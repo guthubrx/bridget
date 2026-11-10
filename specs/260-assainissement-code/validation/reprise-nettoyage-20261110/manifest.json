@@ -1,0 +1,49 @@
+{
+  "at": "2026-11-10T19:51:24.589296+00:00",
+  "head": "4c832f2afe46f60f39790660ebe7a750d80a7caf",
+  "branch": "session-260-lot00c-fondations",
+  "files": [
+    {
+      "source": ".DS_Store",
+      "preserved": "specs/260-assainissement-code/validation/reprise-nettoyage-20261110/.DS_Store",
+      "bytes": 6148,
+      "sha256": "a51b9545965bd5d3b966c0e84ac7d58e5f5a565c361242aa4eb2599fb506e6c1"
+    },
+    {
+      "source": "specs/260-assainissement-code/validation/base-clippy.txt",
+      "preserved": "specs/260-assainissement-code/validation/reprise-nettoyage-20261110/base-clippy.txt",
+      "bytes": 269562,
+      "sha256": "c1626d9712706f7e566155af3efddf2b938d6f54fdc1585209f0a9ea04de633a"
+    },
+    {
+      "source": "specs/260-assainissement-code/validation/base-echecs.txt",
+      "preserved": "specs/260-assainissement-code/validation/reprise-nettoyage-20261110/base-echecs.txt",
+      "bytes": 2044,
+      "sha256": "6aa40a7b532239c8f09de2f6632cad56a2b2dccc3f4afdec5f5a00a198e82422"
+    },
+    {
+      "source": "specs/260-assainissement-code/validation/base-instables.txt",
+      "preserved": "specs/260-assainissement-code/validation/reprise-nettoyage-20261110/base-instables.txt",
+      "bytes": 200,
+      "sha256": "c5aaa0bda2a1948e180eb22aa0288c73e9d3aeb2ea922fcab8019e412cb20cf7"
+    },
+    {
+      "source": "specs/260-assainissement-code/validation/base-noms.txt",
+      "preserved": "specs/260-assainissement-code/validation/reprise-nettoyage-20261110/base-noms.txt",
+      "bytes": 338034,
+      "sha256": "e236878dd86495cd59b8c8c6d0adf0a891507d0558af7fb253fbff79451aafc4"
+    },
+    {
+      "source": "specs/260-assainissement-code/validation/base-tests.txt",
+      "preserved": "specs/260-assainissement-code/validation/reprise-nettoyage-20261110/base-tests.txt",
+      "bytes": 452458,
+      "sha256": "a86c2ad0e99541230f8f3d2aa1879ce74f61ac732df76be0a455c6bcb7114cfc"
+    },
+    {
+      "source": "specs/260-assainissement-code/validation/base2-tests.txt",
+      "preserved": "specs/260-assainissement-code/validation/reprise-nettoyage-20261110/base2-tests.txt",
+      "bytes": 448570,
+      "sha256": "a54eb85db1af667cc074f48b21afeff673b0d8700f53798f83993704575568a5"
+    }
+  ]
+}

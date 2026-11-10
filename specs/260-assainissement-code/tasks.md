@@ -1,6 +1,6 @@
 # Tâches 260 - Assainissement du code et du dépôt
 
-Statut : In Progress. 27 tâches cochées sur 157 (voir `implementation.md` pour le détail et les lots bloqués). La mise en oeuvre est en cours : lots 0 (partiel), 2, 3, 12, 13, 15 traités ; les lots qui compilent attendent une décision sur le disque.
+Statut : In Progress. 32 tâches cochées sur 157 (voir `implementation.md` pour le détail et les lots bloqués). La mise en oeuvre est en cours : lots 0 (partiel), 2, 3, 12, 13, 15 traités ; les lots qui compilent attendent une décision sur le disque.
 Spécification : `spec.md`. Plan : `plan.md`. Règles : `contracts/regles-implementeur.md`. Portes : `decisions.md`. Démarrage et clôture : `quickstart.md`.
 
 ## Comment lire ce fichier
@@ -15,12 +15,12 @@ Spécification : `spec.md`. Plan : `plan.md`. Règles : `contracts/regles-implem
 ## Fondations - Lot 0 (guide : `quickstart.md`)
 
 - [x] T001 [L0] Lire `contracts/regles-implementeur.md` et `decisions.md` ; créer `specs/260-assainissement-code/implementation.md` (sections Journal, Lots, Idées).
-- [ ] T002 [L0] Vérifier les outils (`rg`, `python3`, `gh`, `ruff`, `git`, `scripts/build.py`) et le disque (`C-DISQUE`, 12 Gio minimum).
-- [ ] T003 [L0] Ligne de base des tests : `C-TESTS` (`base`) puis `validation/base-echecs.txt` ; valide la recette d'environnement.
-- [ ] T004 [L0] Ligne de base des noms de tests : `validation/base-noms.txt`.
-- [ ] T005 [L0] Ligne de base de l'analyse : `validation/base-clippy.txt` (3 erreurs, environ 385 avertissements).
+- [x] T002 [L0] Vérifier les outils (`rg`, `python3`, `gh`, `ruff`, `git`, `scripts/build.py`) et le disque (`C-DISQUE`, 12 Gio minimum).
+- [x] T003 [L0] Ligne de base des tests : `C-TESTS` (`base`) puis `validation/base-echecs.txt` ; valide la recette d'environnement.
+- [x] T004 [L0] Ligne de base des noms de tests : `validation/base-noms.txt`.
+- [x] T005 [L0] Ligne de base de l'analyse : `validation/base-clippy.txt` (3 erreurs, environ 385 avertissements).
 - [x] T006 [L0] Ligne de base du format : `validation/base-format.txt` (environ 120 fichiers), sans rien reformater.
-- [ ] T007 [L0] Committer journal et lignes de base ; intégrer à `main` (procédure « Fin de lot » de `quickstart.md`).
+- [x] T007 [L0] Committer journal et lignes de base ; intégrer à `main` (procédure « Fin de lot » de `quickstart.md`).
 
 ## Lot 1 - Filet automatique (guide : `guides/lot-01-filet-automatique.md`)
 

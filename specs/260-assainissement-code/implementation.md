@@ -6,7 +6,7 @@ Statut du programme : In Progress. Règles : `contracts/regles-implementeur.md`.
 
 | Lot | État | Remarque |
 |-----|------|----------|
-| 0 | partiel | T001, T002, T006 faits ; T003 à T005 en attente (Cargo, voir T002) |
+| 0 | intégré | T001 à T006 faits |
 | 2 | intégré | T025 à T030 faits |
 | 3 | intégré | T031 à T035 faits |
 | 12 | intégré | T125 à T127 faits |
@@ -131,3 +131,28 @@ Le disque libre oscille entre 10 et 14 Gio (11 Gio à la dernière mesure). La r
 ### T002 / T003 - reprise après libération du disque (10 novembre 2026)
 - Constat : François a libéré de l'espace (23 Gio libres) et répondu D1, D9, D10 (voir `decisions.md`). Un premier essai de T003 a fait passer le disque de 22 à 7 Gio en 2 minutes (cache de dépendances de 6,8 Gio) ; le worktree a ensuite été retiré (fusion de la branche par une autre session) et le cache purgé par l'entretien de `scripts/build.py` avant la fin.
 - Mesures de prudence pour la reprise : cache de build hors du dépôt (`$HOME/.cache/bridget-build-260`), variables `CARGO_PROFILE_DEV_DEBUG=0`, `CARGO_PROFILE_TEST_DEBUG=0` et `CARGO_INCREMENTAL=0` (moins d'octets écrits ; le comportement des tests ne change pas). Le disque est relevé pendant le build.
+
+### T002 - Outils et disque (clos)
+- Statut : fait. Disque : 23 à 47 Gio libres après libération par François.
+
+### T003 - Ligne de base des tests
+- Statut : fait
+- Fichiers : `validation/base-echecs.txt` (24 lignes), `validation/base-instables.txt` ; sorties complètes non commitées (`base-tests.txt`, `base2-tests.txt`).
+- Vérifications : deux passages complets (`--test-threads=4`, environnement privé, `--offline --locked`) : 3714 passés, 24 échoués, 110 ignorés au premier passage ; 24 échecs identiques au second passage plus 1 échec propre au second (`spec185_workspace_repair_uncertain_stop_...`, noté instable). La liste de base est l'intersection des deux passages.
+- Écarts : la base Mac historique (main `c48c30fb`) comptait 40 échecs ; elle en compte 24 ici sur `ca1e203c`.
+  Variables ajoutées par prudence disque : `CARGO_INCREMENTAL=0`, `CARGO_PROFILE_DEV_DEBUG=0`, `CARGO_PROFILE_TEST_DEBUG=0`, cache de build `$HOME/.cache/bridget-build-260`. Elles ne changent pas le comportement des tests.
+- Non vérifié : la base Linux (T021).
+
+### T004 - Ligne de base des noms de tests
+- Statut : fait
+- Fichiers : `validation/base-noms.txt` (3841 noms triés ; les noms ne portent pas de préfixe de crate).
+
+### T005 - Ligne de base de l'analyse
+- Statut : fait
+- Fichiers : `validation/base-clippy.txt`
+- Vérifications : `clippy --all-targets` avec `test-support` : échec de compilation du lot de tests du démon (3 erreurs, comme attendu : `never_loop`, `non_octal_unix_permissions`, `reversed_empty_ranges`) ; 398 lignes `warning`.
+- Écarts : le total d'avertissements diffère de 385 (compte avec `test-support` et en comptant les lignes de résumé).
+- Non vérifié : rien.
+
+### Bilan lot 0
+Lot 0 complet sauf T007 (cette intégration). Pas d'activation.
