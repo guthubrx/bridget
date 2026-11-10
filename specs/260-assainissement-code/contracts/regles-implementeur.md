@@ -93,6 +93,7 @@ Sur Linux, remplacer `/private/tmp` par `/tmp` et retirer `/opt/homebrew/bin`.
 | `C-TESTS` | `"${ENVT[@]}" python3 scripts/build.py cargo test "${F[@]}" --no-fail-fast -- --test-threads=4 2>&1 \| tee "$V/<nom>-tests.txt"` | la suite se termine |
 | `C-ECHECS` | `grep -E '^test .* \.\.\. FAILED' "$V/<nom>-tests.txt" \| sort > "$V/<nom>-echecs.txt"; diff "$V/base-echecs.txt" "$V/<nom>-echecs.txt"` | aucune ligne |
 | `C-NOMS` | `"${ENVT[@]}" python3 scripts/build.py cargo test "${F[@]}" -- --list 2>/dev/null \| grep ': test$' \| sort > "$V/<nom>-noms.txt"; diff "$V/base-noms.txt" "$V/<nom>-noms.txt"` | aucune ligne |
+| `C-CHECK-LEGER` | `python3 scripts/build.py cargo check --offline --locked -p bridget-daemon --features bridget-daemon/test-support` | code de retour 0 (plus rapide : sans les tests) |
 | `C-CRATE` | `"${ENVT[@]}" python3 scripts/build.py cargo test --offline --locked -p <crate> --features bridget-daemon/test-support --no-fail-fast -- --test-threads=4` | mêmes échecs que la base pour ce crate |
 | `C-DISQUE` | `df -g / \| tail -1` | 12 Gio libres ou plus |
 
