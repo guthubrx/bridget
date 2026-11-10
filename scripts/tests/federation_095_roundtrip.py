@@ -172,10 +172,10 @@ def main():
     finally:
         if remote_registered and remote.poll() is None:
             try: call({"op":"close"})
-            except Exception: pass
+            except Exception: pass  # noqa: S110  nettoyage de fin de test, erreur sans effet
         if local_registered:
             try: local.send({"type":"Unregister"})
-            except Exception: pass
+            except Exception: pass  # noqa: S110  nettoyage de fin de test, erreur sans effet
         local.close(); journal.close()
         try: remote.wait(timeout=0.2)
         except subprocess.TimeoutExpired: pass

@@ -320,7 +320,7 @@ def verify_target_controls(profile):
         for f in p['source_files']:
             body,_,_ = read_stable(f['target_copy'],2*1024*1024)
             if (digest(body) != 'sha256:'+f['sha256']
-                    or hashlib.sha1(b'blob '+str(len(body)).encode()+b'\0'+body).hexdigest() != f['blob']):
+                    or hashlib.sha1(b'blob '+str(len(body)).encode()+b'\0'+body).hexdigest() != f['blob']):  # noqa: S324  identifiant de blob Git, pas un usage cryptographique
                 refuse('permission_hook_target_controls_changed')
 
 

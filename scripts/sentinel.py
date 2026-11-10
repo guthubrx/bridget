@@ -18,8 +18,8 @@ import re
 import threading
 from concurrent.futures import ThreadPoolExecutor
 
-TOKEN = "SENTINELLE244OK"
-COMMUNICATION_TOKEN = "COMMUNICATION244OK"
+TOKEN = "SENTINELLE244OK"  # noqa: S105  marqueur de test, pas un secret
+COMMUNICATION_TOKEN = "COMMUNICATION244OK"  # noqa: S105  marqueur de test, pas un secret
 TERMINAL = {"result_available", "failed", "cancelled"}
 CAPACITY = {"resource_saturated", "provider_quota_exhausted", "referent_paused", "delegations_halted", "usage_limit"}
 
@@ -169,7 +169,9 @@ def fingerprint(binary, registry, state=None):
         # Réutiliser exclusivement les liens natifs dont le reçu, les fichiers
         # et le namespace sont déjà vérifiés par la préparation de projet.
         helper = {"__name__":"sentinel_prepare_helper"}
-        exec(os.environ["BRIDGET_SENTINEL_PREPARE_SOURCE"], helper)
+        # Invariant : la source exécutée est celle que le démon injecte (include_str! de scripts/prepare-project.py dans sentinel244.rs),
+        # de même confiance que ce script (programme 260, décision D11 : mécanisme conservé).
+        exec(os.environ["BRIDGET_SENTINEL_PREPARE_SOURCE"], helper)  # noqa: S102
         links = helper["installed_links"](state)
         code = '''import json,os,pathlib,stat,sys,hashlib
 p=pathlib.Path(sys.argv[1])/"agents.json"
@@ -580,7 +582,7 @@ def main():
             save(args.state/"sentinel.json",report)
             try:
                 alert(args.binary,args.state,report)
-            except Exception:
+            except Exception:  # noqa: S110  l'erreur primaire et son enveloppe sont déjà conservées
                 pass  # L'erreur primaire et son enveloppe restent conservées.
         print(json.dumps(report,ensure_ascii=False))
         if report.get("status")=="failed":

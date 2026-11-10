@@ -308,8 +308,8 @@ class ProcessTests(unittest.TestCase):
         stdout = (b"n/tmp/a b\nn/tmp/a b/fichier ouvert (copie).txt\n"
                   b"n/tmp/a b/supprime.txt (deleted)\nnpipe\n")
         self.assertEqual(build.parse_open_paths(stdout), [
-            Path("/tmp/a b"), Path("/tmp/a b/fichier ouvert (copie).txt"),
-            Path("/tmp/a b/supprime.txt")])
+            Path("/tmp/a b"), Path("/tmp/a b/fichier ouvert (copie).txt"),  # noqa: S108  chemin de fixture de test
+            Path("/tmp/a b/supprime.txt")])  # noqa: S108  chemin de fixture de test
 
     def test_cli_preserve_arguments_et_code_echec_avec_entretien(self):
         with tempfile.TemporaryDirectory(prefix="bridget-cli-test-") as root:
@@ -720,11 +720,11 @@ class WorktreePruneTests(unittest.TestCase):
 
 class Observation176Tests(unittest.TestCase):
     def test_seul_verrou_propre_est_exclu_du_cache(self):
-        lock = Path("/tmp/profile/.cargo-lock")
+        lock = Path("/tmp/profile/.cargo-lock")  # noqa: S108  chemin de fixture de test
         data = (f"p{os.getpid()}\nn{lock}\nn/tmp/profile/other\n"
                 f"p{os.getpid()+1}\nn{lock}\n").encode()
         self.assertEqual(build.parse_open_paths(data, (lock,)),
-                         [Path("/tmp/profile/other"), lock])
+                         [Path("/tmp/profile/other"), lock])  # noqa: S108  chemin de fixture de test
 
     def test_fuse_sans_avertissement_et_annotation_reelle_bloquent(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -741,7 +741,7 @@ class Observation176Tests(unittest.TestCase):
 
     def test_portee_echappee_et_prefixe_exempte_restent_inconnus(self):
         with patch.object(build, "observed_run") as run:
-            for root in (Path("/tmp/é"), Path("/tmp/a\nb"), Path("/tmp/a^b")):
+            for root in (Path("/tmp/é"), Path("/tmp/a\nb"), Path("/tmp/a^b")):  # noqa: S108  chemin de fixture de test
                 self.assertIsNone(build.busy_paths((root,)))
             run.assert_not_called()
         with tempfile.TemporaryDirectory() as directory:
@@ -791,7 +791,7 @@ class Observation176Tests(unittest.TestCase):
     def test_fichier_disparu_reste_un_chemin_occupe(self):
         data = b"p1\nf1\ntREG\nn/tmp/w/f (stat: No such file or directory)\n"
         self.assertTrue(build.process_output_complete(data))
-        self.assertEqual(build.parse_open_paths(data), [Path("/tmp/w/f")])
+        self.assertEqual(build.parse_open_paths(data), [Path("/tmp/w/f")])  # noqa: S108  chemin de fixture de test
 
     def test_montage_exempte_et_format_inconnu_bloquent(self):
         for data in (b"p1\nf1\ntUNKN\nn/portal/file (-e /portal)\n",

@@ -217,7 +217,7 @@ else:
         self.provider_fixtures214()
         child, fd = pty.fork()
         if child == 0:
-            os.execve("/bin/sh", ["sh", str(SCRIPT)], self.env)
+            os.execve("/bin/sh", ["sh", str(SCRIPT)], self.env)  # noqa: S606  remplace le processus enfant du pty de test par /bin/sh
         output = bytearray()
         os.write(fd, b"y\nn\nn\nn\n")
         deadline = time.monotonic() + 15

@@ -94,7 +94,7 @@ def download(url, output, maximum, budget=180):
         raise Refused("update_download_origin_invalid")
     opener = urllib.request.build_opener(Redirect())
     deadline = time.monotonic() + budget
-    req = urllib.request.Request(url, headers={"Accept": "application/vnd.github+json" if url == API else "application/octet-stream",
+    req = urllib.request.Request(url, headers={"Accept": "application/vnd.github+json" if url == API else "application/octet-stream",  # noqa: S310  origine https validée par allowed_url() avant l'ouverture
                                              "User-Agent": "Bridget-Updater"})
     digest = hashlib.sha256()
     count = 0
@@ -788,7 +788,7 @@ def main():
                 updater.save(error=code, stage="error", observed_at=int(time.time()))
                 try:
                     updater.report("error", updater.state.get("available"))
-                except Exception:
+                except Exception:  # noqa: S110  l'état d'erreur est déjà enregistré par save() juste avant
                     pass
                 print(json.dumps({"status": "deferred", "code": code}), flush=True)
             if not watch:
@@ -796,7 +796,7 @@ def main():
             if updater.link.resolve() != updater.original:
                 # Reload the updater implementation from the newly installed binary.
                 fcntl.flock(lock, fcntl.LOCK_UN)
-                os.execv(str(updater.link), [str(updater.link), "updates", "watch"])
+                os.execv(str(updater.link), [str(updater.link), "updates", "watch"])  # noqa: S606  rechargement par le binaire installé (lien actif)
             time.sleep(60)
 
 

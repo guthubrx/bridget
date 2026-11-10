@@ -373,7 +373,7 @@ class Updates224Tests(unittest.TestCase):
                          "com.bridget.worker.monordinateur")
         self.assertEqual(update.service_name("linux", "worker"), "bridget-worker-cartae.service")
         for name in ["ssh.service", "../bridget-worker-sys.service", "bridget-updates.service",
-                     "bridget-worker-sys.service;reboot", "/tmp/bridget-worker-sys.service"]:
+                     "bridget-worker-sys.service;reboot", "/tmp/bridget-worker-sys.service"]:  # noqa: S108  valeur de refus testée, aucun fichier créé
             with self.assertRaises(update.Refused):
                 update.service_name("linux", name)
 
