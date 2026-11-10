@@ -1164,6 +1164,8 @@ struct DaemonState {
             std::sync::mpsc::Sender<bridget_transport::protocol::RuntimeSelectionOutcome>,
         ),
     >,
+    pending_runtime_catalogues: HashMap<String,(String,std::sync::mpsc::Sender<bridget_transport::protocol::RuntimeCatalogueOutcome>)>,
+    runtime_catalogue_connections: HashMap<String,(String,String)>,
     presences: HashMap<String, Presence>,
     conn_counter: u64,
     /// Messages --reply en attente de réponse : (msg_id, from, to, expire_at, target_conn)
@@ -5129,6 +5131,8 @@ impl DaemonState {
             view_closed_rx,
             pending_attach_sends: HashMap::new(),
             pending_runtime_selections: HashMap::new(),
+            pending_runtime_catalogues: HashMap::new(),
+            runtime_catalogue_connections: HashMap::new(),
             presences: HashMap::new(),
             conn_counter: 0,
             pending_replies: Vec::new(),
@@ -5222,6 +5226,7 @@ impl DaemonState {
         }
         let had_credential = self.identity_credentials.remove(owner).is_some();
         self.observation_sequences.remove(owner);
+        self.runtime_catalogue_connections.remove(owner);
         self.observations.remove_source(owner, Instant::now());
         if !had_credential {
             return;
@@ -7677,6 +7682,7 @@ fn handle_connection(
         st.mark_unreachable(&conn_id);
         st.conn_names.remove(&conn_id);
         st.observation_sequences.remove(&conn_id);
+        st.runtime_catalogue_connections.remove(&conn_id);
         st.observations.remove_source(&conn_id, Instant::now());
         st.conn_hosts.remove(&conn_id);
         st.communication_projects.remove(&conn_id);
@@ -12265,6 +12271,7 @@ enum RetainedSendAuthority<'a> {
     WrapperReply(&'a str),
     Result(&'a native_delegation::RetainedResultAuthority),
     Specialist(&'a specialists222::SpecialistSendAuthority),
+    Lineage(&'a native_lineage::ComposeAuthority),
 }
 
 /// Une réponse automatique ordinaire garde les droits de sa connexion primaire.
@@ -12348,6 +12355,7 @@ fn handle_idempotent_send_with_result_authority(
             RetainedSendAuthority::Result(authority)=>native_delegation::authorize_retained_result(st,authority,conn_id,&message),
             RetainedSendAuthority::Specialist(authority)=>specialists222::authorize_prepared_send(st,authority,&message),
             RetainedSendAuthority::WrapperReply(instance)=>authorize_wrapper_reply(st,conn_id,&message,instance),
+            RetainedSendAuthority::Lineage(proof)=>native_lineage::authorize_compose_send(st,conn_id,&message,proof),
         };
         if let Err(reason)=verified {
             return DaemonToWrapper::Nack {
@@ -12361,7 +12369,8 @@ fn handle_idempotent_send_with_result_authority(
             reason: "identité expéditeur non attestée : rattachement auxiliaire requis".into(),
         };
     }
-    let issuer_scope=if let Some(RetainedSendAuthority::Specialist(authority))=authority {
+    let issuer_scope=if let Some(RetainedSendAuthority::Lineage(proof))=authority {proof.issuer_scope()}
+    else if let Some(RetainedSendAuthority::Specialist(authority))=authority {
         crate::communication::issuer_scope(&format!("specialist:{}",authority.issuer_scope))
     }else if let Some(RetainedSendAuthority::WrapperReply(instance))=authority {
         crate::communication::issuer_scope(&format!("wrapper-reply:{instance}"))
@@ -12544,7 +12553,7 @@ fn handle_idempotent_send_with_result_authority(
         }
         _ => None,
     };
-    let native_task_exchange = if matches!(authority,Some(RetainedSendAuthority::Result(_) | RetainedSendAuthority::Specialist(_))) {
+    let native_task_exchange = if matches!(authority,Some(RetainedSendAuthority::Result(_) | RetainedSendAuthority::Specialist(_) | RetainedSendAuthority::Lineage(_))) {
         // authorize_retained_result a déjà contrôlé le résultat canonique.
         true
     } else {
@@ -12609,7 +12618,7 @@ fn handle_idempotent_send_with_result_authority(
     }
     let guidance_admission = match guidance_action {
         Some(action) => {
-            let facts = if scoped_mobile_human && action == crate::guidance::GuidanceAction::Steer {
+            let facts = if (scoped_mobile_human || matches!(authority,Some(RetainedSendAuthority::Lineage(_)))) && action == crate::guidance::GuidanceAction::Steer {
                 // The mobile ingress has just verified this device and this recipient's scope.
                 guidance_facts(st, Some(conn_id), &message.to, action,
                     crate::guidance::GuidancePath::SendIdempotent,
@@ -12987,9 +12996,21 @@ fn control_outcome_from_status(status: ControlCommandStatus) -> ExecutionControl
 fn handle_execution_control(
     conn_id: Option<&str>,
     issuer_scope: &str,
-    mut command: ExecutionControlCommand,
+    command: ExecutionControlCommand,
     st: &mut DaemonState,
 ) -> DaemonToWrapper {
+    handle_execution_control_authorized(conn_id,issuer_scope,command,st,None)
+}
+
+fn handle_execution_control_authorized(
+    conn_id:Option<&str>,issuer_scope:&str,mut command:ExecutionControlCommand,
+    st:&mut DaemonState,proof:Option<&native_lineage::ComposeAuthority>,
+)->DaemonToWrapper {
+    if let Some(proof)=proof {
+        if conn_id.is_none_or(|conn|native_lineage::authorize_compose_control(st,conn,&command,proof).is_err()) {
+            return control_result(&command,ExecutionControlOutcome::Refused(ExecutionControlRefusal::NotPermitted));
+        }
+    }
     if command.version != 1 || command.command_id.is_empty() || command.command_id.len() > 256 {
         return control_result(
             &command,
@@ -13120,7 +13141,7 @@ fn handle_execution_control(
     } else {
         crate::guidance::GuidanceAction::Interrupt
     };
-    let scope_result = if invalid_reason {
+    let scope_result = if proof.is_some() {Ok(Vec::new())} else if invalid_reason {
         Err("invalid_cross_project_reason")
     } else if let Some(message) = command.message.as_ref() {
         match conn_id {
@@ -13190,7 +13211,13 @@ fn handle_execution_control(
             );
         }
     };
-    let guidance_admission = match check_guidance(
+    let admission = if proof.is_some() {
+        // La preuve privée a revérifié racine, tâche, instance et ronde sous ce verrou.
+        guidance_facts(st,conn_id,&target.target_agent,action,crate::guidance::GuidancePath::Control,
+            Some(bridget_core::MessageOrigin::Human),false,now)
+            .map(|mut facts| {facts.actor=crate::guidance::GuidanceActor::AttachedHuman;facts.identity_attested=true;facts})
+            .map_err(|_|("intent_not_permitted".to_owned(),"identity_unattested".to_owned()))
+    } else { check_guidance(
         st,
         conn_id,
         &target.target_agent,
@@ -13202,7 +13229,8 @@ fn handle_execution_control(
             .as_ref()
             .is_some_and(|m| m.delegated_origin.is_some()),
         &command.command_id,
-    ) {
+    ) };
+    let guidance_admission = match admission {
         Ok(facts) => facts,
         Err((_code, _reason)) => {
             let _ = st.execution_store.refuse_control_command(
@@ -13355,16 +13383,11 @@ fn handle_execution_control(
     )
     .is_err()
     {
-        let _ = st.execution_store.resolve_control_command(
-            issuer_scope,
-            &command.command_id,
-            false,
-            Some("target_unavailable"),
-            now,
-        );
+        // Une écriture partielle peut avoir atteint le wrapper. Garder le reçu
+        // dispatched : seul son accusé peut résoudre cette issue inconnue.
         return control_result_with_project(
             &command,
-            ExecutionControlOutcome::Refused(ExecutionControlRefusal::TargetUnavailable),
+            ExecutionControlOutcome::OutcomeUnknown,
             project_warnings,
         );
     }
@@ -15128,6 +15151,7 @@ mod spec099_classic_delivery_tests {
         handle_wrapper_message(
             "sender",
             WrapperToDaemon::ObservationCapabilities {
+                runtime_catalogue: false,
                 events: vec![Kind::TurnEnded],
             },
             &state,
@@ -15196,6 +15220,7 @@ mod spec099_classic_delivery_tests {
         handle_wrapper_message(
             "sender",
             WrapperToDaemon::ObservationCapabilities {
+                runtime_catalogue: false,
                 events: vec![Kind::TurnEnded],
             },
             &state,
@@ -15270,6 +15295,7 @@ mod spec099_classic_delivery_tests {
             handle_wrapper_message(
                 "sender",
                 WrapperToDaemon::ObservationCapabilities {
+                    runtime_catalogue: false,
                     events: vec![Kind::TurnEnded]
                 },
                 &state
@@ -15290,6 +15316,7 @@ mod spec099_classic_delivery_tests {
         handle_wrapper_message(
             "sender",
             WrapperToDaemon::ObservationCapabilities {
+                runtime_catalogue: false,
                 events: vec![Kind::TurnEnded, Kind::FileWritten],
             },
             &state,
@@ -15394,7 +15421,7 @@ mod spec099_classic_delivery_tests {
             assert!(matches!(
                 handle_wrapper_message(
                     "sender",
-                    WrapperToDaemon::ObservationCapabilities { events },
+                    WrapperToDaemon::ObservationCapabilities { events, runtime_catalogue: false },
                     &state
                 ),
                 Some(DaemonToWrapper::Nack { .. })
@@ -15402,7 +15429,7 @@ mod spec099_classic_delivery_tests {
         }
         handle_wrapper_message(
             "sender",
-            WrapperToDaemon::ObservationCapabilities { events: vec![] },
+            WrapperToDaemon::ObservationCapabilities { events: vec![], runtime_catalogue: false },
             &state,
         );
         assert!(
@@ -15411,6 +15438,7 @@ mod spec099_classic_delivery_tests {
         handle_wrapper_message(
             "sender",
             WrapperToDaemon::ObservationCapabilities {
+                runtime_catalogue: false,
                 events: vec![Kind::TurnEnded],
             },
             &state,
@@ -15437,6 +15465,7 @@ mod spec099_classic_delivery_tests {
             handle_wrapper_message(
                 conn,
                 WrapperToDaemon::ObservationCapabilities {
+                    runtime_catalogue: false,
                     events: vec![Kind::FileWritten, Kind::TurnEnded, Kind::PermissionRequired],
                 },
                 &state,
@@ -18521,6 +18550,7 @@ fn human_client_guard(
         ClientCapability::HumanLineageViewV1
             | ClientCapability::HumanLineageWatchV1
             | ClientCapability::HumanLineageCancelV1
+            | ClientCapability::HumanLineageComposeV1
     );
     if (lineage
         && (t3_thread_id.is_empty()
@@ -20211,7 +20241,7 @@ fn handle_wrapper_message_with_peer(
                 | WrapperToDaemon::ProviderCatalogueUpdate { .. }
                 | WrapperToDaemon::OriginProofResponse { .. } =>
                     Some(ServiceRefusal::MessageOutsideServiceRole),
-                WrapperToDaemon::SelectRuntime { .. } | WrapperToDaemon::RuntimeSelectionReported { .. } => Some(ServiceRefusal::MessageOutsideServiceRole),
+                WrapperToDaemon::SelectRuntime { .. } | WrapperToDaemon::RuntimeSelectionReported { .. } | WrapperToDaemon::RuntimeCatalogueReported { .. } => Some(ServiceRefusal::MessageOutsideServiceRole),
                 WrapperToDaemon::HumanInboxDeposit { .. }
                 | WrapperToDaemon::ControlFocusPublish { .. }
                 | WrapperToDaemon::HumanInboxDecisions { .. }
@@ -20508,7 +20538,7 @@ fn handle_wrapper_message_with_peer(
                 WrapperToDaemon::CommunicationProjectFact { .. } | WrapperToDaemon::DirectoryScoped { .. } if !st.client_negotiations.get(conn_id).is_some_and(|n| n.capabilities.contains(&ClientCapability::CommunicationProjectsV1)) => Some(ClientRefusal::CapabilityNotNegotiated),
                 WrapperToDaemon::CommunicationProjectFact { .. } | WrapperToDaemon::DirectoryScoped { .. } => None,
                 WrapperToDaemon::RegisterAuxiliary { .. } => None,
-                WrapperToDaemon::SelectRuntime { .. } | WrapperToDaemon::RuntimeSelectionReported { .. } => Some(ClientRefusal::MessageOutsideClientRole),
+                WrapperToDaemon::SelectRuntime { .. } | WrapperToDaemon::RuntimeSelectionReported { .. } | WrapperToDaemon::RuntimeCatalogueReported { .. } => Some(ClientRefusal::MessageOutsideClientRole),
                 WrapperToDaemon::ClientHello { .. }
                     if st.client_negotiations.contains_key(conn_id) =>
                 {
@@ -20943,9 +20973,9 @@ fn handle_wrapper_message_with_peer(
             queue_observation_notifications(&mut st, notices);
             None
         }
-        WrapperToDaemon::ObservationCapabilities { events } => {
+        WrapperToDaemon::ObservationCapabilities { events, runtime_catalogue } => {
             let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
-            let Some((agent, _)) = live_connection_identity(&st, conn_id) else {
+            let Some((agent, instance)) = live_connection_identity(&st, conn_id) else {
                 return Some(DaemonToWrapper::Nack {
                     id: "observation-capabilities".into(),
                     reason: "primary_identity_required".into(),
@@ -20963,6 +20993,8 @@ fn handle_wrapper_message_with_peer(
                     reason: "invalid_primary_capabilities".into(),
                 });
             }
+            if runtime_catalogue {st.runtime_catalogue_connections.insert(conn_id.into(),(agent.clone(),instance));}
+            else {st.runtime_catalogue_connections.remove(conn_id);}
             st.observations
                 .set_source(conn_id, &agent, events, Instant::now());
             None
@@ -22386,6 +22418,7 @@ fn handle_wrapper_message_with_peer(
                             | ClientCapability::HumanLineageViewV1
                             | ClientCapability::HumanLineageWatchV1
                             | ClientCapability::HumanLineageCancelV1
+                            | ClientCapability::HumanLineageComposeV1
                             | ClientCapability::CommunicationProjectsV1
                             | ClientCapability::Lookup
                             | ClientCapability::ExecutionControlV1
@@ -23805,6 +23838,7 @@ fn handle_wrapper_message_with_peer(
                 st.mark_stopped(conn_id);
                 st.conn_names.remove(conn_id);
                 st.observation_sequences.remove(conn_id);
+                st.runtime_catalogue_connections.remove(conn_id);
                 st.observations.remove_source(conn_id, Instant::now());
                 st.conn_hosts.remove(conn_id);
                 st.communication_projects.remove(conn_id);
@@ -23833,6 +23867,14 @@ fn handle_wrapper_message_with_peer(
                 && let Some((_, sender)) = st.pending_runtime_selections.remove(&token)
             {
                 let _ = sender.send(outcome);
+            }
+            None
+        }
+        WrapperToDaemon::RuntimeCatalogueReported{token,outcome}=>{
+            let mut st=state.lock().unwrap_or_else(|e|e.into_inner());
+            if st.pending_runtime_catalogues.get(&token).is_some_and(|(target,_)|target==conn_id)
+                && let Some((_,sender))=st.pending_runtime_catalogues.remove(&token) {
+                let _=sender.send(outcome);
             }
             None
         }
@@ -24679,7 +24721,8 @@ fn handle_wrapper_message_with_peer(
                     && let Err(error) = deliver_to_agent(
                         &writer,
                         &request.sender,
-                        &format!("Échec de livraison de la demande #{id} : {reason}"),
+                        &format!("{}Échec de livraison de la demande #{id} : {reason}",
+                            native_delegation::provider_error_recovery(&reason).map_or_else(String::new,|recovery|format!("{recovery}\n\n"))),
                     )
                 {
                     error!(

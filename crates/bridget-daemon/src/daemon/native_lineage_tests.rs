@@ -200,6 +200,761 @@ fn owner_agent() -> String {
     crate::t3code::stable_uuid(T3)
 }
 
+#[test]
+fn spec258_compose_lit_ronde_sans_mutation_et_refuse_fin() {
+    let (state, root, _peer) = fixture("compose258-read", "human_lineage_compose_v1");
+    let task_id = "25800000-0000-4000-8000-000000000001";
+    let mut task = lineage_task(task_id, &owner_agent(), "result_available");
+    task.round = 3;
+    state
+        .lock()
+        .unwrap()
+        .delegation_store
+        .insert(&task, "compose258-read", b"read")
+        .unwrap();
+    let action = json!({"action":"compose","task_id":task_id,"request_id":"25800000-0000-4000-8000-000000000002",
+        "expected_round":0,"operation":{"kind":"read"}});
+    let response = call(&state, &root, action);
+    assert_eq!(response["round"], 3, "{response}");
+    assert_eq!(response["outcome"], "observed");
+    assert_eq!(
+        response["capabilities"],
+        json!({"send":false,"steer":false,"interrupt":false,"select_runtime":false,"attachments":false})
+    );
+    serde_json::from_value::<bridget_transport::protocol::HumanComposeResponseV1>(response)
+        .unwrap();
+    let send = json!({"action":"compose","task_id":task_id,"request_id":"25800000-0000-4000-8000-000000000003",
+        "expected_round":3,"operation":{"kind":"send","body":"Conserver le texte","intent":"queue"}});
+    let refused = call(&state, &root, send.clone());
+    assert_eq!(refused["outcome"], "refused", "{refused}");
+    assert_eq!(refused["code"], "target_unavailable");
+    assert_eq!(call(&state, &root, send), refused);
+    let saved = state
+        .lock()
+        .unwrap()
+        .delegation_store
+        .get(task_id)
+        .unwrap()
+        .unwrap();
+    assert_eq!(saved.round, 3);
+    assert_eq!(saved.state, "result_available");
+    assert_eq!(saved.result, task.result);
+}
+
+#[test]
+fn spec258_compose_queue_reutilise_remise_sans_nouvelle_mission_ni_doublon() {
+    let (state, root, _peer) = fixture("c258send", "human_lineage_compose_v1");
+    let task_id = "25800000-0000-4000-8000-000000000010";
+    let mut task = lineage_task(task_id, &owner_agent(), "working");
+    task.round = 1;
+    let _child = {
+        let mut st = state.lock().unwrap();
+        task.child = st.presences["instance-1"].name.clone();
+        task.child_instance = Some("instance-1".into());
+        let peer = spec094_live_test_connection(&mut st, "conn-1");
+        st.runtime_catalogue_connections
+            .insert("conn-1".into(), (task.child.clone(), "instance-1".into()));
+        st.delegation_store
+            .insert(&task, "c258send", b"send")
+            .unwrap();
+        peer
+    };
+    let observed = call(
+        &state,
+        &root,
+        json!({"action":"compose","task_id":task_id,"request_id":"25800000-0000-4000-8000-000000000011",
+        "expected_round":0,"operation":{"kind":"read"}}),
+    );
+    assert_eq!(observed["capabilities"]["send"], true, "{observed}");
+    assert_eq!(
+        observed["capabilities"]["steer"], false,
+        "no baseline must mean no steer"
+    );
+    let action = json!({"action":"compose","task_id":task_id,"request_id":"25800000-0000-4000-8000-000000000012",
+        "expected_round":1,"operation":{"kind":"send","body":"Intervention humaine","intent":"queue"}});
+    let response = call(&state, &root, action.clone());
+    assert!(
+        response["outcome"] == "accepted" || response["outcome"] == "outcome_unknown",
+        "{response}"
+    );
+    let before = state
+        .lock()
+        .unwrap()
+        .pending_post_response_controls
+        .get("human")
+        .map_or(0, Vec::len);
+    assert_eq!(
+        before, 1,
+        "Une seule remise réelle doit être préparée : {response}"
+    );
+    assert_eq!(call(&state, &root, action), response);
+    let st = state.lock().unwrap();
+    assert_eq!(
+        st.pending_post_response_controls
+            .get("human")
+            .map_or(0, Vec::len),
+        before
+    );
+    assert_eq!(st.delegation_store.tasks().unwrap().len(), 1);
+    let current = st.delegation_store.get(task_id).unwrap().unwrap();
+    assert_eq!(current.mission, task.mission);
+    assert_eq!(current.round, task.round);
+    assert_eq!(current.child_instance, task.child_instance);
+}
+
+#[test]
+fn spec258_catalogue_vient_du_wrapper_cible_et_reglage_confirme_sans_rejeu() {
+    use bridget_transport::protocol::{RuntimeCatalogueOutcome, RuntimeSelectionOutcome};
+    let (state, root, _peer) = fixture("c258runtime", "human_lineage_compose_v1");
+    let task_id = "25800000-0000-4000-8000-000000000020";
+    let mut task = lineage_task(task_id, &owner_agent(), "working");
+    task.round = 1;
+    task.definition.protocol = "codex_app_server".into();
+    let child = {
+        let mut st = state.lock().unwrap();
+        task.child = st.presences["instance-1"].name.clone();
+        task.child_instance = Some("instance-1".into());
+        let peer = spec094_live_test_connection(&mut st, "conn-1");
+        st.runtime_catalogue_connections
+            .insert("conn-1".into(), (task.child.clone(), "instance-1".into()));
+        peer.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
+        st.delegation_store
+            .insert(&task, "c258runtime", b"runtime")
+            .unwrap();
+        peer
+    };
+    let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let counted = calls.clone();
+    let shared = state.clone();
+    let worker = thread::spawn(move || {
+        let mut reader = BufReader::new(child);
+        for _ in 0..6 {
+            match crate::daemon::presence_tests::read_control(&mut reader) {
+                DaemonToWrapper::ReadRuntimeCatalogue { token } => {
+                    let report = WrapperToDaemon::RuntimeCatalogueReported {
+                        token: token.clone(),
+                        outcome: RuntimeCatalogueOutcome::Observed {
+                            models: vec![bridget_transport::provider_catalogue::CatalogueModel {
+                                model: "child-only-model".into(),
+                                supported_efforts: vec!["low".into(), "high".into()],
+                                default_effort: Some("high".into()),
+                                service_tiers_unavailable: false,
+                                service_tiers: Vec::new(),
+                                default_service_tier: None,
+                            }],
+                        },
+                    };
+                    handle_wrapper_message("other-wrapper", report.clone(), &shared);
+                    assert!(
+                        shared
+                            .lock()
+                            .unwrap()
+                            .pending_runtime_catalogues
+                            .contains_key(&token),
+                        "un voisin ne peut pas répondre pour la cible"
+                    );
+                    handle_wrapper_message("conn-1", report, &shared);
+                }
+                DaemonToWrapper::SelectRuntime { token, selection } => {
+                    let number = counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    assert_eq!(selection.model, "child-only-model");
+                    assert_eq!(selection.effort, "high");
+                    assert!(
+                        shared.try_lock().is_ok(),
+                        "aucun verrou daemon pendant le contrôle fournisseur"
+                    );
+                    if number == 0 {
+                        handle_wrapper_message(
+                            "conn-1",
+                            WrapperToDaemon::RuntimeSelectionReported {
+                                token,
+                                outcome: RuntimeSelectionOutcome::Selected { selection },
+                            },
+                            &shared,
+                        );
+                    }
+                }
+                other => panic!("trame inattendue {other:?}"),
+            }
+        }
+    });
+    let read = call(
+        &state,
+        &root,
+        json!({"action":"compose","task_id":task_id,"request_id":"25800000-0000-4000-8000-000000000021",
+        "expected_round":0,"operation":{"kind":"read"}}),
+    );
+    assert_eq!(
+        read["models"],
+        json!([{"id":"child-only-model","name":"child-only-model","efforts":["low","high"]}]),
+        "{read}"
+    );
+    assert_eq!(read["capabilities"]["select_runtime"], true);
+    let request = json!({"action":"compose","task_id":task_id,"request_id":"25800000-0000-4000-8000-000000000022",
+        "expected_round":1,"operation":{"kind":"select_runtime","model":"child-only-model","effort":null}});
+    let selected = call(&state, &root, request.clone());
+    assert_eq!(selected["outcome"], "selected", "{selected}");
+    assert_eq!(
+        selected["selection"],
+        json!({"model":"child-only-model","effort":"high"})
+    );
+    assert_eq!(call(&state, &root, request), selected);
+    let refused = call(
+        &state,
+        &root,
+        json!({"action":"compose","task_id":task_id,"request_id":"25800000-0000-4000-8000-000000000023",
+        "expected_round":1,"operation":{"kind":"select_runtime","model":"child-only-model","effort":"absent"}}),
+    );
+    assert_eq!(refused["code"], "effort_unavailable");
+    let lost_request = json!({"action":"compose","task_id":task_id,"request_id":"25800000-0000-4000-8000-000000000024",
+        "expected_round":1,"operation":{"kind":"select_runtime","model":"child-only-model","effort":"high"}});
+    let unknown = call(&state, &root, lost_request.clone());
+    assert_eq!(unknown["outcome"], "outcome_unknown", "{unknown}");
+    assert_eq!(
+        call(&state, &root, lost_request),
+        unknown,
+        "une perte d'accusé ne rejoue pas le réglage"
+    );
+    worker.join().unwrap();
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 2);
+    let current = state
+        .lock()
+        .unwrap()
+        .delegation_store
+        .get(task_id)
+        .unwrap()
+        .unwrap();
+    assert_eq!(current.mission, task.mission);
+    assert_eq!(current.round, 1);
+    assert_eq!(current.child_instance, task.child_instance);
+}
+
+#[test]
+fn spec258_reglage_distant_cible_worker_frais_puis_perte_sans_repli() {
+    use bridget_transport::protocol::{
+        ClientCapability, IdentityCredential, RemotePlacement, RuntimeCatalogueOutcome,
+        RuntimeSelectionOutcome, WORKER_STALE_SECS, WorkerHello, WorkerIdentity,
+    };
+    let (state, root, _t3) = fixture("c258remote", "human_lineage_compose_v1");
+    let task_id = "25800000-0000-4000-8000-000000000040";
+    let mut task = lineage_task(task_id, &owner_agent(), "working");
+    task.round = 1;
+    task.definition.protocol = "codex_app_server".into();
+    task.remote_prepared = true;
+    task.remote_placement = Some(RemotePlacement {
+        machine_id: "cartae".into(),
+        worker_id: "worker-cartae".into(),
+        provisioning_revision: 1,
+        project_id: "project".into(),
+        mapping_revision: 1,
+        origin_host: "mac".into(),
+        origin_cwd: root.clone(),
+        source_root_identity: "git:fixture258".into(),
+        relative_cwd: ".".into(),
+        execution_cwd: "/tmp".into(),
+        base_commit: None,
+        definition_digest: "a".repeat(64),
+        permission_digest: "b".repeat(64),
+    });
+    let (child, _worker) = {
+        let mut st = state.lock().unwrap();
+        task.child = st.presences["instance-1"].name.clone();
+        let worker = reserve_remote_lineage_fixture(&mut st, &mut task, "c258remote");
+        let instance = task.child_instance.clone().unwrap();
+        let presence = st.presences.remove("instance-1").unwrap();
+        st.presences.insert(instance.clone(), presence);
+        st.conn_instances.insert("conn-1".into(), instance.clone());
+        st.runtime_catalogue_connections
+            .insert("conn-1".into(), (task.child.clone(), instance));
+        let child = spec094_live_test_connection(&mut st, "conn-1");
+        child
+            .set_read_timeout(Some(Duration::from_secs(3)))
+            .unwrap();
+        (child, worker)
+    };
+    assert!(matches!(
+        handle_worker_message(
+            &state,
+            "worker162-journal",
+            WrapperToDaemon::WorkerHello {
+                hello: WorkerHello {
+                    version: 1,
+                    identity: WorkerIdentity {
+                        machine_id: "cartae".into(),
+                        worker_id: "worker-cartae".into(),
+                        provisioning_revision: 1
+                    },
+                    credential: IdentityCredential::new("lineage162-secret".into()),
+                    build: "fixture258".into(),
+                    capability: ClientCapability::RemoteWorkerV1
+                }
+            }
+        ),
+        Some(DaemonToWrapper::WorkerAccepted { .. })
+    ));
+    let shared = state.clone();
+    let target = thread::spawn(move || {
+        let mut reader = BufReader::new(child);
+        let DaemonToWrapper::ReadRuntimeCatalogue { token } =
+            crate::daemon::presence_tests::read_control(&mut reader)
+        else {
+            panic!("catalogue cible attendu")
+        };
+        handle_wrapper_message(
+            "conn-1",
+            WrapperToDaemon::RuntimeCatalogueReported {
+                token,
+                outcome: RuntimeCatalogueOutcome::Observed {
+                    models: vec![bridget_transport::provider_catalogue::CatalogueModel {
+                        model: "remote-only-model".into(),
+                        supported_efforts: vec!["high".into()],
+                        default_effort: Some("high".into()),
+                        service_tiers_unavailable: false,
+                        service_tiers: vec![],
+                        default_service_tier: None,
+                    }],
+                },
+            },
+            &shared,
+        );
+        let DaemonToWrapper::SelectRuntime { token, selection } =
+            crate::daemon::presence_tests::read_control(&mut reader)
+        else {
+            panic!("réglage distant attendu")
+        };
+        assert_eq!(selection.model, "remote-only-model");
+        handle_wrapper_message(
+            "conn-1",
+            WrapperToDaemon::RuntimeSelectionReported {
+                token,
+                outcome: RuntimeSelectionOutcome::Selected { selection },
+            },
+            &shared,
+        );
+    });
+    let selected = call(
+        &state,
+        &root,
+        json!({"action":"compose", "task_id":task_id, "request_id":"25800000-0000-4000-8000-000000000041", "expected_round":1,
+        "operation":{"kind":"select_runtime", "model":"remote-only-model", "effort":null}}),
+    );
+    assert_eq!(selected["outcome"], "selected", "{selected}");
+    target.join().unwrap();
+    state
+        .lock()
+        .unwrap()
+        .remote_workers
+        .get_mut("cartae")
+        .unwrap()
+        .last_contact = Instant::now() - Duration::from_secs(WORKER_STALE_SECS as u64 + 1);
+    let refused = call(
+        &state,
+        &root,
+        json!({"action":"compose", "task_id":task_id, "request_id":"25800000-0000-4000-8000-000000000042", "expected_round":1,
+        "operation":{"kind":"send", "body":"Ne pas envoyer localement", "intent":"queue"}}),
+    );
+    assert_eq!(refused["outcome"], "refused", "{refused}");
+    assert_eq!(refused["code"], "target_unavailable");
+    assert_eq!(refused["capabilities"]["send"], false);
+    let st = state.lock().unwrap();
+    assert!(st.pending_post_response_controls.get("human").is_none());
+    let current = st.delegation_store.get(task_id).unwrap().unwrap();
+    assert_eq!(current.mission, task.mission);
+    assert_eq!(current.remote_placement, task.remote_placement);
+    assert_eq!(current.round, 1);
+}
+
+#[test]
+fn spec258_steer_et_interruption_restent_sur_execution_et_recu_existants() {
+    use bridget_transport::protocol::{ProviderObservation, ProviderOperation};
+    let (state, root, _peer) = fixture("c258control", "human_lineage_compose_v1");
+    let task_id = "25800000-0000-4000-8000-000000000030";
+    let mut task = lineage_task(task_id, &owner_agent(), "working");
+    task.round = 1;
+    task.definition.capabilities.observed = Some(ProviderObservation {
+        binary_path: "/fixture/provider".into(),
+        binary_version: "test".into(),
+        binary_digest: "0".repeat(64),
+        contract_version: "fixture258".into(),
+        operations: vec![ProviderOperation::Steer, ProviderOperation::Interrupt],
+    });
+    let execution = format!("execution-{}", task.mission);
+    let child = {
+        let mut st = state.lock().unwrap();
+        task.child = st.presences["instance-1"].name.clone();
+        task.child_instance = Some("instance-1".into());
+        let peer = spec094_live_test_connection(&mut st, "conn-1");
+        st.runtime_catalogue_connections
+            .insert("conn-1".into(), (task.child.clone(), "instance-1".into()));
+        peer.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
+        st.delegation_store
+            .insert(&task, "c258control", b"control")
+            .unwrap();
+        st.execution_store
+            .record_starting("submission258", &execution, &task.child, unix_timestamp())
+            .unwrap();
+        st.execution_store
+            .transition_if_current(
+                &execution,
+                "starting",
+                0,
+                1,
+                "running",
+                "provider_accepted",
+                unix_timestamp(),
+            )
+            .unwrap();
+        peer
+    };
+    let counted = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    for (index, operation) in [
+        json!({"kind":"send","body":"Guidage courant","intent":"steer"}),
+        json!({"kind":"interrupt"}),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let action = json!({"action":"compose","task_id":task_id,"request_id":format!("25800000-0000-4000-8000-{:012}",31+index),"expected_round":1,"operation":operation});
+        let response = call(&state, &root, action.clone());
+        assert_eq!(response["outcome"], "outcome_unknown", "{response}");
+        let mut reader = BufReader::new(child.try_clone().unwrap());
+        let DaemonToWrapper::ControlExecutionDispatch {
+            issuer_scope,
+            command,
+        } = crate::daemon::presence_tests::read_control(&mut reader)
+        else {
+            panic!("contrôle natif attendu");
+        };
+        assert_eq!(command.execution_id, execution);
+        assert_eq!(command.generation, 1);
+        assert_eq!(command.revision, 1);
+        assert_eq!(
+            command.operation,
+            if index == 0 {
+                ExecutionControlOperation::SteerCurrent
+            } else {
+                ExecutionControlOperation::Interrupt
+            }
+        );
+        if index == 0 {
+            assert_eq!(command.message.as_ref().unwrap().body, "Guidage courant");
+        } else {
+            assert!(command.message.is_none());
+        }
+        counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        handle_wrapper_message(
+            "conn-1",
+            WrapperToDaemon::ControlExecutionReported {
+                issuer_scope,
+                command_id: command.command_id,
+                execution_id: execution.clone(),
+                accepted: true,
+                refusal_reason: None,
+            },
+            &state,
+        );
+        let accepted = call(&state, &root, action.clone());
+        assert_eq!(accepted["outcome"], "accepted", "{accepted}");
+        assert_eq!(call(&state, &root, action), accepted);
+    }
+    assert_eq!(counted.load(std::sync::atomic::Ordering::SeqCst), 2);
+    let st = state.lock().unwrap();
+    let current = st.delegation_store.get(task_id).unwrap().unwrap();
+    assert_eq!(current.state, "working");
+    assert_eq!(current.mission, task.mission);
+    assert!(!current.guard_released);
+    assert_eq!(st.delegation_store.tasks().unwrap().len(), 1);
+}
+
+#[test]
+fn spec258_remplacement_pendant_catalogue_refuse_sans_effet_et_conserve_recu() {
+    let (state, root, _peer) = fixture("c258drift", "human_lineage_compose_v1");
+    let task_id = "25800000-0000-4000-8000-000000000040";
+    let mut task = lineage_task(task_id, &owner_agent(), "working");
+    task.round = 1;
+    task.definition.protocol = "codex_app_server".into();
+    let child = {
+        let mut st = state.lock().unwrap();
+        task.child = st.presences["instance-1"].name.clone();
+        task.child_instance = Some("instance-1".into());
+        let peer = spec094_live_test_connection(&mut st, "conn-1");
+        st.runtime_catalogue_connections
+            .insert("conn-1".into(), (task.child.clone(), "instance-1".into()));
+        peer.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
+        st.delegation_store
+            .insert(&task, "c258drift", b"drift")
+            .unwrap();
+        peer
+    };
+    let shared = state.clone();
+    let worker = thread::spawn(move || {
+        let mut reader = BufReader::new(child);
+        let DaemonToWrapper::ReadRuntimeCatalogue { token } =
+            crate::daemon::presence_tests::read_control(&mut reader)
+        else {
+            panic!("lecture seule attendue");
+        };
+        {
+            let st = shared.lock().unwrap();
+            let mut changed = st.delegation_store.get(task_id).unwrap().unwrap();
+            changed.child_instance = Some("replacement".into());
+            st.delegation_store.save(&changed).unwrap();
+        }
+        handle_wrapper_message(
+            "conn-1",
+            WrapperToDaemon::RuntimeCatalogueReported {
+                token,
+                outcome: bridget_transport::protocol::RuntimeCatalogueOutcome::Observed {
+                    models: Vec::new(),
+                },
+            },
+            &shared,
+        );
+    });
+    let request = json!({"action":"compose","task_id":task_id,"request_id":"25800000-0000-4000-8000-000000000041","expected_round":1,"operation":{"kind":"send","body":"Garder le brouillon","intent":"queue"}});
+    let refused = call(&state, &root, request.clone());
+    assert_eq!(refused["outcome"], "refused", "{refused}");
+    assert_eq!(refused["code"], "snapshot_changed");
+    worker.join().unwrap();
+    assert_eq!(call(&state, &root, request), refused);
+    assert_eq!(
+        state
+            .lock()
+            .unwrap()
+            .pending_post_response_controls
+            .get("human")
+            .map_or(0, Vec::len),
+        0
+    );
+}
+
+#[test]
+fn spec258_ancien_wrapper_ne_recoit_aucune_trame_catalogue_inconnue() {
+    let (state, root, _peer) = fixture("c258legacy", "human_lineage_compose_v1");
+    let task_id = "25800000-0000-4000-8000-000000000050";
+    let mut task = lineage_task(task_id, &owner_agent(), "working");
+    task.round = 1;
+    task.definition.protocol = "codex_app_server".into();
+    let child = {
+        let mut st = state.lock().unwrap();
+        task.child = st.presences["instance-1"].name.clone();
+        task.child_instance = Some("instance-1".into());
+        let peer = spec094_live_test_connection(&mut st, "conn-1");
+        peer.set_read_timeout(Some(Duration::from_millis(50)))
+            .unwrap();
+        st.delegation_store
+            .insert(&task, "c258legacy", b"legacy")
+            .unwrap();
+        peer
+    };
+    handle_wrapper_message(
+        "conn-1",
+        WrapperToDaemon::ObservationCapabilities {
+            events: Vec::new(),
+            runtime_catalogue: true,
+        },
+        &state,
+    );
+    assert!(
+        state
+            .lock()
+            .unwrap()
+            .runtime_catalogue_connections
+            .contains_key("conn-1")
+    );
+    handle_wrapper_message(
+        "conn-1",
+        WrapperToDaemon::ObservationCapabilities {
+            events: Vec::new(),
+            runtime_catalogue: false,
+        },
+        &state,
+    );
+    assert!(
+        !state
+            .lock()
+            .unwrap()
+            .runtime_catalogue_connections
+            .contains_key("conn-1")
+    );
+    let read = call(
+        &state,
+        &root,
+        json!({"action":"compose","task_id":task_id,"request_id":"25800000-0000-4000-8000-000000000051","expected_round":0,"operation":{"kind":"read"}}),
+    );
+    assert_eq!(read["capabilities"]["send"], true, "{read}");
+    assert_eq!(read["capabilities"]["select_runtime"], false);
+    assert_eq!(read["code"], "runtime_unsupported");
+    let mut reader = BufReader::new(child);
+    let mut line = String::new();
+    assert!(
+        reader.read_line(&mut line).is_err(),
+        "aucune trame nouvelle vers l'ancien wrapper"
+    );
+    assert!(state.lock().unwrap().pending_runtime_catalogues.is_empty());
+}
+
+#[test]
+fn spec258_revoque_libere_ou_deconnecte_ne_remet_aucune_commande() {
+    use bridget_transport::protocol::SpawnPosture;
+    for reason in ["instance", "agent", "released", "offline"] {
+        let (state, root, _t3) = fixture(&format!("c258-{reason}"), "human_lineage_compose_v1");
+        let task_id = uuid::Uuid::new_v4().to_string();
+        let mut task = lineage_task(&task_id, &owner_agent(), "working");
+        task.round = 1;
+        let _child = {
+            let mut st = state.lock().unwrap();
+            task.child = st.presences["instance-1"].name.clone();
+            task.child_instance = Some("instance-1".into());
+            let peer = spec094_live_test_connection(&mut st, "conn-1");
+            match reason {
+                "instance" => st
+                    .delegation_store
+                    .grant(
+                        "instance-1",
+                        std::path::Path::new("/tmp"),
+                        SpawnPosture::Development,
+                        true,
+                    )
+                    .unwrap(),
+                "agent" => st
+                    .delegation_store
+                    .grant_agent(
+                        &task.child,
+                        "instance-1",
+                        std::path::Path::new("/tmp"),
+                        SpawnPosture::Development,
+                        true,
+                    )
+                    .unwrap(),
+                "released" => task.guard_released = true,
+                "offline" => {
+                    st.connections.remove("conn-1");
+                }
+                _ => unreachable!(),
+            }
+            st.delegation_store
+                .insert(&task, &format!("c258-{reason}"), b"guards")
+                .unwrap();
+            peer
+        };
+        let request = json!({"action":"compose","task_id":task_id,"request_id":uuid::Uuid::new_v4().to_string(),"expected_round":1,
+            "operation":{"kind":"send","body":"Conserver le brouillon", "intent":"queue"}});
+        let response = call(&state, &root, request.clone());
+        assert_eq!(response["outcome"], "refused", "{reason}: {response}");
+        assert_eq!(response["capabilities"]["send"], false);
+        assert_eq!(call(&state, &root, request), response);
+        assert!(
+            state
+                .lock()
+                .unwrap()
+                .pending_post_response_controls
+                .get("human")
+                .is_none()
+        );
+    }
+}
+
+#[test]
+fn spec258_echec_ecriture_controle_garde_issue_inconnue_et_recu_dispatched() {
+    use bridget_transport::protocol::{ProviderObservation, ProviderOperation};
+    let (state, root, _t3) = fixture("c258broken", "human_lineage_compose_v1");
+    let task_id = uuid::Uuid::new_v4().to_string();
+    let mut task = lineage_task(&task_id, &owner_agent(), "working");
+    task.round = 1;
+    task.definition.capabilities.observed = Some(ProviderObservation {
+        binary_path: "/fixture/provider".into(),
+        binary_version: "test".into(),
+        binary_digest: "0".repeat(64),
+        contract_version: "fixture258".into(),
+        operations: vec![ProviderOperation::Interrupt],
+    });
+    let execution = format!("execution-{}", task.mission);
+    {
+        let mut st = state.lock().unwrap();
+        task.child = st.presences["instance-1"].name.clone();
+        task.child_instance = Some("instance-1".into());
+        drop(spec094_live_test_connection(&mut st, "conn-1"));
+        st.delegation_store
+            .insert(&task, "c258broken", b"control")
+            .unwrap();
+        st.execution_store
+            .record_starting(
+                "submission258-broken",
+                &execution,
+                &task.child,
+                unix_timestamp(),
+            )
+            .unwrap();
+        st.execution_store
+            .transition_if_current(
+                &execution,
+                "starting",
+                0,
+                1,
+                "running",
+                "provider_accepted",
+                unix_timestamp(),
+            )
+            .unwrap();
+    }
+    let request_id = uuid::Uuid::new_v4().to_string();
+    let request = json!({"action":"compose","task_id":task_id,"request_id":request_id,"expected_round":1,"operation":{"kind":"interrupt"}});
+    let response = call(&state, &root, request.clone());
+    assert_eq!(response["outcome"], "outcome_unknown", "{response}");
+    assert_eq!(call(&state, &root, request), response);
+    let st = state.lock().unwrap();
+    let scope = crate::communication::issuer_scope(&format!("human-compose:{}", owner_agent()));
+    let record = st
+        .execution_store
+        .lookup_control_command(&scope, &request_id, unix_timestamp())
+        .unwrap()
+        .unwrap();
+    assert!(matches!(
+        record.status,
+        crate::execution_store::ControlCommandStatus::Dispatched
+    ));
+    assert_eq!(
+        st.delegation_store.get(&task_id).unwrap().unwrap().state,
+        "working"
+    );
+}
+
+#[test]
+fn spec258_compose_refuse_ronde_modifiee_enveloppe_et_autre_racine() {
+    let (state, root, _peer) = fixture("compose258-guard", "human_lineage_compose_v1");
+    let task_id = "25800000-0000-4000-8000-000000000004";
+    let mut task = lineage_task(task_id, &owner_agent(), "working");
+    task.round = 2;
+    state
+        .lock()
+        .unwrap()
+        .delegation_store
+        .insert(&task, "compose258-guard", b"guard")
+        .unwrap();
+    let mut action = json!({"action":"compose","task_id":task_id,"request_id":"25800000-0000-4000-8000-000000000005",
+        "expected_round":1,"operation":{"kind":"send","body":"Même texte","intent":"queue"}});
+    let refused = call(&state, &root, action.clone());
+    assert_eq!(refused["code"], "round_changed", "{refused}");
+    action["operation"]["body"] = json!("autre texte");
+    assert_eq!(
+        call(&state, &root, action.clone())["code"],
+        "envelope_mismatch"
+    );
+    let foreign_id = "25800000-0000-4000-8000-000000000006";
+    let mut foreign = lineage_task(foreign_id, "autre-proprietaire", "working");
+    foreign.round = 2;
+    state
+        .lock()
+        .unwrap()
+        .delegation_store
+        .insert(&foreign, "compose258-foreign", b"foreign")
+        .unwrap();
+    action["task_id"] = json!(foreign_id);
+    action["request_id"] = json!("25800000-0000-4000-8000-000000000007");
+    assert_eq!(call(&state, &root, action)["code"], "task_unavailable");
+}
+
 // ---------------------------------------------------------------------------
 // Fermeture des formes ouvertes en entrée.
 // ---------------------------------------------------------------------------
@@ -1385,17 +2140,73 @@ fn native162_lineage_autres_actions_v2_refusees_avec_erreurs_v1() {
     );
 }
 
+/// Préparation distante partagée : mêmes reçus de flotte et identité worker que la lecture162.
+fn reserve_remote_lineage_fixture(
+    st: &mut DaemonState,
+    task: &mut crate::delegation::Task,
+    label: &str,
+) -> UnixStream {
+    use crate::fleet::{SpawnOrder, SpawnSubmission};
+    use bridget_transport::protocol::SpawnOwnership;
+    use sha2::{Digest, Sha256};
+    st.registry = AgentRegistry::from_json(
+        &json!({"machines":{"cartae":{
+            "enabled":true,"worker_id":"worker-cartae","provisioning_revision":1,
+            "credential_fingerprint":format!("{:x}", Sha256::digest(b"lineage162-secret")),
+            "allowed_agent_types":["fixture"],"mappings":{}
+        }}})
+        .to_string(),
+        "/tmp/lineage162-agents.json",
+    )
+    .unwrap();
+    let now = unix_now_secs();
+    let order = SpawnOrder {
+        posture: None,
+        agent_type: "fixture".into(),
+        project: None,
+        requested_name: Some(task.child.clone()),
+        cwd: PathBuf::from("/tmp"),
+        persistent: false,
+        command_id: uuid::Uuid::new_v4().to_string(),
+        issued_at: now,
+        deadline_at: now + 60,
+        ownership: Some(SpawnOwnership {
+            parent_instance_id: task.owner_instance.clone(),
+            parent_execution_id: None,
+            objective_id: None,
+            delegation_id: Some(task.task_id.clone()),
+            project: None,
+            role: "native_delegate".into(),
+            max_children: None,
+            max_depth: None,
+        }),
+        remote_placement: task.remote_placement.clone(),
+    };
+    let SpawnSubmission::Start(lease) = st.fleet.request_spawn(&order, now).unwrap() else {
+        panic!("réservation distante attendue, cas {label}");
+    };
+    task.child_instance = Some(lease.instance_id);
+    st.delegation_store
+        .insert(&task, label, b"remote-journal162")
+        .unwrap();
+    native_delegation::remote_command_identity(st, task).unwrap();
+    let peer = spec094_live_test_connection(st, "worker162-journal");
+    st.connection_roles
+        .insert("worker162-journal".into(), ConnectionRole::Worker);
+    st.peer_uids
+        .insert("worker162-journal".into(), unsafe { libc::geteuid() });
+    peer
+}
+
 /// T029/T032 : lecture froide authentifiée, sans présence du fournisseur ni
 /// réplication locale. La socket permet de modifier les gardes pendant le RPC.
 #[test]
 fn native162_journal_distant_froid_gap_perte_et_gardes_sans_repli_local() {
-    use crate::fleet::{SpawnOrder, SpawnSubmission};
     use bridget_transport::protocol::{
-        ClientCapability, IdentityCredential, RemotePlacement, SpawnOwnership, WorkerHello,
+        ClientCapability, IdentityCredential, RemotePlacement, WorkerHello,
         WorkerIdentity, WorkerJournalFragment, WorkerRequestOperation, WorkerResponse,
         WorkerResponseOperation,
     };
-    use sha2::{Digest, Sha256};
 
     for case in ["cold", "gap", "lost", "placement", "permissions", "human"] {
         let (state, root, _t3_peer) = fixture(&format!("l162-j-{case}"), "human_lineage_view_v1");
@@ -1417,57 +2228,9 @@ fn native162_journal_distant_froid_gap_perte_et_gardes_sans_repli_local() {
             definition_digest: "a".repeat(64),
             permission_digest: "b".repeat(64),
         });
-        let worker_peer =
-            {
-                let mut st = state.lock().unwrap();
-                st.registry = AgentRegistry::from_json(&json!({"machines":{"cartae":{
-                "enabled":true,"worker_id":"worker-cartae","provisioning_revision":1,
-                "credential_fingerprint":format!("{:x}", Sha256::digest(b"lineage162-secret")),
-                "allowed_agent_types":["fixture"],"mappings":{}
-            }}}).to_string(), "/tmp/lineage162-agents.json").unwrap();
-                let now = unix_now_secs();
-                let order = SpawnOrder {
-                    posture: None,
-                    agent_type: "fixture".into(),
-                    project: None,
-                    requested_name: Some(task.child.clone()),
-                    cwd: PathBuf::from("/tmp"),
-                    persistent: false,
-                    command_id: uuid::Uuid::new_v4().to_string(),
-                    issued_at: now,
-                    deadline_at: now + 60,
-                    ownership: Some(SpawnOwnership {
-                        parent_instance_id: task.owner_instance.clone(),
-                        parent_execution_id: None,
-                        objective_id: None,
-                        delegation_id: Some(task_id.clone()),
-                        project: None,
-                        role: "native_delegate".into(),
-                        max_children: None,
-                        max_depth: None,
-                    }),
-                    remote_placement: task.remote_placement.clone(),
-                };
-                let SpawnSubmission::Start(lease) = st.fleet.request_spawn(&order, now).unwrap()
-                else {
-                    panic!("réservation distante attendue, cas {case}");
-                };
-                task.child_instance = Some(lease.instance_id);
-                st.delegation_store
-                    .insert(&task, &format!("journal162-{case}"), b"remote-journal162")
-                    .unwrap();
-                assert!(
-                    st.router.get_agent(&task.child).is_none(),
-                    "aucun fournisseur local"
-                );
-                native_delegation::remote_command_identity(&st, &task).unwrap();
-                let peer = spec094_live_test_connection(&mut st, "worker162-journal");
-                st.connection_roles
-                    .insert("worker162-journal".into(), ConnectionRole::Worker);
-                st.peer_uids
-                    .insert("worker162-journal".into(), unsafe { libc::geteuid() });
-                peer
-            };
+        let worker_peer={let mut st=state.lock().unwrap();
+            let peer=reserve_remote_lineage_fixture(&mut st,&mut task,&format!("journal162-{case}"));
+            assert!(st.router.get_agent(&task.child).is_none(),"aucun fournisseur local");peer};
         let hello = WorkerHello {
             version: 1,
             identity: WorkerIdentity {

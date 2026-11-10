@@ -4948,6 +4948,12 @@ fn project_sender_and_prepare_refusals(task: &Task, view: &mut Value) {
     }
 }
 
+/// Closed provider diagnostic shared by status and both failure-notice paths.
+/// No raw provider text, account identifier or credential is copied into a notice.
+pub(super) fn provider_error_recovery(error: &str) -> Option<&'static str> {
+    (error == "api_error:oauth_session_expired").then_some("Reconnectez la session Claude sur la machine de cette tâche, avec le compte existant : sa session OAuth a expiré et son renouvellement a échoué. Le code fournisseur api_error est conservé. Cette connexion doit être réauthentifiée ; ce constat ne prouve aucun arrêt global. Conservez la tâche, sa clé et ses fichiers. Ne rejouez pas une tâche failed et ne créez pas de remplacement avant la reconnexion, la confirmation de son arrêt natif et la vérification du dossier. Une suite distincte reste soumise à son autorisation. Les autres travaux autorisés suivent leur propre état.")
+}
+
 fn task_view(task: &Task, phase: Option<&str>, full: bool) -> Value {
     let (agent_type, model, effort, posture) = match &task.request {
         NativeDelegationRequest::Delegate {
@@ -5153,6 +5159,11 @@ fn task_view(task: &Task, phase: Option<&str>, full: bool) -> Value {
         view["error_message"]=json!("Conservez les produits et faites vérifier les métadonnées provider_result du journal corrélé à cette tâche. Le résultat final Claude est inconnu ou signale une erreur d’exécution sans cause plus précise. Ce constat concerne cette tâche ; les autres travaux autorisés suivent leur propre état.");
         view["error_recovery"]=json!("Depuis le statut complet, transmettez detail.provider_failure au responsable Bridget. Il doit corréler tâche, ronde, mission, instance et génération avant de lire subtype, is_error et terminal_reason. Sans événement conservé, la cause historique reste inconnue. Un commit poussé ne prouve pas la réussite du tour fournisseur. Conservez tâche, clé et fichiers ; aucun rejeu initial, remplacement ni reclassification automatique. Avant toute suite distincte autorisée, confirmez l’arrêt natif et le rapport du dossier.");
         view["error_human_action"]=json!("Si le diagnostic manque ou qu’une reprise dépasse votre mandat, demandez à l’utilisateur la décision sur la suite du travail conservé. Ne changez ni compte, ni modèle, ni droits et ne réinstallez pas le programme sur ce seul refus.");
+    }
+    if let Some(recovery)=task.projected_error().and_then(provider_error_recovery) {
+        view["error_message"]=json!("Reconnectez la session Claude de cette machine : sa session OAuth a expiré et le renouvellement a échoué. Aucun résultat de revue n’a été obtenu.");
+        view["error_recovery"]=json!(recovery);
+        view["error_human_action"]=json!("Demandez à l’utilisateur de reconnecter le compte Claude existant sur la machine indiquée. Gardez le même compte et modèle ; n’essayez ni autre connexion ni rejeu de cette tâche failed sans une suite autorisée.");
     }
     if task.projected_error()==Some("api_error") {
         view["error_message"]=json!("Le fournisseur a refusé ce tour avec api_error. Ce code seul ne prouve ni quota épuisé, ni compte invalide, ni durée excessive.");
@@ -5447,7 +5458,7 @@ fn current_task_view(st: &DaemonState, task: &Task, full: bool) -> Result<Value,
         json!({"request_id":row.request_id,"kind":row.kind,"outcome":row.outcome,"decision":row.decision,"decided_at":row.decided_at,"delivery_state":row.delivery_state,"delivery_error":row.void_reason.as_deref().map(|reason| match reason { "permission_source_unavailable" | "delivery_check_unavailable" | "provider_quota_exhausted" | "revoked" => reason, _ => "delivery_invalidated" })})).collect::<Vec<_>>());
     st.dispatch_diagnostics.attach(task, &mut view, full);
     quota_questions246::attach(st, task, &mut view);
-    if full && matches!(task.projected_error(),Some("stdout Codex fermé pendant le tour" | "api_error" | "terminal Codex: failed:cause=model_not_found" | "terminal Claude inconnu" | "error_during_execution")) {
+    if full && matches!(task.projected_error(),Some("stdout Codex fermé pendant le tour" | "api_error" | "api_error:oauth_session_expired" | "terminal Codex: failed:cause=model_not_found" | "terminal Claude inconnu" | "error_during_execution")) {
         // Projection après autorisation : aucun contenu de stderr ni chemin privé.
         // Une commande manquante reste inconnue, jamais reconstruite depuis un ancien slot.
         let command=task.remote_placement.as_ref().and_then(|_|remote_command_identity(st,task).ok());
@@ -5461,8 +5472,14 @@ fn current_task_view(st: &DaemonState, task: &Task, full: bool) -> Result<Value,
             "command_id":command.as_ref().map(|c|&c.command_id),
             "generation":command.as_ref().map(|c|c.generation),
             "command_identity_confirmed":command.is_some(),
-            "cause":if task.projected_error()==Some("terminal Codex: failed:cause=model_not_found") { "model_not_found" } else { "unobserved" },
+            "cause":match task.projected_error(){Some("terminal Codex: failed:cause=model_not_found")=>"model_not_found",Some("api_error:oauth_session_expired")=>"oauth_session_expired",_=>"unobserved"},
             "verification":"Transmettez cette référence au responsable de la machine : retrouver le reçu natif lié à task_id, vérifier instance et génération, puis lire seulement le stderr de cette identité. Si command_identity_confirmed=false, la référence de commande reste à vérifier ; ne choisissez pas un journal par approximation ni un ancien slot. Ces identifiants n’autorisent aucune reprise et ne prouvent pas un état courant du fournisseur."});
+    }
+    if full && task.projected_error()==Some("api_error:oauth_session_expired") {
+        view["detail"]["provider_failure"]["provider_code"]=json!("api_error");
+        view["detail"]["provider_failure"]["round"]=json!(task.round);
+        view["detail"]["provider_failure"]["mission_id"]=json!(task.mission);
+        view["detail"]["provider_failure"]["verification"]=json!("Diagnostic OAuth exact observé pendant ce tour et corrélé à son terminal fournisseur api_error. Aucune lecture de secret ni nouveau journal n’est nécessaire pour connaître cette cause. Ne reclassifiez pas les anciens api_error sans leur propre preuve.");
     }
     if full && matches!(task.projected_error(),Some("terminal Claude inconnu" | "error_during_execution")) {
         view["detail"]["provider_failure"]["round"]=json!(task.round);
@@ -13085,12 +13102,13 @@ pub(super) fn tick(state: &Arc<Mutex<DaemonState>>) {
                         |reset| format!("{error} (retour quota : {reset})"),
                     );
                     let recovery = quota_questions246::notice(&st,&task);
+                    let provider_recovery=provider_error_recovery(error).unwrap_or("");
                     let mut notice = bridget_core::BridgetMessage::new(
                         &task.owner,
                         &task.owner,
                         format!(
-                            "Délégation native {} échouée : {}{}",
-                            task.task_id, description, recovery
+                            "{}Délégation native {} échouée : {}{}",
+                            if provider_recovery.is_empty(){String::new()}else{format!("{provider_recovery}\n\n")}, task.task_id, description, recovery
                         ),
                     );
                     notice.id = format!("native-failure-{}", task.task_id);
@@ -36684,6 +36702,51 @@ for frame in frames: print(json.dumps(frame),flush=True)
             assert_eq!(before,serde_json::to_vec(&task).unwrap());
         }
         cleanup(&remote_config);cleanup(&config);
+    }
+
+    #[test]
+    fn spec258_oauth_guidage_confirme_sans_reclassification_historique_ni_mutation() {
+        let (st, config, mut task, _) = remote162_capture_fixture();
+        task.state = "failed".into();
+        task.error = Some("api_error:oauth_session_expired".into());
+        task.result = None;
+        let before = serde_json::to_vec(&task).unwrap();
+        let view = current_task_view(&st, &task, true).unwrap();
+        assert_eq!(
+            view["detail"]["provider_failure"]["cause"],
+            "oauth_session_expired"
+        );
+        assert_eq!(
+            view["detail"]["provider_failure"]["provider_code"],
+            "api_error"
+        );
+        assert!(
+            view["error_message"]
+                .as_str()
+                .unwrap()
+                .starts_with("Reconnectez")
+        );
+        assert!(
+            view["error_recovery"]
+                .as_str()
+                .unwrap()
+                .contains("compte existant")
+        );
+        assert!(
+            view["error_recovery"]
+                .as_str()
+                .unwrap()
+                .contains("Ne rejouez pas")
+        );
+        assert!(
+            current_task_view(&st, &task, false).unwrap()["detail"]["provider_failure"].is_null()
+        );
+        assert_eq!(before, serde_json::to_vec(&task).unwrap());
+        task.error = Some("api_error".into());
+        let old = current_task_view(&st, &task, true).unwrap();
+        assert_eq!(old["detail"]["provider_failure"]["cause"], "unobserved");
+        assert!(provider_error_recovery("api_error").is_none());
+        cleanup(&config);
     }
 
     #[test]

@@ -19,8 +19,15 @@ pub(crate) fn human_lineage(
         }
     };
     let capability = request.request.capability();
+    // Compose can wait up to 3 s for the target catalogue, then 4 s for its
+    // confirmation. Keep one absolute budget, below the adapter's 10 s limit.
+    let budget = if matches!(&request.request, A::Compose { .. }) {
+        9
+    } else {
+        6
+    };
     let mut connection =
-        DaemonConnection::connect_until(socket, Instant::now() + Duration::from_secs(6))?;
+        DaemonConnection::connect_until(socket, Instant::now() + Duration::from_secs(budget))?;
     connection.max_response_bytes = 128 * 1024;
     let watch = matches!(request.request, A::Watch);
     let following = matches!(request.request, A::Journal { follow: true, .. });
@@ -161,5 +168,62 @@ pub(crate) fn human_lineage(
             };
         };
         response = serde_json::from_slice(&frame).map_err(|_| watch_protocol_error())?;
+    }
+}
+
+#[cfg(test)]
+mod composer_tests {
+    use super::*;
+    use std::io::{BufRead, Write};
+    use std::os::unix::net::UnixListener;
+
+    #[test]
+    fn spec258_client_compose_attend_catalogue_et_confirmation_sans_rejeu() {
+        let directory =
+            std::env::temp_dir().join(format!("l258-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir(&directory).unwrap();
+        let socket = directory.join("s");
+        let listener = UnixListener::bind(&socket).unwrap();
+        let task_id = uuid::Uuid::new_v4().to_string();
+        let request_id = uuid::Uuid::new_v4().to_string();
+        let reply = serde_json::json!({"version":1,"status":"ok","task_id":task_id,"request_id":request_id,"round":1,"state":"working","outcome":"selected","code":null,
+            "message":"Réglage confirmé.","selection":{"model":"target","effort":"high"},"models":[],
+            "capabilities":{"send":true,"steer":false,"interrupt":false,"select_runtime":true,"attachments":false}});
+        let server = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(10)))
+                .unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut writer = stream;
+            for (index,response) in [serde_json::json!({"type":"RoleAccepted","role":"client"}),
+                serde_json::json!({"type":"ClientWelcome","version":1,"build_id":"fixture258","horizon_secs":60,"issued_at_tolerance_secs":5,"capabilities":["human_lineage_compose_v1"]}),
+                serde_json::json!({"type":"HumanLineageResult","result":reply})].into_iter().enumerate() {
+                let mut line=String::new();assert!(reader.read_line(&mut line).unwrap()>0);
+                let request:serde_json::Value=serde_json::from_str(&line).unwrap();
+                if index==1 {assert_eq!(request["capabilities"],serde_json::json!(["human_lineage_compose_v1"]));}
+                if index==2 {assert_eq!(request["request"]["request"]["operation"]["kind"],"select_runtime");
+                    std::thread::sleep(Duration::from_millis(6100));}
+                writeln!(writer,"{response}").unwrap();writer.flush().unwrap();
+            }
+            assert_eq!(reader.read_line(&mut String::new()).unwrap(), 0);
+        });
+        let request=serde_json::from_value(serde_json::json!({"version":1,"t3_thread_id":"root","project_root":"/fixture","request":{"action":"compose","task_id":task_id,"request_id":request_id,"expected_round":1,
+            "operation":{"kind":"select_runtime","model":"target","effort":"high"}}})).unwrap();
+        let mut output = Vec::new();
+        human_lineage(
+            &socket,
+            request,
+            |value| {
+                output.push(value.clone());
+                Ok(())
+            },
+            || false,
+        )
+        .unwrap();
+        assert_eq!(output.len(), 1);
+        assert_eq!(output[0]["outcome"], "selected");
+        server.join().unwrap();
+        std::fs::remove_dir_all(directory).unwrap();
     }
 }

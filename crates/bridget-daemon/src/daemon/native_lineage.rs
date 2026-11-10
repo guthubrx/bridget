@@ -6,6 +6,7 @@ use bridget_transport::protocol::{
     HumanLineageWatchEvent as Event,
 };
 use serde_json::Value;
+use bridget_transport::protocol::{HumanComposeOperation as Op, HumanComposeSendIntent as Intent};
 
 #[derive(Clone)]
 pub(super) struct Context {
@@ -13,6 +14,185 @@ pub(super) struct Context {
     project: Option<bridget_transport::protocol::CommunicationProject>,
     owner: String,
     root: String,
+}
+
+/// Preuve privée créée seulement après la garde humaine et la liaison de tâche.
+pub(super) struct ComposeAuthority {
+    context: Context,
+    task: crate::delegation::Task,
+}
+impl ComposeAuthority {
+    pub(super) fn issuer_scope(&self) -> String {
+        crate::communication::issuer_scope(&format!("human-compose:{}", self.context.root))
+    }
+}
+
+fn compose_live_task(
+    st: &DaemonState,
+    conn: &str,
+    context: &Context,
+    expected: &crate::delegation::Task,
+) -> Result<(), E> {
+    guard(st, conn, context)?;
+    let task = st
+        .delegation_store
+        .get(&expected.task_id)
+        .map_err(|_| E::StoreUnavailable)?
+        .filter(|t| t.root_owner() == context.root)
+        .ok_or(E::TaskUnavailable)?;
+    if task.round != expected.round
+        || task.child != expected.child
+        || task.child_instance != expected.child_instance
+        || task.remote_placement != expected.remote_placement
+        || task.owner != expected.owner
+        || task.owner_instance != expected.owner_instance
+        || task.origin_owner_instance != expected.origin_owner_instance
+    {
+        return Err(E::SnapshotChanged);
+    }
+    if !matches!(task.state.as_str(), "working" | "waiting_for_children") || task.guard_released {
+        return Err(E::TaskUnavailable);
+    }
+    for agent in [&task.owner, &task.child, &context.root] {
+        if st
+            .delegation_store
+            .revoked_agent(agent)
+            .map_err(|_| E::StoreUnavailable)?
+        {
+            return Err(E::BindingUnavailable);
+        }
+    }
+    for instance in [
+        Some(task.owner_instance.as_str()),
+        Some(task.origin_owner_instance.as_str()),
+        task.child_instance.as_deref(),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        if st
+            .delegation_store
+            .revoked(instance)
+            .map_err(|_| E::StoreUnavailable)?
+        {
+            return Err(E::BindingUnavailable);
+        }
+    }
+    let route = st.router.get_agent(&task.child).ok_or(E::TaskUnavailable)?;
+    let identity = live_connection_identity(st, &route.connection_id).ok_or(E::TaskUnavailable)?;
+    if identity.0 != task.child
+        || Some(identity.1.as_str()) != task.child_instance.as_deref()
+        || !st.connections.contains_key(&route.connection_id)
+    {
+        return Err(E::TaskUnavailable);
+    }
+    if task.remote_placement.is_some() {
+        native_delegation::remote_command_identity(st, &task).map_err(|_| E::TaskUnavailable)?;
+        let placement =
+            native_delegation::remote_lineage_placement(st, &task).ok_or(E::TaskUnavailable)?;
+        let worker = st
+            .remote_workers
+            .get(&placement.machine_id)
+            .ok_or(E::TaskUnavailable)?;
+        let expected_worker = task.remote_placement.as_ref().ok_or(E::TaskUnavailable)?;
+        if placement.contact_state != bridget_transport::protocol::WorkerContactState::Connected
+            || worker.identity.worker_id != expected_worker.worker_id
+            || worker.identity.provisioning_revision != expected_worker.provisioning_revision
+            || worker.last_contact.elapsed()
+                >= Duration::from_secs(bridget_transport::protocol::WORKER_STALE_SECS as u64)
+            || !st.connections.contains_key(&worker.conn_id)
+        {
+            return Err(E::TaskUnavailable);
+        }
+    }
+    Ok(())
+}
+
+pub(super) fn authorize_compose_send(
+    st: &DaemonState,
+    conn: &str,
+    message: &bridget_core::BridgetMessage,
+    proof: &ComposeAuthority,
+) -> Result<(), String> {
+    compose_live_task(st, conn, &proof.context, &proof.task)
+        .map_err(|e| format!("human_compose_{e:?}"))?;
+    let A::Compose {
+        request_id,
+        operation: Op::Send { body, intent },
+        ..
+    } = &proof.context.request.request
+    else {
+        return Err("human_compose_operation_mismatch".into());
+    };
+    let wanted = match intent {
+        Intent::Queue => bridget_core::MessageIntent::QueueOnly,
+        Intent::Steer => bridget_core::MessageIntent::SteerCurrent,
+    };
+    if message.id != *request_id
+        || message.from != "human"
+        || message.to != proof.task.child
+        || message.body != *body
+        || message.intent != Some(wanted)
+        || message.reply
+        || message.in_reply_to.is_some()
+    {
+        return Err("human_compose_envelope_mismatch".into());
+    }
+    Ok(())
+}
+
+pub(super) fn authorize_compose_control(
+    st: &DaemonState,
+    conn: &str,
+    command: &ExecutionControlCommand,
+    proof: &ComposeAuthority,
+) -> Result<(), String> {
+    compose_live_task(st, conn, &proof.context, &proof.task)
+        .map_err(|e| format!("human_compose_{e:?}"))?;
+    let A::Compose {
+        request_id,
+        operation,
+        ..
+    } = &proof.context.request.request
+    else {
+        return Err("human_compose_operation_mismatch".into());
+    };
+    let operation_ok = match operation {
+        Op::Interrupt {} => {
+            command.operation == ExecutionControlOperation::Interrupt && command.message.is_none()
+        }
+        Op::Send {
+            intent: Intent::Steer,
+            ..
+        } => {
+            command.operation == ExecutionControlOperation::SteerCurrent
+                && command
+                    .message
+                    .as_ref()
+                    .is_some_and(|message| authorize_compose_send(st, conn, message, proof).is_ok())
+        }
+        _ => false,
+    };
+    let snapshot = st
+        .execution_store
+        .latest_in_chain(&format!("execution-{}", proof.task.mission))
+        .map_err(|_| "human_compose_execution_unavailable")?
+        .ok_or("human_compose_execution_unavailable")?;
+    let target = st
+        .execution_store
+        .execution_control_target(&snapshot.execution_id)
+        .map_err(|_| "human_compose_execution_unavailable")?
+        .ok_or("human_compose_execution_unavailable")?;
+    if command.command_id != *request_id
+        || command.execution_id != snapshot.execution_id
+        || command.generation != snapshot.generation
+        || command.revision != snapshot.revision
+        || !operation_ok
+        || target.target_agent != proof.task.child
+    {
+        return Err("human_compose_execution_mismatch".into());
+    }
+    Ok(())
 }
 
 pub(super) struct Watch {
@@ -87,6 +267,17 @@ fn validate(request: &Request) -> Result<(), E> {
             task_id,
             request_id,
         } if !valid_uuid(task_id) || !valid_uuid(request_id) => Err(E::InvalidRequest),
+        A::Compose {
+            task_id,
+            request_id,
+            operation,
+            expected_round,
+        } if !valid_uuid(task_id)
+            || !valid_uuid(request_id)
+            || !operation.bounded(*expected_round) =>
+        {
+            Err(E::InvalidRequest)
+        }
         _ => Ok(()),
     }
 }
@@ -222,6 +413,11 @@ pub(super) fn handle(
             result: journal_page(conn, &context, state).unwrap_or_else(E::result),
         });
     }
+    if matches!(request.request,A::Compose{..}) {
+        return Some(DaemonToWrapper::HumanLineageResult {
+            result:compose(conn,&context,state).unwrap_or_else(E::result),
+        });
+    }
     let mut drive = false;
     let result = {
         let st = state.lock().unwrap_or_else(|e| e.into_inner());
@@ -265,6 +461,7 @@ pub(super) fn handle(
                 drive = run;
                 Ok(receipt)
             }
+            A::Compose { .. } => unreachable!(),
             A::Journal { .. } => unreachable!(),
             A::Watch => unreachable!(),
         })
@@ -276,6 +473,684 @@ pub(super) fn handle(
     Some(DaemonToWrapper::HumanLineageResult {
         result: result.unwrap_or_else(E::result),
     })
+}
+
+fn compose_catalogue(
+    conn: &str,
+    context: &Context,
+    task: &crate::delegation::Task,
+    state: &Arc<Mutex<DaemonState>>,
+) -> Result<
+    Vec<bridget_transport::provider_catalogue::CatalogueModel>,
+    bridget_transport::protocol::RuntimeSelectionRefusal,
+> {
+    use bridget_transport::protocol::{
+        RuntimeCatalogueOutcome, RuntimeSelectionRefusal as Refusal,
+    };
+    if task.definition.protocol != "codex_app_server" {
+        return Err(Refusal::Unsupported);
+    }
+    let deadline = Instant::now() + Duration::from_secs(3);
+    let token = uuid::Uuid::new_v4().to_string();
+    let (sender, receiver) = std::sync::mpsc::channel();
+    let writer = {
+        let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+        if compose_live_task(&st, conn, context, task).is_err() {
+            return Err(Refusal::TargetUnavailable);
+        }
+        if st.pending_runtime_catalogues.len() >= 64 {
+            return Err(Refusal::Busy);
+        }
+        let Some(target) = st
+            .router
+            .get_agent(&task.child)
+            .map(|agent| agent.connection_id.clone())
+        else {
+            return Err(Refusal::TargetUnavailable);
+        };
+        if !st
+            .runtime_catalogue_connections
+            .get(&target)
+            .is_some_and(|(agent, instance)| {
+                agent == &task.child && Some(instance) == task.child_instance.as_ref()
+            })
+        {
+            return Err(Refusal::Unsupported);
+        }
+        let Some(writer) = st.connections.get(&target).cloned() else {
+            return Err(Refusal::TargetUnavailable);
+        };
+        st.pending_runtime_catalogues
+            .insert(token.clone(), (target, sender));
+        writer
+    };
+    let observed = if push_control_message_until(
+        &writer,
+        &DaemonToWrapper::ReadRuntimeCatalogue {
+            token: token.clone(),
+        },
+        deadline,
+    )
+    .is_ok()
+    {
+        receiver
+            .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+            .ok()
+    } else {
+        None
+    };
+    let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+    st.pending_runtime_catalogues.remove(&token);
+    if compose_live_task(&st, conn, context, task).is_err() {
+        return Err(Refusal::TargetUnavailable);
+    }
+    match observed {
+        Some(RuntimeCatalogueOutcome::Observed { models })
+            if models.len() <= bridget_transport::provider_catalogue::MAX_CATALOGUE_MODELS
+                && models
+                    .iter()
+                    .all(bridget_transport::provider_catalogue::CatalogueModel::valid)
+                && models
+                    .iter()
+                    .map(|m| &m.model)
+                    .collect::<std::collections::BTreeSet<_>>()
+                    .len()
+                    == models.len()
+                && serde_json::to_vec(&models).is_ok_and(|v| {
+                    v.len() <= bridget_transport::provider_catalogue::MAX_CATALOGUE_BYTES
+                }) =>
+        {
+            Ok(models)
+        }
+        Some(RuntimeCatalogueOutcome::Refused { reason }) => Err(reason),
+        _ => Err(Refusal::CatalogueUnavailable),
+    }
+}
+
+fn compose_snapshot(
+    st: &DaemonState,
+    conn: &str,
+    context: &Context,
+    task: &crate::delegation::Task,
+    request_id: &str,
+    models: &[bridget_transport::provider_catalogue::CatalogueModel],
+) -> Value {
+    let live = compose_live_task(st, conn, context, task).is_ok();
+    let active = live
+        && st
+            .execution_store
+            .latest_in_chain(&format!("execution-{}", task.mission))
+            .ok()
+            .flatten()
+            .is_some_and(|s| {
+                !matches!(
+                    s.state.as_str(),
+                    "completed" | "failed" | "interrupted" | "unreachable"
+                )
+            });
+    let supports = |operation| {
+        task.definition
+            .capabilities
+            .observed
+            .as_ref()
+            .is_some_and(|o| o.supports(operation))
+    };
+    let interrupt = active && supports(bridget_transport::protocol::ProviderOperation::Interrupt);
+    let steer = active && supports(bridget_transport::protocol::ProviderOperation::Steer);
+    let select_runtime =
+        live && task.definition.protocol == "codex_app_server" && !models.is_empty();
+    let selection = task
+        .child_instance
+        .as_deref()
+        .and_then(|id| st.presences.get(id))
+        .filter(|p| p.name == task.child)
+        .and_then(|p| {
+            p.model
+                .as_ref()
+                .map(|model| serde_json::json!({"model":model,"effort":p.effort}))
+        });
+    serde_json::json!({"version":1,"status":"ok","request_id":request_id,"task_id":task.task_id,"round":task.round,
+        "state":task.state,"outcome":"observed","code":null,
+        "message":if live {"Commandes de cet enfant disponibles. Les réglages confirmés concernent les prochains tours."}
+            else {"Cet enfant ne peut pas recevoir de commande dans son état actuel. Son journal et le brouillon sont conservés. Les autres tâches suivent leur propre état."},
+        "selection":selection,"models":models.iter().map(|m|serde_json::json!({"id":m.model,"name":m.model,"efforts":m.supported_efforts})).collect::<Vec<_>>(),
+        "capabilities":{"send":live,"steer":steer,"interrupt":interrupt,"select_runtime":select_runtime,"attachments":false}})
+}
+
+fn compose_outcome(value: &mut Value, outcome: &str, code: Option<&str>, message: &str) {
+    value["outcome"] = serde_json::json!(outcome);
+    value["code"] = serde_json::json!(code);
+    value["message"] = serde_json::json!(message);
+}
+
+fn compose(conn: &str, context: &Context, state: &Arc<Mutex<DaemonState>>) -> Result<Value, E> {
+    let A::Compose {
+        task_id,
+        request_id,
+        expected_round,
+        operation,
+    } = &context.request.request
+    else {
+        return Err(E::InvalidRequest);
+    };
+    let canonical = serde_json::to_string(&context.request).map_err(|_| E::InvalidRequest)?;
+    let st = state.lock().unwrap_or_else(|e| e.into_inner());
+    guard(&st, conn, context)?;
+    let task = st
+        .delegation_store
+        .get(task_id)
+        .map_err(|_| E::StoreUnavailable)?
+        .filter(|t| t.root_owner() == context.root && t.round > 0)
+        .ok_or(E::TaskUnavailable)?;
+    // Figer le reçu avant même la lecture fournisseur. Une perte du client
+    // pendant cette lecture ne doit pas autoriser un nouvel envoi vers un enfant remplacé.
+    let mut initial = compose_snapshot(&st, conn, context, &task, request_id, &[]);
+    if !matches!(operation, Op::Read {}) {
+        compose_outcome(
+            &mut initial,
+            "outcome_unknown",
+            Some("command_unconfirmed"),
+            "La commande est conservée. Relisez sa même clé pour vérifier son issue ; ne créez pas une seconde commande.",
+        );
+        if let Some(mut saved) = st.delegation_store.human_compose_reserve(
+            &context.root,
+            task_id,
+            request_id,
+            &canonical,
+            &initial,
+        )? {
+            // Relire le puits existant peut résoudre une remise tardive, sans nouvel envoi.
+            if saved["outcome"] == "outcome_unknown" && matches!(operation, Op::Send { .. }) {
+                let scope =
+                    crate::communication::issuer_scope(&format!("human-compose:{}", context.root));
+                if let Ok(key) = IdempotencyKey::new(scope, OperationKind::Send, request_id.clone())
+                {
+                    match st.idempotency.lookup(&key, unix_timestamp()) {
+                        Ok(LookupResult::Accepted { .. }) => compose_outcome(
+                            &mut saved,
+                            "accepted",
+                            None,
+                            "Message accepté par Bridget pour cet enfant.",
+                        ),
+                        Ok(LookupResult::Rejected {
+                            category, reason, ..
+                        }) => compose_outcome(&mut saved, "refused", Some(&category), &reason),
+                        _ => {}
+                    }
+                    st.delegation_store.human_compose_complete(
+                        &context.root,
+                        task_id,
+                        request_id,
+                        &canonical,
+                        &saved,
+                    )?;
+                }
+            }
+            if saved["outcome"] == "outcome_unknown"
+                && matches!(
+                    operation,
+                    Op::Interrupt {}
+                        | Op::Send {
+                            intent: Intent::Steer,
+                            ..
+                        }
+                )
+            {
+                let scope =
+                    crate::communication::issuer_scope(&format!("human-compose:{}", context.root));
+                if let Some(record) = st
+                    .execution_store
+                    .lookup_control_command(&scope, request_id, unix_timestamp())
+                    .map_err(|_| E::StoreUnavailable)?
+                {
+                    match record.status {
+                        crate::execution_store::ControlCommandStatus::Accepted => compose_outcome(
+                            &mut saved,
+                            "accepted",
+                            None,
+                            "Contrôle accepté par le pilote. La mission n'est pas annulée.",
+                        ),
+                        crate::execution_store::ControlCommandStatus::Refused { reason } => {
+                            compose_outcome(
+                                &mut saved,
+                                "refused",
+                                Some(&reason),
+                                "Le pilote a refusé ce contrôle. Le journal et les autres tâches sont conservés.",
+                            )
+                        }
+                        _ => {}
+                    }
+                    st.delegation_store.human_compose_complete(
+                        &context.root,
+                        task_id,
+                        request_id,
+                        &canonical,
+                        &saved,
+                    )?;
+                }
+            }
+            return Ok(saved);
+        }
+    }
+    drop(st);
+    let (models, catalogue_failure) = match compose_catalogue(conn, context, &task, state) {
+        Ok(models) => (models, None),
+        Err(reason) => (Vec::new(), Some(reason)),
+    };
+    let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+    guard(&st, conn, context)?;
+    let current = st
+        .delegation_store
+        .get(task_id)
+        .map_err(|_| E::StoreUnavailable)?
+        .ok_or(E::TaskUnavailable)?;
+    if current.child != task.child
+        || current.child_instance != task.child_instance
+        || current.round != task.round
+        || current.remote_placement != task.remote_placement
+        || current.owner != task.owner
+        || current.owner_instance != task.owner_instance
+        || current.origin_owner_instance != task.origin_owner_instance
+        || current.root_owner() != context.root
+    {
+        if current.root_owner() != context.root {
+            return Err(E::TaskUnavailable);
+        }
+        if matches!(operation, Op::Read {}) {
+            return Err(E::SnapshotChanged);
+        }
+        compose_outcome(
+            &mut initial,
+            "refused",
+            Some("snapshot_changed"),
+            "La liaison de cet enfant a changé avant la remise. Aucune commande n'a été envoyée. Rechargez ses commandes avant une nouvelle intervention ; le brouillon est conservé.",
+        );
+        initial["capabilities"] = serde_json::json!({"send":false,"steer":false,"interrupt":false,"select_runtime":false,"attachments":false});
+        st.delegation_store.human_compose_complete(
+            &context.root,
+            task_id,
+            request_id,
+            &canonical,
+            &initial,
+        )?;
+        return Ok(initial);
+    }
+    let task = current;
+    let mut response = compose_snapshot(&st, conn, context, &task, request_id, &models);
+    if response["capabilities"]["send"] == true
+        && let Some(reason) = catalogue_failure
+    {
+        let code = serde_json::to_value(reason).map_err(|_| E::StoreUnavailable)?;
+        response["code"] = serde_json::json!(format!(
+            "runtime_{}",
+            code.as_str().unwrap_or("unavailable")
+        ));
+        response["message"] = serde_json::json!(format!(
+            "Messages disponibles. Le catalogue de cette session n'a pas fourni de choix utilisable ({}). Modèle et effort restent inchangés ; les autres commandes gardent leurs capacités affichées.",
+            code.as_str().unwrap_or("unavailable")
+        ));
+    }
+    if matches!(operation, Op::Read {}) {
+        return Ok(response);
+    }
+    compose_outcome(
+        &mut response,
+        "outcome_unknown",
+        Some("command_unconfirmed"),
+        "La commande est conservée. Relisez sa même clé pour vérifier son issue ; ne créez pas une seconde commande.",
+    );
+    if task.round != *expected_round {
+        compose_outcome(
+            &mut response,
+            "refused",
+            Some("round_changed"),
+            "La ronde de cet enfant a changé. Rechargez ses commandes avant une nouvelle intervention ; le texte est conservé.",
+        );
+    } else if compose_live_task(&st, conn, context, &task).is_err() {
+        compose_outcome(
+            &mut response,
+            "refused",
+            Some("target_unavailable"),
+            "Cet enfant n'est pas pilotable avec sa liaison actuelle. Conservez le brouillon et relisez sa tâche ; aucun autre travail n'est arrêté.",
+        );
+    } else {
+        match operation {
+            Op::Send {
+                body,
+                intent: Intent::Queue,
+            } => {
+                let proof = ComposeAuthority {
+                    context: context.clone(),
+                    task: task.clone(),
+                };
+                let mut message = bridget_core::BridgetMessage::new("human", &task.child, body);
+                message.id = request_id.clone();
+                message.origin = Some(bridget_core::MessageOrigin::Human);
+                message.intent = Some(bridget_core::MessageIntent::QueueOnly);
+                let mut controls = Vec::new();
+                let outcome = handle_idempotent_send_with_result_authority(
+                    conn,
+                    message,
+                    request_id.clone(),
+                    unix_timestamp(),
+                    IdempotentSendAdmission {
+                        project: None,
+                        issued_at_tolerance_secs: CLIENT_ISSUED_AT_TOLERANCE_SECS,
+                    },
+                    &mut st,
+                    &mut controls,
+                    Some(RetainedSendAuthority::Lineage(&proof)),
+                    false,
+                );
+                st.pending_post_response_controls
+                    .entry(conn.into())
+                    .or_default()
+                    .extend(controls);
+                match outcome {
+                    DaemonToWrapper::IdempotencyResult {
+                        issue: IdempotencyIssue::Accepted { .. },
+                        ..
+                    } => compose_outcome(
+                        &mut response,
+                        "accepted",
+                        None,
+                        "Message accepté par Bridget pour cet enfant.",
+                    ),
+                    DaemonToWrapper::IdempotencyResult {
+                        issue:
+                            IdempotencyIssue::Rejected {
+                                category, reason, ..
+                            },
+                        ..
+                    } => compose_outcome(&mut response, "refused", Some(&category), &reason),
+                    DaemonToWrapper::Nack { reason, .. } => compose_outcome(
+                        &mut response,
+                        "outcome_unknown",
+                        Some("send_unconfirmed"),
+                        &format!(
+                            "{reason}. Conservez cette même clé pour relire l'issue ; le brouillon reste conservé."
+                        ),
+                    ),
+                    _ => {}
+                }
+            }
+            Op::Interrupt {}
+            | Op::Send {
+                intent: Intent::Steer,
+                ..
+            } => {
+                compose_execution_control(
+                    &mut st,
+                    conn,
+                    context,
+                    &task,
+                    request_id,
+                    operation,
+                    &mut response,
+                )?;
+            }
+            Op::SelectRuntime { model, effort } => {
+                drop(st);
+                return compose_select_runtime(
+                    conn,
+                    context,
+                    &task,
+                    model,
+                    effort.as_deref(),
+                    &models,
+                    &canonical,
+                    response,
+                    state,
+                );
+            }
+            Op::Read {} => unreachable!(),
+        }
+    }
+    st.delegation_store.human_compose_complete(
+        &context.root,
+        task_id,
+        request_id,
+        &canonical,
+        &response,
+    )?;
+    Ok(response)
+}
+
+fn compose_execution_control(
+    st: &mut DaemonState,
+    conn: &str,
+    context: &Context,
+    task: &crate::delegation::Task,
+    request_id: &str,
+    operation: &Op,
+    response: &mut Value,
+) -> Result<(), E> {
+    let (kind, message, capability) = match operation {
+        Op::Send {
+            body,
+            intent: Intent::Steer,
+        } => {
+            let mut message = bridget_core::BridgetMessage::new("human", &task.child, body);
+            message.id = request_id.into();
+            message.origin = Some(bridget_core::MessageOrigin::Human);
+            message.intent = Some(bridget_core::MessageIntent::SteerCurrent);
+            (
+                ExecutionControlOperation::SteerCurrent,
+                Some(message),
+                "steer",
+            )
+        }
+        Op::Interrupt {} => (ExecutionControlOperation::Interrupt, None, "interrupt"),
+        _ => return Err(E::InvalidRequest),
+    };
+    if response["capabilities"][capability] != true {
+        compose_outcome(
+            response,
+            "refused",
+            Some("capability_unavailable"),
+            "Le pilote n'annonce pas ce contrôle sur le tour actuel. Utilisez l'envoi en file s'il est disponible ; le brouillon et les autres tâches sont conservés.",
+        );
+        return Ok(());
+    }
+    if let Some(snapshot) = st
+        .execution_store
+        .latest_in_chain(&format!("execution-{}", task.mission))
+        .map_err(|_| E::StoreUnavailable)?
+    {
+        let proof = ComposeAuthority {
+            context: context.clone(),
+            task: task.clone(),
+        };
+        let command = ExecutionControlCommand {
+            version: 1,
+            command_id: request_id.into(),
+            execution_id: snapshot.execution_id,
+            generation: snapshot.generation,
+            revision: snapshot.revision,
+            operation: kind,
+            message,
+        };
+        match handle_execution_control_authorized(
+            Some(conn),
+            &proof.issuer_scope(),
+            command,
+            st,
+            Some(&proof),
+        ) {
+            DaemonToWrapper::ControlExecutionResult {
+                outcome: ExecutionControlOutcome::Accepted,
+                ..
+            } => compose_outcome(
+                response,
+                "accepted",
+                None,
+                "Contrôle accepté par le pilote sur cet enfant. La mission n'est pas annulée.",
+            ),
+            DaemonToWrapper::ControlExecutionResult {
+                outcome: ExecutionControlOutcome::Refused(reason),
+                ..
+            } => {
+                let code = serde_json::to_value(reason).map_err(|_| E::StoreUnavailable)?;
+                compose_outcome(
+                    response,
+                    "refused",
+                    code.as_str(),
+                    "Le pilote a refusé ce contrôle. Conservez la tâche et son journal ; les autres travaux suivent leur état.",
+                );
+            }
+            _ => {}
+        }
+    } else {
+        compose_outcome(
+            response,
+            "refused",
+            Some("execution_unavailable"),
+            "Aucun tour actif attesté n'est disponible pour cet enfant. Relisez sa tâche ; aucune annulation de mission n'a été demandée.",
+        );
+    }
+    Ok(())
+}
+
+fn compose_select_runtime(
+    conn: &str,
+    context: &Context,
+    task: &crate::delegation::Task,
+    model: &str,
+    effort: Option<&str>,
+    models: &[bridget_transport::provider_catalogue::CatalogueModel],
+    canonical: &str,
+    mut response: Value,
+    state: &Arc<Mutex<DaemonState>>,
+) -> Result<Value, E> {
+    use bridget_transport::protocol::{RuntimeSelection, RuntimeSelectionOutcome as Outcome};
+    let A::Compose { request_id, .. } = &context.request.request else {
+        return Err(E::InvalidRequest);
+    };
+    let deadline = Instant::now() + Duration::from_secs(4);
+    let token = uuid::Uuid::new_v4().to_string();
+    let (sender, receiver) = std::sync::mpsc::channel();
+    let prepared = {
+        let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+        compose_live_task(&st, conn, context, task)?;
+        let choice = models.iter().find(|m| m.model == model);
+        if task.definition.protocol != "codex_app_server" || choice.is_none() {
+            compose_outcome(
+                &mut response,
+                "refused",
+                Some("model_unavailable"),
+                "Ce modèle n'est pas annoncé pour la connexion actuelle de cet enfant. Conservez le réglage courant ; aucun remplacement n'a été effectué.",
+            );
+            None
+        } else {
+            let choice = choice.unwrap();
+            let effort = effort
+                .or(choice.default_effort.as_deref())
+                .filter(|e| choice.supported_efforts.iter().any(|known| known == e));
+            if let Some(effort) = effort {
+                let selection = RuntimeSelection {
+                    model: model.into(),
+                    effort: effort.into(),
+                };
+                if !selection.valid() || st.pending_runtime_selections.len() >= 64 {
+                    compose_outcome(
+                        &mut response,
+                        "refused",
+                        Some("runtime_busy"),
+                        "La commande ne peut pas être admise maintenant. Conservez les réglages actuels ; relisez la même commande avant un nouvel essai.",
+                    );
+                    None
+                } else {
+                    let target = st
+                        .router
+                        .get_agent(&task.child)
+                        .ok_or(E::TaskUnavailable)?
+                        .connection_id
+                        .clone();
+                    let writer = st
+                        .connections
+                        .get(&target)
+                        .cloned()
+                        .ok_or(E::TaskUnavailable)?;
+                    st.pending_runtime_selections
+                        .insert(token.clone(), (target, sender));
+                    Some((writer, selection))
+                }
+            } else {
+                compose_outcome(
+                    &mut response,
+                    "refused",
+                    Some("effort_unavailable"),
+                    "Aucun effort demandé ou défaut natif confirmé n'est disponible pour ce modèle. Choisissez un effort annoncé ; les réglages actuels sont conservés.",
+                );
+                None
+            }
+        }
+    };
+    if let Some((writer, selection)) = prepared {
+        let outcome = if push_control_message_until(
+            &writer,
+            &DaemonToWrapper::SelectRuntime {
+                token: token.clone(),
+                selection: selection.clone(),
+            },
+            deadline,
+        )
+        .is_ok()
+        {
+            receiver
+                .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+                .unwrap_or(Outcome::OutcomeUnknown {})
+        } else {
+            Outcome::OutcomeUnknown {}
+        };
+        let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+        st.pending_runtime_selections.remove(&token);
+        // Une réponse tardive ou une révocation ne permet pas d'affirmer l'état courant.
+        if compose_live_task(&st, conn, context, task).is_ok() {
+            match outcome {
+                Outcome::Selected {
+                    selection: confirmed,
+                } if confirmed == selection => {
+                    response["selection"] =
+                        serde_json::json!({"model":confirmed.model,"effort":confirmed.effort});
+                    let _ = handle_runtime_for_instance(
+                        &task.child,
+                        confirmed.model,
+                        Some(confirmed.effort),
+                        bridget_transport::protocol::RuntimeSource::CodexAppServer,
+                        task.child_instance.as_deref(),
+                        &mut st,
+                    );
+                    compose_outcome(
+                        &mut response,
+                        "selected",
+                        None,
+                        "Modèle et effort confirmés par le pilote pour les prochains tours. Le tour courant conserve son exécution.",
+                    );
+                }
+                Outcome::Refused { reason } => {
+                    let code = serde_json::to_value(reason).map_err(|_| E::StoreUnavailable)?;
+                    compose_outcome(
+                        &mut response,
+                        "refused",
+                        code.as_str(),
+                        "Le pilote a refusé ce réglage. Conservez la sélection courante et choisissez parmi les capacités annoncées ; aucun remplacement n'est demandé.",
+                    );
+                }
+                _ => {}
+            }
+        }
+    }
+    let st = state.lock().unwrap_or_else(|e| e.into_inner());
+    guard(&st, conn, context)?;
+    st.delegation_store.human_compose_complete(
+        &context.root,
+        &task.task_id,
+        request_id,
+        canonical,
+        &response,
+    )?;
+    Ok(response)
 }
 
 fn journal_page(

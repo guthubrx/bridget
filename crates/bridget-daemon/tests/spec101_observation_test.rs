@@ -285,6 +285,7 @@ fn spec101_real_daemon_journal_share_collision_and_restart() {
     );
     for peer in [&mut source, &mut other] {
         peer.send(WrapperToDaemon::ObservationCapabilities {
+            runtime_catalogue: false,
             events: vec![Kind::TurnEnded, Kind::FileWritten],
         });
         peer.barrier();
@@ -395,7 +396,7 @@ fn spec101_real_daemon_journal_share_collision_and_restart() {
         "journal_only"
     );
     // CLI ferme sa vue : absorber son Unsubscribe avant la barrière suivante.
-    source.send(WrapperToDaemon::ObservationCapabilities { events: vec![] });
+    source.send(WrapperToDaemon::ObservationCapabilities { events: vec![], runtime_catalogue: false });
     loop {
         if matches!(source.read(), DaemonToWrapper::Unsubscribe { .. }) {
             break;
@@ -409,6 +410,7 @@ fn spec101_real_daemon_journal_share_collision_and_restart() {
         "source_unavailable"
     );
     source.send(WrapperToDaemon::ObservationCapabilities {
+        runtime_catalogue: false,
         events: vec![Kind::TurnEnded, Kind::FileWritten],
     });
     source.barrier();
@@ -468,6 +470,7 @@ fn spec101_real_daemon_journal_share_collision_and_restart() {
     );
     let mut source = Peer::register(&root, SOURCE, "source101");
     source.send(WrapperToDaemon::ObservationCapabilities {
+        runtime_catalogue: false,
         events: vec![Kind::TurnEnded],
     });
     source.barrier();

@@ -1,9 +1,9 @@
 //! Contrat filaire lineage 149 : aucun processus, socket ou environnement.
 //! Chaque forme acceptée ou refusée est figée ici comme référence de codec.
 use bridget_transport::protocol::{
-    DaemonToWrapper, HUMAN_LINEAGE_MAX_SEQ, HUMAN_LINEAGE_VERSION, HumanLineageAction,
-    HumanLineageError, HumanLineageRequest, HumanLineageWatchEvent, WrapperToDaemon, decode,
-    encode,
+    ClientCapability, DaemonToWrapper, HUMAN_COMPOSE_BODY_MAX_BYTES, HUMAN_LINEAGE_MAX_SEQ,
+    HUMAN_LINEAGE_VERSION, HumanLineageAction, HumanLineageError, HumanLineageRequest,
+    HumanLineageWatchEvent, WrapperToDaemon, decode, encode,
 };
 use serde_json::{Value, json};
 
@@ -89,6 +89,162 @@ fn lineage149_capacite_exigee_par_action() {
     assert_eq!(serde_json::to_value(ClientCapability::HumanLineageViewV1).unwrap(), "human_lineage_view_v1");
     assert_eq!(serde_json::to_value(ClientCapability::HumanLineageWatchV1).unwrap(), "human_lineage_watch_v1");
     assert_eq!(serde_json::to_value(ClientCapability::HumanLineageCancelV1).unwrap(), "human_lineage_cancel_v1");
+}
+
+/// Forme d'écriture `compose` : opération fermée, capacité dédiée, bornes
+/// locales. Le daemon garde la corrélation tâche/ronde/instance.
+fn compose(operation: Value) -> Value {
+    json!({"action":"compose","task_id":"14900000-0000-4000-8000-000000000001",
+        "expected_round":3,"request_id":"49000000-0000-4000-8000-000000000002",
+        "operation":operation})
+}
+
+#[test]
+fn spec258_compose_decode_les_quatre_operations_avec_capacite_dediee() {
+    let forms = [
+        json!({"kind":"read"}),
+        json!({"kind":"send","body":"bonjour","intent":"queue"}),
+        json!({"kind":"send","body":"ligne\nsuite","intent":"steer"}),
+        json!({"kind":"select_runtime","model":"gpt-6.1-sol","effort":"high"}),
+        json!({"kind":"select_runtime","model":"simple","effort":null}),
+        json!({"kind":"interrupt"}),
+    ];
+    for operation in forms {
+        let action: HumanLineageAction = serde_json::from_value(compose(operation.clone()))
+            .unwrap_or_else(|e| panic!("{operation}: {e}"));
+        assert_eq!(action.capability(), ClientCapability::HumanLineageComposeV1);
+        assert_eq!(serde_json::to_value(&action).unwrap(), compose(operation));
+    }
+    assert_eq!(
+        serde_json::to_value(ClientCapability::HumanLineageComposeV1).unwrap(),
+        "human_lineage_compose_v1"
+    );
+}
+
+#[test]
+fn spec258_catalogue_capacite_absente_legacy_et_lecture_sans_effet() {
+    let legacy=json!({"type":"ObservationCapabilities","events":[]});
+    assert!(matches!(serde_json::from_value::<WrapperToDaemon>(legacy.clone()).unwrap(),WrapperToDaemon::ObservationCapabilities{runtime_catalogue:false,..}));
+    assert_eq!(serde_json::to_value(WrapperToDaemon::ObservationCapabilities{events:Vec::new(),runtime_catalogue:false}).unwrap(),legacy);
+    #[derive(serde::Deserialize)]
+    #[serde(tag="type")]
+    enum Legacy { ObservationCapabilities {events:Vec<bridget_transport::protocol::ObservationKind>} }
+    let new=json!({"type":"ObservationCapabilities","events":[],"runtime_catalogue":true});
+    let Legacy::ObservationCapabilities{events}=serde_json::from_value(new).unwrap();assert!(events.is_empty());
+    for invalid in [json!({"status":"observed","models":[],"selection":{"model":"forged"}}),json!({"status":"mystery"})] {
+        assert!(serde_json::from_value::<bridget_transport::protocol::RuntimeCatalogueOutcome>(invalid).is_err());
+    }
+}
+
+#[test]
+fn spec258_compose_refuse_operation_ou_champ_inconnu() {
+    for operation in [
+        json!({"kind":"resume"}),
+        json!({"kind":"send","body":"x","intent":"interrupt"}),
+        json!({"kind":"send","body":"x","intent":"queue","agent":"autre"}),
+        json!({"kind":"interrupt","force":true}),
+        json!({"kind":"read","body":null}),
+        json!({"kind":"read","intent":"queue"}),
+        json!({"kind":"select_runtime","model":"m"}),
+    ] {
+        assert!(
+            serde_json::from_value::<HumanLineageAction>(compose(operation.clone())).is_err(),
+            "{operation}"
+        );
+    }
+    let mut champ_inconnu = compose(json!({"kind":"read"}));
+    champ_inconnu["agent_type"] = json!("claude");
+    assert!(serde_json::from_value::<HumanLineageAction>(champ_inconnu).is_err());
+}
+
+#[test]
+fn spec258_compose_bornes_locales_fermees() {
+    let bornes = |operation: Value| {
+        serde_json::from_value::<HumanLineageAction>(compose(operation))
+            .map(|a| match a {
+                HumanLineageAction::Compose {
+                    operation,
+                    expected_round,
+                    ..
+                } => operation.bounded(expected_round),
+                _ => unreachable!(),
+            })
+            .unwrap()
+    };
+    assert!(bornes(json!({"kind":"interrupt"})));
+    assert!(bornes(json!({"kind":"send","body":"a\tb\nc","intent":"queue"})));
+    assert!(bornes(json!({"kind":"select_runtime","model":"m","effort":"high"})));
+    assert!(!bornes(json!({"kind":"send","body":"   ","intent":"queue"})));
+    assert!(!bornes(json!({"kind":"send","body":"a\u{0007}b","intent":"steer"})));
+    let trop_long = "x".repeat(HUMAN_COMPOSE_BODY_MAX_BYTES + 1);
+    assert!(!bornes(json!({"kind":"send","body":trop_long,"intent":"queue"})));
+    let limite = "x".repeat(HUMAN_COMPOSE_BODY_MAX_BYTES);
+    assert!(bornes(json!({"kind":"send","body":limite,"intent":"queue"})));
+    assert!(!bornes(json!({"kind":"select_runtime","model":"","effort":"high"})));
+    assert!(!bornes(json!({"kind":"select_runtime","model":"m","effort":"hi gh"})));
+}
+
+#[test]
+fn spec258_compose_lecture_de_ronde_et_mutations_exigent_une_ronde_constatee() {
+    let avec_ronde = |round: u64, operation: Value| {
+        let mut value = compose(operation);
+        value["expected_round"] = json!(round);
+        serde_json::from_value::<HumanLineageAction>(value).map(|a| match a {
+            HumanLineageAction::Compose {
+                operation,
+                expected_round,
+                ..
+            } => operation.bounded(expected_round),
+            _ => unreachable!(),
+        })
+    };
+    assert_eq!(avec_ronde(0, json!({"kind":"read"})).unwrap(), true);
+    assert_eq!(avec_ronde(3, json!({"kind":"read"})).unwrap(), false);
+    assert_eq!(avec_ronde(0, json!({"kind":"interrupt"})).unwrap(), false);
+    assert_eq!(
+        avec_ronde(0, json!({"kind":"send","body":"x","intent":"queue"})).unwrap(),
+        false
+    );
+    assert_eq!(
+        avec_ronde(1, json!({"kind":"select_runtime","model":"m","effort":"high"})).unwrap(),
+        true
+    );
+    assert_eq!(
+        avec_ronde(u32::MAX as u64 + 1, json!({"kind":"read"})).is_err(),
+        true
+    );
+}
+
+#[test]
+fn spec258_reponse_compose_fermee_et_nullable() {
+    use bridget_transport::protocol::{HumanComposeResponseV1, HumanComposeStatus};
+    let reponse = json!({
+        "version": 1,
+        "status": "ok",
+        "request_id": "49000000-0000-4000-8000-000000000002",
+        "task_id": "14900000-0000-4000-8000-000000000001",
+        "round": 3,
+        "outcome": "observed",
+        "code": null,
+        "message": "",
+        "state": "running",
+        "selection": null,
+        "models": [{"id": "gpt-6.1-sol", "name": "GPT 6.1 Sol", "efforts": ["low", "high"]}],
+        "capabilities": {"send": true, "steer": true, "interrupt": true,
+            "select_runtime": true, "attachments": false}
+    });
+    let decoded: HumanComposeResponseV1 = serde_json::from_value(reponse.clone()).unwrap();
+    assert_eq!(decoded.status, HumanComposeStatus::Ok);
+    assert_eq!(serde_json::to_value(&decoded).unwrap(), reponse);
+    let mut selected = reponse.clone();
+    selected["selection"] = json!({"model": "gpt-6.1-sol", "effort": null});
+    assert!(serde_json::from_value::<HumanComposeResponseV1>(selected).is_ok());
+    let mut champ = reponse.clone();
+    champ["agent_type"] = json!("claude");
+    assert!(serde_json::from_value::<HumanComposeResponseV1>(champ).is_err());
+    let mut sans_null = reponse;
+    sans_null.as_object_mut().unwrap().remove("code");
+    assert!(serde_json::from_value::<HumanComposeResponseV1>(sans_null).is_err());
 }
 
 #[test]

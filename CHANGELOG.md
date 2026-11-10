@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.8.25 — 2026-11-10
+
+- Piloter un enfant existant depuis sa conversation humaine : envoi, guidage, interruption et sélection confirmée du modèle/effort selon les capacités de sa session.
+- Lire le catalogue du pilote ciblé, local ou distant, sans modifier le parent ni créer de mission. Les anciens wrappers restent compatibles.
+- Conserver les commandes et leur clé après une réponse perdue ; une relecture ne double pas la remise.
+- Préciser la reconnexion du compte existant quand le fournisseur atteste une session OAuth expirée ; conserver api_error et distinguer les refus de cause inconnue.
+
 ## 0.8.23 — 2026-11-09
 
 - Exposer les six formes de références du brief avec leurs champs requis et rappeler kind/label/host/path dans le guidage de continuation. Validateur natif inchangé.

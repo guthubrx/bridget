@@ -203,6 +203,9 @@ pub enum ClientCapability {
     HumanLineageViewV1,
     HumanLineageWatchV1,
     HumanLineageCancelV1,
+    /// Composition humaine d'un tour enfant : écriture dédiée, jamais déduite
+    /// de l'annulation ni de la consultation.
+    HumanLineageComposeV1,
     /// Ajout de lecteurs, distinct des publications et des sollicitations.
     ThreadMembersV1,
     /// Invalidation humaine sans contenu, distincte des observations agents.
@@ -5436,6 +5439,10 @@ pub enum WrapperToDaemon {
     /// Capacités réelles du producteur primaire vivant ; vide = indisponible.
     ObservationCapabilities {
         events: Vec<ObservationKind>,
+        /// Compréhension du contrôle en lecture, distincte des capacités du pilote.
+        /// Absent dans les anciens wrappers : le daemon ne leur envoie aucune trame nouvelle.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        runtime_catalogue: bool,
     },
     ObservationRequest {
         request: ObservationRequest,
@@ -5913,6 +5920,10 @@ pub enum WrapperToDaemon {
     RuntimeSelectionReported {
         token: String,
         outcome: RuntimeSelectionOutcome,
+    },
+    RuntimeCatalogueReported {
+        token:String,
+        outcome:RuntimeCatalogueOutcome,
     },
     /// Rapporter le modèle et le niveau d'effort courants d'un agent.
     ///
@@ -6695,6 +6706,7 @@ pub enum DaemonToWrapper {
         token: String,
         selection: RuntimeSelection,
     },
+    ReadRuntimeCatalogue { token:String },
     RuntimeSelectionResult {
         outcome: RuntimeSelectionOutcome,
     },
@@ -7253,6 +7265,12 @@ pub enum RuntimeSelectionRefusal {
     TargetUnavailable,
     AttachRequired,
     Busy,
+}
+#[derive(Debug,Clone,PartialEq,Eq,Serialize,Deserialize)]
+#[serde(tag="status",rename_all="snake_case",deny_unknown_fields)]
+pub enum RuntimeCatalogueOutcome {
+    Observed { models:Vec<crate::provider_catalogue::CatalogueModel> },
+    Refused { reason:RuntimeSelectionRefusal },
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "status", rename_all = "snake_case", deny_unknown_fields)]

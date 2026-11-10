@@ -3229,7 +3229,7 @@ impl LinkWorker {
         self.observation_events = events.clone();
         send_wrapper_message(
             &self.writer,
-            WrapperToDaemon::ObservationCapabilities { events },
+            WrapperToDaemon::ObservationCapabilities { events, runtime_catalogue: false },
         );
     }
 
@@ -5804,7 +5804,7 @@ mod tests {
                 let mut line = String::new();
                 assert!(reader.read_line(&mut line).unwrap() > 0);
                 match decode::<WrapperToDaemon>(line.trim()).unwrap() {
-                    WrapperToDaemon::ObservationCapabilities { events } => {
+                    WrapperToDaemon::ObservationCapabilities { events, .. } => {
                         assert!(!events.is_empty(), "pas de fausse déconnexion");
                         saw_capabilities = true;
                     }
@@ -7696,7 +7696,7 @@ mod tests {
         let mut announced = Vec::new();
         let mut line = String::new();
         while reader.read_line(&mut line).is_ok_and(|n| n > 0) {
-            if let Ok(WrapperToDaemon::ObservationCapabilities { events }) =
+            if let Ok(WrapperToDaemon::ObservationCapabilities { events, .. }) =
                 decode::<WrapperToDaemon>(line.trim())
             {
                 announced.push(events);

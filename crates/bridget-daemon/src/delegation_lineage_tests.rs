@@ -132,6 +132,27 @@ fn open_store(path: &std::path::Path) -> DelegationStore {
     DelegationStore::open(path).unwrap()
 }
 
+#[test]
+fn spec258_recu_compose_survit_reouverture_et_refuse_canon_modifie() {
+    let directory=temp_dir("compose258");let path=directory.join("state.db");
+    let unknown=json!({"outcome":"outcome_unknown","request_id":"commande"});
+    {
+        let store=open_store(&path);
+        assert_eq!(store.human_compose_reserve("racine","tache","commande","canon",&unknown).unwrap(),None);
+        assert_eq!(store.human_compose_reserve("racine","tache","commande","canon",&json!({})).unwrap(),Some(unknown.clone()));
+    }
+    let store=open_store(&path);
+    assert_eq!(store.human_compose_reserve("racine","tache","commande","canon",&json!({})).unwrap(),Some(unknown));
+    for (root,task,canon) in [("autre","tache","canon"),("racine","autre","canon"),("racine","tache","modifie")] {
+        assert!(matches!(store.human_compose_reserve(root,task,"commande",canon,&json!({})),Err(E::EnvelopeMismatch)));
+    }
+    let accepted=json!({"outcome":"accepted","request_id":"commande"});
+    store.human_compose_complete("racine","tache","commande","canon",&accepted).unwrap();
+    assert_eq!(store.human_compose_reserve("racine","tache","commande","canon",&json!({})).unwrap(),Some(accepted));
+    assert!(matches!(store.human_compose_complete("racine","tache","commande","modifie",&json!({})),Err(E::EnvelopeMismatch)));
+    drop(store);std::fs::remove_dir_all(directory).unwrap();
+}
+
 /// Schéma 148 minimal : la table native_delegations seule, sans table de
 /// projection ni index lineage. Les payloads omettent les champs 149 ; les
 /// défauts serde doivent les combler à la migration.

@@ -167,6 +167,7 @@ struct ActiveTurn {
     stop_reason: Option<String>,
     permission_denied: bool,
     latest_assistant_rate_limited: bool,
+    latest_assistant_api_error: bool,
     structured_rate_limit_observed: bool,
     background_tasks: BackgroundTasks,
     /// Issue déjà signalée au fil de la mission : sa réponse lui appartient.
@@ -1246,6 +1247,7 @@ fn spawn_worker(
                 stop_reason: None,
                 permission_denied: false,
                 latest_assistant_rate_limited: false,
+                latest_assistant_api_error: false,
                 structured_rate_limit_observed: false,
                 background_tasks: BackgroundTasks::default(),
                 terminal_sent: false,
@@ -1427,13 +1429,21 @@ fn known_claude_terminal_reason(reason: &str) -> Option<&str> {
         .then_some(reason)
 }
 
-fn classify_claude_result(value: &Value, interrupted: bool, rate_limited: bool) -> ManagedTerminal {
+fn classify_claude_result(
+    value: &Value,
+    interrupted: bool,
+    rate_limited: bool,
+    diagnostic: Option<&str>,
+) -> ManagedTerminal {
     let reason = value.get("terminal_reason").and_then(Value::as_str);
     let reason_absent = value.get("terminal_reason").is_none_or(Value::is_null);
     let subtype = value.get("subtype").and_then(Value::as_str);
-    let success_type = value.get("subtype").is_none_or(Value::is_null) || subtype == Some("success");
+    let success_type =
+        value.get("subtype").is_none_or(Value::is_null) || subtype == Some("success");
     if interrupted {
-        return ManagedTerminal::Failed { detail: "provider_permission_denied".into() };
+        return ManagedTerminal::Failed {
+            detail: "provider_permission_denied".into(),
+        };
     }
     if value["is_error"].as_bool() == Some(false)
         && ((reason == Some("completed") && success_type)
@@ -1444,21 +1454,48 @@ fn classify_claude_result(value: &Value, interrupted: bool, rate_limited: bool) 
     if reason.is_some_and(interrupt_terminal_reason) {
         return ManagedTerminal::Cancelled;
     }
+    // A successful assistant quotation is never an authentication fact. Only
+    // this exact provider diagnostic, correlated to an api_error terminal in
+    // the same turn, establishes an expired session. Keep the raw api_error.
+    const EXPIRED: &str =
+        "Failed to authenticate: OAuth session expired and could not be refreshed";
+    if reason == Some("api_error")
+        && value["is_error"].as_bool() == Some(true)
+        && (value
+            .get("result")
+            .and_then(Value::as_str)
+            .is_some_and(|s| s.trim() == EXPIRED)
+            || diagnostic.is_some_and(|s| s.trim() == EXPIRED))
+    {
+        return ManagedTerminal::Failed {
+            detail: "api_error:oauth_session_expired".into(),
+        };
+    }
     if rate_limited {
-        return ManagedTerminal::Failed { detail: "usage_limit".into() };
+        return ManagedTerminal::Failed {
+            detail: "usage_limit".into(),
+        };
     }
     let fallback = if reason_absent && value["is_error"].as_bool() == Some(true) {
         match subtype {
             Some("error_max_turns") => Some("max_turns"),
             Some("error_max_budget_usd") => Some("budget_exhausted"),
-            Some("error_max_structured_output_retries") => Some("structured_output_retry_exhausted"),
+            Some("error_max_structured_output_retries") => {
+                Some("structured_output_retry_exhausted")
+            }
             Some("error_during_execution") => Some("error_during_execution"),
             _ => None,
         }
-    } else { None };
+    } else {
+        None
+    };
     ManagedTerminal::Failed {
-        detail: reason.filter(|reason| *reason != "completed").and_then(known_claude_terminal_reason).or(fallback)
-            .unwrap_or("terminal Claude inconnu").to_owned(),
+        detail: reason
+            .filter(|reason| *reason != "completed")
+            .and_then(known_claude_terminal_reason)
+            .or(fallback)
+            .unwrap_or("terminal Claude inconnu")
+            .to_owned(),
     }
 }
 
@@ -1466,14 +1503,21 @@ fn classify_claude_result(value: &Value, interrupted: bool, rate_limited: bool) 
 // L'identifiant du message actif porte la corrélation dans le journal existant.
 fn claude_result_metadata(value: &Value, terminal: &ManagedTerminal, interrupted: bool) -> Value {
     let subtype = match value.get("subtype").and_then(Value::as_str) {
-        Some(s @ ("success" | "error_max_turns" | "error_during_execution"
-            | "error_max_budget_usd" | "error_max_structured_output_retries")) => s,
+        Some(
+            s @ ("success"
+            | "error_max_turns"
+            | "error_during_execution"
+            | "error_max_budget_usd"
+            | "error_max_structured_output_retries"),
+        ) => s,
         None if value.get("subtype").is_none_or(Value::is_null) => "missing",
         _ => "unrecognized",
     };
     let reason = match value.get("terminal_reason") {
         None | Some(Value::Null) => "missing",
-        Some(Value::String(reason)) => known_claude_terminal_reason(reason).unwrap_or("unrecognized"),
+        Some(Value::String(reason)) => {
+            known_claude_terminal_reason(reason).unwrap_or("unrecognized")
+        }
         _ => "unrecognized",
     };
     json!({
@@ -1484,6 +1528,7 @@ fn claude_result_metadata(value: &Value, terminal: &ManagedTerminal, interrupted
         "permission_denial_count": value.get("permission_denials").and_then(Value::as_array)
             .map_or(0, |v| v.len().min(1_000_000)),
         "permission_interrupted": interrupted,
+        "diagnostic_code": if matches!(terminal,ManagedTerminal::Failed{detail} if detail=="api_error:oauth_session_expired") {Some("oauth_session_expired")} else {None},
         "outcome": match terminal { ManagedTerminal::Completed => "completed",
             ManagedTerminal::Cancelled => "cancelled", ManagedTerminal::Failed { .. } => "failed" },
     })
@@ -1848,6 +1893,8 @@ fn spawn_reader(
                         assistant_limit_observation = Some(limited);
                     }
                     active.latest_assistant_rate_limited = limited;
+                    active.latest_assistant_api_error = value.get("error").and_then(Value::as_str) == Some("authentication_failed")
+                        || (value.get("error").is_none_or(Value::is_null) && value.get("isApiErrorMessage") == Some(&Value::Bool(true)));
                 }
                 drop(state);
                 // TOOL : le content_block_start arrive tôt avec name mais
@@ -1906,17 +1953,15 @@ fn spawn_reader(
                     .get("permission_denials")
                     .and_then(Value::as_array)
                     .map_or(0, Vec::len);
-                let (interrupted_for_permission, rate_limited) = queue
-                    .0
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner())
-                    .active
-                    .as_ref()
-                    .map_or((false, false), |active| (active.permission_denied, active.latest_assistant_rate_limited));
-                // Un outil bloqué par Claude ou un hook ne transforme pas un
-                // tour terminé en échec. Une interruption imposée par notre
-                // contrôle d'autorisation reste un refus terminal.
-                let terminal = classify_claude_result(&value, interrupted_for_permission, rate_limited);
+                let (interrupted_for_permission, terminal) = {
+                    let state=queue.0.lock().unwrap_or_else(|e|e.into_inner());
+                    let active=state.active.as_ref();
+                    let interrupted=active.is_some_and(|active|active.permission_denied);
+                    let terminal=classify_claude_result(&value,interrupted,
+                        active.is_some_and(|active|active.latest_assistant_rate_limited),
+                        active.filter(|active|active.latest_assistant_api_error).map(|active|active.response.as_str()));
+                    (interrupted,terminal)
+                };
                 let active_id = queue.0.lock().unwrap_or_else(|e| e.into_inner())
                     .active.as_ref().map(|active| active.message_id.clone());
                 if let Some(message_id) = active_id {
@@ -3411,22 +3456,22 @@ sys.stdin.readline()
         for reason in [None, Some(Value::Null), Some(json!("completed"))] {
             let mut frame = base.clone();
             if let Some(reason) = reason { frame["terminal_reason"] = reason; }
-            assert!(matches!(classify_claude_result(&frame,false,false),ManagedTerminal::Completed));
-            assert!(matches!(classify_claude_result(&frame,true,false),
+            assert!(matches!(classify_claude_result(&frame,false,false,None),ManagedTerminal::Completed));
+            assert!(matches!(classify_claude_result(&frame,true,false,None),
                 ManagedTerminal::Failed { detail } if detail=="provider_permission_denied"));
         }
         let mut explicit=base.clone();
         explicit["terminal_reason"]=json!("completed");explicit["subtype"]=Value::Null;
-        assert!(matches!(classify_claude_result(&explicit,false,false),ManagedTerminal::Completed));
+        assert!(matches!(classify_claude_result(&explicit,false,false,None),ManagedTerminal::Completed));
         explicit["is_error"]=json!(true);
-        assert!(matches!(classify_claude_result(&explicit,false,false),
+        assert!(matches!(classify_claude_result(&explicit,false,false,None),
             ManagedTerminal::Failed { detail } if detail=="terminal Claude inconnu"));
         for (subtype, expected) in [("error_max_turns","max_turns"),
             ("error_max_budget_usd","budget_exhausted"),
             ("error_max_structured_output_retries","structured_output_retry_exhausted"),
             ("error_during_execution","error_during_execution")] {
             let mut frame = base.clone(); frame["is_error"]=json!(true); frame["subtype"]=json!(subtype);
-            assert!(matches!(classify_claude_result(&frame,false,false),
+            assert!(matches!(classify_claude_result(&frame,false,false,None),
                 ManagedTerminal::Failed { detail } if detail==expected));
         }
         for patch in [json!({"terminal_reason":"PRIVATE_REASON"}), json!({"terminal_reason":false}),
@@ -3434,18 +3479,114 @@ sys.stdin.readline()
             json!({"subtype":"PRIVATE_SUBTYPE"}), json!({"subtype":"error_during_execution","terminal_reason":"completed"})] {
             let mut frame = base.clone();
             frame.as_object_mut().unwrap().extend(patch.as_object().unwrap().clone());
-            let terminal=classify_claude_result(&frame,false,false);
+            let terminal=classify_claude_result(&frame,false,false,None);
             assert!(matches!(terminal,ManagedTerminal::Failed { .. }),"{frame:?}");
             let metadata=serde_json::to_string(&claude_result_metadata(&frame,&terminal,false)).unwrap();
             assert!(!metadata.contains("PRIVATE") && metadata.len()<512,"{metadata}");
         }
         let mut frame=base.clone();frame["terminal_reason"]=json!("aborted_streaming");
-        assert!(matches!(classify_claude_result(&frame,false,true),ManagedTerminal::Cancelled));
+        assert!(matches!(classify_claude_result(&frame,false,true,None),ManagedTerminal::Cancelled));
         frame["terminal_reason"]=json!("api_error");
-        assert!(matches!(classify_claude_result(&frame,false,true),
+        assert!(matches!(classify_claude_result(&frame,false,true,None),
             ManagedTerminal::Failed { detail } if detail=="usage_limit"));
-        assert!(matches!(classify_claude_result(&json!({"stop_reason":"end_turn"}),false,false),
+        assert!(matches!(classify_claude_result(&json!({"stop_reason":"end_turn"}),false,false,None),
             ManagedTerminal::Failed { .. }));
+    }
+
+    #[test]
+    fn spec258_oauth_expire_exige_terminal_erreur_et_diagnostic_exact_du_tour() {
+        let diagnostic = "Failed to authenticate: OAuth session expired and could not be refreshed";
+        let error = json!({"type":"result","terminal_reason":"api_error","is_error":true});
+        assert!(
+            matches!(classify_claude_result(&error,false,false,Some(diagnostic)),ManagedTerminal::Failed{detail} if detail=="api_error:oauth_session_expired")
+        );
+        let success = json!({"type":"result","terminal_reason":"completed","subtype":"success","is_error":false,"result":diagnostic});
+        assert!(matches!(
+            classify_claude_result(&success, false, false, Some(diagnostic)),
+            ManagedTerminal::Completed
+        ));
+        for text in [
+            "OAuth session expired",
+            "Compte refusé",
+            "un assistant cite OAuth session expired and could not be refreshed",
+        ] {
+            assert!(
+                matches!(classify_claude_result(&error,false,false,Some(text)),ManagedTerminal::Failed{detail} if detail=="api_error")
+            );
+        }
+        assert!(
+            matches!(classify_claude_result(&error,false,false,None),ManagedTerminal::Failed{detail} if detail=="api_error")
+        );
+    }
+
+    #[test]
+    fn spec258_diagnostic_oauth_assistant_correlé_est_conserve_dans_refus_et_journal() {
+        for typed_error in [false, true] {
+            let mut failing = options();
+            failing.args[1]=concat!("while IFS= read -r line; do ",
+            "printf '%s\\n' '{\"type\":\"assistant\",\"isApiErrorMessage\":true,\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"Failed to authenticate: OAuth session expired and could not be refreshed\"}]}}' ",
+            "'{\"type\":\"result\",\"is_error\":true,\"terminal_reason\":\"api_error\",\"result\":\"\"}'; done").to_string();
+            if typed_error {
+                failing.args[1] = failing.args[1].replace(
+                    "\"isApiErrorMessage\":true",
+                    "\"error\":\"authentication_failed\"",
+                );
+            }
+            let root = std::env::temp_dir().join(format!(
+                "bridget-oauth258-{}-{}",
+                std::process::id(),
+                FIXTURE_SEQ.fetch_add(1, AtomicOrdering::Relaxed)
+            ));
+            fs::create_dir_all(&root).unwrap();
+            failing.session_store_root = Some(root.clone());
+            failing.agent_name = Some("oauth258".into());
+            let mut transport = ClaudeStreamJsonTransport::spawn(failing).unwrap();
+            transport.activate_journal(&root, "oauth258", None).unwrap();
+            transport.deliver(&message("oauth258")).unwrap();
+            let deadline = Instant::now() + Duration::from_secs(2);
+            let mut events = Vec::new();
+            while Instant::now() < deadline {
+                events.extend(transport.drain_events());
+                if events.iter().any(|e|matches!(&e.kind,ManagedEventKind::DeliveryRejected{reason,..} if reason=="api_error:oauth_session_expired")){break;}
+                thread::sleep(Duration::from_millis(10));
+            }
+            assert!(events.iter().any(|e|matches!(&e.kind,ManagedEventKind::DeliveryRejected{message_id,reason} if message_id=="oauth258" && reason=="api_error:oauth_session_expired")),"{events:?}");
+            transport.stop();
+            let journal_path = fs::read_dir(root.join("oauth258"))
+                .unwrap()
+                .next()
+                .unwrap()
+                .unwrap()
+                .path();
+            let entries = crate::journal::valid_events(&journal_path);
+            assert!(entries.iter().any(|e| e["event"] == "provider_result"
+                && e["payload"]["terminal_reason"] == "api_error"
+                && e["payload"]["diagnostic_code"] == "oauth_session_expired"));
+        }
+    }
+
+    #[test]
+    fn spec258_citation_oauth_sans_marqueur_api_ne_devient_pas_cause_du_refus() {
+        let mut fake = options();
+        fake.args[1]=concat!("while IFS= read -r line; do ",
+            "printf '%s\\n' '{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"Failed to authenticate: OAuth session expired and could not be refreshed\"}]}}' ",
+            "'{\"type\":\"result\",\"is_error\":true,\"terminal_reason\":\"api_error\",\"result\":\"different provider error\"}'; done").into();
+        let mut transport = ClaudeStreamJsonTransport::spawn(fake).unwrap();
+        transport.deliver(&message("quote258")).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let mut events = Vec::new();
+        while Instant::now() < deadline {
+            events.extend(transport.drain_events());
+            if events
+                .iter()
+                .any(|e| matches!(&e.kind, ManagedEventKind::DeliveryRejected { .. }))
+            {
+                break;
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        assert!(events.iter().any(|e|matches!(&e.kind,ManagedEventKind::DeliveryRejected{reason,..} if reason=="api_error")),"{events:?}");
+        transport.stop();
     }
 
     #[test]

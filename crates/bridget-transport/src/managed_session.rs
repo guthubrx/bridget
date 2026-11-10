@@ -307,6 +307,10 @@ pub trait ManagedSession: Transport {
     fn provider_permissions(&self) -> Option<(String, serde_json::Value, u64, Option<String>)> {
         None
     }
+    /// Lecture de la session existante, sans création de fil ni inférence.
+    fn runtime_catalogue(&mut self)->crate::protocol::RuntimeCatalogueOutcome {
+        crate::protocol::RuntimeCatalogueOutcome::Refused{reason:crate::protocol::RuntimeSelectionRefusal::Unsupported}
+    }
     /// Choix explicite de session, sans tour caché. Le défaut refuse : aucun
     /// adaptateur ne simule une commande de modèle par un prompt.
     fn select_runtime(

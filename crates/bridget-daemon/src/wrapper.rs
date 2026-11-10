@@ -4821,6 +4821,7 @@ fn launch_session_with_status(
     send_wrapper_message(
         &writer,
         WrapperToDaemon::ObservationCapabilities {
+            runtime_catalogue: true,
             events: vec![
                 bridget_transport::protocol::ObservationKind::TurnEnded,
                 bridget_transport::protocol::ObservationKind::PermissionRequired,
@@ -5444,6 +5445,10 @@ fn launch_session_with_status(
                         &writer,
                         WrapperToDaemon::RuntimeSelectionReported { token, outcome },
                     );
+                }
+                Ok(DaemonToWrapper::ReadRuntimeCatalogue{token})=>{
+                    let outcome=transport.runtime_catalogue();
+                    send_wrapper_message(&writer,WrapperToDaemon::RuntimeCatalogueReported{token,outcome});
                 }
                 Ok(DaemonToWrapper::CancelDelivery {
                     id,
@@ -6429,6 +6434,7 @@ fn reconnect_managed_session(
                 send_wrapper_message(
                     writer,
                     WrapperToDaemon::ObservationCapabilities {
+                        runtime_catalogue: true,
                         events: vec![
                             bridget_transport::protocol::ObservationKind::TurnEnded,
                             bridget_transport::protocol::ObservationKind::PermissionRequired,

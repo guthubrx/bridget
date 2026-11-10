@@ -377,6 +377,132 @@ pub enum HumanLineageAction {
         task_id: String,
         request_id: String,
     },
+    /// Composition d'un tour enfant. `expected_round` et `request_id` gardent
+    /// la corrélation ; l'identité d'agent ne vient jamais du client.
+    Compose {
+        task_id: String,
+        expected_round: u32,
+        request_id: String,
+        operation: HumanComposeOperation,
+    },
+}
+
+/// Réponse `compose` réussie. Tous les champs sont présents, `null` compris ;
+/// les refus d'autorité restent `HumanLineageError`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HumanComposeResponseV1 {
+    pub version: u16,
+    pub status: HumanComposeStatus,
+    pub request_id: String,
+    pub task_id: String,
+    pub round: u32,
+    pub outcome: HumanComposeOutcome,
+    #[serde(deserialize_with = "present_nullable")]
+    pub code: Option<String>,
+    pub message: String,
+    pub state: String,
+    #[serde(deserialize_with = "present_nullable")]
+    pub selection: Option<HumanComposeSelection>,
+    pub models: Vec<HumanComposeModel>,
+    pub capabilities: HumanComposeCapabilities,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HumanComposeStatus {
+    Ok,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HumanComposeOutcome {
+    Observed,
+    Accepted,
+    Selected,
+    Refused,
+    OutcomeUnknown,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HumanComposeSelection {
+    pub model: String,
+    #[serde(deserialize_with = "present_nullable")]
+    pub effort: Option<String>,
+}
+
+/// Un champ nullable doit être présent dans la réponse fermée : serde
+/// accepterait autrement son absence comme `null`.
+fn present_nullable<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    Option::<T>::deserialize(deserializer)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HumanComposeModel {
+    pub id: String,
+    pub name: String,
+    pub efforts: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HumanComposeCapabilities {
+    pub send: bool,
+    pub steer: bool,
+    pub interrupt: bool,
+    pub select_runtime: bool,
+    pub attachments: bool,
+}
+
+/// Taille maximale du texte d'un envoi humain, en octets UTF-8.
+pub const HUMAN_COMPOSE_BODY_MAX_BYTES: usize = 65536;
+
+/// Opérations humaines fermées. Les champs d'une autre opération sont refusés.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum HumanComposeOperation {
+    Read {},
+    Send { body: String, intent: HumanComposeSendIntent },
+    SelectRuntime {
+        model: String,
+        #[serde(deserialize_with = "present_nullable")]
+        effort: Option<String>,
+    },
+    Interrupt {},
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HumanComposeSendIntent { Queue, Steer }
+
+impl HumanComposeOperation {
+    /// Bornes locales ; l'existence du tour et des capacités relève du daemon.
+    /// La lecture de ronde utilise `expected_round=0` sans effet ; toute
+    /// mutation exige une ronde constatée strictement positive.
+    pub fn bounded(&self, expected_round: u32) -> bool {
+        match self {
+            Self::Read {} => expected_round == 0,
+            _ if expected_round == 0 => false,
+            Self::Interrupt {} => true,
+            Self::Send { body, .. } => {
+                !body.trim().is_empty()
+                    && body.len() <= HUMAN_COMPOSE_BODY_MAX_BYTES
+                    && !body.chars().any(|c| c != '\n' && c != '\t' && c.is_control())
+            }
+            // Même règle que `RuntimeSelection::valid` du plan de contrôle.
+            Self::SelectRuntime { model, effort } => std::iter::once(model)
+                .chain(effort.iter()).all(|s| {
+                    !s.is_empty() && s.len() <= 128
+                        && s.chars().all(|c| !c.is_control() && !c.is_whitespace())
+                }),
+        }
+    }
 }
 
 impl HumanLineageAction {
@@ -384,6 +510,7 @@ impl HumanLineageAction {
         match self {
             Self::Watch => ClientCapability::HumanLineageWatchV1,
             Self::Cancel { .. } => ClientCapability::HumanLineageCancelV1,
+            Self::Compose { .. } => ClientCapability::HumanLineageComposeV1,
             _ => ClientCapability::HumanLineageViewV1,
         }
     }
@@ -427,6 +554,9 @@ pub enum HumanLineageError {
     EnvelopeMismatch,
     ResourceLimit,
     StoreUnavailable,
+    /// Composition reconnue mais pas encore branchée au daemon : refus explicite,
+    /// jamais un succès ni un envoi partiel.
+    ComposeUnavailable,
 }
 
 impl HumanLineageError {

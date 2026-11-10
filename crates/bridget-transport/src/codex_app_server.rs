@@ -300,6 +300,33 @@ pub struct CodexAppServerTransport {
 }
 
 impl CodexAppServerTransport {
+    fn runtime_catalogue_until(&mut self,deadline:Instant)->Result<Vec<crate::provider_catalogue::CatalogueModel>,crate::protocol::RuntimeSelectionRefusal> {
+        use crate::protocol::RuntimeSelectionRefusal as Refusal;
+        if self.interactive_socket.is_some() {return Err(Refusal::Unsupported);}
+        if !self.alive.load(Ordering::SeqCst) {return Err(Refusal::TargetUnavailable);}
+        let mut cursor=Value::Null;
+        let mut cursors=std::collections::HashSet::new();
+        let mut ids=std::collections::HashSet::new();
+        let mut result=Vec::new();
+        for _ in 0..4 {
+            let remaining=deadline.checked_duration_since(Instant::now()).ok_or(Refusal::CatalogueUnavailable)?;
+            let response=request_with_timeout(&self.writer,&self.waiters,&self.next_id,"model/list",
+                json!({"cursor":cursor,"limit":100,"includeHidden":false}),remaining).map_err(|_|Refusal::CatalogueUnavailable)?;
+            let (models,next)=crate::provider_catalogue::model_page(&response.value).map_err(|_|Refusal::CatalogueUnavailable)?;
+            for model in models {
+                if !ids.insert(model.model.clone()) {return Err(Refusal::CatalogueUnavailable);}
+                result.push(model);
+            }
+            if result.len()>crate::provider_catalogue::MAX_CATALOGUE_MODELS {return Err(Refusal::CatalogueUnavailable);}
+            match next {
+                None=>return Ok(result),
+                Some(next) if cursors.insert(next.clone())=>cursor=Value::String(next),
+                Some(_)=>return Err(Refusal::CatalogueUnavailable),
+            }
+        }
+        Err(Refusal::CatalogueUnavailable)
+    }
+
     pub fn spawn(options: CodexAppServerOptions) -> Result<Self, TransportError> {
         Self::spawn_with_environment(options, &[], false)
     }
@@ -1179,90 +1206,30 @@ impl ManagedSession for CodexAppServerTransport {
             .unwrap_or_else(|e| e.into_inner())
             .clone()
     }
+    fn runtime_catalogue(&mut self)->crate::protocol::RuntimeCatalogueOutcome {
+        match self.runtime_catalogue_until(Instant::now()+Duration::from_secs(2)) {
+            Ok(models)=>crate::protocol::RuntimeCatalogueOutcome::Observed{models},
+            Err(reason)=>crate::protocol::RuntimeCatalogueOutcome::Refused{reason},
+        }
+    }
     fn select_runtime(
-        &mut self,
-        selection: crate::protocol::RuntimeSelection,
-    ) -> crate::protocol::RuntimeSelectionOutcome {
-        use crate::protocol::{
-            RuntimeSelectionOutcome as Outcome, RuntimeSelectionRefusal as Refusal,
-        };
-        let refuse = |reason| Outcome::Refused { reason };
-        if self.interactive_socket.is_some() {
-            return refuse(Refusal::Unsupported); // La TUI native reste propriétaire de ses réglages.
+        &mut self,selection:crate::protocol::RuntimeSelection,
+    )->crate::protocol::RuntimeSelectionOutcome {
+        use crate::protocol::{RuntimeSelectionOutcome as Outcome,RuntimeSelectionRefusal as Refusal};
+        let refuse=|reason|Outcome::Refused{reason};
+        if !selection.valid() {return refuse(Refusal::InvalidSelection);}
+        let deadline=Instant::now()+Duration::from_secs(2);
+        let models=match self.runtime_catalogue_until(deadline) {Ok(models)=>models,Err(reason)=>return refuse(reason)};
+        let Some(model)=models.iter().find(|model|model.model==selection.model) else {return refuse(Refusal::ModelUnavailable);};
+        if !model.supported_efforts.contains(&selection.effort) {return refuse(Refusal::EffortUnavailable);}
+        let Some(remaining)=deadline.checked_duration_since(Instant::now()) else {return refuse(Refusal::CatalogueUnavailable);};
+        // Le fil natif confirme le réglage ; aucun tour de convenance n'est créé.
+        match request_with_timeout(&self.writer,&self.waiters,&self.next_id,"thread/settings/update",
+            json!({"threadId":self.thread_id,"model":selection.model,"effort":selection.effort}),remaining) {
+            Ok(_)=>Outcome::Selected{selection},
+            Err(error) if error.to_string().contains("-32601")=>refuse(Refusal::Unsupported),
+            Err(_)=>Outcome::OutcomeUnknown{},
         }
-        if !selection.valid() {
-            return refuse(Refusal::InvalidSelection);
-        }
-        if !self.alive.load(Ordering::SeqCst) {
-            return refuse(Refusal::TargetUnavailable);
-        }
-        // O(n), au plus 4 pages de 100 modèles, une échéance ABSOLUE de 2 s.
-        // Ce catalogue autorise le choix humain, jamais le bootstrap/rejeu figé.
-        let deadline = Instant::now() + Duration::from_secs(2);
-        let mut cursor = Value::Null;
-        for _ in 0..4 {
-            let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
-                return refuse(Refusal::CatalogueUnavailable);
-            };
-            let Ok(response) = request_with_timeout(
-                &self.writer,
-                &self.waiters,
-                &self.next_id,
-                "model/list",
-                json!({"cursor":cursor,"limit":100,"includeHidden":false}),
-                remaining,
-            ) else {
-                return refuse(Refusal::CatalogueUnavailable);
-            };
-            let Some(models) = response.value.get("data").and_then(Value::as_array) else {
-                return refuse(Refusal::CatalogueUnavailable);
-            };
-            if let Some(model) = models.iter().find(|model| {
-                model.get("model").and_then(Value::as_str) == Some(selection.model.as_str())
-            }) {
-                let supported = model
-                    .get("supportedReasoningEfforts")
-                    .and_then(Value::as_array)
-                    .is_some_and(|efforts| {
-                        efforts.iter().any(|effort| {
-                            effort.get("reasoningEffort").and_then(Value::as_str)
-                                == Some(selection.effort.as_str())
-                        })
-                    });
-                if !supported {
-                    return refuse(Refusal::EffortUnavailable);
-                }
-                let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
-                    return refuse(Refusal::CatalogueUnavailable);
-                };
-                // Le fournisseur détient déjà les réglages du fil. Ne pas en
-                // créer un double Bridget, ni un turn/start vide de convenance.
-                return match request_with_timeout(
-                    &self.writer,
-                    &self.waiters,
-                    &self.next_id,
-                    "thread/settings/update",
-                    json!({"threadId":self.thread_id,
-                    "model":selection.model,"effort":selection.effort}),
-                    remaining,
-                ) {
-                    Ok(_) => Outcome::Selected { selection },
-                    Err(error) if error.to_string().contains("-32601") => {
-                        refuse(Refusal::Unsupported)
-                    }
-                    Err(_) => Outcome::OutcomeUnknown {},
-                };
-            }
-            cursor = response
-                .value
-                .get("nextCursor")
-                .cloned()
-                .unwrap_or(Value::Null);
-            if cursor.is_null() {
-                return refuse(Refusal::ModelUnavailable);
-            }
-        }
-        refuse(Refusal::CatalogueUnavailable)
     }
     fn set_private_profile_instructions(
         &mut self,
@@ -5883,6 +5850,10 @@ for line in sys.stdin:
         print(json.dumps({'method':'turn/completed','params':{'threadId':params['threadId'],'turn':{'id':str(value['id']),'status':'completed'}}}), flush=True)
 "#.into(), trace.to_string_lossy().into_owned()];
         let mut session = CodexAppServerTransport::spawn(options).unwrap();
+        let crate::protocol::RuntimeCatalogueOutcome::Observed{models}=session.runtime_catalogue() else {panic!("catalogue de la session attendu");};
+        assert_eq!(models.iter().map(|m|m.model.as_str()).collect::<Vec<_>>(),["first","second"]);
+        assert_eq!(models[0].supported_efforts,["low","high"]);
+        assert!(!fs::read_to_string(&trace).unwrap().contains("thread/settings/update"),"la lecture du catalogue ne sélectionne aucun réglage");
         let requested = RuntimeSelection {
             model: "second".into(),
             effort: "high".into(),
