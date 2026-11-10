@@ -1,3 +1,15 @@
+## Branche unique — décision de François du 10 novembre 2026 au soir
+
+Pour ce dépôt, travailler désormais sur `main`, dans le checkout principal.
+Ne plus créer de branche de travail ni de worktree auxiliaire sans nouvelle
+instruction explicite de François. Cette décision prévaut sur les anciennes
+obligations de branche ou de worktree de la constitution et des sessions.
+Intégrer et pousser les travaux existants avant de retirer leurs branches.
+Préserver les changements non intégrés et les preuves utiles ; les anciennes
+variantes peuvent être archivées dans l'historique de `main`. Supprimer les
+builds reproductibles inutilisés après vérification des processus et verrous.
+Cette décision ne demande pas d'interrompre les missions métier ou T3.
+
 ## Avancement : développement par lots, vérification utile
 
 Consigne utilisateur du31octobre2026 : privilégier les développements utiles,
