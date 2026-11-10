@@ -1,0 +1,41 @@
+{
+  "preservation": "Complete stash commits, index and untracked parents retained in main ancestry",
+  "working_tree_unchanged": true,
+  "items": [
+    {
+      "host": "monordinateur",
+      "sha": "8847c19551678a8d61d177534f15c6e063bb4095",
+      "files": 58
+    },
+    {
+      "host": "monordinateur",
+      "sha": "52c3ec5831ef24a0343cb5eb509c7ae19ebcb186",
+      "files": 58
+    },
+    {
+      "host": "monordinateur",
+      "sha": "5df30ff87e5401a09b60d34726f226ececdf7b7a",
+      "files": 2
+    },
+    {
+      "host": "monordinateur",
+      "sha": "fd040c5386675fd54c64f6a6ddbcff7037ce9234",
+      "files": 65
+    },
+    {
+      "host": "cartae",
+      "sha": "f79fddc6b5814e9d3cbf8b171b02c1fc270abfab",
+      "files": 20
+    },
+    {
+      "host": "cartae",
+      "sha": "5669068f7ee01bf6eb786ca7a6152ec1d648ceb6",
+      "files": 24
+    },
+    {
+      "host": "cartae",
+      "sha": "563647867f053185b5f304ff5931c7b00df8eeff",
+      "files": 21
+    }
+  ]
+}
