@@ -4,6 +4,29 @@
     const OWNER: &str = "89000000-0000-4000-8000-000000000102";
 
     #[test]
+    fn spec261_continuation_refusal_exposes_only_its_child_quota() {
+        let (state, config, task, _parent, _child) = native160_mission(false);
+        let now = unix_timestamp();
+        let mut st = state.lock().unwrap();
+        let NativeDelegationRequest::Delegate {agent_type, ..} = &task.request else {panic!()};
+        st.provider_limits.record_scoped(agent_type, task.child_instance.as_deref().unwrap(),
+            bridget_transport::protocol::RateLimitFact {window:"primary/10080m".into(),status:"available".into(),
+                resets_at:Some(now+3600),used_percent:Some(100),credits:None},
+            bridget_transport::protocol::RateLimitSource::CodexAppServer, now);
+        let before = serde_json::to_value(&task).unwrap();
+        let result = continuation_failure(&st, "conn-1", Some(&task), Some("reset261"), "provider_quota_exhausted");
+        assert_eq!(result["code"], "provider_quota_exhausted");
+        assert_eq!(result["detail"]["request_id"], "reset261");
+        assert_eq!(result["detail"]["resets_at"], now+3600);
+        assert_eq!(result["detail"]["quota"]["windows"][0]["window"], "primary/10080m");
+        assert_eq!(result["detail"]["quota"]["launch_blocked"], true);
+        assert_eq!(serde_json::to_value(&task).unwrap(), before);
+        assert!(continuation_failure(&st, "other-connection", Some(&task), Some("reset261"),
+            "provider_quota_exhausted")["detail"]["quota"].is_null());
+        drop(st); drop(state); cleanup(&config);
+    }
+
+    #[test]
     fn spec174_workspace_preflight_technical_detail_constant() {
         use bridget_transport::protocol::{AutoDelegateWorkload, WorkerSourceBase};
         let message = "Le contrôle préalable du dossier source a refusé la demande.";

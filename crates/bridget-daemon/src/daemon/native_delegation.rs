@@ -6335,6 +6335,10 @@ fn handle_with_fact_inner(
             fact.as_ref(),thread,state).unwrap_or_else(|code|failure(&code));
         return DaemonToWrapper::NativeDelegationResult {result};
     }
+    let continuation_key = match &request {
+        NativeDelegationRequest::Continue { request_id, .. } => Some(request_id.clone()),
+        _ => None,
+    };
     let mut remote_task_context = None;
     let remote_proof = (|| -> Result<Option<Task>, String> {
         let NativeDelegationRequest::Continue {
@@ -6380,7 +6384,10 @@ fn handle_with_fact_inner(
     let remote_proof = match remote_proof {
         Ok(proof) => proof,
         Err(code) => {
-            let mut result = failure(&code);
+            let mut result = {
+                let st = state.lock().unwrap_or_else(|e| e.into_inner());
+                continuation_failure(&st, conn, remote_task_context.as_ref(), continuation_key.as_deref(), &code)
+            };
             // Ce contexte vient uniquement de la tâche après contrôle du parent,
             // jamais du chemin ou de l'identité proposés par l'appelant.
             if let Some(task) = remote_task_context
@@ -6436,7 +6443,7 @@ fn handle_with_fact_inner(
             &mut st,
         ) {
             Ok(result) => result,
-            Err(code) => failure(&code),
+            Err(code) => continuation_failure(&st, conn, remote_task_context.as_ref(), continuation_key.as_deref(), &code),
         };
         let drives = drives
             || previous_epoch.is_some_and(|seen| st.delegation_store.wait_epoch().get() != seen);
@@ -6448,6 +6455,29 @@ fn handle_with_fact_inner(
         tick(state);
     }
     DaemonToWrapper::NativeDelegationResult { result }
+}
+
+/// Le contexte appartient au parent attesté ; aucune projection de quota voisin.
+fn continuation_failure(st: &DaemonState, conn: &str, task: Option<&Task>, request_id: Option<&str>, code: &str) -> Value {
+    let mut result = failure(code);
+    if code != "provider_quota_exhausted" { return result; }
+    let Some(task) = task else { return result; };
+    let Some((owner, instance)) = live_connection_identity(st, conn) else { return result; };
+    if !can_own_task(st, task, &owner, &instance).unwrap_or(false) { return result; }
+    let NativeDelegationRequest::Delegate { agent_type, .. } = &task.request else { return result; };
+    let Some(quota) = st.provider_limits.scoped_quota(agent_type, task.child_instance.as_deref().unwrap_or(""), unix_timestamp()) else { return result; };
+    if !quota.launch_blocked { return result; }
+    if !result["detail"].is_object() { result["detail"] = json!({}); }
+    result["scope"] = json!("this_continuation");
+    result["message"] = json!("Après un reset, laisser le pilote relire le quota de cet enfant, puis reprendre la même demande si sa garde reste ouverte. Un ancien pilote chargé nécessite une mise à jour native. Ce refus concerne cette reprise ; les autres travaux autorisés suivent leur propre état.");
+    result["detail"]["task_id"] = json!(task.task_id);
+    result["detail"]["request_id"] = json!(request_id);
+    result["detail"]["child_instance"] = json!(task.child_instance);
+    result["detail"]["machine_id"] = json!(task.remote_placement.as_ref().map(|p| &p.machine_id));
+    result["detail"]["resets_at"] = json!(quota.resets_at);
+    result["detail"]["quota"] = json!(quota);
+    result["detail"]["human_action"] = json!("Si le pilote ne peut pas être actualisé dans le mandat courant, demander une maintenance ciblée de cet enfant. Ne pas effacer le cache ni remplacer le compte ou une mission d'issue inconnue.");
+    result
 }
 
 /// Lecture 168 sans identité agent : le rôle Client et le même UID Unix sont

@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.8.27
+
+- Relire le quota sur la session conservée au repos pour observer un reset du fournisseur, sans tour de modèle ni assouplissement des contrôles.
+- Donner la fenêtre, le retour et la date d'observation du quota de l'enfant dans le refus de reprise, avec sa tâche et sa clé.
+
 ## 0.8.26
 
 - Les erreurs du contrôle préalable MCP indiquent que la commande n’a pas été transmise, avec l’étape constatée et la conservation des reçus antérieurs. Aucun délai ni droit changé.

@@ -52,6 +52,7 @@ const INTERRUPT_REQUEST_TIMEOUT: Duration = Duration::from_secs(3);
 /// jamais `dispatching` éternel.
 const INTERRUPT_TERMINAL_TIMEOUT: Duration = Duration::from_secs(10);
 const RATE_LIMIT_READ_TIMEOUT: Duration = Duration::from_secs(2);
+const RATE_LIMIT_REFRESH_INTERVAL: Duration = Duration::from_secs(30);
 const TURN_POLL: Duration = Duration::from_millis(25);
 const SATURATION_RETRIES: u32 = 4;
 const CODEX_SATURATED_REASON: &str = "saturation Codex";
@@ -297,6 +298,7 @@ pub struct CodexAppServerTransport {
     reader_handle: Mutex<Option<thread::JoinHandle<()>>>,
     worker_handle: Mutex<Option<thread::JoinHandle<()>>>,
     interactive_socket: Option<std::path::PathBuf>,
+    quota_read_at: Mutex<Instant>,
 }
 
 impl CodexAppServerTransport {
@@ -773,6 +775,7 @@ impl CodexAppServerTransport {
             journal,
             child_requests,
             pending_request,
+            quota_read_at: Mutex::new(Instant::now()),
             reader_handle: Mutex::new(Some(reader_handle)),
             worker_handle: Mutex::new(Some(worker_handle)),
             interactive_socket: interactive_socket.map(Path::to_path_buf),
@@ -792,6 +795,22 @@ impl CodexAppServerTransport {
                 raw,
                 kind,
             ));
+    }
+
+    /// O(1), une lecture au plus par intervalle sur ce même processus.
+    /// Le lecteur publie les faits fournisseur avant de solder le RPC.
+    /// Un échec conserve les faits précédents et ne crée aucun tour.
+    fn refresh_idle_quota(&self) {
+        if !self.alive.load(Ordering::SeqCst) || self.busy.load(Ordering::SeqCst) {
+            return;
+        }
+        let Ok(mut read_at) = self.quota_read_at.try_lock() else { return; };
+        if read_at.elapsed() < RATE_LIMIT_REFRESH_INTERVAL { return; }
+        *read_at = Instant::now();
+        let _ = request_with_timeout(
+            &self.writer, &self.waiters, &self.next_id,
+            "account/rateLimits/read", Value::Null, RATE_LIMIT_READ_TIMEOUT,
+        );
     }
 
     fn enable_journal_with_live_feed(
@@ -1292,6 +1311,7 @@ impl ManagedSession for CodexAppServerTransport {
     }
 
     fn drain_events(&self) -> Vec<ManagedEvent> {
+        self.refresh_idle_quota();
         self.observations
             .0
             .lock()
@@ -4787,6 +4807,10 @@ fn push_source(
 #[cfg(test)]
 #[path = "codex_app_server_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "codex_quota_refresh_tests.rs"]
+mod quota_refresh_tests;
 
 #[cfg(test)]
 mod mobile183_compaction_tests {
