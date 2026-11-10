@@ -7601,7 +7601,7 @@ mod tests {
         assert_eq!(unsafe {libc::mkfifo(c.as_ptr(),0o600)},0);
         let (tx,rx)=std::sync::mpsc::channel();let fifo=p.clone();
         let reader=std::thread::spawn(move||tx.send(AgentRegistry::load_from_path(fifo).is_err()).unwrap());
-        assert_eq!(rx.recv_timeout(Duration::from_secs(2)).unwrap(),true);reader.join().unwrap();
+        assert!(rx.recv_timeout(Duration::from_secs(2)).unwrap());reader.join().unwrap();
         fs::remove_file(&p).unwrap();write_private_file_atomic(&p,b"{}").unwrap();
         fs::OpenOptions::new().write(true).open(&p).unwrap().set_len(16*1024*1024+1).unwrap();
         assert!(AgentRegistry::load_from_path(p).err().unwrap().contains("volumineux"));
@@ -10907,7 +10907,7 @@ while not stop.exists(): time.sleep(.01)
         }
         assert_eq!(held,1);
         assert!(!pending.commit_view.as_ref().unwrap().source_stopped);
-        assert_eq!(stopped.unwrap(),false);
+        assert!(!stopped.unwrap());
         let receipt=runtime.store.checked_view_receipt(&prep,&intent).unwrap();
         let view=receipt.commit_view.as_ref().unwrap();
         assert!(view.source_stopped);

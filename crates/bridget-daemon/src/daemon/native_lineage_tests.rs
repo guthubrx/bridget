@@ -1768,8 +1768,8 @@ fn marker_file(m: Value) -> Value {
 #[test]
 fn native149_marqueur_projection_ferme_et_exclut() {
     use crate::t3code_contract::is_native_projection;
-    assert_eq!(is_native_projection(&marker_file(marker())).unwrap(), true);
-    assert_eq!(is_native_projection(&json!({"id":"t"})).unwrap(), false);
+    assert!(is_native_projection(&marker_file(marker())).unwrap());
+    assert!(!is_native_projection(&json!({"id":"t"})).unwrap());
     // La présence du préfixe seul ne suffit pas : l'objet est validé en entier.
     assert!(is_native_projection(&json!({"id":"t","bridgetTaskRef":"x"})).is_err());
 

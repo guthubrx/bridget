@@ -1434,15 +1434,14 @@ fn native149_entrees_claude_sans_regles_sont_classees() {
     let (root, env) = fixture_root("inputs");
     let definition = claude_definition(&root, &[]);
     let mut context = capture_context_with_env(&definition, &root, &env).unwrap();
-    assert_eq!(
+    assert!(
         claude_inputs_without_rules(&context).unwrap(),
-        true,
         "sources toutes absentes"
     );
     // Settings sans règles de droits : classé sans règles.
     fs::write(root.join("settings.json"), br#"{"model":"fixture"}"#).unwrap();
     context = capture_context_with_env(&definition, &root, &env).unwrap();
-    assert_eq!(claude_inputs_without_rules(&context).unwrap(), true);
+    assert!(claude_inputs_without_rules(&context).unwrap());
     // Settings avec une règle de droits : classé avec règles.
     fs::write(
         root.join("settings.json"),
@@ -1450,12 +1449,12 @@ fn native149_entrees_claude_sans_regles_sont_classees() {
     )
     .unwrap();
     context = capture_context_with_env(&definition, &root, &env).unwrap();
-    assert_eq!(claude_inputs_without_rules(&context).unwrap(), false);
+    assert!(!claude_inputs_without_rules(&context).unwrap());
     // Overrides : avec règles même si les sources sont vides.
     fs::remove_file(root.join("settings.json")).unwrap();
     let mut overrides = capture_context_with_env(&definition, &root, &env).unwrap();
     overrides["settings_overrides"] = json!({"permissions":{"defaultMode":"default"}});
-    assert_eq!(claude_inputs_without_rules(&overrides).unwrap(), false);
+    assert!(!claude_inputs_without_rules(&overrides).unwrap());
     // Révision muée : refus nommé avant tout classement.
     fs::write(root.join("settings.json"), br#"{"model":"mue"}"#).unwrap();
     let erreur = claude_inputs_without_rules(&context).unwrap_err();
@@ -1476,7 +1475,7 @@ fn native149_entrees_claude_sans_regles_sont_classees() {
         )
         .unwrap()
     );
-    assert_eq!(claude_inputs_without_rules(&cli_context).unwrap(), true);
+    assert!(claude_inputs_without_rules(&cli_context).unwrap());
 }
 
 // Un nom de fichier seul ne qualifie pas une dépendance ni son bootstrap.

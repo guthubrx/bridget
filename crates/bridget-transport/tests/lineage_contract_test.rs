@@ -198,20 +198,17 @@ fn spec258_compose_lecture_de_ronde_et_mutations_exigent_une_ronde_constatee() {
             _ => unreachable!(),
         })
     };
-    assert_eq!(avec_ronde(0, json!({"kind":"read"})).unwrap(), true);
-    assert_eq!(avec_ronde(3, json!({"kind":"read"})).unwrap(), false);
-    assert_eq!(avec_ronde(0, json!({"kind":"interrupt"})).unwrap(), false);
-    assert_eq!(
-        avec_ronde(0, json!({"kind":"send","body":"x","intent":"queue"})).unwrap(),
-        false
+    assert!(avec_ronde(0, json!({"kind":"read"})).unwrap());
+    assert!(!avec_ronde(3, json!({"kind":"read"})).unwrap());
+    assert!(!avec_ronde(0, json!({"kind":"interrupt"})).unwrap());
+    assert!(
+        !avec_ronde(0, json!({"kind":"send","body":"x","intent":"queue"})).unwrap()
     );
-    assert_eq!(
-        avec_ronde(1, json!({"kind":"select_runtime","model":"m","effort":"high"})).unwrap(),
-        true
+    assert!(
+        avec_ronde(1, json!({"kind":"select_runtime","model":"m","effort":"high"})).unwrap()
     );
-    assert_eq!(
-        avec_ronde(u32::MAX as u64 + 1, json!({"kind":"read"})).is_err(),
-        true
+    assert!(
+        avec_ronde(u32::MAX as u64 + 1, json!({"kind":"read"})).is_err()
     );
 }
 
