@@ -20,3 +20,10 @@ log = "0.4"
 env_logger = "0.11"
 libc = "0.2"
 sha2 = { version = "0.10", features = ["asm"] }
+
+[workspace.lints.clippy]
+# Dette structurelle, traitée au lot 9 du programme 260 (signatures et types à refondre).
+too_many_arguments = "allow"
+type_complexity = "allow"
+result_large_err = "allow"
+large_enum_variant = "allow"
