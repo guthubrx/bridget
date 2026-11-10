@@ -17434,55 +17434,7 @@ fn handle_wrapper_message_with_peer(
         WrapperToDaemon::WaitAgentLinks {
             after_cursor,
             timeout_ms,
-        } => {
-            const MAX_AGENT_LINK_WAIT: u64 = 30_000;
-            if timeout_ms > MAX_AGENT_LINK_WAIT {
-                return Some(DaemonToWrapper::Nack {
-                    id: "agent-link-events".to_string(),
-                    reason: "délai d'attente de descendance supérieur à 30 s".to_string(),
-                });
-            }
-            let (parent_instance_id, fleet) = {
-                let st = state.lock().unwrap_or_else(|e| e.into_inner());
-                let Some(parent_instance_id) = st.conn_instances.get(conn_id).cloned() else {
-                    return Some(DaemonToWrapper::Nack {
-                        id: "agent-link-events".to_string(),
-                        reason: "wrapper non enregistré".to_string(),
-                    });
-                };
-                (parent_instance_id, Arc::clone(&st.fleet))
-            };
-            match fleet.wait_for_agent_link_events(
-                &parent_instance_id,
-                after_cursor,
-                Duration::from_millis(timeout_ms),
-            ) {
-                Ok(batch) => Some(DaemonToWrapper::AgentLinkEvents {
-                    timed_out: batch.events.is_empty(),
-                    through_cursor: batch.through_cursor,
-                    events: batch
-                        .events
-                        .into_iter()
-                        .map(|event| AgentLinkEventFrame {
-                            cursor: event.cursor,
-                            event_id: event.event_id,
-                            link_id: event.link_id,
-                            child_instance_id: event.child_instance_id,
-                            state: event.state.as_str().to_string(),
-                            observed_at: event.observed_at,
-                            project: event.project,
-                        })
-                        .collect(),
-                }),
-                Err(error) => {
-                    error!("attente de descendance indisponible: {error}");
-                    Some(DaemonToWrapper::Nack {
-                        id: "agent-link-events".to_string(),
-                        reason: "attente de descendance indisponible".to_string(),
-                    })
-                }
-            }
-        }
+        } => wrapper_dispatch::on_wait_agent_links(after_cursor, timeout_ms, conn_id, state),
         WrapperToDaemon::ServiceHello {
             version,
             service,
