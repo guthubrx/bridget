@@ -156,3 +156,6 @@ Le disque libre oscille entre 10 et 14 Gio (11 Gio à la dernière mesure). La r
 
 ### Bilan lot 0
 Lot 0 complet sauf T007 (cette intégration). Pas d'activation.
+
+### Changement de méthode (10 novembre 2026, soir)
+- `AGENTS.md` (commit `1d50c0fa`) impose désormais de travailler sur `main` dans le checkout principal, sans branche ni worktree. Les règles `contracts/regles-implementeur.md` (R0) en tiennent compte. Les fichiers de preuve de la ligne de base, qui étaient dans un worktree retiré par une autre session, ont été récupérés depuis `validation/reprise-nettoyage-20261110/` (manifeste SHA conservé là).

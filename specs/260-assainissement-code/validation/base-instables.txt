@@ -1,0 +1,2 @@
+# Tests en échec dans un seul des deux passages de la ligne de base (instables, 10 novembre 2026)
+codex_app_server::tests::spec185_workspace_repair_uncertain_stop_is_bounded_and_never_claims_success

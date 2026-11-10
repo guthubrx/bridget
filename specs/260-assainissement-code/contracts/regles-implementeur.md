@@ -3,7 +3,11 @@
 Ces règles valent pour toutes les tâches. Une tâche ne les répète pas.
 En cas de conflit entre une tâche et une règle, la règle gagne. Écrire le conflit dans `implementation.md`.
 
-## R1 - Un lot, une branche, un worktree
+## R0 - Décision de François du 10 novembre 2026 au soir (prévaut sur R1)
+
+Travailler sur `main`, dans le checkout principal. Ne créer ni branche ni worktree sans nouvelle instruction explicite (voir `AGENTS.md`, « Branche unique »). Dans ce fichier et dans les guides, ignorer les mots « branche », « worktree » et la procédure d'intégration de `quickstart.md` : committer sur `main` (un commit par tâche), `git fetch origin`, `git pull --rebase origin main` si `main` a avancé, puis `git push origin main`. Le cache de build reste hors du dépôt (`$HOME/.cache/bridget-build-260`).
+
+## R1 - Un lot, une branche, un worktree (remplacé par R0)
 
 ```sh
 cd /Users/moi/Nextcloud/10.Scripts/64.bridget
