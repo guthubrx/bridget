@@ -1,5 +1,5 @@
 {
-  "preservation": "Complete stash commits, index and untracked parents retained in main ancestry",
+  "preservation": "Commits complets des sauvegardes, index et fichiers non suivis conservés dans l'ascendance de main",
   "working_tree_unchanged": true,
   "items": [
     {
