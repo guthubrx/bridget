@@ -1011,3 +1011,70 @@ pub(super) fn on_client_hello(contract_version: u16, issuer_scope: String, capab
                 capabilities,
             })
         }
+
+pub(super) fn on_delivery_rejected(id: String, reason: String, execution_id: Option<String>, generation: Option<u64>, conn_id: &str, state: &Arc<Mutex<DaemonState>>) -> Option<DaemonToWrapper> {
+            let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+            match native_delegation::rejected(
+                &mut st,
+                conn_id,
+                &id,
+                &reason,
+                execution_id.as_deref(),
+                generation,
+            ) {
+                Ok(native_delegation::NativeRejection::Pass) => {}
+                Ok(native_delegation::NativeRejection::NativeFailed) => {
+                    st.pending_replies.retain(|pending| pending.msg_id != id);
+                    return None;
+                }
+                Ok(_) => return None,
+                Err(error) => {
+                    error!("refus de mission native non qualifié ou non persisté: {error}");
+                    return None;
+                }
+            }
+            purge_expired_attach_sends(&mut st);
+            if let Some(pending) = st.pending_attach_sends.remove(&id) {
+                let writer = st.connections.get(&pending.conn_id).cloned();
+                drop(st);
+                if let Some(writer) = writer {
+                    let _ = push_control_message(
+                        &writer,
+                        &DaemonToWrapper::DeliveryRejected { id, reason },
+                    );
+                }
+                return None;
+            }
+            let request = st.store.get_request(&id).ok().flatten();
+            if let Some(request) = request {
+                st.pending_replies.retain(|pending| pending.msg_id != id);
+                if (reason.contains("échéance") || reason.contains("timeout ACP"))
+                    && !claim_timeout(&mut st.store, &id)
+                {
+                    return None;
+                }
+                if reason.contains("échéance") || reason.contains("timeout ACP") {
+                    st.delegation_store.wait_epoch().bump();
+                }
+                let writer = st
+                    .router
+                    .get_agent(&request.sender)
+                    .and_then(|agent| st.connections.get(&agent.connection_id))
+                    .cloned();
+                drop(st);
+                if let Some(writer) = writer
+                    && let Err(error) = deliver_to_agent(
+                        &writer,
+                        &request.sender,
+                        &format!("{}Échec de livraison de la demande #{id} : {reason}",
+                            native_delegation::provider_error_recovery(&reason).map_or_else(String::new,|recovery|format!("{recovery}\n\n"))),
+                    )
+                {
+                    error!(
+                        "impossible de notifier l'échec ACP à {}: {}",
+                        request.sender, error
+                    );
+                }
+            }
+            None
+        }
