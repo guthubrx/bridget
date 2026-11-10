@@ -1044,8 +1044,7 @@ fn workload_command_writes(name: &str, args: &[String]) -> bool {
         }
         "cargo" => {
             let op = args.iter().find(|a| !a.starts_with('+')).map(String::as_str).unwrap_or("");
-            !(read(&["--version", "-V", "version", "help", "--help", "-h", "locate-project", "read-manifest"], op) || op == "fmt" && any(&["--check"]))
-                && !(op == "metadata" && any(&["--locked", "--frozen"]))
+            !(read(&["--version", "-V", "version", "help", "--help", "-h", "locate-project", "read-manifest"], op) || op == "fmt" && any(&["--check"]) || op == "metadata" && any(&["--locked", "--frozen"]))
         }
         "npm" | "pnpm" => !read(&["--version", "-v", "version", "help", "--help", "-h"], first)
             || (first == "version" && args.len() > 1),
@@ -6697,7 +6696,7 @@ fn delegate_remote_with_routing(
     let inspect_only =
         routing.is_some() && matches!(workspace, Some(WorkspaceRequest::Worktree { .. } | WorkspaceRequest::CommitView {}));
     let (owner, parent, worker, mut prepare, task_id) = {
-        let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+        let st = state.lock().unwrap_or_else(|e| e.into_inner());
         recheck_attested_thread(&st, conn, thread)?;
         let (owner, instance) =
             live_connection_identity(&st, conn).ok_or("identity_unavailable")?;
@@ -36951,6 +36950,7 @@ mod permission_projection214_tests {
     }
 
     #[test]
+    #[allow(clippy::assertions_on_constants)] // le drapeau de lancement est une constante : l'assertion garde le test
     fn spec221_c05_unsupported_selection_is_guided_and_consumes_no_admission() {
         let (shared,config,_rx,_reader,mut request,_root)=super::tests::routing168_fixture(1);
         let before=serde_json::to_vec(&shared.lock().unwrap().delegation_store.tasks().unwrap()).unwrap();

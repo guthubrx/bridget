@@ -8012,6 +8012,7 @@ mod tests {
         paths
     }
 
+    #[allow(clippy::field_reassign_with_default)] // état hérité reconstruit champ par champ pour le test
     fn legacy_state149() -> ThreadState {
         let mut state = ThreadState::default();
         state.seen = vec!["m1".into(), "m2".into()];

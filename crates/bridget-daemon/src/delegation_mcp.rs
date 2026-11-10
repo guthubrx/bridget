@@ -831,6 +831,7 @@ mod admission_recovery171_tests {
 
 
     #[test]
+    #[allow(clippy::assertions_on_constants)] // le drapeau de lancement est une constante : l'assertion garde le test
     fn spec221_c05_client_exposes_only_the_explicit_typed_option() {
         use std::os::unix::net::UnixListener;
         assert!(crate::provider_catalogue220::MODEL_OPTIONS_LAUNCH_ENABLED);
@@ -860,6 +861,7 @@ mod admission_recovery171_tests {
     }
 
     #[test]
+    #[allow(clippy::assertions_on_constants)] // le drapeau de lancement est une constante : l'assertion garde le test
     fn spec221_c19_auto_view_requires_explicit_scope_and_keeps_closed_schema_before_connection() {
         use std::os::unix::net::UnixListener;
         assert!(crate::workspace_git::COMMIT_VIEW_LAUNCH_ENABLED);
@@ -894,6 +896,7 @@ mod admission_recovery171_tests {
     }
 
     #[test]
+    #[allow(clippy::assertions_on_constants)] // le drapeau de lancement est une constante : l'assertion garde le test
     fn spec221_c19_auto_view_negotiates_creation_before_sending_original_envelope() {
         use std::io::{BufRead,BufReader,Write};
         use std::os::unix::net::UnixListener;

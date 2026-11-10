@@ -53,7 +53,7 @@ pub(crate) fn reconcile_delivery_replay(
     old.deadline_at=new.deadline_at;
     old.from_display_name=new.from_display_name.clone();
     old.thread_display_title=new.thread_display_title.clone();
-    *old_mid=*new_mid;
+    *old_mid = *new_mid;
     if serde_json::to_vec(&comparable).map_err(|e|e.to_string())?
         !=serde_json::to_vec(incoming).map_err(|e|e.to_string())? {
         return Err("spool_envelope_changed".into());

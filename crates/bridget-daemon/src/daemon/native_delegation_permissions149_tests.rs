@@ -4193,7 +4193,7 @@ fn native149_o4_naissance_differente_ou_groupe_disparu_ne_recoit_aucun_signal() 
     let magasin = poser_marqueur(&racine, &natif.nom, &m_natif);
     poser_marqueur(&racine, &ordinaire.nom, &m_ordi);
     // Groupe déjà disparu : son marqueur est seulement retiré.
-    let mort = GroupeReel::lancer(&racine, "natif-mort", &PRET.to_string(), &[]);
+    let mort = GroupeReel::lancer(&racine, "natif-mort", PRET, &[]);
     let m_mort = mort.marqueur("inst", "mort", 1);
     unsafe { libc::killpg(mort.pgid as libc::pid_t, libc::SIGTERM) };
     mort.statut();

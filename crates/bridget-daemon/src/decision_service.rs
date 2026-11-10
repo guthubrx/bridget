@@ -570,8 +570,8 @@ fn decision_endpoint_allowed(endpoint: &str) -> bool {
     {
         return false;
     }
-    if endpoint.starts_with("https://") {
-        return endpoint[8..]
+    if let Some(rest) = endpoint.strip_prefix("https://") {
+        return rest
             .split(['/', '?'])
             .next()
             .is_some_and(|authority| !authority.is_empty());

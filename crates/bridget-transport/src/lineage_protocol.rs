@@ -294,7 +294,7 @@ where
     }
 }
 
-fn serialize_routing_candidate_id<S>(value: &String, serializer: S) -> Result<S::Ok, S::Error>
+fn serialize_routing_candidate_id<S>(value: &str, serializer: S) -> Result<S::Ok, S::Error>
 where
     S: serde::Serializer,
 {
@@ -317,7 +317,7 @@ where
     }
 }
 
-fn serialize_auto_candidate_id<S>(value: &String, serializer: S) -> Result<S::Ok, S::Error>
+fn serialize_auto_candidate_id<S>(value: &str, serializer: S) -> Result<S::Ok, S::Error>
 where
     S: serde::Serializer,
 {

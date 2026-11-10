@@ -41,7 +41,7 @@ impl ReplyOutbox {
     ) -> Result<BridgetMessage, String> {
         let identity = serde_json::to_vec(&(&self.instance, &original.id, &original.from))
             .map_err(|e| e.to_string())?;
-        reply.id = format!("reply244-{}", format!("{:x}", Sha256::digest(identity)));
+        reply.id = format!("reply244-{:x}", Sha256::digest(identity));
         let bytes = serde_json::to_vec(&reply).map_err(|e| e.to_string())?;
         if bytes.len() >= bridget_transport::jsonl::MAX_DAEMON_FRAME_BYTES {
             return Err("reply_outbox_frame_too_large".into());

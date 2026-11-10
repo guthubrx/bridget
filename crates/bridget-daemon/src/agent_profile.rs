@@ -1389,6 +1389,7 @@ fn now_secs() -> i64 {
         .as_secs() as i64
 }
 
+#[allow(clippy::items_after_test_module)] // fonctions utilitaires placées après les tests, sans effet sur le code de production
 #[cfg(test)]
 mod tests {
     use super::*;

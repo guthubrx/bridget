@@ -1150,7 +1150,7 @@ fn native149_capture_refuse_les_sources_opaques_et_garde_les_inline() {
     fs::set_permissions(&hook, fs::Permissions::from_mode(0o755)).unwrap();
     fs::write(
         autre.join("settings.json"),
-        r#"{"hooks":{"PreToolUse":[{"hooks":[{"type":"command","command":"${CLAUDE_PROJECT_DIR}/hook.sh"}]}]}}"#.to_string(),
+        r#"{"hooks":{"PreToolUse":[{"hooks":[{"type":"command","command":"${CLAUDE_PROJECT_DIR}/hook.sh"}]}]}}"#,
     )
     .unwrap();
     let hook_context =

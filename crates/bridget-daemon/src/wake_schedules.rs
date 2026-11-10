@@ -161,6 +161,7 @@ pub(crate) fn validate_schedule(schedule: &WakeSchedule) -> Result<(), &'static 
     }
 }
 fn local(epoch: i64) -> Result<libc::tm, &'static str> {
+    #[allow(clippy::useless_conversion)] // time_t varie selon la plateforme
     let raw: libc::time_t = epoch.try_into().map_err(|_| "calendar_unavailable")?;
     let mut civil: libc::tm = unsafe { std::mem::zeroed() };
     if unsafe { libc::localtime_r(&raw, &mut civil) }.is_null() {
@@ -300,6 +301,7 @@ pub(crate) fn calculate_cadence(
                 let epoch = base
                     .checked_add(offset * 86400)
                     .ok_or("calendar_unavailable")?;
+                #[allow(clippy::useless_conversion)] // time_t varie selon la plateforme
                 let raw: libc::time_t = epoch.try_into().map_err(|_| "calendar_unavailable")?;
                 let mut day: libc::tm = unsafe { std::mem::zeroed() };
                 if unsafe { libc::gmtime_r(&raw, &mut day) }.is_null() {

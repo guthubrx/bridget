@@ -877,6 +877,7 @@ fn probe(
         if before_key == Ok(None) {
             return Ok((Vec::new(), None));
         }
+        #[allow(clippy::unnecessary_unwrap)] // le unwrap_err suit la vérification is_err()
         if before_key.is_err() && before_key != Err(CatalogueCause::AccountUnidentified) {
             return Err(before_key.unwrap_err());
         }

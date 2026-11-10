@@ -1041,6 +1041,7 @@ fn compose_select_runtime(
             );
             None
         } else {
+            #[allow(clippy::unnecessary_unwrap)] // la garde `choice.is_none()` est posée par le `if` ci-dessus
             let choice = choice.unwrap();
             let effort = effort
                 .or(choice.default_effort.as_deref())

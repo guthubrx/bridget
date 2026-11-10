@@ -331,6 +331,7 @@ fn native149_acquittement_negatif_bloque_le_hook_par_nom() {
     let (emit, rx) = collector();
     let observer = Observer::start(&root, &definition(&root), &[], "instance-149", emit).unwrap();
     let out = root.join("out-ack-false.json");
+    #[allow(clippy::zombie_processes)] // processus de test : il disparaît avec le processus de test
     let client = connect_payload(
         &observer,
         &root,
@@ -359,6 +360,7 @@ fn native149_overlay_modifie_est_refuse_par_un_refus_nomme() {
     contenu.push(b' ');
     fs::write(observer.overlay(), &contenu).unwrap();
     let out = root.join("out-tamper.json");
+    #[allow(clippy::zombie_processes)] // processus de test : il disparaît avec le processus de test
     let client = connect_payload(
         &observer,
         &root,
@@ -417,6 +419,7 @@ fn native149_nonce_inconnu_et_pair_etranger_restant_silencieux() {
     let mut faux = valid_payload(&observer, "sess-149", json!({"request_id":"req-149"}));
     faux["nonce"] = json!("0".repeat(64));
     let out = root.join("out-nonce.json");
+    #[allow(clippy::zombie_processes)] // processus de test : il disparaît avec le processus de test
     let client = connect_payload(&observer, &root, faux, &out);
     observer.bind_provider(client.id()).unwrap();
     assert_eq!(wait_file(&out), "SILENT");
@@ -493,6 +496,7 @@ fn native149_session_attendue_filtre_les_demandes_hors_session() {
     )
     .unwrap();
     let out = root.join("out-session.json");
+    #[allow(clippy::zombie_processes)] // processus de test : il disparaît avec le processus de test
     let client = connect_payload(
         &observer,
         &root,
@@ -523,6 +527,7 @@ fn native149_fait_capacities_est_informationnel_et_corrige() {
     // corrélé au prompt et à la session, jamais un droit d'une autre demande.
     let mut payload = payload;
     payload["tool_name"] = json!("mcp__bridget__bridget_capabilities");
+    #[allow(clippy::zombie_processes)] // processus de test : il disparaît avec le processus de test
     let client = connect_payload(&observer, &root, payload, &out);
     observer.bind_provider(client.id()).unwrap();
     let (fact, request_id, observation_id, unavailable) = wait_fact(&rx);

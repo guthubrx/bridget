@@ -385,9 +385,9 @@ fn capture_with_objects(cwd: &Path, args: &[&str], timeout: Duration,
         STATUS_READS193.with(|count| count.set(count.get() + 1));
     }
 
-    let timeout = timeout.min(if args.first() == Some(&"worktree") && args.get(1) == Some(&"add") {
-        WORKTREE_ADD_TIMEOUT
-    } else if args.first() == Some(&"read-tree") {
+    let timeout = timeout.min(if args.first() == Some(&"worktree") && args.get(1) == Some(&"add")
+        || args.first() == Some(&"read-tree")
+    {
         WORKTREE_ADD_TIMEOUT
     } else if args.first() == Some(&"fetch") {
         CREATE_TIMEOUT

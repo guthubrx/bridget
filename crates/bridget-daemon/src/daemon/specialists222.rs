@@ -831,7 +831,6 @@ fn verify_memory_source(
     Ok(())
 }
 #[allow(clippy::too_many_arguments)]
-
 fn decision_projects(st: &DaemonState, row: &Value) -> Result<Vec<String>, String> {
     match row["actor"].as_str() {
         Some("cli" | "humain") => Ok(vec!["*".into()]),
@@ -2296,6 +2295,7 @@ pub(super) fn capture_correlated_reply(
     if live_connection_identity(st, conn).map(|v| v.0).as_deref() != Some(message.from.as_str()) {
         return;
     }
+    #[allow(clippy::redundant_closure_call)] // la fermeture borne le type d'erreur de `?`
     let source = (|| -> Result<Option<(String, Vec<u8>)>, rusqlite::Error> {
         st.store.connection().query_row("SELECT issuer_scope,canonical_bytes FROM specialist_requests WHERE native_submission_id=?1 AND selected_agent_id=?2",
             rusqlite::params![parent,message.from],|r|Ok((r.get(0)?,r.get(1)?))).optional()

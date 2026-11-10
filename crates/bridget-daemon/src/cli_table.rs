@@ -432,7 +432,7 @@ fn state(v: &Value) -> String {
 }
 #[derive(Clone, Copy)]
 struct Column(&'static str, &'static str);
-fn columns<'a>(family: &str, rows: &[&Value]) -> Vec<Column> {
+fn columns(family: &str, rows: &[&Value]) -> Vec<Column> {
     let first = rows.first().copied().unwrap_or(&Value::Null);
     use Column as C;
     if first.get("specialist").is_some() || (family == "specialists" && rows.is_empty()) {
@@ -751,8 +751,6 @@ fn table(headers: &[String], rows: &[Vec<String>], width: usize, color: bool) ->
         }
     };
     row(headers, true);
-    // Relâcher la capture mutable avant les bordures et les lignes suivantes.
-    drop(row);
     out.push_str(&border('├', '┼', '┤'));
     for cells in rows {
         let chunks = cells
