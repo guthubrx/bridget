@@ -1,6 +1,6 @@
 # Tâches 260 - Assainissement du code et du dépôt
 
-Statut : In Progress. 13 tâches cochées sur 157 (T001, T006, T025 à T035). L'implémentation est hors de ce tour (demande de François, 10 novembre 2026).
+Statut : In Progress. 16 tâches cochées sur 157 (T001, T006, T025 à T035, T125 à T127). L'implémentation est hors de ce tour (demande de François, 10 novembre 2026).
 Spécification : `spec.md`. Plan : `plan.md`. Règles : `contracts/regles-implementeur.md`. Portes : `decisions.md`. Démarrage et clôture : `quickstart.md`.
 
 ## Comment lire ce fichier
@@ -174,9 +174,9 @@ Spécification : `spec.md`. Plan : `plan.md`. Règles : `contracts/regles-implem
 
 ## Lot 12 - Stockage documenté (guide : `guides/lot-12-stockage.md`)
 
-- [ ] T125 [L12] Inventaire des mécanismes de version, ouvertures et modes de journal ; `validation/lot12-inventaire-stockage.md`.
-- [ ] T126 [L12] ADR proposé `docs/decisions/260-stockage-versions-schema.md` (statut Proposé).
-- [ ] T127 [L12] Porte : aucun fichier de code modifié ; `check-docs.py` ; bilan ; fin de lot.
+- [x] T125 [L12] Inventaire des mécanismes de version, ouvertures et modes de journal ; `validation/lot12-inventaire-stockage.md`.
+- [x] T126 [L12] ADR proposé `docs/decisions/260-stockage-versions-schema.md` (statut Proposé).
+- [x] T127 [L12] Porte : aucun fichier de code modifié ; `check-docs.py` ; bilan ; fin de lot.
 
 ## Lot 13 - Scripts contrôlés (guide : `guides/lot-13-scripts.md`)
 

@@ -9,6 +9,7 @@ Statut du programme : In Progress. Règles : `contracts/regles-implementeur.md`.
 | 0 | partiel | T001, T002, T006 faits ; T003 à T005 en attente (Cargo, voir T002) |
 | 2 | intégré | T025 à T030 faits |
 | 3 | intégré | T031 à T035 faits |
+| 12 | intégré | T125 à T127 faits |
 
 ## Journal
 
@@ -62,3 +63,14 @@ Pas d'activation : aucun fichier exécutable modifié.
 
 ### Bilan lot 3
 Pas d'activation : documentation seulement.
+
+### Lot 12 - Stockage documenté (T125 à T127)
+- Statut : fait
+- Commits : `6348d671` (inventaire), `bd37ae63` (ADR proposé) sur la branche du lot.
+- Fichiers : `specs/260-assainissement-code/validation/lot12-inventaire-stockage.md`, `docs/decisions/260-stockage-versions-schema.md` (statut Proposé).
+- Vérifications : relevé par `rg` hors fichiers de tests ; `python3 scripts/check-docs.py` PASS ; `git diff origin/main --stat -- crates` vide (aucun code touché).
+- Écarts : l'inventaire contient des cellules « non lu » (comportement face à une base plus récente pour trois mécanismes ; modes de journal de six magasins). Elles ne sont pas inventées.
+- Non vérifié : ce qui est marqué « non lu » dans l'inventaire.
+
+### Bilan lot 12
+Pas d'activation : documentation seulement. Décision à prendre par François : ADR `260-stockage-versions-schema.md`.
