@@ -1,6 +1,6 @@
 # Tâches 260 - Assainissement du code et du dépôt
 
-Statut : In Progress. 0 tâche cochée sur 157. L'implémentation est hors de ce tour (demande de François, 10 novembre 2026).
+Statut : In Progress. 2 tâches cochées sur 157 (T001, T006). L'implémentation est hors de ce tour (demande de François, 10 novembre 2026).
 Spécification : `spec.md`. Plan : `plan.md`. Règles : `contracts/regles-implementeur.md`. Portes : `decisions.md`. Démarrage et clôture : `quickstart.md`.
 
 ## Comment lire ce fichier
@@ -14,12 +14,12 @@ Spécification : `spec.md`. Plan : `plan.md`. Règles : `contracts/regles-implem
 
 ## Fondations - Lot 0 (guide : `quickstart.md`)
 
-- [ ] T001 [L0] Lire `contracts/regles-implementeur.md` et `decisions.md` ; créer `specs/260-assainissement-code/implementation.md` (sections Journal, Lots, Idées).
+- [x] T001 [L0] Lire `contracts/regles-implementeur.md` et `decisions.md` ; créer `specs/260-assainissement-code/implementation.md` (sections Journal, Lots, Idées).
 - [ ] T002 [L0] Vérifier les outils (`rg`, `python3`, `gh`, `ruff`, `git`, `scripts/build.py`) et le disque (`C-DISQUE`, 12 Gio minimum).
 - [ ] T003 [L0] Ligne de base des tests : `C-TESTS` (`base`) puis `validation/base-echecs.txt` ; valide la recette d'environnement.
 - [ ] T004 [L0] Ligne de base des noms de tests : `validation/base-noms.txt`.
 - [ ] T005 [L0] Ligne de base de l'analyse : `validation/base-clippy.txt` (3 erreurs, environ 385 avertissements).
-- [ ] T006 [L0] Ligne de base du format : `validation/base-format.txt` (environ 120 fichiers), sans rien reformater.
+- [x] T006 [L0] Ligne de base du format : `validation/base-format.txt` (environ 120 fichiers), sans rien reformater.
 - [ ] T007 [L0] Committer journal et lignes de base ; intégrer à `main` (procédure « Fin de lot » de `quickstart.md`).
 
 ## Lot 1 - Filet automatique (guide : `guides/lot-01-filet-automatique.md`)
