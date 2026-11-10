@@ -48,3 +48,9 @@ crates/bridget-daemon/assets/ui/node_modules/
 # Résidus de travail de la racine (programme 260, lot 2)
 /.wip-*
 /watch_*
+
+# Fichiers suivis par Git bien qu'ils correspondent à une règle ci-dessus (décision D3 du programme 260 : conservés) :
+#   audits/                                   317 fichiers, rapports d'audit d'octobre 2026
+#   specs/159-edition-file/validation/*.log   26 journaux de la session 159
+#   AGENTS.md                                 consignes du projet
+#   .specify/feature.json                     pointeur de la fonctionnalité courante
