@@ -15,6 +15,7 @@ mod origin_proof;
 mod mobile_operations;
 mod mobile_queue;
 mod user_input;
+mod wrapper_dispatch;
 mod mobile_artifacts;
 mod mobile_tasks;
 mod mobile_questions;
