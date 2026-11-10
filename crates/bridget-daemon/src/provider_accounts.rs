@@ -987,7 +987,7 @@ mod tests {
         let mut inherited = value.clone();
         inherited["agents"]["private-codex"]["pass_env"] = json!(["CODEX_HOME"]);
         assert!(AgentRegistry::from_json(&inherited.to_string(), f.path()).is_err());
-        let plain = AgentRegistry::from_json("{}", &f.path())
+        let plain = AgentRegistry::from_json("{}", f.path())
             .unwrap()
             .resolved_definition("codex")
             .unwrap();

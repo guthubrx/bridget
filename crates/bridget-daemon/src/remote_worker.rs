@@ -9789,7 +9789,7 @@ while not stop.exists(): time.sleep(.01)
             assert_eq!(report.dirty,Some(false));
             assert!(report.head_commit.is_none());
         }
-        assert_eq!(fs::read(&cwd.join("tracked")).unwrap(),b"committed");
+        assert_eq!(fs::read(cwd.join("tracked")).unwrap(),b"committed");
         assert_eq!(fs::read(source.join("tracked")).unwrap(),b"dirty B");
         assert_eq!(fs::read(source.join(".git/index")).unwrap(),source_index);
         assert_eq!(fs::read(source.join(".git/refs/heads").join(
@@ -11494,7 +11494,7 @@ while not stop.exists(): time.sleep(.01)
         ));
         let third = slot(3);
         let reservation = store.reserve_result_slot(&third, 101).unwrap();
-        symlink(&fixture.0.join("outside"), &reservation.blob_path).unwrap();
+        symlink(fixture.0.join("outside"), &reservation.blob_path).unwrap();
         assert!(matches!(
             publish_result_blob(&reservation, &result(&third, "result")),
             Err(WorkerStoreError::Quarantined)
@@ -12206,7 +12206,7 @@ while not stop.exists(): time.sleep(.01)
         assert_eq!(fs::read_to_string(project.join("file")).unwrap(), "local commit\n");
         // Les codes distincts traversent le protocole fermé existant.
         for reason in [R::WorkspaceDirty, R::WorkspaceBusy, R::WorkspaceDiverged, R::WorkspaceBaseUnavailable] {
-            assert_eq!(serde_json::from_value::<R>(serde_json::to_value(&reason).unwrap()).unwrap(), reason);
+            assert_eq!(serde_json::from_value::<R>(serde_json::to_value(reason).unwrap()).unwrap(), reason);
         }
     }
 

@@ -11803,7 +11803,7 @@ mod spec104_search_contract_tests {
             ),
         ] {
             assert_eq!(
-                serde_json::to_value(&reason).unwrap(),
+                serde_json::to_value(reason).unwrap(),
                 serde_json::json!(code)
             );
             assert_eq!(

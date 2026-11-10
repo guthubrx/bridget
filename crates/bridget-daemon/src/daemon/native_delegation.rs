@@ -5399,7 +5399,7 @@ fn current_task_view(st: &DaemonState, task: &Task, full: bool) -> Result<Value,
                 task.result_message_id()
             };
             let key = IdempotencyKey::new(
-                &crate::communication::issuer_scope(&task.task_id),
+                crate::communication::issuer_scope(&task.task_id),
                 OperationKind::Send,
                 &message_id,
             )
@@ -14411,7 +14411,7 @@ pub(super) fn copy_delivery_acks(st: &DaemonState) -> Result<usize, String> {
             let key = IdempotencyKey::new(
                 &scope,
                 OperationKind::Send,
-                &task.result_message_id_for_round(*round),
+                task.result_message_id_for_round(*round),
             )
             .map_err(|error| error.to_string())?;
             if st
@@ -23397,7 +23397,7 @@ for frame in frames: print(json.dumps(frame),flush=True)
         st.delegation_store.save(&task).unwrap();
         let message_id = task.result_message_id();
         let key = IdempotencyKey::new(
-            &crate::communication::issuer_scope(&id),
+            crate::communication::issuer_scope(&id),
             OperationKind::Send,
             &message_id,
         )
@@ -23542,7 +23542,7 @@ for frame in frames: print(json.dumps(frame),flush=True)
                 .unwrap()
                 .expect("la mission a été lue par la fixture150");
             let key = IdempotencyKey::new(
-                &crate::communication::issuer_scope(&task.task_id),
+                crate::communication::issuer_scope(&task.task_id),
                 OperationKind::Send,
                 &task.mission,
             )
@@ -23572,7 +23572,7 @@ for frame in frames: print(json.dumps(frame),flush=True)
         {
             let st = shared.lock().unwrap();
             let key = IdempotencyKey::new(
-                &crate::communication::issuer_scope(&task.task_id),
+                crate::communication::issuer_scope(&task.task_id),
                 OperationKind::Send,
                 &task.mission,
             )
@@ -27417,9 +27417,9 @@ for frame in frames: print(json.dumps(frame),flush=True)
         let mut before =
             serde_json::to_value(st.delegation_store.get(&task.task_id).unwrap().unwrap()).unwrap();
         let key = IdempotencyKey::new(
-            &crate::communication::issuer_scope(&task.task_id),
+            crate::communication::issuer_scope(&task.task_id),
             OperationKind::Send,
-            &format!("native-result-{}", task.task_id),
+            format!("native-result-{}", task.task_id),
         )
         .unwrap();
         let phase = st.idempotency.send_delivery_phase(&key).unwrap();
@@ -27679,7 +27679,7 @@ for frame in frames: print(json.dumps(frame),flush=True)
                 "mappings":{"session172":{"source_host":st.host.clone(),"source_root":task.cwd,
                     "remote_root":task.cwd,"expected_git_identity":"fixture-session172","mapping_revision":1}}
             }}
-        }).to_string(), &root.join("session172-registry.json")).unwrap();
+        }).to_string(), root.join("session172-registry.json")).unwrap();
         let mut parent = continuation172_parent();
         parent.cwd.clone_from(&task.cwd);
         task.permission_snapshot = Some(crate::native_permissions::snapshot(
@@ -28721,7 +28721,7 @@ for frame in frames: print(json.dumps(frame),flush=True)
                     "default_effort":"high","provenance":"operator_observation"}]},
                 "machine_policies":{"cartae":{"enabled":true}}}});
         st.registry =
-            AgentRegistry::from_json(&value.to_string(), &root.join("quota172.json")).unwrap();
+            AgentRegistry::from_json(&value.to_string(), root.join("quota172.json")).unwrap();
         let instance = task.child_instance.clone().unwrap();
         let response = handle_register_with_channel(
             "quota-child172",
@@ -28769,7 +28769,7 @@ for frame in frames: print(json.dumps(frame),flush=True)
                     declared["routing_policy"]["model_catalog"]["cartae-native"].clone();
             }
             st.registry =
-                AgentRegistry::from_json(&declared.to_string(), &root.join("quota172.json")).unwrap();
+                AgentRegistry::from_json(&declared.to_string(), root.join("quota172.json")).unwrap();
             st.managed_by_instance
                 .insert(instance.clone(), task.task_id.clone());
             let mut candidate = task.clone();
@@ -31220,7 +31220,7 @@ for frame in frames: print(json.dumps(frame),flush=True)
     fn remise_native_150(st: &mut DaemonState, task: &Task, prefix: &str, accuser: bool) -> String {
         let id = format!("{prefix}{}", task.task_id);
         let key = IdempotencyKey::new(
-            &crate::communication::issuer_scope(&task.task_id),
+            crate::communication::issuer_scope(&task.task_id),
             OperationKind::Send,
             &id,
         )
@@ -31338,9 +31338,9 @@ for frame in frames: print(json.dumps(frame),flush=True)
         let loin = unix_timestamp() + 90 * JOUR_150;
         super::super::maintain_stores(&mut st, loin);
         let cle = IdempotencyKey::new(
-            &crate::communication::issuer_scope(&ids[0]),
+            crate::communication::issuer_scope(&ids[0]),
             OperationKind::Send,
-            &format!("native-result-{}", ids[0]),
+            format!("native-result-{}", ids[0]),
         )
         .unwrap();
         assert_eq!(
@@ -32866,9 +32866,9 @@ for frame in frames: print(json.dumps(frame),flush=True)
         let task = semer_terminale_150(&st, &modele, 1, "result_available");
         remise_native_150(&mut st, &task, "native-result-", true);
         let cle = IdempotencyKey::new(
-            &crate::communication::issuer_scope(&task.task_id),
+            crate::communication::issuer_scope(&task.task_id),
             OperationKind::Send,
-            &format!("native-result-{}", task.task_id),
+            format!("native-result-{}", task.task_id),
         )
         .unwrap();
         let loin = unix_timestamp() + 90 * JOUR_150;
@@ -35885,7 +35885,7 @@ for frame in frames: print(json.dumps(frame),flush=True)
         st.registry=AgentRegistry::from_json(&json!({"agents":{},"machines":{"cartae":{
             "enabled":true,"worker_id":"worker-cartae","provisioning_revision":1,
             "credential_fingerprint":format!("{:x}",sha2::Sha256::digest(b"secret205")),"allowed_agent_types":["native-test"],"mappings":{}
-        }}}).to_string(),&root.join("registry205.json")).unwrap();
+        }}}).to_string(),root.join("registry205.json")).unwrap();
         task.state="starting".into();task.remote_prepared=false;task.mission_issued_at=None;
         st.delegation_store.save(&task).unwrap();
         let worker=remote_worker_identity(task.remote_placement.as_ref().unwrap());
@@ -35985,7 +35985,7 @@ for frame in frames: print(json.dumps(frame),flush=True)
                 machines[machine]=json!({"enabled":true,"worker_id":format!("worker-{machine}"),"provisioning_revision":1,
                     "credential_fingerprint":format!("{:x}",sha2::Sha256::digest(b"secret205")),"allowed_agent_types":["native-test"],"mappings":{}});
             }
-            st.registry=AgentRegistry::from_json(&json!({"agents":{},"machines":machines}).to_string(),&root.join("machines205.json")).unwrap();
+            st.registry=AgentRegistry::from_json(&json!({"agents":{},"machines":machines}).to_string(),root.join("machines205.json")).unwrap();
             let mut task=original.clone();task.task_id=Uuid::new_v4().to_string();task.child=Uuid::new_v4().to_string();
             task.mission=Uuid::new_v4().to_string();task.remote_result_slots.clear();
             if let NativeDelegationRequest::Delegate {request_id,..}=&mut task.request {*request_id="sys205".into();}

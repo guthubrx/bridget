@@ -82,7 +82,7 @@ fn fixture_guarded202(guarded: bool, selected_effort: bool) -> (
             "credential_fingerprint":format!("{:x}",sha2::Sha256::digest(b"worker198-secret")),"allowed_agent_types":["native-test"],
             "mappings":{"project":{"source_host":st.host,"source_root":task.cwd,
                 "remote_root":"/tmp","expected_git_identity":"git:fixture162","mapping_revision":1}}}}
-    }).to_string(), &root.join("registry198.json")).unwrap();
+    }).to_string(), root.join("registry198.json")).unwrap();
     let source_cwd = task.cwd.clone();
     task.cwd = task
         .remote_placement
@@ -118,7 +118,7 @@ fn fixture_guarded202(guarded: bool, selected_effort: bool) -> (
         definition.as_object_mut().unwrap().remove("digest");
         definition["capabilities"]["models"]["custom/model"]["efforts"] = json!(["low", "high"]);
         task.definition = AgentRegistry::from_json(&json!({"agents":{"native-test":definition}}).to_string(),
-            &config.db_path.with_extension("registry202.json")).unwrap()
+            config.db_path.with_extension("registry202.json")).unwrap()
             .pin_delegation_model("native-test", "custom/model", Some("high")).unwrap()
             .resolved_definition("native-test").unwrap();
         task.remote_placement.as_mut().unwrap().definition_digest = task.definition.digest.clone();

@@ -237,7 +237,7 @@ fn lancer(label: &str, natif: bool, persistant: bool, fin: FinDaemon) -> Scenari
         generation: 1,
     };
     let binary = PathBuf::from(env!("CARGO_BIN_EXE_bridget"));
-    let definition = AgentRegistry::from_json(&registre_json, &racine.0.join("state/agents.json"))
+    let definition = AgentRegistry::from_json(&registre_json, racine.0.join("state/agents.json"))
         .unwrap()
         .resolved_definition("faux-natif")
         .unwrap();
