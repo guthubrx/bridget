@@ -1,6 +1,6 @@
 # Tâches 260 - Assainissement du code et du dépôt
 
-Statut : In Progress. 73 tâches cochées sur 157 (voir `implementation.md` pour le détail et les lots bloqués). La mise en oeuvre est en cours : lots 0, 1 (sauf T024), 2, 3, 4, 12, 14, 13 (T137 partiel), 15, 17 traités.
+Statut : In Progress. 85 tâches cochées sur 157 (voir `implementation.md` pour le détail et les lots bloqués). La mise en oeuvre est en cours : lots 0, 1 (sauf T024), 2, 3, 4, 6, 12, 14, 13 (T137 partiel), 15, 17 traités.
 Spécification : `spec.md`. Plan : `plan.md`. Règles : `contracts/regles-implementeur.md`. Portes : `decisions.md`. Démarrage et clôture : `quickstart.md`.
 
 ## Comment lire ce fichier
@@ -100,18 +100,18 @@ Spécification : `spec.md`. Plan : `plan.md`. Règles : `contracts/regles-implem
 
 ## Lot 6 - `unsafe` justifiés (guide : `guides/lot-06-unsafe.md`)
 
-- [ ] T069 [L6] `fsutil.rs` : `effective_uid()` et son test.
-- [ ] T070 [L6] Remplacer les lectures `geteuid` du crate de transport.
-- [ ] T071 [L6] Remplacer les lectures `geteuid` du crate du démon et de ses tests d'intégration.
-- [ ] T072 [L6] Remplacer les variantes sur plusieurs lignes ; plus aucun `geteuid` hors `fsutil.rs`.
-- [ ] T073 [L6] Commentaires `SAFETY` : `workspace_commit_view.rs`, `claude_interactive.rs`.
-- [ ] T074 [L6] Commentaires `SAFETY` : `managed_process.rs`, `attach.rs`.
-- [ ] T075 [L6] Commentaires `SAFETY` : `daemon.rs` et le dossier `daemon/`.
-- [ ] T076 [L6] Commentaires `SAFETY` : crate `bridget-transport`.
-- [ ] T077 [L6] Commentaires `SAFETY` : autres fichiers de `crates/bridget-daemon/src`.
-- [ ] T078 [L6] Commentaires `SAFETY` : `crates/bridget-daemon/tests/`.
-- [ ] T079 [L6] Lint `undocumented_unsafe_blocks` dans les lints du workspace ; contre-épreuve.
-- [ ] T080 [L6] Porte : `C-TESTS`, `C-ECHECS`, `C-NOMS` (+1 test) ; base actualisée ; bilan ; fin de lot.
+- [x] T069 [L6] `fsutil.rs` : `effective_uid()` et son test.
+- [x] T070 [L6] Remplacer les lectures `geteuid` du crate de transport.
+- [x] T071 [L6] Remplacer les lectures `geteuid` du crate du démon et de ses tests d'intégration.
+- [x] T072 [L6] Remplacer les variantes sur plusieurs lignes ; plus aucun `geteuid` hors `fsutil.rs`.
+- [x] T073 [L6] Commentaires `SAFETY` : `workspace_commit_view.rs`, `claude_interactive.rs`.
+- [x] T074 [L6] Commentaires `SAFETY` : `managed_process.rs`, `attach.rs`.
+- [x] T075 [L6] Commentaires `SAFETY` : `daemon.rs` et le dossier `daemon/`.
+- [x] T076 [L6] Commentaires `SAFETY` : crate `bridget-transport`.
+- [x] T077 [L6] Commentaires `SAFETY` : autres fichiers de `crates/bridget-daemon/src`.
+- [x] T078 [L6] Commentaires `SAFETY` : `crates/bridget-daemon/tests/`.
+- [x] T079 [L6] Lint `undocumented_unsafe_blocks` dans les lints du workspace ; contre-épreuve.
+- [x] T080 [L6] Porte : `C-TESTS`, `C-ECHECS`, `C-NOMS` (+1 test) ; base actualisée ; bilan ; fin de lot.
 
 ## Lot 7 - Concurrence observable (guide : `guides/lot-07-concurrence.md`)
 

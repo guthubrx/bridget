@@ -11,6 +11,7 @@ Statut du programme : In Progress. Règles : `contracts/regles-implementeur.md`.
 | 2 | intégré | T025 à T030 faits |
 | 3 | intégré | T031 à T035 faits |
 | 4 | intégré | T036 à T053 faits (desired_state.rs arrêté) |
+| 6 | intégré | T069 à T080 faits (158 blocs en repli) |
 | 12 | intégré | T125 à T127 faits |
 | 13 | intégré | T128 à T136 faits ; T137 partiel (job CI différé) |
 | 14 | intégré | T138 à T140 faits |
@@ -222,3 +223,18 @@ Code de test seulement. Pas d'activation nécessaire.
 
 ### Bilan lot 17
 Attributs de lint seulement. « Activation en attente » : sans effet fonctionnel.
+
+### Lot 6 - `unsafe` justifiés (T069 à T080)
+- Statut : fait. Commentaires de repli : 158 blocs.
+- Commits : fonction `effective_uid()` (`fsutil.rs`) et son test ; remplacement de 76 lectures `geteuid` dans les deux crates ; commentaires `SAFETY` sur 487 blocs ; lint `undocumented_unsafe_blocks = "warn"` (bloquant par `-D warnings`).
+- Fichiers : 101 fichiers Rust, `Cargo.toml`, `outils/commenter_unsafe.py` (nouvel outil, ajoute un commentaire seulement quand la syntaxe du bloc permet de l'affirmer).
+- Vérifications : `rg geteuid` : plus qu'une occurrence (la définition). Compilation et analyse `-D warnings` : code 0, aucun bloc `unsafe` sans commentaire (487 blocs signalés au départ, 0 à la fin, tests et intégration inclus). Porte sur cliché isolé de `HEAD` : `C-ECHECS` = base + 2 tests instables déjà connus (`reprise_daemon_redelivre...`, `spec185_workspace_repair...`) ; `C-NOMS` = base + exactement 1 ligne (le test de `effective_uid`). La base de noms est actualisée.
+- Écarts :
+  - Le constat compte 487 blocs (et non 247) parce que les tests déplacés au lot 4 sont désormais comptés et que clippy compte aussi les blocs de tests.
+  - Un commentaire `// SAFETY :` existant (espace avant les deux-points) n'était pas reconnu : corrigé en `// SAFETY:`.
+  - **158 blocs reçoivent la phrase de repli** « invariant non établi par lecture locale ; revue demandée (programme 260). » (appels à `from_raw_fd`, `set_var`, `assume_init`, `mkfifo` avec chemin C, API Mach, rappels SQLite...). Principaux fichiers : `daemon_presence_tests.rs` 24, `workspace_commit_view.rs` 19, `attach_tests.rs` 11, `host_resources.rs` 8, `daemon.rs` 8. Un relecteur doit les établir un à un : travail laissé ouvert.
+  - L'outil ne vérifie pas la longueur des tampons au-delà de la forme `x.as_ptr(), x.len()`.
+- Non vérifié : la justesse sémantique des 329 phrases précises au-delà de la forme syntaxique contrôlée (choix assumé : seules les formes vérifiables par lecture du bloc reçoivent une phrase précise).
+
+### Bilan lot 6
+Seul `effective_uid()` modifie du code exécutable (équivalent). Les commentaires ne changent pas le comportement. « Activation en attente ».

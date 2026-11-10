@@ -1960,6 +1960,7 @@ fleet::tests::scope_superviseur_et_issue_persistante_survivent_au_redemarrage: t
 fleet::tests::stop_connecte_preserve_l_issue_spawn_et_marque_l_agent_arrete: test
 fleet::tests::stop_invalide_un_lancement_avant_toute_io_et_rejoue_cancelled: test
 fsutil::tests::atomic_temporary_names_are_unique_across_processes: test
+fsutil::tests::effective_uid_est_le_proprietaire_d_un_fichier_cree_par_ce_processus: test
 fsutil::tests::private_helpers_enforce_permissions_and_replace_content: test
 gap_et_unavailable_restant_des_observations_distinctes: test
 gate_reel_claude_stream_json_reponse_liee_et_attach: test
