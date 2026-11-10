@@ -4774,7 +4774,7 @@ mod tests {
             assert!(message.thread_notice.is_none());
             assert_eq!(batch_family(&message), Some(BatchFamily::Message));
             worker.handle_frame(DaemonToWrapper::Deliver {
-                message: message,
+                message,
                 mid_turn_ok: None,
             });
         }
@@ -5917,7 +5917,7 @@ mod tests {
         message.id = "budget-45min".into();
         message.deadline_at = Some(unix_now() + 2_700);
         worker.handle_frame(DaemonToWrapper::Deliver {
-            message: message,
+            message,
             mid_turn_ok: None,
         });
         // Antidater la réception au-delà du budget : sans report, la remise
@@ -5948,7 +5948,7 @@ mod tests {
         message.id = "stale".into();
         message.deadline_at = Some(unix_now() - 10);
         worker.handle_frame(DaemonToWrapper::Deliver {
-            message: message,
+            message,
             mid_turn_ok: None,
         });
         let (_tx, inbox) = mpsc::channel();
@@ -5964,7 +5964,7 @@ mod tests {
         let mut message = bridget_core::BridgetMessage::new("alice", "bob", "libération");
         message.id = "attente-longue".into();
         worker.handle_frame(DaemonToWrapper::Deliver {
-            message: message,
+            message,
             mid_turn_ok: None,
         });
         // Antidater la réception bien au-delà de l'ancien seuil.
@@ -5990,7 +5990,7 @@ mod tests {
         message.id = "echeance-depassee".into();
         message.deadline_at = Some(unix_now() - 1);
         worker.handle_frame(DaemonToWrapper::Deliver {
-            message: message,
+            message,
             mid_turn_ok: None,
         });
         let (_tx, inbox) = mpsc::channel();
@@ -6010,7 +6010,7 @@ mod tests {
             let mut message = bridget_core::BridgetMessage::new("alice", "bob", "lot");
             message.id = format!("m-{index}");
             worker.handle_frame(DaemonToWrapper::Deliver {
-                message: message,
+                message,
                 mid_turn_ok: None,
             });
         }
@@ -6086,7 +6086,7 @@ mod tests {
             let mut message = bridget_core::BridgetMessage::new("alice", "bob", "lot");
             message.id = format!("m-{index}");
             worker.handle_frame(DaemonToWrapper::Deliver {
-                message: message,
+                message,
                 mid_turn_ok: None,
             });
         }

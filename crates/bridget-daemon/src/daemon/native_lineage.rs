@@ -1223,8 +1223,8 @@ pub(super) fn read_task_journal(
             worker,
             command,
             WorkerRequestOperation::JournalPage {
-                after_seq: after_seq,
-                limit: limit,
+                after_seq,
+                limit,
             },
             Instant::now() + Duration::from_secs(5),
         )
