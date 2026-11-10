@@ -93,3 +93,12 @@ Réutiliser le target du checkout au lieu de le copier à chaque test. Si une
 isolation est nécessaire, utiliser un répertoire temporaire enregistré. Un cache
 créé par un build échoué est enregistré à son retour. Les exécutables installés
 et les copies de retour restent hors budget et sont à traiter à la livraison.
+
+## Contrôles avant livraison
+
+Avant de livrer, lancer `make lint` : il exécute l'analyse statique de Rust avec
+`-D warnings` (un avertissement refuse la livraison) puis le contrôle de format.
+Le contrôle de format reste en observation jusqu'au lot 10 du programme 260.
+`make lint-scripts` contrôle les scripts Python et shell (`ruff` et `bash -n`).
+Le contrôle distant `Rust` rejoue l'analyse statique, le format et les tests ; la
+liste des contrôles attendus est dans `specs/260-assainissement-code/contracts/controles-ci.md`.

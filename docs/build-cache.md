@@ -87,3 +87,13 @@ worktrees, state and rollback artifacts independently of build-cache cleanup.
 Maintenance runs with builds, not on a timer. No background model or scheduler
 is required. Installed executables and rollback copies are outside this cache
 budget and must be accounted for separately at delivery.
+
+## Checks before delivery
+
+Run `make lint` before delivery: it runs the Rust static analysis with
+`-D warnings` (any warning refuses delivery), then the format check. The format
+check stays in observation until lot 10 of program 260.
+`make lint-scripts` checks the Python and shell scripts (`ruff` and `bash -n`).
+The remote `Rust` check replays the static analysis, the format check and the
+tests; the expected checks are listed in
+`specs/260-assainissement-code/contracts/controles-ci.md`.
