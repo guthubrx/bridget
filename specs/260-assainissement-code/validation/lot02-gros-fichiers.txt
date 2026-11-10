@@ -1,0 +1,11 @@
+2344763 preuves-corrections/2026-10-25-183-interface-mobile/preuves.html
+2300233 specs/155-demandes-enfant/validation/diff-155.patch
+2128485 crates/bridget-daemon/src/daemon.rs
+1847365 crates/bridget-daemon/src/daemon/native_delegation.rs
+1430665 audits/2026-10-12/session-2026-10-12-spec-159A-01/diff-159a-scope.patch.initial86
+1392921 docs/adapters/t3/archives/docs/catalogue-du-du.md
+1331633 audits/2026-10-12/session-2026-10-12-spec-159A-01/diff-159a-tracked.patch
+1243128 preuves-corrections/2026-11-01-222-specialistes/preuves.html
+1154400 specs/159-edition-file/validation/global-T013.json
+1116006 specs/158-reveils-controle/validation/diff-158B.patch
+1107964 docs/adapters/t3/documentation182-classement.json

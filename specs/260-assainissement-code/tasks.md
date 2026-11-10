@@ -1,6 +1,6 @@
 # Tâches 260 - Assainissement du code et du dépôt
 
-Statut : In Progress. 2 tâches cochées sur 157 (T001, T006). L'implémentation est hors de ce tour (demande de François, 10 novembre 2026).
+Statut : In Progress. 8 tâches cochées sur 157 (T001, T006, T025 à T030). L'implémentation est hors de ce tour (demande de François, 10 novembre 2026).
 Spécification : `spec.md`. Plan : `plan.md`. Règles : `contracts/regles-implementeur.md`. Portes : `decisions.md`. Démarrage et clôture : `quickstart.md`.
 
 ## Comment lire ce fichier
@@ -44,12 +44,12 @@ Spécification : `spec.md`. Plan : `plan.md`. Règles : `contracts/regles-implem
 
 ## Lot 2 - Dépôt sans résidus (guide : `guides/lot-02-depot-sans-residus.md`)
 
-- [ ] T025 [L2] [D3] Constat : 345 fichiers suivis mais ignorés, 15 résidus de racine ; `validation/lot02-constat.txt`.
-- [ ] T026 [L2] [D5] `git mv` des 15 résidus vers `specs/archives/residus-racine-20261110/` après contrôle par `rg`.
-- [ ] T027 [L2] `.gitignore` : `/.wip-*` et `/watch_*`.
-- [ ] T028 [L2] [D3] `.gitignore` : commentaire qui liste les 4 exceptions historiques (rien n'est retiré).
-- [ ] T029 [L2] Inventaire des fichiers suivis de plus de 1 Mio, `validation/lot02-gros-fichiers.txt` (propositions seulement).
-- [ ] T030 [L2] Porte : `check-secrets.sh`, `check-docs.py`, 0 résidu à la racine ; bilan ; fin de lot.
+- [x] T025 [L2] [D3] Constat : 345 fichiers suivis mais ignorés, 15 résidus de racine ; `validation/lot02-constat.txt`.
+- [x] T026 [L2] [D5] `git mv` des 15 résidus vers `specs/archives/residus-racine-20261110/` après contrôle par `rg`.
+- [x] T027 [L2] `.gitignore` : `/.wip-*` et `/watch_*`.
+- [x] T028 [L2] [D3] `.gitignore` : commentaire qui liste les 4 exceptions historiques (rien n'est retiré).
+- [x] T029 [L2] Inventaire des fichiers suivis de plus de 1 Mio, `validation/lot02-gros-fichiers.txt` (propositions seulement).
+- [x] T030 [L2] Porte : `check-secrets.sh`, `check-docs.py`, 0 résidu à la racine ; bilan ; fin de lot.
 
 ## Lot 3 - Consignes allégées (guide : `guides/lot-03-consignes-allegees.md`)
 
