@@ -109,6 +109,19 @@ Ne pas décrire le produit par comparaison avec un client externe.
 
 <!-- SPECKIT START -->
 
+## Règles permanentes issues des reçus
+
+Ces huit consignes figurent dans les reçus de `specs/recus-de-session.md` et restent valables. Chacune cite sa source.
+
+- Ne pas arrêter, redémarrer ni remplacer T3 sans assentiment explicite de François, et ne pas reposer la question (reçus 237 à 259).
+- Registre Mac spécial : dernier repère connu `2b4f409e464066f099a6541009332e567ae6a0fb772596421b6172c93f9d32c9` (reçus 256 et 257). Ne pas restaurer un ancien registre à l'aveugle.
+- Worker Mac : préserver le registre dédié `/Users/moi/.cache/bridget-core/worker-monordinateur-agents.json`. Son dossier parent reste le namespace attesté (reçu 221, worker Mac).
+- SYS02 : ne plus la reprendre (reçus 236 et 237).
+- Ne pas reprendre d'essais Claude ni la sentinelle 244 sans demande utile nouvelle (reçu 244).
+- Codex KS : connexion désactivée jusqu'à la connexion de l'utilisateur (reçus 212 à 216).
+- L'outil de mise à jour Mac utilise le Python système 3.9.6 (reçu 224).
+- Le Linux commun est construit sur Debian 12 avec glibc 2.36 (reçu 224).
+
 Session259 — guidage préalable activé en 0.8.26/259-preflight-guidance-r1.
 Source exécutable 406466cb intégrée/poussée ; contrôle CallerScope et raccordement
 guidés, ACK groupés nommés avec bornes, Wait raccordé sans changer délai/reprise.
