@@ -102,3 +102,28 @@ Pas d'activation : documentation seulement. Décision D8 demandée à François.
 
 ### Bilan lot 13
 Activation en attente : `scripts/sentinel.py` est embarqué dans le binaire du démon (octets modifiés, comportement identique). Les autres scripts sont distribués tels quels.
+
+## Converge et audit manuel (état au 10 novembre 2026, fin de séance)
+
+### Converge - périmètre livré (lots 0 partiel, 2, 3, 12, 13, 15)
+Issue : CONVERGED sur ce périmètre. Aucune tâche ajoutée à `tasks.md`.
+
+| Exigence | Preuve lue dans le code réel |
+|----------|------------------------------|
+| FR06, FR07 | `git ls-files` : 0 résidu suivi à la racine, 15 dans `specs/archives/residus-racine-20261110/` ; `.gitignore` documente les 4 exceptions et ignore `/.wip-*`, `/watch_*` |
+| FR08, FR09 | `AGENTS.md` = 10 144 octets ; le bloc de `specs/recus-de-session.md` est identique à celui de `4947bea9` (`diff` vide) |
+| FR22 | `validation/lot12-inventaire-stockage.md`, `docs/decisions/260-stockage-versions-schema.md` (Proposé) |
+| FR23 | `ruff check scripts` : 0 ; `bash -n scripts/*.sh` : 0 erreur ; `make lint-scripts` : code 0. **Manque** : job CI (T137 partiel) |
+| FR25 | `validation/lot15-proposition-signature.md` ; D8 inchangée |
+
+Non convergé (non implémenté) : FR01 à FR05, FR10 à FR21, FR24, FR26, FR27, FR29 (lignes de base), et la partie CI de FR23.
+
+### Audit manuel (le protocole V15 n'a pas été lancé)
+- Écarts spec/plan/tâches/code : T137 coché partiel (CI) ; 5 lots à code uniquement documentaire ou script livrés ; 11 lots non commencés.
+- Tests manquants : lignes de base des tests (T003 à T005) absentes ; aucune suite Rust lancée dans cette séance.
+- Risques : `scripts/sentinel.py` est embarqué dans le binaire du démon (`include_str!`) : prochain build = octets différents, comportement identique ; `test_updates.py` a 16 échecs hérités (identiques sur `origin/main`).
+- Contrôle de secrets complet (`scripts/check-secrets.sh`, historique entier) : arrêté par le système lors du premier essai ; remplacé par `gitleaks` ciblé sur chaque lot (aucune fuite).
+- Contre-revue adverse : `bridget who` -> « Aucun agent connecté ».
+
+### Bloc : disque
+Le disque libre oscille entre 10 et 14 Gio (11 Gio à la dernière mesure). La règle R4 impose un arrêt complet sous 12 Gio. Le dossier `target` de ce dépôt ne fait que 4,8 Mio : la première compilation du workspace écrirait plusieurs Gio. Tous les lots qui compilent sont donc arrêtés avant T003. Première tâche à reprendre : **T002** (contrôle du disque), puis **T003**.
