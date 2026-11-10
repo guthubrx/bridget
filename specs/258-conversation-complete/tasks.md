@@ -31,10 +31,10 @@ chemins Rust sous le worktree 258 Bridget. Aucun commit avant les gates finales.
 - [x] T014 Exécuter tests Rust ciblés via build.py, tests T3, types/lint/build applicables ; traiter les échecs requis sans masquer les limites héritées.
 - [x] T015 Faire la contre-revue du code, Converge et audit V15 ; corriger les manques avant clôture.
 - [x] T016 Refaire le circuit UI réel en environnement isolé, enregistrer les clics et produire/vérifier le diaporama dans preuves-corrections.
-- [ ] T017 Intégrer et pousser les deux dépôts ; distribuer/activer les changements Bridget par le parcours natif et vérifier actif/retour ; construire/signer/préparer l'installation T3 sans fermer l'application.
-- [ ] T018 Nettoyer les ressources propres intégrées et sans usage ; conserver preuves, retour, travaux étrangers ; consigner SHA et exclusions dans validation.md.
+- [x] T017 Intégrer et pousser les deux dépôts ; distribuer/activer les changements Bridget par le parcours natif et vérifier actif/retour ; construire/signer/préparer l'installation T3 sans fermer l'application.
+- [x] T018 Nettoyer les ressources propres intégrées et sans usage ; conserver preuves, retour, travaux étrangers ; consigner SHA et exclusions dans validation.md.
 
-- [ ] T019 Corriger le guidage du refus OAuth attesté dans la revue COPIL Thémys et la revue258 ; qualifier terminal+diagnostic exact, conserver api_error et les tâches, tester les citations ordinaires et erreurs historiques, publier dans le même lot.
+- [x] T019 Corriger le guidage du refus OAuth attesté dans la revue COPIL Thémys et la revue258 ; qualifier terminal+diagnostic exact, conserver api_error et les tâches, tester les citations ordinaires et erreurs historiques, publier dans le même lot.
 
 ## Dépendances
 

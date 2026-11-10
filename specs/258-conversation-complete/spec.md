@@ -1,6 +1,6 @@
 # Session 258 — Conversation complète des sous-agents
 
-Statut : In Progress. Autorisation : demande my-specify-all du 10 novembre 2026.
+Statut : Implemented — 19/19 tâches vérifiées ; pipeline livré sur le périmètre autorisé. Relance T3 par François exclue, installation prête. Autorisation : demande my-specify-all du 10 novembre 2026.
 Dépendances : 149 (lignée native), 154 (workspace), 155 (questions), 174/196
 (lectures), 241 (fiabilité), 246 (filiation), 251 (présentation commune).
 
