@@ -19405,33 +19405,7 @@ fn handle_wrapper_message_with_peer(
             from_seq,
             to_seq,
             reason,
-        } => {
-            let view = {
-                let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
-                let accepted = st
-                    .attach_subscriptions
-                    .get_mut(&subscription_id)
-                    .filter(|subscription| subscription.wrapper_conn == conn_id)
-                    .map(|subscription| {
-                        if reason.as_deref() == Some("live_feed_overrun") {
-                            subscription.caught_up = false;
-                        }
-                    })
-                    .is_some();
-                accepted
-                    .then(|| st.attach_views.get(&subscription_id).cloned())
-                    .flatten()
-            };
-            if let Some(view) = view {
-                let _ = view.enqueue(DaemonToWrapper::Gap {
-                    subscription_id,
-                    from_seq,
-                    to_seq,
-                    reason,
-                });
-            }
-            None
-        }
+        } => wrapper_dispatch::on_gap(subscription_id, from_seq, to_seq, reason, conn_id, state),
         WrapperToDaemon::Register {
             identity_version,
             agent_type,
