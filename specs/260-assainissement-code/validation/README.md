@@ -15,7 +15,7 @@ Il est vide au départ. Les fichiers sont créés par les tâches (voir `tasks.m
 
 | Fichier | Contenu | Tâche |
 |---------|---------|-------|
-| `base-tests.txt` | sortie complète de la suite (non commitée sauf si moins de 2 Mio) | T003 |
+| `base-tests.txt` | sortie complète de la suite (non commitée) | T003 |
 | `base-echecs.txt` | lignes `test ... FAILED`, triées | T003 |
 | `base-noms.txt` | noms de tous les tests, triés | T004 |
 | `base-clippy.txt` | sortie de l'analyse statique | T005 |

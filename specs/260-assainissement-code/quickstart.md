@@ -30,7 +30,7 @@ Si T003 échoue avec plus de 100 échecs, la recette d'environnement est fausse.
 ### Sorties de preuve (contenu de `validation/README.md`)
 
 - Les fichiers `.txt` de ce dossier sont des preuves. Ne pas utiliser `.log` : Git l'ignore.
-- Les sorties complètes de tests (`*-tests.txt`) pèsent plusieurs Mo. Elles ne se committent pas. Ajouter la ligne `*-tests.txt` dans `validation/.gitignore`, sauf `base-tests.txt` si sa taille reste sous 2 Mo.
+- Les sorties complètes de tests (`*-tests.txt`) pèsent plusieurs Mo. Elles ne se committent pas. Ajouter la ligne `*-tests.txt` dans `validation/.gitignore`, y compris `base-tests.txt`.
 - Les listes d'échecs (`*-echecs.txt`), de noms (`*-noms.txt`), de clippy et de format se committent.
 
 ## Fin de lot (procédure citée par la règle R1)
