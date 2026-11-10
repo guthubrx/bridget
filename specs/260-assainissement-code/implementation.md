@@ -10,6 +10,7 @@ Statut du programme : In Progress. Règles : `contracts/regles-implementeur.md`.
 | 2 | intégré | T025 à T030 faits |
 | 3 | intégré | T031 à T035 faits |
 | 12 | intégré | T125 à T127 faits |
+| 13 | intégré | T128 à T136 faits ; T137 partiel (job CI différé) |
 | 15 | intégré | T141, T142 faits |
 
 ## Journal
@@ -86,3 +87,18 @@ Pas d'activation : documentation seulement. Décision à prendre par François :
 
 ### Bilan lot 15
 Pas d'activation : documentation seulement. Décision D8 demandée à François.
+
+### Lot 13 - Scripts contrôlés (T128 à T136 faits, T137 partiel)
+- Statut : T128 à T136 faits ; T137 partiel (cible locale faite, job CI différé)
+- Commits : sur la branche du lot : `ruff.toml`, imports inutiles et chaînage des exceptions, avertissements de boucle, exceptions de sécurité justifiées et documentation de l'`exec`, commentaires `set -e`, cible `lint-scripts`.
+- Fichiers : `ruff.toml` (nouveau), `Makefile`, `scripts/*.py` (prepare-project, publish-android, real_hook_profile171, sentinel, update, tests/...), 4 scripts shell (commentaires), `validation/lot13-*.txt`.
+- Vérifications : `ruff check scripts` : 137 signalements au départ (`lot13-ruff-avant.txt`) -> 0 ; `make lint-scripts` code 0 ; `bash -n scripts/*.sh` code 0 ; `py_compile` des fichiers modifiés OK (dossiers `__pycache__` supprimés) ; `scripts/tests` : `test_install` 44 tests OK, `test_sentinel` 14 OK, `test_publish_android` 7 OK, `test_prepare_project_view` 3 OK ; `test_updates` : 16 échecs sur 26, **identiques sur `origin/main`** (chemin `/private/var` contre `/var` sous macOS), donc hérités.
+- Écarts :
+  - Le guide attendait 6 scripts sans `set -e`. Lecture : `install-k1.sh` et `registre-nature-reclasser.sh` ont déjà `set -euo pipefail` ; `federate-ssh.sh` l'active dans `federation_main()` (le fichier est sourcé). Restent 4 scripts, tous documentés par un commentaire. **T135 adapté** : les deux scripts de test ne reçoivent pas `set -eu`, car ils comptent leurs échecs (variables `passed`/`failed`) ; un `set -e` changerait leur comportement. Ajout du seul commentaire.
+  - B905 : avec `target-version = "py39"` ruff ne le signale plus (rien à faire).
+  - Le fichier `scripts/sentinel.py` est embarqué dans le démon par `include_str!` : le commentaire d'invariant ne change pas le comportement mais change les octets du binaire à la prochaine compilation.
+  - D11 `en attente` : action par défaut appliquée (mécanisme `exec` conservé, commentaire d'invariant et `# noqa: S102`).
+- Non vérifié : le job CI `scripts` de T137 (`rust.yml` n'existe pas avant le lot 1) ; aucun script vivant n'a été exécuté.
+
+### Bilan lot 13
+Activation en attente : `scripts/sentinel.py` est embarqué dans le binaire du démon (octets modifiés, comportement identique). Les autres scripts sont distribués tels quels.
