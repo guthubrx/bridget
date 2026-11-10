@@ -123,6 +123,9 @@ def main(argv):
         else:
             print(__doc__, file=sys.stderr)
             return 1
+    except FileNotFoundError as err:
+        print(f"REFUS : fichier introuvable : {err.filename}", file=sys.stderr)
+        return 2
     except Refus as err:
         print(f"REFUS : {err}", file=sys.stderr)
         return 2
