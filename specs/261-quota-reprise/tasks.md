@@ -1,5 +1,5 @@
 - [x] Diagnostiquer le cache initial périmé et les limites du pilote chargé.
 - [x] Ajouter la lecture native bornée de la même instance au repos.
-- [ ] Vérifier les deux scénarios de lecture et la garde de quota existante.
-- [ ] Faire relire le correctif, intégrer et pousser.
-- [ ] Activer la version et vérifier la reprise réelle avec le parent.
+- [x] Vérifier les deux scénarios de lecture et la garde de quota existante.
+- [x] Faire relire le correctif, intégrer et pousser.
+- [x] Activer la version et vérifier le résultat opérationnel avec le parent. Parix confirme ses devantures déjà actives après la reprise directe demandée par François ; aucune nouvelle admission nécessaire.
