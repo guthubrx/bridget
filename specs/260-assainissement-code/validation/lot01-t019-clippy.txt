@@ -1,0 +1,6 @@
+[build Bridget] entretien des caches différé : nettoyage sûr : Python 3.11 minimum requis
+    Checking bridget-core v0.8.26 (/Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-core)
+   Compiling bridget-daemon v0.8.26 (/Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-daemon)
+    Checking bridget-transport v0.8.26 (/Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-transport)
+    Finished `dev` profile [unoptimized] target(s) in 1m 10s
+[build Bridget] entretien des caches différé : nettoyage sûr : Python 3.11 minimum requis

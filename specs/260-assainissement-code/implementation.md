@@ -7,6 +7,7 @@ Statut du programme : In Progress. Règles : `contracts/regles-implementeur.md`.
 | Lot | État | Remarque |
 |-----|------|----------|
 | 0 | intégré | T001 à T006 faits |
+| 1 | intégré | T008 à T023 faits ; T024 différé (D16) |
 | 2 | intégré | T025 à T030 faits |
 | 3 | intégré | T031 à T035 faits |
 | 12 | intégré | T125 à T127 faits |
@@ -159,3 +160,23 @@ Lot 0 complet sauf T007 (cette intégration). Pas d'activation.
 
 ### Changement de méthode (10 novembre 2026, soir)
 - `AGENTS.md` (commit `1d50c0fa`) impose désormais de travailler sur `main` dans le checkout principal, sans branche ni worktree. Les règles `contracts/regles-implementeur.md` (R0) en tiennent compte. Les fichiers de preuve de la ligne de base, qui étaient dans un worktree retiré par une autre session, ont été récupérés depuis `validation/reprise-nettoyage-20261110/` (manifeste SHA conservé là).
+
+### Lot 1 - Filet automatique (T008 à T023 faits, T024 différé)
+- Statut : T008 à T023 faits ; T024 différé (porte D16)
+- Commits : sur `main` (dernier : `fix(daemon): Retablir la priorite des conditions reecrites par l'analyse`). `Makefile` (cibles `fmt`, `fmt-check`, `clippy`, `lint`), `Cargo.toml` (lints du workspace), `.github/workflows/rust.yml`, `.github/workflows/rust-audit.yml`, corrections de code par règle, `docs/build-cache*.md`.
+- Vérifications :
+  - `C-CHECK` code 0 ; analyse `clippy --all-targets -D warnings` : 3 erreurs et environ 400 lignes d'avertissements au départ (`base-clippy.txt`) -> 0 (`lot01-t019-clippy.txt`).
+  - Porte : `C-TESTS` complet puis `C-ECHECS` : 24 échecs, **identiques** à `base-echecs.txt` (aucun nouveau, aucun disparu) (`lot01-echecs.txt`).
+  - Workflow `rust.yml` : accepté par GitHub (trois passages réels lus avec `gh run list`) ; `rust-audit.yml` : lancé manuellement (`gh workflow run`).
+  - Base Linux (T021) : trois passages du job `tests` ; `base-linux-echecs.txt` = 21 tests en échec dans les trois passages ; `base-linux-instables.txt` = 5 tests en échec dans un ou deux passages seulement.
+- Écarts :
+  - **Défaut trouvé par les tests et corrigé.** Les suggestions de `nonminimal_bool` appliquées automatiquement ont perdu des parenthèses à deux endroits : la commande Docker en lecture seule (`native_delegation.rs`) et une boucle `while` de `native_permissions149_e2e.rs`. Trois tests `spec241_*` ont échoué sur la première porte ; corrigés (parenthèses rétablies), `spec241` rejoué (25 tests OK) puis suite complète rejouée. Les autres réécritures booléennes (git, cargo, lifecycle, guidance, mobile, remote_worker) ont été relues : équivalentes (lois de De Morgan).
+  - Deux suggestions de clippy qui cassaient la compilation ont été annulées ou adaptées (`redundant_closure_call` dans `specialists222.rs` ; `cmp_owned` remplacé par `Path::new` ; `div_ceil` avec `8usize`).
+  - Plusieurs règles ont été appliquées en un commit groupé (suggestions vérifiées) au lieu d'un commit par règle ; les cas non automatisables ont reçu un `#[allow]` local avec commentaire (assertions de constantes, `zombie_processes` des tests, `unnecessary_unwrap`, `redundant_closure_call`, `items_after_test_module`, `useless_conversion` de `time_t`, `field_reassign_with_default`).
+  - Variables de build : voir T003 (débogage réduit, cache hors dépôt).
+  - Le workflow `format` et `tests` restent en observation (`continue-on-error`) : le format attend le lot 10, les tests attendent D16.
+  - La cible `make lint` inclut `fmt-check`, qui échoue tant que le lot 10 n'est pas fait (120 fichiers hors format).
+- Non vérifié : le premier passage réel de `rust-audit.yml` (résultat non lu) ; la décision D16.
+
+### Bilan lot 1
+Activation : D1 = sources seules. Code exécutable modifié (dont `native_lineage.rs`, `native_delegation.rs`, nombreuses réécritures de forme) : **activation en attente**.

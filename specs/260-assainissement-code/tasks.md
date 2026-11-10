@@ -1,6 +1,6 @@
 # Tâches 260 - Assainissement du code et du dépôt
 
-Statut : In Progress. 32 tâches cochées sur 157 (voir `implementation.md` pour le détail et les lots bloqués). La mise en oeuvre est en cours : lots 0 (partiel), 2, 3, 12, 13, 15 traités ; les lots qui compilent attendent une décision sur le disque.
+Statut : In Progress. 48 tâches cochées sur 157 (voir `implementation.md` pour le détail et les lots bloqués). La mise en oeuvre est en cours : lots 0, 1 (sauf T024), 2, 3, 12, 13 (T137 partiel), 15 traités.
 Spécification : `spec.md`. Plan : `plan.md`. Règles : `contracts/regles-implementeur.md`. Portes : `decisions.md`. Démarrage et clôture : `quickstart.md`.
 
 ## Comment lire ce fichier
@@ -24,22 +24,22 @@ Spécification : `spec.md`. Plan : `plan.md`. Règles : `contracts/regles-implem
 
 ## Lot 1 - Filet automatique (guide : `guides/lot-01-filet-automatique.md`)
 
-- [ ] T008 [L1] `Makefile` : cibles `fmt`, `fmt-check`, `clippy`, `lint`. Vérifier `make -n lint`.
-- [ ] T009 [L1] `Cargo.toml` racine et 3 crates : `[workspace.lints]` avec `allow` documentés (dette du lot 9) ; `C-CHECK`.
-- [ ] T010 [L1] `.github/workflows/rust.yml` en observation (clippy, format, tests) ; valide la syntaxe par un passage réel.
-- [ ] T011 [L1] [D2] `native_lineage.rs` : `never_loop`, `while receiver.recv().is_ok()` devient `if` (première modification de code).
-- [ ] T012 [L1] `native_workspace154_tests.rs` : `from_mode(0)` devient `from_mode(0o000)`.
-- [ ] T013 [L1] `mobile_operations.rs` : `reversed_empty_ranges`, `#[allow]` commenté (plage vide voulue).
-- [ ] T014 [L1] Règle `collapsible_if` (110 cas) par correction automatique.
-- [ ] T015 [L1] Règles à correction automatique restantes, un commit par règle.
-- [ ] T016 [L1] `nonminimal_bool` et `bool_assert_comparison`, un commit par règle.
-- [ ] T017 [L1] Petites règles restantes de l'analyse.
-- [ ] T018 [L1] `zombie_processes` (5 cas).
-- [ ] T019 [L1] Analyse sans avertissement (`-D warnings`) puis bloquante localement et en CI.
-- [ ] T020 [L1] `.github/workflows/rust-audit.yml` (audit hebdomadaire, outil à version fixe).
-- [ ] T021 [L1] Ligne de base Linux : trois passages du job `tests`, `validation/base-linux-echecs.txt`.
-- [ ] T022 [L1] Documentation « Contrôles avant livraison » ; `python3 scripts/check-docs.py`.
-- [ ] T023 [L1] Porte du lot : `C-TESTS`, `C-ECHECS`, analyse à 0 ; bilan ; fin de lot.
+- [x] T008 [L1] `Makefile` : cibles `fmt`, `fmt-check`, `clippy`, `lint`. Vérifier `make -n lint`.
+- [x] T009 [L1] `Cargo.toml` racine et 3 crates : `[workspace.lints]` avec `allow` documentés (dette du lot 9) ; `C-CHECK`.
+- [x] T010 [L1] `.github/workflows/rust.yml` en observation (clippy, format, tests) ; valide la syntaxe par un passage réel.
+- [x] T011 [L1] [D2] `native_lineage.rs` : `never_loop`, `while receiver.recv().is_ok()` devient `if` (première modification de code).
+- [x] T012 [L1] `native_workspace154_tests.rs` : `from_mode(0)` devient `from_mode(0o000)`.
+- [x] T013 [L1] `mobile_operations.rs` : `reversed_empty_ranges`, `#[allow]` commenté (plage vide voulue).
+- [x] T014 [L1] Règle `collapsible_if` (110 cas) par correction automatique.
+- [x] T015 [L1] Règles à correction automatique restantes, un commit par règle.
+- [x] T016 [L1] `nonminimal_bool` et `bool_assert_comparison`, un commit par règle.
+- [x] T017 [L1] Petites règles restantes de l'analyse.
+- [x] T018 [L1] `zombie_processes` (5 cas).
+- [x] T019 [L1] Analyse sans avertissement (`-D warnings`) puis bloquante localement et en CI.
+- [x] T020 [L1] `.github/workflows/rust-audit.yml` (audit hebdomadaire, outil à version fixe).
+- [x] T021 [L1] Ligne de base Linux : trois passages du job `tests`, `validation/base-linux-echecs.txt`.
+- [x] T022 [L1] Documentation « Contrôles avant livraison » ; `python3 scripts/check-docs.py`.
+- [x] T023 [L1] Porte du lot : `C-TESTS`, `C-ECHECS`, analyse à 0 ; bilan ; fin de lot.
 - [ ] T024 [L1] [D16] Rendre les tests bloquants en CI si D16 est tranchée et la base Linux stable ; sinon « différé ».
 
 ## Lot 2 - Dépôt sans résidus (guide : `guides/lot-02-depot-sans-residus.md`)
