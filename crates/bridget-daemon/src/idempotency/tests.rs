@@ -2855,12 +2855,12 @@ fn guidance156_store_file_rowid_apres_reaffectation() {
             .conn
             .prepare("SELECT delivery_id,rowid FROM send_deliveries ORDER BY rowid")
             .unwrap();
-        let rows = query
+        
+        query
             .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
             .unwrap()
             .collect::<Result<_, _>>()
-            .unwrap();
-        rows
+            .unwrap()
     };
     assert_eq!(
         store
@@ -2873,12 +2873,12 @@ fn guidance156_store_file_rowid_apres_reaffectation() {
             .conn
             .prepare("SELECT delivery_id,rowid FROM send_deliveries ORDER BY rowid")
             .unwrap();
-        let rows = query
+        
+        query
             .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
             .unwrap()
             .collect::<Result<_, _>>()
-            .unwrap();
-        rows
+            .unwrap()
     };
     assert_eq!(
         after, before,
@@ -3086,7 +3086,8 @@ fn held159_migration_fixture() -> (TempDbGuard, Connection) {
 fn held159_migration_rows(conn: &Connection, sql: &str) -> Vec<Vec<rusqlite::types::Value>> {
     let mut stmt = conn.prepare(sql).unwrap();
     let count = stmt.column_count();
-    let rows = stmt
+    
+    stmt
         .query_map([], |row| {
             (0..count)
                 .map(|index| row.get::<_, rusqlite::types::Value>(index))
@@ -3094,8 +3095,7 @@ fn held159_migration_rows(conn: &Connection, sql: &str) -> Vec<Vec<rusqlite::typ
         })
         .unwrap()
         .collect::<rusqlite::Result<Vec<_>>>()
-        .unwrap();
-    rows
+        .unwrap()
 }
 
 #[test]

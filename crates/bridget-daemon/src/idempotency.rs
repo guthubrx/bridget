@@ -952,10 +952,10 @@ impl IdempotencyStore {
                        AND r.idempotency_key = d.idempotency_key
                  )",
                 )?;
-                let rows = stmt
+                
+                stmt
                     .query_map([], |row| row.get(0))?
-                    .collect::<Result<Vec<_>, _>>()?;
-                rows
+                    .collect::<Result<Vec<_>, _>>()?
             };
             if !schema_orphans.is_empty() {
                 log::warn!(
@@ -985,10 +985,10 @@ impl IdempotencyStore {
                                  OR json_extract(message_bytes,'$.to') = ''
                             ELSE 1 END",
                 )?;
-                let rows = stmt
+                
+                stmt
                     .query_map([], |row| row.get(0))?
-                    .collect::<Result<Vec<_>, _>>()?;
-                rows
+                    .collect::<Result<Vec<_>, _>>()?
             };
             if !unreadable.is_empty() {
                 log::warn!(
