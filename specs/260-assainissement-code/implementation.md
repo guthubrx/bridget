@@ -10,6 +10,7 @@ Statut du programme : In Progress. Règles : `contracts/regles-implementeur.md`.
 | 1 | intégré | T008 à T023 faits ; T024 différé (D16) |
 | 2 | intégré | T025 à T030 faits |
 | 3 | intégré | T031 à T035 faits |
+| 4 | intégré | T036 à T053 faits (desired_state.rs arrêté) |
 | 12 | intégré | T125 à T127 faits |
 | 13 | intégré | T128 à T136 faits ; T137 partiel (job CI différé) |
 | 15 | intégré | T141, T142 faits |
@@ -180,3 +181,20 @@ Lot 0 complet sauf T007 (cette intégration). Pas d'activation.
 
 ### Bilan lot 1
 Activation : D1 = sources seules. Code exécutable modifié (dont `native_lineage.rs`, `native_delegation.rs`, nombreuses réécritures de forme) : **activation en attente**.
+
+### Lot 4 - Tests hors des fichiers de production (T036 à T053)
+- Statut : fait. 16 fichiers de la liste du guide + 47 autres fichiers (« module à sortir absent de la liste est traité aussi »). Un fichier arrêté : `desired_state.rs`.
+- Commits : un par fichier, `refactor(tests): Sortir les tests de <fichier>` (63 commits sur `main`), exécutés par `outils/extraire_module_tests.py` avec `C-CHECK` complet (compilation des tests) avant chaque commit.
+- Fichiers : 63 fichiers de production allégés et autant de fichiers `*_tests.rs` ou `<fichier>_<module>.rs` voisins ; `validation/lot04-echecs.txt`, `lot04-noms.txt`, `lot04-restant.txt`.
+- Vérifications : porte sur un cliché isolé de `HEAD` (copie hors dépôt, pour ne pas mêler le travail non commité d'une autre session) :
+  - `C-ECHECS` : 24 échecs de la base, tous présents ; 1 de plus, `reprise_daemon_redelivre_les_octets_immuables_a_la_meme_instance`, rejoué seul 3 fois : échec, succès, succès (test d'intégration sensible à la charge, déjà cité dans `releves.md` section 15) -> noté dans `base-instables.txt`.
+  - `C-NOMS` : liste identique à la base, plus 3 tests ajoutés par une autre session (`spec261_*`, commits arrivés sur `main` pendant le lot). La base de noms est actualisée avec ces 3 lignes (règle « Ligne de base périmée »).
+  - Tests en ligne restants : 9 340 lignes (SC05 : moins de 15 000).
+- Écarts :
+  - `desired_state.rs` (module `tests`, 381 lignes) : l'outil a coupé trop tôt, car un littéral multi-ligne contient une ligne `}` en colonne 0 ; la compilation a refusé et la modification a été annulée. Le module reste en ligne (tâche arrêtée pour ce seul fichier). Amélioration de l'outil à envisager : contrôle d'équilibre des accolades.
+  - `agent_profile.rs` et `agent_profile/specialists.rs` : l'outil refuse (un attribut `#[allow(...)] // commentaire` ajouté au lot 1 n'est pas reconnu) ; leurs modules restent en ligne.
+  - Une autre session travaillait en parallèle dans le même arbre (quota Codex, `specs/261-quota-reprise`) ; ses modifications non commitées ont fait échouer deux extractions, rejouées avec succès ensuite. Mes commits n'ajoutent que mes chemins.
+- Non vérifié : rien de plus.
+
+### Bilan lot 4
+Code exécutable : seuls des déplacements de tests. « Activation en attente » : sans effet fonctionnel.

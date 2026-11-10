@@ -1,6 +1,6 @@
 # Tâches 260 - Assainissement du code et du dépôt
 
-Statut : In Progress. 48 tâches cochées sur 157 (voir `implementation.md` pour le détail et les lots bloqués). La mise en oeuvre est en cours : lots 0, 1 (sauf T024), 2, 3, 12, 13 (T137 partiel), 15 traités.
+Statut : In Progress. 66 tâches cochées sur 157 (voir `implementation.md` pour le détail et les lots bloqués). La mise en oeuvre est en cours : lots 0, 1 (sauf T024), 2, 3, 4, 12, 13 (T137 partiel), 15 traités.
 Spécification : `spec.md`. Plan : `plan.md`. Règles : `contracts/regles-implementeur.md`. Portes : `decisions.md`. Démarrage et clôture : `quickstart.md`.
 
 ## Comment lire ce fichier
@@ -61,24 +61,24 @@ Spécification : `spec.md`. Plan : `plan.md`. Règles : `contracts/regles-implem
 
 ## Lot 4 - Tests hors des fichiers de production (guide : `guides/lot-04-tests-externalises.md`)
 
-- [ ] T036 [L4] Préparation : lignes de base présentes ; test à sec de `outils/extraire_module_tests.py` dans `/tmp`.
-- [ ] T037 [L4] `crates/bridget-daemon/src/daemon.rs` : 7 modules de tests (du plus grand numéro de ligne au plus petit).
-- [ ] T038 [L4] `crates/bridget-daemon/src/daemon/native_delegation.rs` : 3 modules.
-- [ ] T039 [L4] `crates/bridget-daemon/src/remote_worker.rs` : 1 module.
-- [ ] T040 [L4] `crates/bridget-daemon/src/mcp.rs` : 1 module.
-- [ ] T041 [L4] `crates/bridget-daemon/src/wrapper.rs` : 5 modules.
-- [ ] T042 [L4] `crates/bridget-transport/src/codex_app_server.rs` : 1 module.
-- [ ] T043 [L4] `crates/bridget-daemon/src/attach.rs` : 1 module.
-- [ ] T044 [L4] `crates/bridget-daemon/src/cli.rs` : 4 modules.
-- [ ] T045 [L4] `crates/bridget-transport/src/protocol.rs` : 3 modules.
-- [ ] T046 [L4] `crates/bridget-daemon/src/t3code.rs` : 1 module.
-- [ ] T047 [L4] `crates/bridget-daemon/src/delegation.rs` : 1 module.
-- [ ] T048 [L4] `crates/bridget-transport/src/claude_stream_json.rs` : 1 module.
-- [ ] T049 [L4] `crates/bridget-transport/src/acp.rs` : 1 module.
-- [ ] T050 [L4] `crates/bridget-daemon/src/delegation_mcp.rs` : 3 modules.
-- [ ] T051 [L4] `crates/bridget-daemon/src/daemon/mobile_operations.rs` : 1 module.
-- [ ] T052 [L4] `crates/bridget-daemon/src/registry.rs` : 1 module.
-- [ ] T053 [L4] Porte : `C-TESTS`, `C-ECHECS`, `C-NOMS` identiques ; tests en ligne restants sous 15 000 lignes ; bilan ; fin de lot.
+- [x] T036 [L4] Préparation : lignes de base présentes ; test à sec de `outils/extraire_module_tests.py` dans `/tmp`.
+- [x] T037 [L4] `crates/bridget-daemon/src/daemon.rs` : 7 modules de tests (du plus grand numéro de ligne au plus petit).
+- [x] T038 [L4] `crates/bridget-daemon/src/daemon/native_delegation.rs` : 3 modules.
+- [x] T039 [L4] `crates/bridget-daemon/src/remote_worker.rs` : 1 module.
+- [x] T040 [L4] `crates/bridget-daemon/src/mcp.rs` : 1 module.
+- [x] T041 [L4] `crates/bridget-daemon/src/wrapper.rs` : 5 modules.
+- [x] T042 [L4] `crates/bridget-transport/src/codex_app_server.rs` : 1 module.
+- [x] T043 [L4] `crates/bridget-daemon/src/attach.rs` : 1 module.
+- [x] T044 [L4] `crates/bridget-daemon/src/cli.rs` : 4 modules.
+- [x] T045 [L4] `crates/bridget-transport/src/protocol.rs` : 3 modules.
+- [x] T046 [L4] `crates/bridget-daemon/src/t3code.rs` : 1 module.
+- [x] T047 [L4] `crates/bridget-daemon/src/delegation.rs` : 1 module.
+- [x] T048 [L4] `crates/bridget-transport/src/claude_stream_json.rs` : 1 module.
+- [x] T049 [L4] `crates/bridget-transport/src/acp.rs` : 1 module.
+- [x] T050 [L4] `crates/bridget-daemon/src/delegation_mcp.rs` : 3 modules.
+- [x] T051 [L4] `crates/bridget-daemon/src/daemon/mobile_operations.rs` : 1 module.
+- [x] T052 [L4] `crates/bridget-daemon/src/registry.rs` : 1 module.
+- [x] T053 [L4] Porte : `C-TESTS`, `C-ECHECS`, `C-NOMS` identiques ; tests en ligne restants sous 15 000 lignes ; bilan ; fin de lot.
 
 ## Lot 5 - Aiguillage découpé (guide : `guides/lot-05-aiguillage.md`)
 

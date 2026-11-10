@@ -1,2 +1,3 @@
 # Tests en échec dans un seul des deux passages de la ligne de base (instables, 10 novembre 2026)
 codex_app_server::tests::spec185_workspace_repair_uncertain_stop_is_bounded_and_never_claims_success
+reprise_daemon_redelivre_les_octets_immuables_a_la_meme_instance   (test d'intégration sensible à la charge : échoue 1 fois sur 3 seul, voir releves.md section 15)
