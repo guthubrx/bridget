@@ -36,6 +36,10 @@ pub(crate) fn pre_dispatch_failure(error:ClientError, stage:&str, args:&Value)->
         ClientError::Technical{code,message} if matches!(code,"daemon_unreachable"|"outcome_unknown") => {
             let reference=args.get("task_id").and_then(Value::as_str).map(|id|format!("task_id={id}"))
                 .or_else(||args.get("request_id").and_then(Value::as_str).map(|id|format!("request_id={id}")))
+                .or_else(|| parse_task_ids(args).ok()
+                    .filter(|ids| ids.iter().all(|id| id.len() <= 128
+                        && id.bytes().all(|byte| byte.is_ascii_alphanumeric() || b"-_:.".contains(&byte))))
+                    .map(|ids| format!("task_ids={}", json!(ids))))
                 .unwrap_or_else(||"les identifiants des tâches de cet appel".into());
             ClientError::Technical{code,message:format!("{message} Étape : {stage}. La commande de cet appel n'a pas été transmise. Conservez {reference} et tout reçu antérieur. Vérifiez le lien natif depuis cette machine avant de reprendre exactement cet appel ; si la lecture reste indisponible, le responsable Bridget doit mesurer cette liaison. La cause précise du retard reste inconnue. Ce refus concerne cet appel ; les autres travaux autorisés suivent leur propre état.")}
         }
@@ -557,7 +561,7 @@ fn execute_with_proof(
             &identity.instance_id,
             socket,
             Instant::now() + Duration::from_secs(3),
-        )?;
+        ).map_err(|e| pre_dispatch_failure(e, "raccordement de cette session", args))?;
         connection.set_deadline(deadline);
         connection
     } else {
@@ -2569,6 +2573,55 @@ fn specialists_schema222()->Value {
 #[cfg(test)]
 mod tracking230_preflight_tests {
     use super::*;
+
+    #[test]
+    fn spec259_preflight_refs_name_bounded_ack_ids_and_preserve_refusals() {
+        let error = || ClientError::Technical {code:"daemon_unreachable",message:"budget JSONL dépassé".into()};
+        let valid = json!({"task_ids":["task259", "other-task"]});
+        let ClientError::Technical {message, ..} = pre_dispatch_failure(error(), "test", &valid) else {panic!()};
+        assert!(message.contains("task_ids=[\"task259\",\"other-task\"]"));
+        for invalid in [json!({"task_ids":["x".repeat(129)]}), json!({"task_ids":["task\nforged"]}),
+            json!({"task_ids":["task259","task259"]}), json!({"task_ids":[3]}),
+            json!({"task_ids":(0..17).map(|n| format!("task-{n}")).collect::<Vec<_>>()})] {
+            let ClientError::Technical {message, ..} = pre_dispatch_failure(error(), "test", &invalid) else {panic!()};
+            assert!(message.contains("les identifiants des tâches de cet appel"));
+            assert!(!message.contains("task_ids="));
+        }
+        assert!(matches!(pre_dispatch_failure(ClientError::Technical {
+            code:"native_delegation_refused",message:"refus conservé".into()}, "test", &valid),
+            ClientError::Technical {code:"native_delegation_refused",message} if message=="refus conservé"));
+    }
+
+    #[test]
+    fn spec259_wait_registration_failure_names_ids_without_wait_dispatch() {
+        use std::io::{BufRead, BufReader, Write};
+        use std::os::unix::net::UnixListener;
+        let socket = crate::mcp_identity::mock_socket("259-wait-registration");
+        let listener = UnixListener::bind(&socket).unwrap();
+        crate::mcp_identity::mock_private_identity(&socket, "owner", "instance");
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
+            let mut line = String::new();
+            BufReader::new(stream.try_clone().unwrap()).read_line(&mut line).unwrap();
+            assert_eq!(serde_json::from_str::<Value>(&line).unwrap()["type"], "DaemonIdentityRequest");
+            writeln!(stream, "{}", json!({"type":"DaemonIdentityReport","host":"fixture","db_path":"fixture","instance_id":"fixture","features":["wait_v1"]})).unwrap();
+            drop(stream);
+            for _ in 0..2 {
+                let (stream, _) = listener.accept().unwrap();
+                stream.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
+                let mut reader = BufReader::new(stream);
+                line.clear();reader.read_line(&mut line).unwrap();
+                assert_eq!(serde_json::from_str::<Value>(&line).unwrap()["type"], "RegisterAuxiliary");
+            }
+        });
+        let identity = ResolvedIdentity {name:"owner".into(), instance_id:"instance".into(), delegated_origin:None};
+        let result = execute(&identity, "bridget_task_wait", &json!({"task_ids":["task259"],"wait_timeout":1}), &socket);
+        assert!(matches!(&result, Err(ClientError::Technical {code:"daemon_unreachable",message})
+            if message.contains("raccordement de cette session") && message.contains("task259")
+                && message.contains("n'a pas été transmise")), "refus inattendu : {result:?}");
+        server.join().unwrap();
+    }
     #[test]
     fn tracking230_refus_avant_depart_precise_etape_et_tache_sans_accuser_le_modele() {
         let error=pre_dispatch_failure(ClientError::Technical{code:"daemon_unreachable",message:"budget JSONL dépassé".into()},"lecture des capacités d’attente",&json!({"task_id":"t230"}));

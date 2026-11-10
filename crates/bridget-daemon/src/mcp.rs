@@ -3758,6 +3758,7 @@ mod tests {
         assert!(matches!(error, ToolError::Technical { code:"daemon_unreachable", message }
             if message.contains("budget JSONL dépassé")
                 && message.contains("lecture préalable du plafond MCP")
+                && message.contains("task259")
                 && message.contains("n'a pas été transmise")
                 && message.contains("tout reçu antérieur")
                 && message.contains("cause précise du retard reste inconnue")));
@@ -3775,7 +3776,8 @@ mod tests {
             let server = thread::spawn(move || drop_scope196(&listener));
             let error = execute_tool_at("owner", name, args.as_object().unwrap(), &socket).unwrap_err();
             assert!(matches!(error, ToolError::Technical { code:"daemon_unreachable", message }
-                if message.contains("lecture préalable du plafond MCP") && message.contains("n'a pas été transmise")));
+                if message.contains("lecture préalable du plafond MCP")
+                    && message.contains("task259") && message.contains("n'a pas été transmise")));
             server.join().unwrap();
         }
     }

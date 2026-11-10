@@ -9,3 +9,13 @@ Deux échecs initiaux de qualification, déjà présents dans la source065f54f0,
 Linux : deux tests259, régressionACK et tests230PASS. Suite MCP élargie et construction finale en cours après raccord des mêmes ajustements de qualification. Source Mac/Linux comparée avant installation.
 
 Réutilisation : helper pre_dispatch_failure, fixture registered196 et drop_scope196. Aucun nouveau délai, droit, helper, endpoint ou table. Les refus normaux et les issues inconnues après envoi restent dans leurs puits existants. Revue, Git, activation et nettoyage restent ouverts.
+
+## Qualification finale avant intégration
+
+La revue indépendante APPROVE_WITH_CHANGES est lue et son ACK acquis. Les objections retenues sont corrigées : tâchesdugroupe nommées avec rendu borné ; raccordementWait guidé sans modifier son attente3s. Le delta est vérifié localement, sans prétendre à un second verdict indépendant. Voir adversarial-review.md.
+
+Macfinal :4tests259PASS,135MCPPASS/1AgentLoop ignoré avec prérequis,11ACKPASS,7tests post-dispatchPASS et contrôletracking230PASS. ConstructionreleasePASS151,22s aprèsdelta. Linuxfinal :4tests259PASS,135MCPPASS/1ignoré,7tests post-dispatchPASS,tracking230PASS ; construction distante terminée en2m21, visible danssonlog après coupureSSH du flux de compte rendu. La connexionSSH suivante a réussi ; ne pas assimiler cette coupure à un échec de compilation. Aucun fournisseur métier appelé.
+
+Deux échecs du test privéLinux138 ont été vérifiés sur données réelles : socket créé2,488s aprèsPID, seuilhistoriquede1s. Seule la fixturecfg(test) utilise désormais le budgetexistant10s pour sa disponibilité ; la suite135passe après correction. Le premier essai de la nouvelle fixtureWait avait préparé sa credential avant de créer le socket, donc son helper restait sans effet : ordre corrigé,4/4tests259passent.
+
+Confrontation finale des4FR au code/tests : conformité acquise pourFR01–03, publication et nettoyage encoreT004/T005. Aucun manque fonctionnel supplémentaire. Pas de nouvelle table, dépendance, endpoint, droit, durée ou politique de reprise.

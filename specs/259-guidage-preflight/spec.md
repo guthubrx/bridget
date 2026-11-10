@@ -6,7 +6,7 @@ Le parent a lu le résultat de la tâche 890203d2-7fbc-4ec6-8ff0-3cb070ccdab5. L
 
 FR01 : une erreur de transport au raccordement ou à la lecture du plafond MCP indique l'étape constatée et que la commande de cet appel n'a pas été transmise. Conserver le code technique, les références et les reçus antérieurs.
 FR02 : aucune nouvelle tentative, commande ou connexion après l'échec du contrôle préalable. Aucun ACK de tâche ni changement de droits provoqué par le guidage.
-FR03 : refus natifs et issue inconnue après une transmission gardent leurs contrats actuels. Le nouveau texte ne s'applique qu'aux deux échanges préalables concernés.
+FR03 : refus natifs et issue inconnue après une transmission gardent leurs contrats actuels. Les deux nouveaux points du plafond MCP réutilisent le guidage existant. Le raccordement préalable de Wait reçoit le même guidage que les autres raccordements ; son délai et sa reprise sont inchangés.
 FR04 : intégrer, pousser, distribuer/activer les services et vérifier leur retour compatible. Préserver les tâches et les applications ouvertes ; les façades déjà chargées restent à distinguer du programme installé.
 
 Cause précise du retard non établie : ne pas inventer une panne de réseau, de droits ou de compte. Aucun travail Roadie modifié. Pas de nouvelle mission métier ou rejeu d'ACK.

@@ -10773,13 +10773,14 @@ pub(crate) mod idempotency_projection_tests {
         std::thread::spawn(move || {
             let _ = daemon::run(config);
         });
-        for _ in 0..100 {
+        let deadline = std::time::Instant::now() + crate::communication::client::DAEMON_BUDGET;
+        while std::time::Instant::now() < deadline {
             if socket_path.exists() {
                 return (socket_path, db_path);
             }
             std::thread::sleep(Duration::from_millis(10));
         }
-        panic!("daemon réel T1208 non démarré");
+        panic!("daemon réel T1208 non démarré dans le budget privé de test");
     }
 
     fn stored_canonical_bytes(
