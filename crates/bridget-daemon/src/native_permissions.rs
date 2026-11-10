@@ -456,11 +456,10 @@ pub(crate) fn project_remote_permissions_in_operation(
     }
     if parent.driver == "claude_stream_json"
         && parent.provider_policy["allowed_tools"].as_array().is_some_and(|rules|
-            rules.iter().any(|rule| rule == "mcp__t3-code__*")) {
-        if !native_t3_codex_scope214(parent, definition) {
+            rules.iter().any(|rule| rule == "mcp__t3-code__*"))
+        && !native_t3_codex_scope214(parent, definition) {
             require_isolated_claude_mount171(definition)?;
         }
-    }
     project_policy_directories171(&mut translated.provider_policy, mapping, protected, working_alias, same_host)?;
     let prepared = if definition.protocol == "claude_stream_json" {
         Some(capture_native_target_context(definition, &cwd, source)?)
@@ -1486,11 +1485,9 @@ fn capture_context_with_env_impl(
                             | "remote-settings.json"
                     )
                 })
-        {
-            if read_json_source(&path)?.get("enabledPlugins").is_some() {
+            && read_json_source(&path)?.get("enabledPlugins").is_some() {
                 return Err(unavailable());
             }
-        }
         if !native_target && path.is_dir() {
             for entry in std::fs::read_dir(&path).map_err(|_| unavailable())? {
                 let entry = entry.map_err(|_| unavailable())?.path();
@@ -2893,14 +2890,13 @@ fn equivalence_selector(
             .as_str()
             .ok_or_else(|| equivalence_fail_at(ProjectionGuard::G052))?,
     );
-    if let Ok(relative) = path.strip_prefix(config) {
-        if matches!(kind, "user" | "managed") {
+    if let Ok(relative) = path.strip_prefix(config)
+        && matches!(kind, "user" | "managed") {
             return Ok(format!(
                 "native-profile:{}",
                 relative.to_str().ok_or_else(|| equivalence_fail_at(ProjectionGuard::G053))?
             ));
         }
-    }
     if kind == "managed"
         && path.file_name().and_then(|p| p.to_str()) == Some("managed-settings.json")
     {

@@ -913,11 +913,10 @@ fn sections(family: &str, value: &Value, width: usize, color: bool) -> String {
             _ => scalar.push(vec![key.clone(), text(v)]),
         }
     }
-    if out.is_empty() && scalar.is_empty() {
-        if let Some(status) = object.get("status") {
+    if out.is_empty() && scalar.is_empty()
+        && let Some(status) = object.get("status") {
             scalar.push(vec!["ÉTAT".into(), text(status)]);
         }
-    }
     if !scalar.is_empty() {
         out.push_str(&table(
             &["CHAMP".into(), "VALEUR".into()],

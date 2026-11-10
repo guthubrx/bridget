@@ -9723,11 +9723,10 @@ fn execute_ask_user(identity:&crate::mcp_identity::ResolvedIdentity,args:&serde_
     if action=="create" && result["status"]=="ok" && result["item"]["state"]=="pending" && timeout>0 {
         result=crate::communication::client::user_input_request(socket,Some((&identity.name,&identity.instance_id)),json!({"action":"wait","request_id":id,"wait_timeout":timeout}))?;
     }
-    if result["status"]=="ok" && result["item"]["state"]=="submitted" && TOOL_CALL_CONTEXT.with(|s|s.borrow().is_some()) {
-        if let Some(command)=result["item"]["command_id"].as_str() {
+    if result["status"]=="ok" && result["item"]["state"]=="submitted" && TOOL_CALL_CONTEXT.with(|s|s.borrow().is_some())
+        && let Some(command)=result["item"]["command_id"].as_str() {
             USER_INPUT_RECEIPT.with(|s|*s.borrow_mut()=Some(UserInputReceipt{identity:identity.clone(),socket:socket.to_owned(),request_id:id,command_id:command.into()}));
         }
-    }
     Ok(result)
 }
 

@@ -139,8 +139,7 @@ pub fn validate_permissions(fact: &ProviderPermissions, t3: bool) -> Result<(), 
             if !approval
                 .as_str()
                 .is_some_and(|s| matches!(s, "untrusted" | "on-request" | "never"))
-            {
-                if !keys(approval, &["granular"], &[])
+                && (!keys(approval, &["granular"], &[])
                     || !keys(
                         &approval["granular"],
                         &["mcp_elicitations", "rules", "sandbox_approval"],
@@ -148,11 +147,10 @@ pub fn validate_permissions(fact: &ProviderPermissions, t3: bool) -> Result<(), 
                     )
                     || approval["granular"]
                         .as_object()
-                        .is_none_or(|o| o.values().any(|v| !v.is_boolean()))
+                        .is_none_or(|o| o.values().any(|v| !v.is_boolean())))
                 {
                     return Err(fail());
                 }
-            }
             if !policy["approvals_reviewer"]
                 .as_str()
                 .is_some_and(|s| matches!(s, "user" | "auto_review" | "guardian_subagent"))
@@ -357,8 +355,8 @@ pub fn validate_permissions(fact: &ProviderPermissions, t3: bool) -> Result<(), 
                     if !keys(overrides, &[], &["permissions"]) {
                         return Err("permission_source_unavailable".into());
                     }
-                    if let Some(p) = overrides.get("permissions") {
-                        if !keys(
+                    if let Some(p) = overrides.get("permissions")
+                        && (!keys(
                             p,
                             &[],
                             &[
@@ -388,11 +386,10 @@ pub fn validate_permissions(fact: &ProviderPermissions, t3: bool) -> Result<(), 
                                 })
                             })
                             || p.get("disableBypassPermissionsMode")
-                                .is_some_and(|v| v != "disable")
+                                .is_some_and(|v| v != "disable"))
                         {
                             return Err("permission_source_unavailable".into());
                         }
-                    }
                 }
             }
         }

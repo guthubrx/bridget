@@ -1279,11 +1279,10 @@ for line in sys.stdin:
                 "SELECT request_id,verdict,state,inbox_item_id FROM native_child_requests WHERE task_id=?1",
                 [id], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
             ).optional().unwrap();
-            if let Some(row) = row {
-                if case != "human" || row.3.is_some() {
+            if let Some(row) = row
+                && (case != "human" || row.3.is_some()) {
                     break row;
                 }
-            }
             let status = f.request(
                 &mut parent,
                 NativeDelegationRequest::Status { task_id: id.into() },

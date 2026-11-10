@@ -172,15 +172,14 @@ pub(crate) fn observation_request(
     socket: &Path,
     request: bridget_transport::protocol::ObservationRequest,
 ) -> Result<serde_json::Value, ClientError> {
-    if let bridget_transport::protocol::ObservationRequest::Missed { limit, after_seq } = &request {
-        if limit.is_some_and(|value| !(1..=64).contains(&value))
-            || after_seq.is_some_and(|value| value > i64::MAX as u64)
+    if let bridget_transport::protocol::ObservationRequest::Missed { limit, after_seq } = &request
+        && (limit.is_some_and(|value| !(1..=64).contains(&value))
+            || after_seq.is_some_and(|value| value > i64::MAX as u64))
         {
             return Err(ClientError::InvalidParams(
                 "missed : limit 1..64 et curseur de séquence borné requis".into(),
             ));
         }
-    }
     let mut connection = registered_connection(identity, instance_id, socket)?;
     match connection.send_then_wait(&WrapperToDaemon::ObservationRequest { request })? {
         DaemonToWrapper::ObservationResult { result } => Ok(result),

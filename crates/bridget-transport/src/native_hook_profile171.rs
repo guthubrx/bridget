@@ -175,11 +175,10 @@ pub fn recheck_guarded_hook_profile(context: &Value) -> Result<Value, String> {
                     "--revision",descriptor["revision"].as_str().ok_or_else(fail)?,"--side",side])
         .env_clear().env("PATH","/usr/bin:/bin").env("LANG","C.UTF-8")
         .stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::piped()).spawn().map_err(|_| fail())?;
-    if let Some(mut input) = child.stdin.take() {
-        if input.write_all(&serde_json::to_vec(context).map_err(|_| fail())?).is_err() {
+    if let Some(mut input) = child.stdin.take()
+        && input.write_all(&serde_json::to_vec(context).map_err(|_| fail())?).is_err() {
             let _ = unsafe { libc::kill(child.id() as i32, libc::SIGTERM) }; let _ = child.wait(); return Err(fail());
         }
-    }
     let deadline = Instant::now() + Duration::from_secs(20);
     loop {
         match child.try_wait() {

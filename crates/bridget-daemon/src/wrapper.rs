@@ -4227,8 +4227,7 @@ fn spawn_managed_session_transport(
     if let Some(policy) = repair.map(|v|Ok(Some(v.0.clone()))).unwrap_or_else(|| std::env::var(crate::native_permissions::CHILD_POLICY_ENV)
         .ok().map(|raw| serde_json::from_str::<serde_json::Value>(&raw)).transpose())
         .map_err(|_| "permission_attestation_unavailable")?
-    {
-        if let Some(context) = policy.get("launch_context") {
+        && let Some(context) = policy.get("launch_context") {
             crate::native_permissions::recheck_context(
                 context,
                 definition,
@@ -4236,7 +4235,6 @@ fn spawn_managed_session_transport(
                 &crate::lifecycle::source_environment(),
             )?;
         }
-    }
     match definition.protocol.as_str() {
         "acp" => {
             let options = AcpOptions {
@@ -4481,8 +4479,8 @@ fn launch_session_with_status(
             .map(|raw| serde_json::from_str(&raw))
             .transpose()
             .map_err(|_| "permission_attestation_unavailable")?;
-    if let Some(policy) = &inherited_policy {
-        if let Some(context) = policy.get("launch_context") {
+    if let Some(policy) = &inherited_policy
+        && let Some(context) = policy.get("launch_context") {
             crate::native_permissions::recheck_context(
                 context,
                 definition,
@@ -4490,7 +4488,6 @@ fn launch_session_with_status(
                 &crate::lifecycle::source_environment(),
             )?;
         }
-    }
     if interactive.is_some() && definition.protocol != "codex_app_server" {
         return Err("Codex interactif requiert le pilote natif codex_app_server".into());
     }
@@ -4870,19 +4867,15 @@ fn launch_session_with_status(
     if let Some(reporter) = managed_reporter.as_mut() {
         reporter.startup_succeeded();
     }
-    if let Some(context)=remote_result_context.as_ref() {
-        if cfg!(target_os="linux") && definition.protocol=="codex_app_server" {
-            if let Some(identity)=transport.provider_identity() {
-                if identity.provider_observation.as_ref().is_some_and(|v|
-                    v.supports(bridget_transport::protocol::ProviderOperation::Resume)) {
-                    if let Some(thread_id)=identity.provider_thread_id {
+    if let Some(context)=remote_result_context.as_ref()
+        && cfg!(target_os="linux") && definition.protocol=="codex_app_server"
+            && let Some(identity)=transport.provider_identity()
+                && identity.provider_observation.as_ref().is_some_and(|v|
+                    v.supports(bridget_transport::protocol::ProviderOperation::Resume))
+                    && let Some(thread_id)=identity.provider_thread_id {
                         crate::remote_worker::workspace_repair::publish_capability(
                             &context.store_root,&context.worker,&context.command,&thread_id)?;
                     }
-                }
-            }
-        }
-    }
     // Le retour thread/start ou thread/resume fournit déjà le fait effectif.
     // Le publier avant la TUI : son prompt initial peut lancer une délégation.
     let mut last_permission_fact = None;
@@ -4954,15 +4947,14 @@ fn launch_session_with_status(
 
     loop {
         if last_repair_receipt_attempt.elapsed()>=Duration::from_millis(250) {
-            if let (Some(status),Some(context))=(&workspace_repair_pending_receipt,&remote_result_context) {
-                if workspace_repair::persist_pending(context,status) {
+            if let (Some(status),Some(context))=(&workspace_repair_pending_receipt,&remote_result_context)
+                && workspace_repair::persist_pending(context,status) {
                     let status=status.clone();
                     if status.phase=="refused" {workspace_repair_barrier=None;}
                     send_wrapper_message(&writer,WrapperToDaemon::WorkspaceRepairResult {
                         task_id:context.command.task_id.clone(),status});
                     workspace_repair_pending_receipt=None;
                 }
-            }
             last_repair_receipt_attempt=Instant::now();
         }
         if let (Some(request),Some(context))=(&workspace_repair_barrier,&remote_result_context) {
@@ -5045,8 +5037,7 @@ fn launch_session_with_status(
         // ordinaire attend la fin du tour sans remplir la file du fournisseur.
         if matches!(&read_result,Err(e) if matches!(e.kind(),std::io::ErrorKind::WouldBlock|std::io::ErrorKind::TimedOut))
             && !transport.is_busy() && workspace_repair_barrier.is_none()
-        {
-            if let Some(inbox)=durable_inbox.as_mut() {
+            && let Some(inbox)=durable_inbox.as_mut() {
                 match inbox.next() {
                     Ok(Some(frame)) => {
                         line=serde_json::to_string(&frame)?;
@@ -5057,7 +5048,6 @@ fn launch_session_with_status(
                     Err(error) => {error!("file native illisible : {error} ; copie maître conservée");break;}
                 }
             }
-        }
         if native_termination
             .as_ref()
             .is_some_and(NativeTerminationSignal::requested)
@@ -5304,8 +5294,7 @@ fn launch_session_with_status(
                                 "completed" | "failed" | "interrupted" | "unreachable"
                             )
                         })
-                    {
-                        if execution.as_ref().is_some_and(|next| {
+                        && execution.as_ref().is_some_and(|next| {
                             execution_bindings.get(&message_id).is_some_and(|old| {
                                 old.execution_id != next.execution_id
                                     || old.generation != next.generation
@@ -5313,7 +5302,6 @@ fn launch_session_with_status(
                         }) {
                             execution_bindings.remove(&message_id);
                         }
-                    }
                     if bind_idempotent_delivery_execution(
                         &mut execution_bindings,
                         &message_id,
@@ -5324,11 +5312,10 @@ fn launch_session_with_status(
                     {
                         publish_provider_context(&writer, &execution_bindings, &identity);
                     }
-                    if let Some(binding) = execution_bindings.get_mut(&message_id) {
-                        if remote_result.is_some() {
+                    if let Some(binding) = execution_bindings.get_mut(&message_id)
+                        && remote_result.is_some() {
                             binding.remote_result = remote_result;
                         }
-                    }
                     match idempotent_deliveries.receive(
                         delivery_id,
                         recipient_instance_id,
@@ -5455,11 +5442,10 @@ fn launch_session_with_status(
                     reason,
                     interrupt_active,
                 }) => {
-                    if let Some(inbox)=durable_inbox.as_ref() {
-                        if let Err(error)=inbox.cancel(&id) {
+                    if let Some(inbox)=durable_inbox.as_ref()
+                        && let Err(error)=inbox.cancel(&id) {
                             error!("annulation en file native impossible : {error}");break;
                         }
-                    }
                     if interrupt_active.unwrap_or(false) {
                         transport.cancel_delivery(&id, &reason);
                     } else {
@@ -11671,11 +11657,10 @@ mod reconnect_tests {
         let (events,base_emitter)=relay_emitter();
         let slot=Arc::new(Mutex::new(None::<AttachRelayControl>));let callback_slot=slot.clone();
         let emitter:RelayEmitter=Arc::new(move|event| {
-            if let WrapperToDaemon::End {subscription_id,..}=&event {
-                if let Some(control)=callback_slot.lock().unwrap().as_ref() {
+            if let WrapperToDaemon::End {subscription_id,..}=&event
+                && let Some(control)=callback_slot.lock().unwrap().as_ref() {
                     control.unsubscribe(subscription_id.clone());
                 }
-            }
             base_emitter(event);
         });
         let mut worker=AttachRelayWorker::start_with(root.clone(),"2026-08-22".into(),4,emitter,hooks);

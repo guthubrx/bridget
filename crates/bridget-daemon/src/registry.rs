@@ -2255,8 +2255,8 @@ fn validate_routing_policy(
         {
             return Err("routing_fixed_axis_invalid".into());
         }
-        if let Some(service) = &machine_policy.decision_service {
-            if service.enabled
+        if let Some(service) = &machine_policy.decision_service
+            && service.enabled
                 && !service
                     .service_id
                     .as_deref()
@@ -2264,9 +2264,8 @@ fn validate_routing_policy(
             {
                 return Err("routing_decision_service_invalid".into());
             }
-        }
-        if let Some(lightweight) = &machine_policy.lightweight_decision {
-            if lightweight.enabled {
+        if let Some(lightweight) = &machine_policy.lightweight_decision
+            && lightweight.enabled {
                 let valid_connection = lightweight.connection_id.as_deref().and_then(|id| {
                     policy
                         .connections
@@ -2298,7 +2297,6 @@ fn validate_routing_policy(
                     return Err("routing_lightweight_decision_invalid".into());
                 }
             }
-        }
     }
 
     Ok(())

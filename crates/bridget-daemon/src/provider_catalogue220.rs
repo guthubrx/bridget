@@ -951,13 +951,12 @@ fn probe(
     ) {
         return Err((CatalogueCause::StopUnconfirmed, Some(child)));
     }
-    if let Ok(m) = std::fs::symlink_metadata(&socket) {
-        if (m.file_type().is_socket() || m.file_type().is_symlink())
+    if let Ok(m) = std::fs::symlink_metadata(&socket)
+        && (m.file_type().is_socket() || m.file_type().is_symlink())
             && m.uid() == unsafe { libc::geteuid() }
         {
             let _ = std::fs::remove_file(&socket);
         }
-    }
     if let (Some(contract),Some(initialize))=(automatic_contract,contract_initialize) {
         let compatible=contract.is_compatible();
         contract.publish(source,&initialize).map_err(|code|plain(match code {"program_changed_during_check"=>CatalogueCause::DefinitionChanged,"program_protocol_incompatible"=>CatalogueCause::ProtocolUnavailable,_=>CatalogueCause::SourceUnavailable}))?;

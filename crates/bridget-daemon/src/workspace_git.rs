@@ -1083,11 +1083,10 @@ fn report_anchor(workspace: &WorkspaceRecord) -> Result<(PathBuf, PathBuf), Stri
         }
         candidate.canonicalize().ok()
     })();
-    if let Some(common) = parent_common {
-        if !candidates.contains(&common) {
+    if let Some(common) = parent_common
+        && !candidates.contains(&common) {
             candidates.push(common);
         }
-    }
     let expected_gitfile = path.join(".git");
     for common in candidates {
         let registry = common.join("worktrees");

@@ -2223,11 +2223,10 @@ impl LinkWorker {
             let existing=self.user_inputs.iter().find(|(_,r)|r["callback"]["provider_request_id"]==source_id).map(|(id,row)|(id.clone(),row.clone()));
             if source["status"]=="pending" && matches!(source["responseCapability"]["type"].as_str(),Some("live"|"message")) {
                 let questions=&activity.payload["questions"];
-                if let Some((id,row))=&existing {
-                    if row["callback"]["details"]["questions"]!=*questions {
+                if let Some((id,row))=&existing
+                    && row["callback"]["details"]["questions"]!=*questions {
                         send_wrapper_message(&self.writer,WrapperToDaemon::ChildRequestClosed{request_id:id.clone(),state:ChildRequestClosedState::ClosedBeforeApply});self.user_inputs.remove(id);
                     }
-                }
                 let request=ChildProviderRequest{version:1,provider_session:self.thread_id.clone(),turn_id:activity.turn_id.clone().unwrap_or_else(||self.thread_id.clone()),provider_request_id:ChildProviderRequestId::String(source_id.into()),kind:ChildRequestKind::UserInput,
                     details:json!({"method":"t3.runtime-request.respond","questions":questions,"secret":false}),offered:vec![ChildRequestDecision::Accept],question_ids:questions.as_array().into_iter().flatten().filter_map(|q|q["id"].as_str().map(str::to_owned)).collect(),truncated:false};
                 send_wrapper_message(&self.writer,WrapperToDaemon::ChildRequest{request});
@@ -2274,12 +2273,11 @@ impl LinkWorker {
             DaemonToWrapper::ProjectContextResult { .. } => {}
             DaemonToWrapper::UserInputResult { result } => {
                 let item=&result["item"];
-                if item["origin"]=="t3" && item["callback"]["provider_session"]==self.thread_id {
-                    if let Some(id)=item["request_id"].as_str() {
+                if item["origin"]=="t3" && item["callback"]["provider_session"]==self.thread_id
+                    && let Some(id)=item["request_id"].as_str() {
                         if matches!(item["state"].as_str(),Some("pending"|"submitted"|"unknown")) && (self.user_inputs.contains_key(id) || self.user_inputs.len()<32) {if !(item["state"]=="pending" && self.user_inputs.get(id).is_some_and(|r|r["state"]=="submitted")) {self.user_inputs.insert(id.into(),item.clone());}}
                         else {self.user_inputs.remove(id);}
                     }
-                }
             }
             DaemonToWrapper::ChildRequestAnswer { answer } => self.answer_user_input(answer),
 

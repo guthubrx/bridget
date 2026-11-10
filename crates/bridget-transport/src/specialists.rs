@@ -346,11 +346,10 @@ impl SpecialistRequest {
         {
             return Err("invalid_request");
         }
-        if let Some(id) = value.get("request_id").and_then(|v| v.as_str()) {
-            if id.is_empty() || id.len() > 256 || id.chars().any(char::is_control) {
+        if let Some(id) = value.get("request_id").and_then(|v| v.as_str())
+            && (id.is_empty() || id.len() > 256 || id.chars().any(char::is_control)) {
                 return Err("invalid_request");
             }
-        }
         Ok(())
     }
     pub fn is_read(&self) -> bool {

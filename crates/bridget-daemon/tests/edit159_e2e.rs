@@ -268,13 +268,12 @@ impl Fixture {
     fn stop_native159(&mut self) {
         // Ces PID/birth ont été attestés AVANT la perte possible du wrapper.
         let mut providers = self.initial_provider.take().into_iter().collect::<Vec<_>>();
-        if let Some(agent) = &self.native_agent {
-            if let Ok(marker) =
+        if let Some(agent) = &self.native_agent
+            && let Ok(marker) =
                 ManagedMarkerStore::at_directory(self.state.join("managed")).load(agent)
             {
                 self.native = Some(marker);
             }
-        }
         if let Some(marker) = self.native.take() {
             let provider = evidence152(self)
                 .into_iter()
@@ -400,8 +399,8 @@ impl Drop for Fixture {
             }
             return;
         }
-        if let Some(marker) = &self.native {
-            if process_birth(marker.pgid).ok() == Some(marker.birth) {
+        if let Some(marker) = &self.native
+            && process_birth(marker.pgid).ok() == Some(marker.birth) {
                 let observed = Command::new("/bin/ps")
                     .args(["-ww", "-p", &marker.pgid.to_string(), "-o", "command="])
                     .output()
@@ -423,7 +422,6 @@ impl Drop for Fixture {
                     thread::sleep(Duration::from_millis(10));
                 }
             }
-        }
         drop(self.daemon.take());
         if !thread::panicking() {
             fs::remove_dir_all(&self.root).unwrap();

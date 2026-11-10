@@ -115,12 +115,11 @@ impl ProviderLimits {
         let windows = self.account_refusals244.entry(scope.into()).or_default();
         if fact.status == "rejected" && fact.resets_at.is_none_or(|at| at > now) {
             let seen = Seen { fact: fact.clone(), source, observed_at: now };
-            if let Ok(body) = serde_json::to_string(&seen) {
-                if db.execute("INSERT INTO provider_refusals244(scope,window,fact,expires_at) VALUES(?1,?2,?3,?4) ON CONFLICT(scope,window) DO UPDATE SET fact=excluded.fact, expires_at=excluded.expires_at",
+            if let Ok(body) = serde_json::to_string(&seen)
+                && db.execute("INSERT INTO provider_refusals244(scope,window,fact,expires_at) VALUES(?1,?2,?3,?4) ON CONFLICT(scope,window) DO UPDATE SET fact=excluded.fact, expires_at=excluded.expires_at",
                     rusqlite::params![scope, fact.window, body, Self::refusal_until244(&seen)]).is_err() {
                     log::warn!("refus fournisseur conservé en mémoire ; cache durable indisponible");
                 }
-            }
             windows.insert(fact.window.clone(),seen);
         } else if fact.status == "allowed" || fact.status == "available" {
             let aliases:Vec<_>=self.account_aliases245.iter().filter(|(_,canonical)|canonical.as_str()==scope).map(|(old,_)|old.clone()).collect();

@@ -3893,19 +3893,16 @@ fn spawn_reader(lines: SourceLines, context: ReaderContext) -> thread::JoinHandl
                         .lock()
                         .unwrap_or_else(|e| e.into_inner())
                         .clone();
-                    if let Some(thread_id) = selected.as_deref() {
-                        if value.pointer("/params/threadId").and_then(Value::as_str)
+                    if let Some(thread_id) = selected.as_deref()
+                        && value.pointer("/params/threadId").and_then(Value::as_str)
                             == Some(thread_id)
-                        {
-                            if let Some(settings) = value.pointer("/params/threadSettings") {
+                            && let Some(settings) = value.pointer("/params/threadSettings") {
                                 observe_native_permissions(
                                     &permission_observation,
                                     thread_id,
                                     settings,
                                 );
                             }
-                        }
-                    }
                     if value.pointer("/params/threadId").and_then(Value::as_str)
                         == selected.as_deref()
                         && let Some(model) = value

@@ -230,8 +230,8 @@ pub(super) fn apply(
             Ok(new) => new,
             Err(error) => {
                 let code = format!("workspace_repair_resume:{error}");
-                if let Ok(error) = error.downcast::<bridget_transport::TransportError>() {
-                    if let bridget_transport::TransportError::StartUnconfirmed { owner, .. } =
+                if let Ok(error) = error.downcast::<bridget_transport::TransportError>()
+                    && let bridget_transport::TransportError::StartUnconfirmed { owner, .. } =
                         *error
                     {
                         let descriptor = transport.descriptor();
@@ -241,7 +241,6 @@ pub(super) fn apply(
                             connection_id: "workspace-repair-unconfirmed".into(),
                         });
                     }
-                }
                 return Err(code);
             }
         };
@@ -301,15 +300,13 @@ pub(super) fn apply(
     let mut pending_receipt = None;
     if let Some(context) =
         remote.filter(|v| v.command.task_id == task_id && v.command.instance_id == instance)
-    {
-        if !persist_pending(context, &status) {
+        && !persist_pending(context, &status) {
             pending_receipt = Some(status.clone());
             if status.phase == "refused" {
                 status.phase = "prepared".into();
             }
             status.code = Some("workspace_repair_receipt_unconfirmed".into());
         }
-    }
     ApplyOutcome {
         status,
         pending_receipt,

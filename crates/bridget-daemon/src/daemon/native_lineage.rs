@@ -358,14 +358,13 @@ fn guard_journal_snapshot(
     {
         return Err(E::JournalUnavailable);
     }
-    if let Some(command) = command {
-        if &native_delegation::remote_command_identity(st, &current)
+    if let Some(command) = command
+        && &native_delegation::remote_command_identity(st, &current)
             .map_err(|_| E::JournalUnavailable)?
             != command
         {
             return Err(E::JournalUnavailable);
         }
-    }
     Ok(())
 }
 

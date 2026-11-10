@@ -175,9 +175,8 @@ fn map_probe_permission_failure(
     site: ProbePermissionSite,
     emit: impl FnOnce(&str),
 ) -> WorkerRefusal {
-    if let Some((batch, candidate_id)) = diagnostics {
-        if let Some(note) = batch.note(candidate_id, site, error) { emit(&note); }
-    }
+    if let Some((batch, candidate_id)) = diagnostics
+        && let Some(note) = batch.note(candidate_id, site, error) { emit(&note); }
     WorkerRefusal::PermissionsChanged
 }
 fn observe_probe_permission_failure(
@@ -2467,12 +2466,11 @@ impl WorkerStore {
             || (view.source_marker.is_none() && view.source_failure.is_none()))) {
             return Err(WorkerStoreError::Unknown);
         }
-        if let Some(marker)=self.marker_for_view(&receipt)? {
-            if crate::managed_process::group_exists(marker.pgid)?
+        if let Some(marker)=self.marker_for_view(&receipt)?
+            && crate::managed_process::group_exists(marker.pgid)?
                 && crate::managed_process::process_birth(marker.pgid).ok().is_none_or(|birth|birth==marker.birth) {
                 return Err(WorkerStoreError::Unknown);
             }
-        }
         let (commands,slots,_,_)=self.inventory()?;
         let related=commands.iter().filter(|command|command.identity.task_id==binding.command.task_id);
         for command in related {
@@ -4419,13 +4417,12 @@ impl WorkerRuntime {
         if !cwd.starts_with(&mapping.remote_root) || cwd!=Path::new(&current.placement.execution_cwd) {
             return Err(WorkerRefusal::PlacementMismatch);
         }
-        if let Some(path)=path {
-            if !bridget_transport::protocol::commit_view_file_path(path)
+        if let Some(path)=path
+            && (!bridget_transport::protocol::commit_view_file_path(path)
                 || !intent.destination().map_err(|_|WorkerRefusal::PlacementMismatch)?.join(path)
-                    .starts_with(&mapping.remote_root) {
+                    .starts_with(&mapping.remote_root)) {
                 return Err(WorkerRefusal::PlacementMismatch);
             }
-        }
         let mut operation=crate::native_permissions::PermissionReadOperation::default();
         let fresh=self.readiness_at(&registry,request,&mapping,&cwd,&mut operation,None)?;
         operation.finish().map_err(|_|WorkerRefusal::PermissionsChanged)?;
@@ -6755,7 +6752,7 @@ fn dispatch_origin_proof(request: bridget_transport::protocol::OriginProofReques
         let result=crate::origin_proof::execute(&request,&registry);
         if disconnected.load(Ordering::Acquire){return;}
         let frame=response(result);
-        if let WrapperToDaemon::OriginProofResponse {response}=&frame {if response.validate_shape().is_err(){return;}}
+        if let WrapperToDaemon::OriginProofResponse {response}=&frame&& response.validate_shape().is_err(){return;}
         let _=send_worker_frame(&writer,&frame);
     });
 }

@@ -1452,13 +1452,12 @@ fn observe_routing_candidates_for_project(
         }
         let mut quota_seen = HashMap::new();
         for verdict in result.verdicts {
-            if let CandidateProbeV2Verdict::Ineligible { candidate_id, reason } = &verdict {
-                if wanted.contains(candidate_id) {
+            if let CandidateProbeV2Verdict::Ineligible { candidate_id, reason } = &verdict
+                && wanted.contains(candidate_id) {
                     record_routing_probe_refusal(plan, &result.correlation_id,
                         &result.admission_id, candidate_id,
                         RoutingProbeRefusalCode::Candidate(*reason));
                 }
-            }
             if let CandidateProbeV2Verdict::Eligible {
                 candidate_id,
                 mapping_revision,
@@ -1466,8 +1465,7 @@ fn observe_routing_candidates_for_project(
                 permission_digest,
                 observed_at,
             } = verdict
-            {
-                if wanted.contains(&candidate_id)
+                && wanted.contains(&candidate_id)
                     && observed_at > 0
                     && routing_fact_fresh(received_at, unix_timestamp(), ttl)
                 {
@@ -1514,7 +1512,6 @@ fn observe_routing_candidates_for_project(
                         },
                     );
                 }
-            }
         }
     }
     let mut candidates = Vec::with_capacity(plan.candidates.len());
@@ -4071,12 +4068,11 @@ fn routing_failure_admission(
         result["detail"]["workspace_tasks"]=json!({"status":"unavailable",
             "next_action":"Faire vérifier la projection des tâches par le responsable Bridget ; une absence de diagnostic ne prouve pas le dossier libre. Conserver demande, clé et autres travaux sans libérer de garde."});
     }
-    if let Some((owner,_))=live_connection_identity(&st,conn) {
-        if let Err(_)=crate::sentinel244::record_admission_observation(st.store.connection(),&owner,&request.request_id,admission,
+    if let Some((owner,_))=live_connection_identity(&st,conn)
+        && let Err(_)=crate::sentinel244::record_admission_observation(st.store.connection(),&owner,&request.request_id,admission,
             result["code"].as_str().unwrap_or("unobserved"),unix_timestamp()) {
             warn!("observation du refus d'admission indisponible ; reçu courant conservé");
         }
-    }
     result
 }
 
@@ -6759,8 +6755,8 @@ fn delegate_remote_with_routing(
             worker_id: provision.worker_id.clone(),
             provisioning_revision: provision.provisioning_revision,
         };
-        if let Some((_, _, observation)) = &routing {
-            if st
+        if let Some((_, _, observation)) = &routing
+            && st
                 .remote_workers
                 .get(machine)
                 .map(|session| session.epoch.as_str())
@@ -6768,7 +6764,6 @@ fn delegate_remote_with_routing(
             {
                 return Err("routing_connection_changed:worker_prepare:worker_epoch".into());
             }
-        }
         if let Some((auto,candidate,observed))=&routing {
             let current=super::native_provider_catalogue220::model_option_account(
                 &st,&st.registry,candidate,auto.service_tier.as_deref())?;
@@ -6828,13 +6823,12 @@ fn delegate_remote_with_routing(
     {
         return Err("remote_prepare_invalid".into());
     }
-    if let Some((auto, _, observation)) = &routing {
-        if let Some(code) = routing_change_error("worker_prepare", &[
+    if let Some((auto, _, observation)) = &routing
+        && let Some(code) = routing_change_error("worker_prepare", &[
             ("base", prepared.placement.base_commit != auto.expected_base_commit),
             ("definition", prepared.placement.definition_digest != observation.definition_digest),
             ("permissions", prepared.placement.permission_digest != observation.permission_digest),
         ]) { return Err(code); }
-    }
     if remote_parent_proof(state, &owner, &parent, None)? != proof {
         return Err(permission_change::code("after_inspection", &["permission_sources"]));
     }
@@ -10154,8 +10148,8 @@ fn spawn_task(st: &mut DaemonState, task: &mut Task) -> Result<(), String> {
     // Le superviseur possède déjà ce lancement. Attendre son issue ne lance
     // rien : ne pas rehacher sous le mutex dont Register a besoin pour finir.
     // Le canon, la génération et l'échéance restent vérifiés par la flotte.
-    if task.state == "starting" && known {
-        if let crate::fleet::SpawnSubmission::Await(waiter) =
+    if task.state == "starting" && known
+        && let crate::fleet::SpawnSubmission::Await(waiter) =
             st.fleet.request_spawn(&order, unix_timestamp()).map_err(|e| e.to_string())?
         {
             if task.child_instance.as_deref() != Some(waiter.instance_id.as_str()) {
@@ -10168,7 +10162,6 @@ fn spawn_task(st: &mut DaemonState, task: &mut Task) -> Result<(), String> {
             }
             return Ok(());
         }
-    }
     // Relecture fraîche conservée avant le premier lancement et après
     // l'enregistrement, avant de rendre la mission transmissible.
     let registry = match checked_registry {
@@ -12758,11 +12751,10 @@ pub(super) fn tick(state: &Arc<Mutex<DaemonState>>) {
         let state = Arc::clone(state);
         if let Err(error) = thread::Builder::new().name("bridget-result-slot".into()).spawn(move || {
             let result = reserve_remote_result_slot(&state, &task_id);
-            if let Ok(proof) = &result {
-                if let Err(error) = dispatch_remote_pause_resume(&state, &task_id, proof.as_ref()) {
+            if let Ok(proof) = &result
+                && let Err(error) = dispatch_remote_pause_resume(&state, &task_id, proof.as_ref()) {
                     warn!("reprise de pause distante différée: {error}");
                 }
-            }
             let _ = sender.send(result);
         }) {
             // Le sender est détruit : le prochain tick constate Disconnected et libère le créneau.
@@ -13072,11 +13064,10 @@ pub(super) fn tick(state: &Arc<Mutex<DaemonState>>) {
                 }
             }
             if task.state == "failed" {
-                if task.acknowledged_at.is_none() {
-                    if let Err(code)=quota_questions246::ensure(&st,&task) {
+                if task.acknowledged_at.is_none()
+                    && let Err(code)=quota_questions246::ensure(&st,&task) {
                         warn!("question de reprise quota non déposée ({code}) ; tâche et refus conservés");
                     }
-                }
                 if quota_enabled(&task) {
                     st.pending_replies
                         .retain(|pending| pending.msg_id != task.mission);

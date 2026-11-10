@@ -283,9 +283,8 @@ fn attestation_failure(response: &Value) -> IdentityError {
     let mut values = vec![response.pointer("/result/structuredContent").cloned().unwrap_or(Value::Null)];
     if let Some(content) = response.pointer("/result/content").and_then(Value::as_array) {
         for item in content.iter().take(8) {
-            if let Some(text) = item.get("text").and_then(Value::as_str).filter(|s| s.len() <= 4096) {
-                if let Ok(value) = serde_json::from_str::<Value>(text) { values.push(value); }
-            }
+            if let Some(text) = item.get("text").and_then(Value::as_str).filter(|s| s.len() <= 4096)
+                && let Ok(value) = serde_json::from_str::<Value>(text) { values.push(value); }
         }
     }
     for value in values {
@@ -461,9 +460,8 @@ mod tests {
                 let mut line = String::new();
                 reader.read_line(&mut line).unwrap();
                 if line == "\r\n" { break; }
-                if let Some((key, value)) = line.split_once(':') {
-                    if key.eq_ignore_ascii_case("content-length") { length = value.trim().parse::<usize>().unwrap(); }
-                }
+                if let Some((key, value)) = line.split_once(':')
+                    && key.eq_ignore_ascii_case("content-length") { length = value.trim().parse::<usize>().unwrap(); }
             }
             reader.read_exact(&mut vec![0; length]).unwrap();
             std::thread::sleep(Duration::from_millis(3500));
@@ -501,11 +499,10 @@ mod tests {
                 if line == "\r\n" {
                     break;
                 }
-                if let Some((key, value)) = line.split_once(':') {
-                    if key.eq_ignore_ascii_case("content-length") {
+                if let Some((key, value)) = line.split_once(':')
+                    && key.eq_ignore_ascii_case("content-length") {
                         length = value.trim().parse().unwrap();
                     }
-                }
             }
             assert!(length < 4096);
             reader.read_exact(&mut vec![0; length]).unwrap();

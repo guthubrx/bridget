@@ -1786,8 +1786,8 @@ fn spawn_reader(
                     }
                     if permission_requests.insert(request_id.to_owned()) {
                         let turn = queue.0.lock().unwrap_or_else(|e| e.into_inner()).active.as_ref().map(|a| a.message_id.clone());
-                        if let (Some(session), Some(turn)) = (provider_session.as_deref(), turn.as_deref()) {
-                            if let Some(request) = claude_user_input(&value, session, turn) {
+                        if let (Some(session), Some(turn)) = (provider_session.as_deref(), turn.as_deref())
+                            && let Some(request) = claude_user_input(&value, session, turn) {
                                 let mut pending = user_inputs.lock().unwrap_or_else(|e| e.into_inner());
                                 pending.retain(|(r,_)|r.turn_id == turn);
                                 if pending.len() < 4 {
@@ -1797,7 +1797,6 @@ fn spawn_reader(
                                     continue;
                                 }
                             }
-                        }
                         if let Some(active) = queue
                             .0
                             .lock()
@@ -1971,11 +1970,10 @@ fn spawn_reader(
                 if tool_denials > 0 {
                     let mut state = queue.0.lock().unwrap_or_else(|e| e.into_inner());
                     if let Some(active) = state.active.as_mut() {
-                        if active.response.is_empty() {
-                            if let Some(result) = value.get("result").and_then(Value::as_str) {
+                        if active.response.is_empty()
+                            && let Some(result) = value.get("result").and_then(Value::as_str) {
                                 active.response.push_str(result);
                             }
-                        }
                         if matches!(terminal, ManagedTerminal::Completed) {
                             active.response.insert_str(0, &format!(
                                 "Bridget : {tool_denials} appel(s) d'outil refusé(s) par les permissions ou les hooks. Les refus sont conservés.\n\n"

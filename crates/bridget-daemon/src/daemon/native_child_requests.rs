@@ -939,11 +939,10 @@ pub(super) fn tick(state: &Arc<Mutex<DaemonState>>) {
             if !matches!(row.delivery_state.as_str(), "pending" | "sent") {
                 continue;
             }
-            if let (Ok(conn), Ok(frame)) = (validity, persisted_answer(&row)) {
-                if let Some(writer) = st.connections.get(&conn) {
+            if let (Ok(conn), Ok(frame)) = (validity, persisted_answer(&row))
+                && let Some(writer) = st.connections.get(&conn) {
                     outgoing.push((row.request_id.clone(), conn, writer.clone(), frame));
                 }
-            }
         }
     }
     for (id, conn, writer, frame) in outgoing {
@@ -1082,8 +1081,8 @@ fn emit(
     drop(permit);
     if result.is_err() && had_emit_permit {
         let st = state.lock().unwrap_or_else(|e| e.into_inner());
-        if let Ok(Some(row)) = st.delegation_store.get_child_request(id) {
-            if row.delivery_state == "sent" && !receipt {
+        if let Ok(Some(row)) = st.delegation_store.get_child_request(id)
+            && row.delivery_state == "sent" && !receipt {
                 let _ = st.delegation_store.settle_sent_child_request(
                     id,
                     "unknown",
@@ -1091,7 +1090,6 @@ fn emit(
                     unix_timestamp(),
                 );
             }
-        }
     }
 }
 

@@ -2359,8 +2359,8 @@ fn deliver_frozen_wake(
             if current_now >= wake.grace_until {
                 return Ok(WakePhase::MissedBeforeDeparture);
             }
-            if matches!(wake.source, WakeSource::CliOnce) {
-                if st
+            if matches!(wake.source, WakeSource::CliOnce)
+                && st
                     .idempotency
                     .cli_wake(&wake.id)
                     .map_err(|_| "storage_unavailable")?
@@ -2374,7 +2374,6 @@ fn deliver_frozen_wake(
                         )
                         .map_err(|_| "storage_unavailable")?;
                 }
-            }
             let current_now = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .ok()
@@ -2856,8 +2855,8 @@ fn scheduled_wakes_tick(state: &Arc<Mutex<DaemonState>>, now: i64, clock: Instan
                 }
             }
         }
-        if let Some(wake) = frozen {
-            if let Ok(phase) =
+        if let Some(wake) = frozen
+            && let Ok(phase) =
                 deliver_frozen_wake(state, &wake, Some(&schedule.schedule_id), now, clock)
             {
                 let future = if phase.terminal() && schedule.next_at <= now {
@@ -2877,7 +2876,6 @@ fn scheduled_wakes_tick(state: &Arc<Mutex<DaemonState>>, now: i64, clock: Instan
                     future.next_calendar_date.as_deref(),
                 );
             }
-        }
     }
     let pending = {
         let st = state.lock().unwrap_or_else(|e| e.into_inner());
@@ -2911,8 +2909,8 @@ fn scheduled_wakes_tick(state: &Arc<Mutex<DaemonState>>, now: i64, clock: Instan
                 }),
                 _ => None,
             };
-            if let Some(result) = terminal {
-                if let Ok(key) = IdempotencyKey::new(
+            if let Some(result) = terminal
+                && let Ok(key) = IdempotencyKey::new(
                     crate::wake_schedules::CLI_WAKE_SCOPE,
                     OperationKind::Send,
                     &wake.id,
@@ -2929,7 +2927,6 @@ fn scheduled_wakes_tick(state: &Arc<Mutex<DaemonState>>, now: i64, clock: Instan
                     }
                     let _ = st.idempotency.finalize(&key, result);
                 }
-            }
         }
     }
 }
@@ -5024,11 +5021,10 @@ impl DaemonState {
         let coordinator_epoch = delegation_store.next_auto_coordinator_epoch()?;
         let mut provider_limits=crate::provider_limits::ProviderLimits::restore_routing244(store.connection(),unix_timestamp());
         for connection in registry.routing_policy().into_iter().flat_map(|policy|&policy.connections) {
-            if let (Some(old),Some(new))=(registry.routing_account_scope_legacy245(&connection.connection_id),registry.routing_account_scope244(&connection.connection_id)) {
-                if provider_limits.migrate_account_scope245(store.connection(),&old,&new).is_err() {
+            if let (Some(old),Some(new))=(registry.routing_account_scope_legacy245(&connection.connection_id),registry.routing_account_scope244(&connection.connection_id))
+                && provider_limits.migrate_account_scope245(store.connection(),&old,&new).is_err() {
                     warn!("reclassement du cache de quota indisponible ; observations originales conservées");
                 }
-            }
         }
         Ok(DaemonState {
             update_gate: crate::updates::Gate::open(
@@ -7695,11 +7691,10 @@ fn handle_connection(
         st.client_negotiations.remove(&conn_id);
         st.human_thread_watches.remove(&conn_id);
         st.lineage_watches.remove(&conn_id);
-        if let Some(journal) = st.lineage_journals.remove(&conn_id) {
-            if let Some(socket) = journal.shutdown {
+        if let Some(journal) = st.lineage_journals.remove(&conn_id)
+            && let Some(socket) = journal.shutdown {
                 let _ = socket.shutdown(std::net::Shutdown::Both);
             }
-        }
         st.service_negotiations.remove(&conn_id);
         st.peer_uids.remove(&conn_id);
         st.coordination_subscriptions.remove(&conn_id);
@@ -9892,8 +9887,8 @@ fn sweep_held(st: &mut DaemonState, now: i64) -> Result<(), String> {
             } else {
                 None
             };
-            if let Some(reason) = reason {
-                if let Some(notice) = st
+            if let Some(reason) = reason
+                && let Some(notice) = st
                     .idempotency
                     .settle_held(&delivery_id, reason, now)
                     .map_err(|error| error.to_string())?
@@ -9901,7 +9896,6 @@ fn sweep_held(st: &mut DaemonState, now: i64) -> Result<(), String> {
                     st.held_ids.remove(&notice.message_id);
                     settled_ids.insert(notice.message_id);
                 }
-            }
         }
         Ok(())
     })();
@@ -10406,11 +10400,10 @@ fn handle_execution_transition(
                 .is_some_and(|presence| presence.turn_attest);
             // Un terminal d'exécution n'atteste pas le repos de la session réelle.
             // Les porteurs legacy gardent leur projection historique.
-            if in_progress || !attested {
-                if let Err(reason) = st.set_turn_state(conn_id, in_progress) {
+            if (in_progress || !attested)
+                && let Err(reason) = st.set_turn_state(conn_id, in_progress) {
                     warn!("projection de tour après transition ignorée: {reason}");
                 }
-            }
             if matches!(
                 transition.next_state.as_str(),
                 "completed" | "failed" | "cancelled" | "interrupted" | "unreachable"
@@ -10463,15 +10456,15 @@ fn handle_delivery_ack(
         .acknowledge_send_delivery(&delivery_id, &instance_id, delivery_generation)
     {
         Ok(answered_request) => {
-            if let Some((owner, _)) = live_connection_identity(st, conn_id) {
-                if let Ok(Some(summary)) = st.store.observation_summary_current(&owner) {
-                    if let Ok(key) = IdempotencyKey::new(
+            if let Some((owner, _)) = live_connection_identity(st, conn_id)
+                && let Ok(Some(summary)) = st.store.observation_summary_current(&owner)
+                    && let Ok(key) = IdempotencyKey::new(
                         crate::wake_schedules::MISSED_SUMMARY_SCOPE,
                         OperationKind::Send,
                         &summary.summary_id,
-                    ) {
-                        if let Ok(Some(delivery)) = st.idempotency.stored_send_delivery(&key) {
-                            if delivery.delivery_id == delivery_id
+                    )
+                        && let Ok(Some(delivery)) = st.idempotency.stored_send_delivery(&key)
+                            && delivery.delivery_id == delivery_id
                                 && delivery.recipient_instance_id == instance_id
                                 && delivery.delivery_generation == delivery_generation
                             {
@@ -10490,10 +10483,6 @@ fn handle_delivery_ack(
                                     delivery_generation,
                                 );
                             }
-                        }
-                    }
-                }
-            }
             if let Some(request_id) = answered_request {
                 st.delegation_store.wait_epoch().bump();
                 st.pending_replies
@@ -12914,8 +12903,8 @@ fn handle_idempotent_send_with_result_authority(
         .mark_sent(&prepared.content_key, &message.to);
     st.envelope_guard
         .mark_relayed(&prepared.message_guard_id, &message.to);
-    if held_for_agent.is_none() {
-        if let Err(error) = defer_idempotent_delivery(
+    if held_for_agent.is_none()
+        && let Err(error) = defer_idempotent_delivery(
             st,
             &prepared.target_conn,
             delivery.clone(),
@@ -12927,7 +12916,6 @@ fn handle_idempotent_send_with_result_authority(
         ) {
             error!("remise idempotente préparée mais non sérialisable: {error}");
         }
-    }
     #[cfg(feature = "test-support")]
     crate::test_sync::checkpoint("after_delivery_before_issue");
     let response = issue_response_with_project(
@@ -13006,11 +12994,10 @@ fn handle_execution_control_authorized(
     conn_id:Option<&str>,issuer_scope:&str,mut command:ExecutionControlCommand,
     st:&mut DaemonState,proof:Option<&native_lineage::ComposeAuthority>,
 )->DaemonToWrapper {
-    if let Some(proof)=proof {
-        if conn_id.is_none_or(|conn|native_lineage::authorize_compose_control(st,conn,&command,proof).is_err()) {
+    if let Some(proof)=proof
+        && conn_id.is_none_or(|conn|native_lineage::authorize_compose_control(st,conn,&command,proof).is_err()) {
             return control_result(&command,ExecutionControlOutcome::Refused(ExecutionControlRefusal::NotPermitted));
         }
-    }
     if command.version != 1 || command.command_id.is_empty() || command.command_id.len() > 256 {
         return control_result(
             &command,
@@ -14137,15 +14124,14 @@ fn handle_control_state_set(
             if paused == Some(false) && resume_controls.is_empty() {
                 let agents: Vec<_> = st.presences.values().map(|p| p.name.clone()).collect();
                 for agent in agents {
-                    if schedule_held_release(&mut st, &agent, Instant::now()) {
-                        if let Some(route) = st.router.get_agent(&agent) {
+                    if schedule_held_release(&mut st, &agent, Instant::now())
+                        && let Some(route) = st.router.get_agent(&agent) {
                             let conn = route.connection_id.clone();
                             if let Some(controls) = st.pending_post_response_controls.remove(&conn)
                             {
                                 resume_controls.push((conn, controls));
                             }
                         }
-                    }
                 }
             }
             drop(st);
@@ -19297,9 +19283,9 @@ fn handle_worker_message(
                 if !command_matches {
                     return refused(WorkerRefusal::CommandMismatch);
                 }
-                if let Some(failure) = observation.startup_failure {
-                    if let Ok(Some(mut task)) = st.delegation_store.get(&response.command.task_id) {
-                        if task.state == "starting" && task.mission_issued_at.is_none() {
+                if let Some(failure) = observation.startup_failure
+                    && let Ok(Some(mut task)) = st.delegation_store.get(&response.command.task_id)
+                        && task.state == "starting" && task.mission_issued_at.is_none() {
                             let detail = match observation.exit_code {
                                 Some(code) => format!("remote_start_failed:{}:exit={code}", failure.code()),
                                 None => format!("remote_start_failed:{}", failure.code()),
@@ -19309,13 +19295,11 @@ fn handle_worker_message(
                                 return refused(WorkerRefusal::StoreUnavailable);
                             }
                         }
-                    }
-                }
                 if matches!(
                     observation.phase,
                     WorkerCommandPhase::Terminal | WorkerCommandPhase::Refused
-                ) {
-                    if let Some(lease) = st
+                )
+                    && let Some(lease) = st
                         .managed_spawns
                         .get(&response.command.command_id)
                         .map(|record| record.lease.clone())
@@ -19333,7 +19317,6 @@ fn handle_worker_message(
                         st.remote_native_ready.remove(&lease.command_id);
                         st.managed_terminal_instances.insert(lease.instance_id);
                     }
-                }
                 if observation.native_ready && observation.phase == WorkerCommandPhase::Released {
                     st.remote_native_ready
                         .insert(response.command.command_id.clone());
@@ -20854,15 +20837,13 @@ fn handle_wrapper_message_with_peer(
                         delivery_generation,
                         ..
                     } = control.message
-                    {
-                        if let Err(error) = st.idempotency.mark_delivery_indeterminate(
+                        && let Err(error) = st.idempotency.mark_delivery_indeterminate(
                             &delivery_id,
                             &recipient_instance_id,
                             delivery_generation,
                         ) {
                             warn!("poussée de promotion non confirmée: {error}");
                         }
-                    }
                 }
             }
             // Le retrait est committé et State relâché avant le writer. Rejeu: aucune notice fresh.
@@ -24323,7 +24304,7 @@ fn handle_wrapper_message_with_peer(
             let finished=!in_progress && st.conn_instances.get(conn_id).and_then(|id| st.presences.get(id)).is_some_and(|p| p.state=="busy");
             match st.set_turn_state(conn_id, in_progress) {
                 Ok(()) => {
-                    if finished { if let Some(notifier)=&st.mobile_notifier { notifier.changed(); } }
+                    if finished && let Some(notifier)=&st.mobile_notifier { notifier.changed(); }
                     // La levée peut précéder le terminal de `turn/interrupt`.
                     // Le retour à l'état disponible rejoue alors la reprise
                     // durable. Celle-ci reste refusée tant que le contrôle est
@@ -24333,11 +24314,10 @@ fn handle_wrapper_message_with_peer(
                     } else {
                         Vec::new()
                     };
-                    if !in_progress && controls.is_empty() {
-                        if let Some((agent, _)) = live_connection_identity(&st, conn_id) {
+                    if !in_progress && controls.is_empty()
+                        && let Some((agent, _)) = live_connection_identity(&st, conn_id) {
                             schedule_held_release(&mut st, &agent, Instant::now());
                         }
-                    }
                     drop(st);
                     for (target_conn, controls) in controls {
                         let retry = execute_controls(controls);

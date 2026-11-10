@@ -131,11 +131,9 @@ fn parse_input(args: &[String], input: &mut dyn Read) -> Result<HumanLineageRequ
     if let A::List {
         cursor: Some(c), ..
     } = &request
-    {
-        if c.len() > 2048 || c.chars().any(char::is_control) {
+        && (c.len() > 2048 || c.chars().any(char::is_control)) {
             return Err(E::InvalidRequest);
         }
-    }
     let request = HumanLineageRequest {
         version,
         t3_thread_id,

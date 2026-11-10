@@ -447,14 +447,12 @@ impl CheckedContract {
             .and_then(Value::as_str)
             .and_then(|s| s.split_whitespace().next())
             .and_then(|s| s.strip_prefix("codex_cli_rs/"))
-        {
-            if v.len() <= 64
+            && v.len() <= 64
                 && v.split('.').count() == 3
                 && v.bytes().all(|b| b.is_ascii_digit() || b == b'.')
             {
                 self.binary_version = v.into();
             }
-        }
         self.observed_at = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
@@ -601,11 +599,10 @@ fn accepts(root: &Value, s: &Value, v: &Value, depth: u8) -> bool {
             return false;
         }
     }
-    if let Some(values) = s.get("enum").and_then(Value::as_array) {
-        if !values.contains(v) {
+    if let Some(values) = s.get("enum").and_then(Value::as_array)
+        && !values.contains(v) {
             return false;
         }
-    }
     if s.get("const").is_some_and(|x| x != v) {
         return false;
     }
@@ -655,11 +652,10 @@ fn accepts(root: &Value, s: &Value, v: &Value, depth: u8) -> bool {
                 if !accepts(root, p, v, depth + 1) {
                     return false;
                 }
-            } else if let Some(additional) = s.get("additionalProperties") {
-                if !accepts(root, additional, v, depth + 1) {
+            } else if let Some(additional) = s.get("additionalProperties")
+                && !accepts(root, additional, v, depth + 1) {
                     return false;
                 }
-            }
         }
     }
     if let Some(a) = v.as_array() {
@@ -672,11 +668,10 @@ fn accepts(root: &Value, s: &Value, v: &Value, depth: u8) -> bool {
         {
             return false;
         }
-        if let Some(i) = s.get("items") {
-            if a.iter().any(|v| !accepts(root, i, v, depth + 1)) {
+        if let Some(i) = s.get("items")
+            && a.iter().any(|v| !accepts(root, i, v, depth + 1)) {
                 return false;
             }
-        }
     }
     if let Some(text) = v.as_str() {
         let n = text.chars().count();
@@ -698,17 +693,16 @@ fn accepts(root: &Value, s: &Value, v: &Value, depth: u8) -> bool {
             }
         }
     }
-    if let Some(n) = v.as_f64() {
-        if s.get("minimum")
+    if let Some(n) = v.as_f64()
+        && (s.get("minimum")
             .and_then(Value::as_f64)
             .is_some_and(|m| n < m)
             || s.get("maximum")
                 .and_then(Value::as_f64)
-                .is_some_and(|m| n > m)
+                .is_some_and(|m| n > m))
         {
             return false;
         }
-    }
     true
 }
 

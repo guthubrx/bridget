@@ -655,11 +655,10 @@ fn native154_isolation_sous_dossier_deux_branches_et_lancement_par_paire() {
             }
         }
         let mut request = request154(&cwd, "first", Some(json!({"strategy":"worktree"})));
-        if pair == "codex-claude" {
-            if let NativeDelegationRequest::Delegate { agent_type, .. } = &mut request {
+        if pair == "codex-claude"
+            && let NativeDelegationRequest::Delegate { agent_type, .. } = &mut request {
                 *agent_type = "claude-child".into();
             }
-        }
         let first = call154(&fixture, request);
         let mut task = task154(&fixture, &first);
         let expected = cwd.join(".worktrees").join(&task.task_id[..8]).join("sub");

@@ -98,12 +98,11 @@ fn slug(s: &str) -> bool {
 }
 fn specialist_projection(record: &SpecialistRecord, principal: &SpecialistPrincipal) -> Value {
     let mut view = json!(record);
-    if !principal.owns(&record.agent_id) {
-        if let Some(object) = view.as_object_mut() {
+    if !principal.owns(&record.agent_id)
+        && let Some(object) = view.as_object_mut() {
             object.remove("grant");
             object.remove("owner");
         }
-    }
     view
 }
 fn valid_uuid(s: &str) -> bool {
@@ -336,13 +335,11 @@ impl AgentProfileStore {
                         return Err(SpecialistError("role_scope_denied"));
                     }
                 }
-                if let Some(id) = raw["specialist_agent_id"].as_str() {
-                    if let Some(record) = self.get_specialist(id)? {
-                        if !permits_scope(&record.scope) {
+                if let Some(id) = raw["specialist_agent_id"].as_str()
+                    && let Some(record) = self.get_specialist(id)?
+                        && !permits_scope(&record.scope) {
                             return Err(SpecialistError("role_scope_denied"));
                         }
-                    }
-                }
             }
         }
         let canonical = Sha256::digest(serde_json::to_vec(q)?).to_vec();

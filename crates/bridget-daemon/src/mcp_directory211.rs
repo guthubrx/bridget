@@ -17,9 +17,8 @@ impl Options {
             _=>return Err(invalid("include_stopped doit être un booléen"))};
         let cursor=match a.get("cursor"){None=>None,Some(Value::String(s)) if !s.is_empty()&&s.len()<=1024=>Some(s.clone()),
             _=>return Err(invalid("cursor doit être le next_cursor reçu, au plus 1024 octets"))};
-        if let Some(Value::String(s))=a.get("domain") {
-            if s.len()>256 || s.chars().any(char::is_control) {return Err(invalid("domain doit rester borné à 256 octets sans contrôle"));}
-        }
+        if let Some(Value::String(s))=a.get("domain")
+            && (s.len()>256 || s.chars().any(char::is_control)) {return Err(invalid("domain doit rester borné à 256 octets sans contrôle"));}
         Ok(Self{limit,stopped,cursor})
     }
 }

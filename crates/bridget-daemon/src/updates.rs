@@ -286,15 +286,14 @@ impl Gate {
         if i.active != 0 {
             return Err("update_operations_active");
         }
-        if let Some(l) = &i.lease {
-            if l.expires_at > now() {
+        if let Some(l) = &i.lease
+            && l.expires_at > now() {
                 return if l.token == token {
                     Ok(json!({"status":"ok","expires_at":l.expires_at}))
                 } else {
                     Err("update_activation_active")
                 };
             }
-        }
         let lease = Lease {
             token: token.into(),
             expires_at: now() + 180,

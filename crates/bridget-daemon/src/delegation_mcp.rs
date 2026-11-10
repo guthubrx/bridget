@@ -150,16 +150,14 @@ pub(crate) fn tools(brief_schema: &Value) -> Vec<Value> {
         }
     }
     let automatic=definitions.iter().find(|d|d["name"]=="bridget_auto_delegate").map(|d|d["inputSchema"].clone());
-    if let Some(automatic)=automatic {
-        if let Some(tool)=definitions.iter_mut().find(|d|d["name"]=="bridget_specialists"){
-            if let Some(branches)=tool["inputSchema"]["oneOf"].as_array_mut(){
+    if let Some(automatic)=automatic
+        && let Some(tool)=definitions.iter_mut().find(|d|d["name"]=="bridget_specialists")
+            && let Some(branches)=tool["inputSchema"]["oneOf"].as_array_mut(){
                 branches.push(json!({"type":"object","properties":{"version":{"const":1},"action":{"const":"request_temporary"},
                     "request_id":{"type":"string","minLength":1,"maxLength":128},"profile_id":{"type":"string"},
                     "profile_revision":{"type":"integer","minimum":1},"delegation":automatic},
                     "required":["version","action","request_id","profile_id","profile_revision","delegation"],"additionalProperties":false}));
             }
-        }
-    }
     definitions
 }
 

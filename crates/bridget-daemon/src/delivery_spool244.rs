@@ -60,9 +60,8 @@ pub(crate) fn reconcile_delivery_replay(
     }
     let mut frozen=prior.clone();
     if let (DaemonToWrapper::DeliverIdempotent {mid_turn_ok:old,..},
-        DaemonToWrapper::DeliverIdempotent {mid_turn_ok:new,..})=(&mut frozen,incoming) {
-        if old!=new {*old=Some(false);}
-    }
+        DaemonToWrapper::DeliverIdempotent {mid_turn_ok:new,..})=(&mut frozen,incoming)
+        && old!=new {*old=Some(false);}
     Ok(frozen)
 }
 

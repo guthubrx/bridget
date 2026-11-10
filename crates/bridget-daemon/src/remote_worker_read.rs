@@ -1784,11 +1784,10 @@ pub(super) fn read_worker_command(root:&Path,worker:&WorkerIdentity,identity:&Wo
         identity.validate()?;
         let mut result: Option<WorkerCommandReceipt> =
             read_optional(&root.join("commands").join(format!("{}.json",marker_key(identity))), MAX_METADATA_BYTES)?;
-        if let Some(receipt) = result.as_mut() {
-            if receipt.worker == *worker && receipt.identity == *identity {
+        if let Some(receipt) = result.as_mut()
+            && receipt.worker == *worker && receipt.identity == *identity {
                 proof198::overlay_fence(root, worker, receipt)?;
             }
-        }
         if let Some(receipt) = &result {
             if receipt.worker != *worker
                 || receipt.version != STORE_VERSION

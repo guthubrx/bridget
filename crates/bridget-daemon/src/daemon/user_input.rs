@@ -32,13 +32,12 @@ pub(super) fn live(st: &DaemonState, row: &Value) -> bool {
 pub(super) fn public(st: &DaemonState, row: Value) -> Value {
     let mut value = store::projection(row.clone());
     // Même identité et nom que l'annuaire ; aucun identifiant fourni par le modèle.
-    if let Some(owner) = row["owner"].as_str() {
-        if let Some(presence) = st.presences.get(row["instance"].as_str().unwrap_or("")) {
+    if let Some(owner) = row["owner"].as_str()
+        && let Some(presence) = st.presences.get(row["instance"].as_str().unwrap_or("")) {
             value["source_agent"] = json!({"agent_id":owner,
                 "display_name":st.store.agent_display_name(owner).ok().flatten().unwrap_or_else(||owner.to_owned()),
                 "machine":presence.host,"state":presence.state});
         }
-    }
     value["can_respond"] = json!(
         row["state"] == "pending"
             && live(st, &row)
@@ -480,11 +479,10 @@ pub(super) fn receive_native(
             &callback,
             unix_now_secs(),
         )?;
-        if fresh {
-            if let Some(n) = &st.mobile_notifier {
+        if fresh
+            && let Some(n) = &st.mobile_notifier {
                 n.changed();
             }
-        }
         Ok(row)
     })();
     match result {

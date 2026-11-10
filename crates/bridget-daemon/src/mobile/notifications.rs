@@ -225,11 +225,10 @@ fn run(root: PathBuf, url: String, account: Account, receiver: mpsc::Receiver<()
     let mut credential: Option<(String, i64)> = None;
     let mut previous: Option<Instant> = None;
     while receiver.recv().is_ok() {
-        if let Some(last) = previous {
-            if let Some(delay) = Duration::from_secs(15).checked_sub(last.elapsed()) {
+        if let Some(last) = previous
+            && let Some(delay) = Duration::from_secs(15).checked_sub(last.elapsed()) {
                 std::thread::sleep(delay);
             }
-        }
         while receiver.try_recv().is_ok() {}
         let now = super::http::unix_now();
         let targets = match Store::open(&root.join("mobile-devices.db"))

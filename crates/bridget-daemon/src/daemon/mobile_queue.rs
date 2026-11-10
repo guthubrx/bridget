@@ -95,11 +95,10 @@ pub(super) fn handle(conn: &str, operation: &MobileOperation, device: &Device, s
                 message.intent=Some(bridget_core::MessageIntent::SteerCurrent);
                 message.references.push("steer-or-queue".into());
                 d.message_bytes=serde_json::to_vec(&message).expect("stored message");
-                if let Some(target)=st.router.get_agent(agent).map(|r|r.connection_id.clone()) {
-                    if defer_idempotent_delivery(st,&target,d.clone(),&mut controls,None,Some(conn)).is_err() {
+                if let Some(target)=st.router.get_agent(agent).map(|r|r.connection_id.clone())
+                    && defer_idempotent_delivery(st,&target,d.clone(),&mut controls,None,Some(conn)).is_err() {
                         let _=st.idempotency.mark_delivery_indeterminate(&d.delivery_id,&d.recipient_instance_id,d.delivery_generation);
                     }
-                }
                 if !controls.is_empty() {st.pending_post_response_controls.entry(conn.into()).or_default().extend(controls);}
             }
             response(json!({"status":"ok","request_id":request_id,"state":receipt.state,"refusal":receipt.refusal,"effect":receipt.effect}))

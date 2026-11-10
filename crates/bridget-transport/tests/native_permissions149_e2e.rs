@@ -232,12 +232,11 @@ fn native149_fait_claude_incremente_la_revision_quand_le_cwd_change() {
     let deadline = Instant::now() + Duration::from_secs(8);
     let mut revision_a = None;
     while Instant::now() < deadline {
-        if let Some((session, _, revision, cwd)) = transport.provider_permissions() {
-            if session == "s-149" && cwd.as_deref() == Some("/private/tmp/claude-149-a") {
+        if let Some((session, _, revision, cwd)) = transport.provider_permissions()
+            && session == "s-149" && cwd.as_deref() == Some("/private/tmp/claude-149-a") {
                 revision_a = Some(revision);
                 break;
             }
-        }
         std::thread::sleep(Duration::from_millis(20));
     }
     let revision_a = revision_a.unwrap_or_else(|| panic!("première observation manquante"));
@@ -247,12 +246,11 @@ fn native149_fait_claude_incremente_la_revision_quand_le_cwd_change() {
     let mut revision_b = None;
     let deadline = Instant::now() + Duration::from_secs(8);
     while Instant::now() < deadline {
-        if let Some((session, _, revision, cwd)) = transport.provider_permissions() {
-            if session == "s-149" && cwd.as_deref() == Some("/private/tmp/claude-149-b") {
+        if let Some((session, _, revision, cwd)) = transport.provider_permissions()
+            && session == "s-149" && cwd.as_deref() == Some("/private/tmp/claude-149-b") {
                 revision_b = Some(revision);
                 break;
             }
-        }
         std::thread::sleep(Duration::from_millis(20));
     }
     transport.stop();

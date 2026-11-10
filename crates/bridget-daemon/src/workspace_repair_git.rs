@@ -70,11 +70,10 @@ pub(crate) fn inspect_repair(
     }
     // L'ancienne entrée doit être absente ou être l'alias exact de la cible.
     // Un second dossier réel est un conflit, jamais une preuve de déplacement.
-    if let Ok(meta) = fs::symlink_metadata(old) {
-        if !meta.file_type().is_symlink() || old.canonicalize().ok().as_deref() != Some(target) {
+    if let Ok(meta) = fs::symlink_metadata(old)
+        && (!meta.file_type().is_symlink() || old.canonicalize().ok().as_deref() != Some(target)) {
             return Err("workspace_repair_original_conflict".into());
         }
-    }
     let common_text =
         run_git(parent, &["rev-parse", "--git-common-dir"], READ_TIMEOUT)?.complete()?;
     let common_path = PathBuf::from(common_text);

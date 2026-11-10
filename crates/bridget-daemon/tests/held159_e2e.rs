@@ -264,13 +264,12 @@ impl Fixture {
     fn stop_native159(&mut self) {
         // Ces PID/birth ont été attestés AVANT la perte possible du wrapper.
         let mut providers = self.initial_provider.take().into_iter().collect::<Vec<_>>();
-        if let Some(agent) = &self.native_agent {
-            if let Ok(marker) =
+        if let Some(agent) = &self.native_agent
+            && let Ok(marker) =
                 ManagedMarkerStore::at_directory(self.state.join("managed")).load(agent)
             {
                 self.native = Some(marker);
             }
-        }
         if let Some(marker) = self.native.take() {
             let provider = evidence152(self)
                 .into_iter()
@@ -410,8 +409,8 @@ impl Drop for Fixture {
             }
             return;
         }
-        if let Some(marker) = &self.native {
-            if process_birth(marker.pgid).ok() == Some(marker.birth) {
+        if let Some(marker) = &self.native
+            && process_birth(marker.pgid).ok() == Some(marker.birth) {
                 let observed = Command::new("/bin/ps")
                     .args(["-ww", "-p", &marker.pgid.to_string(), "-o", "command="])
                     .output()
@@ -433,7 +432,6 @@ impl Drop for Fixture {
                     thread::sleep(Duration::from_millis(10));
                 }
             }
-        }
         drop(self.daemon.take());
         if !thread::panicking() {
             fs::remove_dir_all(&self.root).unwrap();
@@ -1019,11 +1017,10 @@ fn held159_daemon_arrete_apres_retention_conserve_la_remise() {
         let row:Option<(String,String,i64,Vec<u8>,i64)>=db.query_row(
             "SELECT phase,delivery_id,delivery_generation,message_bytes,queue_rank FROM send_deliveries WHERE issuer_scope=?1 AND idempotency_key=?2",
             rusqlite::params![support::SCOPE,id],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?))).optional().unwrap();
-        if let Some(row) = row {
-            if row.0 == "held" && row.4 > 0 {
+        if let Some(row) = row
+            && row.0 == "held" && row.4 > 0 {
                 break row;
             }
-        }
         assert!(
             Instant::now() < until,
             "message ordinaire attesté non retenu"

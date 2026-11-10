@@ -29,11 +29,10 @@ pub(super) fn initial_prepare(command: &WorkerCommandIdentity, operation: &Worke
 impl Cache {
     pub(super) fn remember(&mut self, correlation: String, connection: &str, epoch: &str,
         worker: &WorkerIdentity, command: &WorkerCommandIdentity) {
-        if self.entries.len() >= MAX_WORKER_STORE_ENTRIES {
-            if let Some(oldest) = self.entries.iter().min_by_key(|(_, e)| e.retired_at).map(|(k, _)| k.clone()) {
+        if self.entries.len() >= MAX_WORKER_STORE_ENTRIES
+            && let Some(oldest) = self.entries.iter().min_by_key(|(_, e)| e.retired_at).map(|(k, _)| k.clone()) {
                 self.entries.remove(&oldest);
             }
-        }
         self.entries.insert(correlation, Retired { connection: connection.into(), epoch: epoch.into(),
             worker: worker.clone(), command: command.clone(), retired_at: Instant::now() });
     }
