@@ -109,6 +109,23 @@ Ne pas décrire le produit par comparaison avec un client externe.
 
 <!-- SPECKIT START -->
 
+Session259 — guidage préalable activé en 0.8.26/259-preflight-guidance-r1.
+Source exécutable 406466cb intégrée/poussée ; contrôle CallerScope et raccordement
+guidés, ACK groupés nommés avec bornes, Wait raccordé sans changer délai/reprise.
+ACK Roadie absent aux deux lectures ciblées, résultat conservé, aucun rejeu ; cause
+du délai initial inconnue. Mac/Linux : 4 tests259, 135 MCP/1 ignoré avec prérequis,
+11 ACK et 7 post-dispatch PASS (groupes recouvrants), release PASS ; revue lue/ACK,
+objections corrigées et delta relu localement. Sept services/SHA sur quatre hôtes,
+retour258 compatible/pointeurs atomiques, coupure maître 1,61 s ; annuaire revenu.
+Registre Mac, sept payloads et six processus T3/birth conservés. T3 non arrêté ;
+façades MCP déjà ouvertes encore anciennes, aucun rechargement global affirmé.
+Public 0.8.26/six fichiers anonymes/SHA et APK8026/lignée8025 vérifiés.
+Worktree/branches Mac et distante retirés ; trois transferts et image257 Mac
+inutilisée retirés (171932488 octets). SYS/Android conservés : 5/61 processus
+inobservables ; session260 et travaux étrangers intacts. Caches Mac3,48/SYS5,54 Gio.
+Bilan : /Users/moi/Nextcloud/10.Scripts/64.bridget/specs/259-guidage-preflight/validation.md.
+Reprise : /Users/moi/.cache/bridget259-guidage-preflight/resume.md.
+
 Session257 — diagnostic d’ACK groupé activé en0.8.24/257-ack-diagnostic-r1.
 Source8a3dc845 intégrée/poussée ; refus task_not_ready avec tâches non prêtes,
 ronde/état/rapport après propriété complète. Aucun ACK partiel ni format changé.
