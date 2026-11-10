@@ -18895,78 +18895,7 @@ fn handle_wrapper_message_with_peer(
             journal_available,
             turn_attest,
             queue_fallback,
-        } => {
-            let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
-            if instance_id
-                .as_ref()
-                .is_some_and(|id| st.managed_terminal_instances.contains(id))
-            {
-                return Some(DaemonToWrapper::Nack {
-                    id: "register".to_string(),
-                    reason: "génération gérée déjà terminale".to_string(),
-                });
-            }
-            if st.managed_spawns.values().any(|record| {
-                record.lease.remote_placement.is_some()
-                    && (agent_id == record.lease.name
-                        || instance_id.as_ref() == Some(&record.lease.instance_id))
-                    && (agent_id != record.lease.name
-                        || instance_id.as_ref() != Some(&record.lease.instance_id))
-            }) {
-                return Some(DaemonToWrapper::Nack {
-                    id: "register".into(),
-                    reason: "remote_registration_mismatch".into(),
-                });
-            }
-            let managed_instance = instance_id.clone();
-            let response = handle_register_with_channel(
-                conn_id,
-                identity_version,
-                agent_type,
-                agent_id,
-                host,
-                transport,
-                channel,
-                mode,
-                location,
-                os,
-                instance_id,
-                domain,
-                turn_in_progress,
-                journal_available,
-                &mut st,
-                turn_attest,
-            );
-            if let DaemonToWrapper::Registered { agent_id, .. } = &response
-                && let Some((owner, instance)) = live_connection_identity(&st, conn_id)
-                && owner.as_str() == agent_id.as_str()
-                && let Some(presence) = st.presences.get_mut(&instance)
-            {
-                presence.queue_fallback = queue_fallback;
-            }
-            if let (
-                Some(instance_id),
-                DaemonToWrapper::Registered {
-                    credential: _,
-                    agent_id: final_agent_id,
-                },
-            ) = (managed_instance, &response)
-                && let Some(command_id) = st.managed_by_instance.get(&instance_id).cloned()
-                && let Some(record) = st.managed_spawns.get_mut(&command_id)
-            {
-                record.wrapper_conn = Some(conn_id.to_string());
-                if record.lease.remote_placement.is_some() {
-                    complete_remote_registration(&mut st, &command_id);
-                    return Some(response);
-                }
-                let _ = st.managed_tx.send(ManagedSupervisorCommand::Registered {
-                    instance_id,
-                    conn_id: conn_id.to_string(),
-                    name: final_agent_id.clone(),
-                });
-            }
-            Some(response)
-        }
+        } => wrapper_dispatch::on_register(identity_version, agent_type, agent_id, host, transport, channel, mode, location, os, instance_id, domain, turn_in_progress, journal_available, turn_attest, queue_fallback, conn_id, state),
 
         WrapperToDaemon::DiskSpace { fact } => {
             let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
