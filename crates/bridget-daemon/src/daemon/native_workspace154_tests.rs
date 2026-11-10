@@ -1894,7 +1894,7 @@ fn native154_conservation_retention_150_active_kept_et_rejeu_expire() {
     let kept = task154(&fixture, &receipt);
     assert!(kept.cleanup_done);
     assert_eq!(kept.workspace.as_ref().unwrap().state, WorkspaceState::Kept);
-    fs::set_permissions(Path::new(&task.cwd), fs::Permissions::from_mode(0)).unwrap();
+    fs::set_permissions(Path::new(&task.cwd), fs::Permissions::from_mode(0o000)).unwrap();
     let (purged, sagas) = {
         let st = fixture.state.lock().unwrap();
         (
