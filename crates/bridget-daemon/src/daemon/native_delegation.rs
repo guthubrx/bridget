@@ -1052,7 +1052,7 @@ fn workload_command_writes(name: &str, args: &[String]) -> bool {
         "docker" => {
             let op = if first == "compose" { args.get(1).map(String::as_str).unwrap_or("") } else { first };
             !read(&["--version", "-v", "version", "help", "--help", "ps", "info", "inspect", "logs", "images", "top"], op)
-                && first != "compose" || op != "config" || any(&["--output", "-o"]) || args.iter().any(|a| a.starts_with("--output="))
+                && (first != "compose" || op != "config" || any(&["--output", "-o"]) || args.iter().any(|a| a.starts_with("--output=")))
         }
         _ => false,
     }

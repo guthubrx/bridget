@@ -132,7 +132,7 @@ fn native149_remise_positive_termine_le_tour_sans_refus() {
     let mut refuse = false;
     let deadline = Instant::now() + Duration::from_secs(8);
     let mut termine = false;
-    while Instant::now() < deadline && !termine || refuse {
+    while Instant::now() < deadline && (!termine || refuse) {
         for event in transport.drain_events() {
             termine |= matches!(
                 event.kind,
