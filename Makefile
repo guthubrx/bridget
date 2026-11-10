@@ -1,4 +1,4 @@
-.PHONY: lint-scripts build release test daemon install install-k1 test-install-k1-preflight install-ronde test-ronde uninstall clean clean-builds test-build-cleanup
+.PHONY: fmt fmt-check clippy lint lint-scripts build release test daemon install install-k1 test-install-k1-preflight install-ronde test-ronde uninstall clean clean-builds test-build-cleanup
 
 BINARY = bridget
 INSTALL_DIR = $(HOME)/.local/bin
@@ -15,6 +15,17 @@ release:
 
 test:
 	python3 scripts/build.py cargo test
+
+fmt:
+	cargo fmt --all
+
+fmt-check:
+	cargo fmt --all -- --check
+
+clippy:
+	python3 scripts/build.py cargo clippy --workspace --all-targets --locked --features bridget-daemon/test-support
+
+lint: clippy fmt-check
 
 lint-scripts:
 	ruff check scripts
