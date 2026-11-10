@@ -118,7 +118,7 @@ while True: time.sleep(.02)
     #[ignore = "Recette privée explicite root, sans fournisseur ni fichier métier"]
     fn spec221_drain_reaps_owned_foreign_uid_zombie_after_signal_refusal() {
         const HELPER: &str = "BRIDGET_SPEC221_DRAIN_HELPER";
-        assert_eq!(unsafe { libc::geteuid() }, 0, "cette recette exige root");
+        assert_eq!(bridget_transport::fsutil::effective_uid(), 0, "cette recette exige root");
         if std::env::var_os(HELPER).is_none() {
             let status = Command::new(std::env::current_exe().unwrap())
                 .args(["--exact", "managed_process::tests::spec221_drain_reaps_owned_foreign_uid_zombie_after_signal_refusal", "--ignored", "--nocapture", "--test-threads=1"])

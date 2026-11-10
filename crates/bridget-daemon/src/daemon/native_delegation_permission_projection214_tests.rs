@@ -662,7 +662,7 @@
         let (shared,config,_rx,_reader,_request,_root)=super::tests::routing168_fixture(1);
         let denied=handle("unknown",NativeDelegationRequest::ProviderCatalogueV1 {refresh:true,machine_id:None},&shared);
         assert!(matches!(denied,DaemonToWrapper::NativeDelegationResult {result} if result["status"]=="refused"));
-        {let mut st=shared.lock().unwrap();st.connection_roles.insert("human220".into(),ConnectionRole::Client);st.peer_uids.insert("human220".into(),unsafe{libc::geteuid()});
+        {let mut st=shared.lock().unwrap();st.connection_roles.insert("human220".into(),ConnectionRole::Client);st.peer_uids.insert("human220".into(),bridget_transport::fsutil::effective_uid());
         st.client_negotiations.insert("human220".into(),NegotiatedClient {version:CLIENT_CONTRACT_VERSION,issuer_scope:"test220".into(),capabilities:vec![ClientCapability::ProviderCatalogueV1]});}
         let read=handle("human220",NativeDelegationRequest::ProviderCatalogueV1 {refresh:false,machine_id:None},&shared);
         assert!(matches!(read,DaemonToWrapper::NativeDelegationResult {result} if result["connection_catalogues"].is_array()));
@@ -697,7 +697,7 @@
             let value=ProviderCatalogue {connection_id:"main".into(),definition_digest:st.registry.resolved_definition("native-test").unwrap().digest,observed_at:unix_timestamp(),state:CatalogueState::Unavailable,account_scope:None,models:vec![],cause:Some(CatalogueCause::StopUnconfirmed)};
             let mut cache=HashMap::new();cache.insert("main".into(),catalogue::CachedCatalogue {sequence:9,received:Instant::now(),received_at:unix_timestamp(),value:value.clone()});
             st.remote_workers.insert("local".into(),RemoteWorkerConnection {identity:worker.clone(),conn_id:"old-worker".into(),epoch:"old-epoch".into(),capabilities:vec![WorkerCapability::ProviderCatalogueV1],catalogues:cache,catalogue_refresh_id:"old-epoch".into(),catalogue_refresh_at:None,last_contact:Instant::now(),last_contact_at:unix_timestamp(),contact:WorkerContactState::Connected});
-            st.peer_uids.insert("new-worker".into(),unsafe{libc::geteuid()});value};
+            st.peer_uids.insert("new-worker".into(),bridget_transport::fsutil::effective_uid());value};
         let accepted=super::super::handle_worker_message(&shared,"new-worker",WrapperToDaemon::WorkerHelloWithCapabilities {hello:WorkerHelloWithCapabilities {hello:WorkerHello {version:REMOTE_WORKER_VERSION,identity:worker.clone(),credential,build:"220".into(),capability:ClientCapability::RemoteWorkerV1},capabilities:vec![WorkerCapability::ProviderCatalogueV1]}});
         let Some(DaemonToWrapper::WorkerAcceptedWithCapabilities {accepted})=accepted else {panic!("negotiation expected");};let epoch=accepted.accepted.connection_epoch;
         {let st=shared.lock().unwrap();assert!(st.remote_workers["local"].catalogues.is_empty());

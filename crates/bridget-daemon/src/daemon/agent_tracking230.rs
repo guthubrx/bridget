@@ -152,7 +152,7 @@ pub(super) fn human(
     let allowed = st.connection_roles.get(conn) == Some(&ConnectionRole::Client)
         && !st.auxiliary_connections.contains(conn)
         && !st.conn_names.contains_key(conn)
-        && st.peer_uids.get(conn).copied() == Some(unsafe { libc::geteuid() })
+        && st.peer_uids.get(conn).copied() == Some(bridget_transport::fsutil::effective_uid())
         && control_client_actor(&st, conn).is_some()
         && st.client_negotiations.get(conn).is_some_and(|n| {
             n.version == CLIENT_CONTRACT_VERSION

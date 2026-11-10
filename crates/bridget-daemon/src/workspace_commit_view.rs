@@ -1279,7 +1279,7 @@ impl ViewPlan {
             let metadata=Directory::open(parent)?.0.metadata().map_err(compact::io_failure)?;
             if metadata.dev()!=device {return Err(refusal("destination_volume_mismatch"));}
             if parent.starts_with(top) {continue;}
-            if metadata.uid()==unsafe{libc::geteuid()} && metadata.mode()&0o022==0 {
+            if metadata.uid()==bridget_transport::fsutil::effective_uid() && metadata.mode()&0o022==0 {
                 return Ok(parent.join(".bridget-commit-views"));
             }
         }
@@ -1309,7 +1309,7 @@ impl ViewPlan {
         let parent=Directory::open(parent_path)?;
         let parent_meta=parent.0.metadata().map_err(compact::io_failure)?;
         let source_meta=Directory::open(&self.source_root)?.0.metadata().map_err(compact::io_failure)?;
-        if parent_meta.uid()!=unsafe{libc::geteuid()} || parent_meta.mode()&0o022!=0
+        if parent_meta.uid()!=bridget_transport::fsutil::effective_uid() || parent_meta.mode()&0o022!=0
             || parent_meta.dev()!=source_meta.dev() {return Err(refusal("destination_invalid"));}
         let name=data_root.file_name().and_then(|name|name.to_str()).ok_or_else(||refusal("destination_invalid"))?;
         let data=match parent.optional_kind(name)? {
@@ -1320,7 +1320,7 @@ impl ViewPlan {
             _=>return Err(refusal("destination_invalid")),
         };
         let metadata=data.0.metadata().map_err(compact::io_failure)?;
-        if metadata.uid()!=unsafe{libc::geteuid()} || metadata.mode()&0o077!=0
+        if metadata.uid()!=bridget_transport::fsutil::effective_uid() || metadata.mode()&0o077!=0
             || metadata.dev()!=source_meta.dev() {return Err(refusal("destination_invalid"));}
         let (available,block)=super::available_space(&data.0)
             .map_err(|_|refusal("storage_space_unavailable"))?;
@@ -1602,7 +1602,7 @@ impl ViewProofs {
         }
         let directory = Directory::open(path)?;
         let metadata = directory.0.metadata().map_err(compact::io_failure)?;
-        if metadata.uid() != unsafe { libc::geteuid() } || metadata.mode() & 0o077 != 0 {
+        if metadata.uid() != bridget_transport::fsutil::effective_uid() || metadata.mode() & 0o077 != 0 {
             return Err(refusal("proof_path_unsafe"));
         }
         Ok(Self {
@@ -1618,7 +1618,7 @@ impl ViewProofs {
         let metadata = file.metadata().map_err(compact::io_failure)?;
         if !metadata.is_file()
             || metadata.nlink() != 1
-            || metadata.uid() != unsafe { libc::geteuid() }
+            || metadata.uid() != bridget_transport::fsutil::effective_uid()
             || metadata.mode() & 0o077 != 0
             || metadata.len() > maximum as u64
         {
@@ -1924,7 +1924,7 @@ impl ViewProofs {
         let metadata = file.metadata().map_err(compact::io_failure)?;
         if !metadata.is_file()
             || metadata.nlink() != 1
-            || metadata.uid() != unsafe { libc::geteuid() }
+            || metadata.uid() != bridget_transport::fsutil::effective_uid()
             || metadata.mode() & 0o077 != 0
         {
             return Err(refusal("proof_path_unsafe"));

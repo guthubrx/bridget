@@ -415,7 +415,7 @@ fn apply(
         .map_err(|_| "account_registry_lock_unavailable")?;
     if !m.is_file()
         || m.nlink() != 1
-        || m.uid() != unsafe { libc::geteuid() }
+        || m.uid() != bridget_transport::fsutil::effective_uid()
         || m.mode() & 0o077 != 0
     {
         return Err("account_registry_lock_unavailable");

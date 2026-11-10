@@ -28,7 +28,7 @@
         st.connection_roles
             .insert("worker177".into(), ConnectionRole::Worker);
         st.peer_uids
-            .insert("worker177".into(), unsafe { libc::geteuid() });
+            .insert("worker177".into(), bridget_transport::fsutil::effective_uid());
         let shared = Arc::new(Mutex::new(st));
         let identity = WorkerIdentity {
             machine_id: "origin177".into(),

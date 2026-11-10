@@ -129,7 +129,7 @@
     #[test]
     fn spec_065_peer_uid_est_lu_sur_la_socket_unix_locale() {
         let (stream, _peer) = UnixStream::pair().unwrap();
-        assert_eq!(unix_peer_uid(&stream).unwrap(), unsafe { libc::geteuid() });
+        assert_eq!(unix_peer_uid(&stream).unwrap(), bridget_transport::fsutil::effective_uid());
     }
 
     #[test]

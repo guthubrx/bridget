@@ -801,7 +801,7 @@ impl Drop for CodexInteractiveEndpoint {
         if absent
             && std::fs::symlink_metadata(&self.directory).is_ok_and(|metadata| {
                 metadata.is_dir()
-                    && metadata.uid() == unsafe { libc::geteuid() }
+                    && metadata.uid() == bridget_transport::fsutil::effective_uid()
                     && (metadata.dev(), metadata.ino()) == self.identity
                     && metadata.mode() & 0o077 == 0
             })

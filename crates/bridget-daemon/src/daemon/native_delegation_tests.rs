@@ -453,7 +453,7 @@
         {
             let mut st = state.lock().unwrap();
             st.connections.insert("worker171".into(), writer);
-            st.peer_uids.insert("worker171".into(), unsafe { libc::geteuid() });
+            st.peer_uids.insert("worker171".into(), bridget_transport::fsutil::effective_uid());
         }
         assert!(matches!(handle_worker_message(&state, "worker171",
             WrapperToDaemon::WorkerHelloWithCapabilities { hello: WorkerHelloWithCapabilities {
@@ -758,7 +758,7 @@
         {
             let mut st = state.lock().unwrap();
             st.connections.insert("worker171".into(), writer);
-            st.peer_uids.insert("worker171".into(), unsafe { libc::geteuid() });
+            st.peer_uids.insert("worker171".into(), bridget_transport::fsutil::effective_uid());
         }
         assert!(matches!(handle_worker_message(&state, "worker171",
             WrapperToDaemon::WorkerHelloWithCapabilities { hello: WorkerHelloWithCapabilities {
@@ -1080,7 +1080,7 @@
         {
             let mut st = state.lock().unwrap();
             st.connections.insert("worker171".into(), writer);
-            st.peer_uids.insert("worker171".into(), unsafe { libc::geteuid() });
+            st.peer_uids.insert("worker171".into(), bridget_transport::fsutil::effective_uid());
         }
         assert!(matches!(handle_worker_message(&state, "worker171",
             WrapperToDaemon::WorkerHelloWithCapabilities { hello: WorkerHelloWithCapabilities {
@@ -1195,7 +1195,7 @@
         {
             let mut st=state.lock().unwrap();
             st.connections.insert("worker-c19".into(),writer);
-            st.peer_uids.insert("worker-c19".into(),unsafe{libc::geteuid()});
+            st.peer_uids.insert("worker-c19".into(),bridget_transport::fsutil::effective_uid());
         }
         assert!(matches!(handle_worker_message(&state,"worker-c19",
             WrapperToDaemon::WorkerHelloWithCapabilities {hello:WorkerHelloWithCapabilities {
@@ -1277,7 +1277,7 @@
         {
             let mut st = state.lock().unwrap();
             st.connections.insert("worker171".into(), writer);
-            st.peer_uids.insert("worker171".into(), unsafe { libc::geteuid() });
+            st.peer_uids.insert("worker171".into(), bridget_transport::fsutil::effective_uid());
         }
         assert!(matches!(handle_worker_message(&state, "worker171",
             WrapperToDaemon::WorkerHelloWithCapabilities { hello: WorkerHelloWithCapabilities {
@@ -1472,7 +1472,7 @@
             st.connection_roles
                 .insert("human168".into(), ConnectionRole::Client);
             st.peer_uids
-                .insert("human168".into(), unsafe { libc::geteuid() });
+                .insert("human168".into(), bridget_transport::fsutil::effective_uid());
             st.client_negotiations.insert(
                 "human168".into(),
                 NegotiatedClient {
@@ -1499,13 +1499,13 @@
                 }
             }
             st.peer_uids
-                .insert("human168".into(), unsafe { libc::geteuid() } + 1);
+                .insert("human168".into(), bridget_transport::fsutil::effective_uid() + 1);
             assert_eq!(
                 routing_catalogue_view(&st, "human168").unwrap_err(),
                 "capability_unavailable"
             );
             st.peer_uids
-                .insert("human168".into(), unsafe { libc::geteuid() });
+                .insert("human168".into(), bridget_transport::fsutil::effective_uid());
             st.client_negotiations
                 .get_mut("human168")
                 .unwrap()
@@ -3274,7 +3274,7 @@ for frame in frames: print(json.dumps(frame),flush=True)
             assert_eq!(available.cpu_percent, Some(10));
             st.connections.insert("worker168".into(), writer);
             st.peer_uids
-                .insert("worker168".into(), unsafe { libc::geteuid() });
+                .insert("worker168".into(), bridget_transport::fsutil::effective_uid());
         }
         let accepted = handle_worker_message(
             &state,
@@ -3956,7 +3956,7 @@ for frame in frames: print(json.dumps(frame),flush=True)
         reader.get_ref().set_read_timeout(Some(Duration::from_secs(5))).unwrap();
         {
             let mut st=state.lock().unwrap();st.connections.insert("worker194".into(),writer);
-            st.peer_uids.insert("worker194".into(),unsafe {libc::geteuid()});
+            st.peer_uids.insert("worker194".into(),bridget_transport::fsutil::effective_uid());
         }
         assert!(matches!(handle_worker_message(&state,"worker194",
             WrapperToDaemon::WorkerHelloWithCapabilities {hello:WorkerHelloWithCapabilities {
@@ -20774,7 +20774,7 @@ for frame in frames: print(json.dumps(frame),flush=True)
         st.registry=AgentRegistry::load_from_path(registry_path).unwrap();
         let (writer,mut reader)=super::super::presence_tests::control_socket("observe185");
         st.connections.insert("worker185".into(),writer);
-        st.peer_uids.insert("worker185".into(),unsafe {libc::geteuid()});
+        st.peer_uids.insert("worker185".into(),bridget_transport::fsutil::effective_uid());
         let state=Arc::new(Mutex::new(st));
         assert!(matches!(handle_worker_message(&state,"worker185",
             WrapperToDaemon::WorkerHelloWithCapabilities {hello:WorkerHelloWithCapabilities {
@@ -21229,7 +21229,7 @@ for frame in frames: print(json.dumps(frame),flush=True)
         {
             let mut st = state.lock().unwrap();
             st.connections.insert("worker171".into(), writer);
-            st.peer_uids.insert("worker171".into(), unsafe { libc::geteuid() });
+            st.peer_uids.insert("worker171".into(), bridget_transport::fsutil::effective_uid());
         }
         assert!(matches!(handle_worker_message(&state, "worker171",
             WrapperToDaemon::WorkerHelloWithCapabilities { hello: WorkerHelloWithCapabilities {
@@ -21330,7 +21330,7 @@ for frame in frames: print(json.dumps(frame),flush=True)
         assert_eq!(view["fleet"]["options"],json!([]));
         assert_eq!(st.registry.routing_catalogue(1).unwrap().options.len(),1,"registre des tâches non muté");
         st.connection_roles.insert("client217".into(),ConnectionRole::Client);
-        st.peer_uids.insert("client217".into(),unsafe {libc::geteuid()});
+        st.peer_uids.insert("client217".into(),bridget_transport::fsutil::effective_uid());
         st.client_negotiations.insert("client217".into(),NegotiatedClient {
             version:CLIENT_CONTRACT_VERSION,issuer_scope:"catalogue217".into(),
             capabilities:vec![ClientCapability::RoutingCatalogueV1],
@@ -21594,7 +21594,7 @@ for frame in frames: print(json.dumps(frame),flush=True)
         let (new_writer,mut new_reader)=super::super::presence_tests::control_socket("reconnect205");
         {
             let mut st=state.lock().unwrap();st.connections.insert("worker205-new".into(),new_writer);
-            st.peer_uids.insert("worker205-new".into(),unsafe {libc::geteuid()});
+            st.peer_uids.insert("worker205-new".into(),bridget_transport::fsutil::effective_uid());
         }
         let accepted=handle_worker_message(&state,"worker205-new",WrapperToDaemon::WorkerHello {hello:WorkerHello {
             version:REMOTE_WORKER_VERSION,identity:worker.clone(),credential:IdentityCredential::new("secret205".into()),

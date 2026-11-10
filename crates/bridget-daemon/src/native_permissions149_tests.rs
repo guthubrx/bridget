@@ -1580,7 +1580,7 @@ fn native171_additional_root_mapping_translates_and_refuses_without_private_inpu
     let private = root.join("worker-private");
     fs::create_dir(&private).unwrap();
     let protected = vec![private];
-    let uid = unsafe { libc::geteuid() };
+    let uid = bridget_transport::fsutil::effective_uid();
     let mapping = crate::registry::ProjectMapping {
         additional_root: Some(crate::registry::AdditionalDirectoryMapping171 {
             source_root: PathBuf::from("/origin171/attachments"),

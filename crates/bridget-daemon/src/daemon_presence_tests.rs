@@ -16487,7 +16487,7 @@
                 .insert(conn.into(), ConnectionRole::Worker);
             state
                 .peer_uids
-                .insert(conn.into(), unsafe { libc::geteuid() });
+                .insert(conn.into(), bridget_transport::fsutil::effective_uid());
         }
         let shared = Arc::new(Mutex::new(state));
         let mut hello = WorkerHello {
@@ -16569,7 +16569,7 @@
             .lock()
             .unwrap()
             .peer_uids
-            .insert("worker-probe".into(), unsafe { libc::geteuid() });
+            .insert("worker-probe".into(), bridget_transport::fsutil::effective_uid());
         assert!(matches!(
             handle_wrapper_message(
                 "worker-probe",
@@ -16604,7 +16604,7 @@
             Instant::now() + Duration::from_secs(1)), Err(WorkerRefusal::CapabilityRequired),
             "aucune nouvelle opération ne part vers un worker sans capacité négociée");
 
-        shared.lock().unwrap().peer_uids.insert("worker-lease".into(), unsafe { libc::geteuid() });
+        shared.lock().unwrap().peer_uids.insert("worker-lease".into(), bridget_transport::fsutil::effective_uid());
         let capabilities = vec![
             WorkerCapability::CandidateProbeV1,
             WorkerCapability::CandidateProbeV2,

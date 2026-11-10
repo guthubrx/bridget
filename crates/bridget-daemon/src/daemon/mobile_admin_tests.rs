@@ -32,7 +32,7 @@
                 },
             );
             st.peer_uids
-                .insert("agent".into(), unsafe { libc::geteuid() });
+                .insert("agent".into(), bridget_transport::fsutil::effective_uid());
             st.conn_names
                 .insert("agent".into(), Uuid::new_v4().to_string());
         }
@@ -172,7 +172,7 @@
             st.connection_roles
                 .insert("human".into(), ConnectionRole::Client);
             st.peer_uids
-                .insert("human".into(), unsafe { libc::geteuid() });
+                .insert("human".into(), bridget_transport::fsutil::effective_uid());
             st.client_negotiations.insert(
                 "human".into(),
                 NegotiatedClient {

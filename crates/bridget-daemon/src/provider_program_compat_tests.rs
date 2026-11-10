@@ -334,7 +334,7 @@
             Err("program_check_unavailable")
         );
         // Real filesystem refusal; tests normally run as the unprivileged worker user.
-        if unsafe { libc::geteuid() } != 0 {
+        if bridget_transport::fsutil::effective_uid() != 0 {
             let parent = home.join(".cache");
             fs::set_permissions(&parent, fs::Permissions::from_mode(0o000)).unwrap();
             let result = validate_upgrade(program.to_str().unwrap(), &source, &digest);

@@ -672,7 +672,7 @@ pub(crate) fn validate_provider_profile_directory(profile: &str, provider: &str)
             ),
         });
     }
-    if metadata.uid() != unsafe { libc::geteuid() } {
+    if metadata.uid() != bridget_transport::fsutil::effective_uid() {
         return Err(SpawnRefusal::EnvUnfit {
             detail: format!(
                 "profil {provider} invalide {}: propriétaire inattendu",

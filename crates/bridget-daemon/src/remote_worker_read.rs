@@ -1124,7 +1124,7 @@ pub(crate) fn live_worker_binding(
     if fs::metadata(&process)
         .map_err(|_| "diagnostic_worker_binding_unavailable")?
         .uid()
-        != unsafe { libc::geteuid() }
+        != bridget_transport::fsutil::effective_uid()
     {
         return Err("diagnostic_worker_binding_unavailable");
     }

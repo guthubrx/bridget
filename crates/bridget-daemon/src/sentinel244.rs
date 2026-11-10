@@ -80,7 +80,7 @@ pub(crate) fn status(state: &Path) -> Value {
             .open(&path)
             .map_err(|_| ())?;
         let meta = file.metadata().map_err(|_| ())?;
-        if !meta.is_file() || meta.uid() != unsafe { libc::geteuid() } || meta.mode() & 0o077 != 0 {
+        if !meta.is_file() || meta.uid() != bridget_transport::fsutil::effective_uid() || meta.mode() & 0o077 != 0 {
             return Err(());
         }
         let mut data = Vec::new();

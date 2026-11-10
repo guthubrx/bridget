@@ -146,7 +146,7 @@ fn proof_path(source: &SourceEnvironment, program: &str) -> Result<PathBuf, &'st
     Ok(root(source)?.join(format!("{:x}.json", Sha256::digest(program.as_bytes()))))
 }
 fn private(m: &fs::Metadata) -> bool {
-    m.uid() == unsafe { libc::geteuid() } && m.mode() & 0o077 == 0 && !m.file_type().is_symlink()
+    m.uid() == bridget_transport::fsutil::effective_uid() && m.mode() & 0o077 == 0 && !m.file_type().is_symlink()
 }
 /// Au-delà de ce délai, un contrôle de compatibilité qui échoue à chaque
 /// essai n'est plus présenté comme en attente.

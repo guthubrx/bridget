@@ -6165,7 +6165,7 @@ fn handle_with_fact_inner(
             let mut st=state.lock().unwrap_or_else(|e|e.into_inner());
             let human=st.connection_roles.get(conn)==Some(&ConnectionRole::Client)
                 && !st.conn_names.contains_key(conn) && !st.auxiliary_connections.contains(conn)
-                && st.peer_uids.get(conn).copied()==Some(unsafe{libc::geteuid()})
+                && st.peer_uids.get(conn).copied()==Some(bridget_transport::fsutil::effective_uid())
                 && st.client_negotiations.get(conn).is_some_and(|n|n.version==CLIENT_CONTRACT_VERSION && n.capabilities.contains(&bridget_transport::protocol::ClientCapability::ProviderCatalogueV1));
             if !human {
                 recheck_attested_thread(&st,conn,thread)?;
@@ -6492,7 +6492,7 @@ fn routing_catalogue_view(st: &DaemonState, conn: &str) -> Result<Value, String>
     if st.connection_roles.get(conn) != Some(&ConnectionRole::Client)
         || st.conn_names.contains_key(conn)
         || st.auxiliary_connections.contains(conn)
-        || st.peer_uids.get(conn).copied() != Some(unsafe { libc::geteuid() })
+        || st.peer_uids.get(conn).copied() != Some(bridget_transport::fsutil::effective_uid())
         || !negotiated
     {
         return Err("capability_unavailable".into());

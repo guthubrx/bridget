@@ -138,7 +138,7 @@ impl ArtifactBlobStore {
             })?;
         let before = file.metadata()?;
         if !before.is_file()
-            || before.uid() != unsafe { libc::geteuid() }
+            || before.uid() != bridget_transport::fsutil::effective_uid()
             || before.mode() & 0o077 != 0
             || before.len() != expected_len
         {

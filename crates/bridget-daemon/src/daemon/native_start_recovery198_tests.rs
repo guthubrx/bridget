@@ -1416,7 +1416,7 @@ fn negotiate198(
     assert!(caps.contains(&WorkerCapability::WorkspaceFailureV1));
     let identity = {
         let mut st = state.lock().unwrap();
-        st.peer_uids.insert(conn.into(), unsafe { libc::geteuid() });
+        st.peer_uids.insert(conn.into(), bridget_transport::fsutil::effective_uid());
         st.connection_roles
             .insert(conn.into(), ConnectionRole::Worker);
         st.remote_workers["cartae"].identity.clone()

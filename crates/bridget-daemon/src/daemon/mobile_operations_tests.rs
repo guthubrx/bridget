@@ -44,7 +44,7 @@
                 .insert("phone".into(), ConnectionRole::Client);
             state
                 .peer_uids
-                .insert("phone".into(), unsafe { libc::geteuid() });
+                .insert("phone".into(), bridget_transport::fsutil::effective_uid());
             state.client_negotiations.insert(
                 "phone".into(),
                 NegotiatedClient {

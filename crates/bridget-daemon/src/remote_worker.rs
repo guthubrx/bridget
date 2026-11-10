@@ -3083,7 +3083,7 @@ fn valid_digest(value: &str) -> bool {
 fn check_private(path: &Path, directory: bool) -> Result<(), WorkerStoreError> {
     let metadata = fs::symlink_metadata(path)?;
     if metadata.file_type().is_symlink()
-        || metadata.uid() != unsafe { libc::geteuid() }
+        || metadata.uid() != bridget_transport::fsutil::effective_uid()
         || metadata.permissions().mode() & 0o077 != 0
         || (directory && !metadata.is_dir())
         || (!directory && (!metadata.is_file() || metadata.nlink() != 1))
@@ -3159,7 +3159,7 @@ fn read_optional<T: DeserializeOwned>(
         .open(path)?;
     let metadata = file.metadata()?;
     if !metadata.is_file()
-        || metadata.uid() != unsafe { libc::geteuid() }
+        || metadata.uid() != bridget_transport::fsutil::effective_uid()
         || metadata.permissions().mode() & 0o077 != 0
         || metadata.nlink() != 1
         || metadata.len() > max as u64

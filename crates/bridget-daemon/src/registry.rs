@@ -1774,7 +1774,7 @@ pub(crate) fn read_private_registry(source: &Path) -> Result<String, String> {
             source.display()
         ));
     }
-    if metadata.uid() != unsafe { libc::geteuid() } {
+    if metadata.uid() != bridget_transport::fsutil::effective_uid() {
         return Err(format!(
             "registre refusé {}: propriétaire inattendu",
             source.display()
@@ -2308,7 +2308,7 @@ fn validate_private_machine_registry_parent(source: &Path) -> Result<(), String>
         std::fs::symlink_metadata(parent).map_err(|_| "machine_registry_parent_unavailable")?;
     if !metadata.is_dir()
         || metadata.file_type().is_symlink()
-        || metadata.uid() != unsafe { libc::geteuid() }
+        || metadata.uid() != bridget_transport::fsutil::effective_uid()
         || metadata.permissions().mode() & 0o077 != 0
     {
         return Err("machine_registry_parent_not_private".into());

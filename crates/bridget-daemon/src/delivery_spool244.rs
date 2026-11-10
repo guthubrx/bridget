@@ -17,7 +17,7 @@ pub(crate) fn private_connection(path: &Path) -> Result<Connection, String> {
         .map_err(|e| e.to_string())?;
     let m = file.metadata().map_err(|e| e.to_string())?;
     if !m.is_file()
-        || m.uid() != unsafe { libc::geteuid() }
+        || m.uid() != bridget_transport::fsutil::effective_uid()
         || m.mode() & 0o077 != 0
         || m.nlink() != 1
     {

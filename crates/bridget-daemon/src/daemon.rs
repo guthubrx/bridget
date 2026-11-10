@@ -2022,7 +2022,7 @@ fn handle_wake_request(
                     .client_negotiations
                     .get(conn_id)
                     .is_some_and(|n| n.version == CLIENT_CONTRACT_VERSION)
-                && st.peer_uids.get(conn_id).copied() == Some(unsafe { libc::geteuid() })
+                && st.peer_uids.get(conn_id).copied() == Some(bridget_transport::fsutil::effective_uid())
             {
                 ("bridget-local-cli".to_owned(), None, false)
             } else {
@@ -14853,7 +14853,7 @@ fn handle_worker_message(
         if let Err(reason) = hello.validate() {
             return refused(reason);
         }
-        if st.peer_uids.get(conn_id).copied() != Some(unsafe { libc::geteuid() }) {
+        if st.peer_uids.get(conn_id).copied() != Some(bridget_transport::fsutil::effective_uid()) {
             return refused(WorkerRefusal::Unauthorized);
         }
         let Some(provision) = st.registry.machines().get(&hello.identity.machine_id) else {

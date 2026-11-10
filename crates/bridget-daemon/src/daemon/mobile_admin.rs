@@ -21,7 +21,7 @@ pub(super) fn handle(
         let valid = st.connection_roles.get(conn_id) == Some(&ConnectionRole::Client)
             && !st.auxiliary_connections.contains(conn_id)
             && !st.conn_names.contains_key(conn_id)
-            && st.peer_uids.get(conn_id).copied() == Some(unsafe { libc::geteuid() })
+            && st.peer_uids.get(conn_id).copied() == Some(bridget_transport::fsutil::effective_uid())
             && st.client_negotiations.get(conn_id).is_some_and(|n| {
                 n.version == CLIENT_CONTRACT_VERSION
                     && n.capabilities.as_slice() == [ClientCapability::MobileAdministrationV1]

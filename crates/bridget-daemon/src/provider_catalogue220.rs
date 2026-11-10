@@ -54,7 +54,7 @@ fn private_dir(path: &Path) -> std::io::Result<()> {
         Ok(m)
             if !m.file_type().is_symlink()
                 && m.is_dir()
-                && m.uid() == unsafe { libc::geteuid() }
+                && m.uid() == bridget_transport::fsutil::effective_uid()
                 && m.mode() & 0o077 == 0 =>
         {
             Ok(())
@@ -722,7 +722,7 @@ fn check_program_schema_inner(
     }
     // Racine exclusive créée ici, arrêt confirmé ; remove_dir_all ne suit pas
     // les liens internes. Aucun cache fournisseur ni répertoire de profil.
-    if std::fs::symlink_metadata(&job).is_ok_and(|m|m.is_dir()&&!m.file_type().is_symlink()&&m.uid()==unsafe{libc::geteuid()}) {
+    if std::fs::symlink_metadata(&job).is_ok_and(|m|m.is_dir()&&!m.file_type().is_symlink()&&m.uid()==bridget_transport::fsutil::effective_uid()) {
         let _=std::fs::remove_dir_all(&job);
     }
     result.map_err(plain)
@@ -778,7 +778,7 @@ fn probe(
     match std::fs::symlink_metadata(&socket) {
         Ok(m)
             if (m.file_type().is_socket() || m.file_type().is_symlink())
-                && m.uid() == unsafe { libc::geteuid() } =>
+                && m.uid() == bridget_transport::fsutil::effective_uid() =>
         {
             std::fs::remove_file(&socket).map_err(|_| plain(CatalogueCause::SourceUnavailable))?;
         }
@@ -860,7 +860,7 @@ fn probe(
         };
         #[cfg(test)]
         eprintln!("metadata220 stage=connected");
-        if crate::daemon::unix_peer_uid(&stream).ok() != Some(unsafe { libc::geteuid() }) {
+        if crate::daemon::unix_peer_uid(&stream).ok() != Some(bridget_transport::fsutil::effective_uid()) {
             return Err(CatalogueCause::SourceUnavailable);
         }
         let mut rpc = Rpc::connect(stream, deadline)?;
@@ -954,7 +954,7 @@ fn probe(
     }
     if let Ok(m) = std::fs::symlink_metadata(&socket)
         && (m.file_type().is_socket() || m.file_type().is_symlink())
-            && m.uid() == unsafe { libc::geteuid() }
+            && m.uid() == bridget_transport::fsutil::effective_uid()
         {
             let _ = std::fs::remove_file(&socket);
         }

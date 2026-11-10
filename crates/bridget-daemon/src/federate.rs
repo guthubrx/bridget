@@ -33,7 +33,7 @@ fn create_script() -> Result<(PathBuf, PathBuf), String> {
     let metadata = fs::symlink_metadata(&directory)
         .map_err(|error| format!("inspection {} : {error}", directory.display()))?;
     if !metadata.is_dir()
-        || metadata.uid() != unsafe { libc::geteuid() }
+        || metadata.uid() != bridget_transport::fsutil::effective_uid()
         || metadata.permissions().mode() & 0o777 != 0o700
         || fs::canonicalize(&directory).ok().as_deref() != Some(directory.as_path())
     {

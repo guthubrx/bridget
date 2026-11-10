@@ -2221,7 +2221,7 @@
             assert!(status.success());
             return;
         }
-        assert_ne!(unsafe { libc::geteuid() }, 0, "recette non privilégiée");
+        assert_ne!(bridget_transport::fsutil::effective_uid(), 0, "recette non privilégiée");
         crate::managed_process::remote_drain::arm().unwrap();
         let root = relay_root("spec221-signaler-unavailable");
         std::fs::create_dir_all(root.join("markers")).unwrap();

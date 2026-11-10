@@ -18,7 +18,7 @@ use std::time::{Duration, Instant};
 fn les_fichiers_naissent_prives_et_le_bootstrap_refuse_les_substitutions() {
     let root = test_root("security-private");
     let daemon = spawn_daemon(&root, None);
-    let uid = unsafe { libc::geteuid() };
+    let uid = bridget_transport::fsutil::effective_uid();
     for entry in fs::read_dir(root.join("state")).unwrap() {
         let meta = entry.unwrap().metadata().unwrap();
         assert_eq!(meta.uid(), uid);

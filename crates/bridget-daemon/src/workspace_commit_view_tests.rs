@@ -1790,7 +1790,7 @@ fn spec221_c19_native_placement_creates_private_sibling_only_after_base_is_known
     assert!(missing.planned_intent().unwrap_err().contains("commit_unavailable"));
     assert!(!data.exists());
     eprintln!("C19_PLACEMENT_OBSERVED {}",serde_json::json!({
-        "uid":unsafe{libc::geteuid()},
+        "uid":bridget_transport::fsutil::effective_uid(),
         "parent_mode":fs::metadata(&f.root).unwrap().mode()&0o777,
         "parent_uid":fs::metadata(&f.root).unwrap().uid(),
         "parent_dev":fs::metadata(&f.root).unwrap().dev(),

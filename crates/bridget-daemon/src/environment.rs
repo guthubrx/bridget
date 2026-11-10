@@ -211,7 +211,7 @@ pub fn validate_private_directory_if_present(path: &Path) -> Result<(), String> 
     validate_path(path)?;
     match fs::symlink_metadata(path) {
         Ok(metadata) => {
-            if !metadata.is_dir() || !is_private_owned(&metadata, unsafe { libc::geteuid() }) {
+            if !metadata.is_dir() || !is_private_owned(&metadata, bridget_transport::fsutil::effective_uid()) {
                 return Err(format!(
                     "répertoire privé 0700 appartenant à l'utilisateur requis : {}",
                     path.display()
@@ -270,7 +270,7 @@ pub fn validate_existing_tree(root: &Path) -> Result<(), String> {
             if metadata.file_type().is_symlink() {
                 return Err(format!("symlink d'état interdit : {}", path.display()));
             }
-            if !is_private_owned(&metadata, unsafe { libc::geteuid() }) {
+            if !is_private_owned(&metadata, bridget_transport::fsutil::effective_uid()) {
                 return Err(format!(
                     "état non privé dans le namespace : {}",
                     path.display()
@@ -295,7 +295,7 @@ pub fn validate_state_file(path: &Path, socket: bool) -> Result<(), String> {
             } else {
                 metadata.is_file()
             };
-            if !valid_type || !is_private_owned(&metadata, unsafe { libc::geteuid() }) {
+            if !valid_type || !is_private_owned(&metadata, bridget_transport::fsutil::effective_uid()) {
                 return Err(format!(
                     "état privé de type/propriétaire valide requis : {}",
                     path.display()
@@ -325,7 +325,7 @@ mod tests {
             .open(&path)
             .unwrap();
         let metadata = file.metadata().unwrap();
-        let actual = unsafe { libc::geteuid() };
+        let actual = bridget_transport::fsutil::effective_uid();
         assert_eq!(metadata.uid(), actual);
         assert!(super::is_private_owned(&metadata, actual));
         // Métadonnées d'un VRAI fichier 0600 ; identité attendue injectée,

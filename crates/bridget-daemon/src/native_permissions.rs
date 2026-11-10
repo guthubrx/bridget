@@ -320,7 +320,7 @@ fn project_policy_directories171(policy: &mut Value, mapping: &crate::registry::
 fn verify_permission_directory171(path: &Path, uid: u32, mode: u32, protected: &[PathBuf]) -> Result<(), String> {
     use std::os::unix::fs::MetadataExt;
     let canonical = crate::registry::validate_unprotected_local_path(path, protected)?;
-    if canonical != path || uid != unsafe { libc::geteuid() } { return Err("permission_mapping_unavailable".into()); }
+    if canonical != path || uid != bridget_transport::fsutil::effective_uid() { return Err("permission_mapping_unavailable".into()); }
     for ancestor in path.ancestors() {
         let m = std::fs::symlink_metadata(ancestor).map_err(|_| "permission_mapping_unavailable")?;
         if !m.is_dir() || m.file_type().is_symlink()
@@ -879,7 +879,7 @@ fn configured_absolute_claude171(command: &str, launcher: &Path) -> Result<bool,
     }
     let mut file = std::fs::File::open(launcher).map_err(|_| unavailable())?;
     let metadata = file.metadata().map_err(|_| unavailable())?;
-    let owner = unsafe { libc::geteuid() };
+    let owner = bridget_transport::fsutil::effective_uid();
     if !metadata.is_file() || (metadata.uid() != owner && metadata.uid() != 0)
         || metadata.mode() & 0o022 != 0 || metadata.mode() & 0o111 == 0 {
         return Err(unavailable());
@@ -1258,7 +1258,7 @@ fn capture_context_with_env_impl(
         // name and installation path need not match any origin computer.
         use std::os::unix::fs::MetadataExt;
         let m = std::fs::metadata(&launcher).map_err(|_| unavailable())?;
-        if !m.is_file() || (m.uid() != unsafe { libc::geteuid() } && m.uid() != 0)
+        if !m.is_file() || (m.uid() != bridget_transport::fsutil::effective_uid() && m.uid() != 0)
             || m.mode() & 0o022 != 0 || m.mode() & 0o111 == 0 { return Err(unavailable()); }
         launcher.clone()
     } else if launcher_revision == TRANSPARENT_GCLAUDE {
@@ -2916,7 +2916,7 @@ fn source_equivalence_manifest(context: &Value, project: &Path) -> Result<Value,
             .ok_or_else(|| equivalence_fail_at(ProjectionGuard::G057))?,
     )
     .map_err(|_| equivalence_fail_at(ProjectionGuard::G058))?;
-    if profile.uid() != unsafe { libc::geteuid() } {
+    if profile.uid() != bridget_transport::fsutil::effective_uid() {
         return Err(equivalence_fail_at(ProjectionGuard::G059));
     }
     let mut rows = Vec::new();

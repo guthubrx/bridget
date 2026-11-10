@@ -2192,7 +2192,7 @@ fn reserve_remote_lineage_fixture(
     st.connection_roles
         .insert("worker162-journal".into(), ConnectionRole::Worker);
     st.peer_uids
-        .insert("worker162-journal".into(), unsafe { libc::geteuid() });
+        .insert("worker162-journal".into(), bridget_transport::fsutil::effective_uid());
     peer
 }
 

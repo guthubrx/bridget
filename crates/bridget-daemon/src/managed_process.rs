@@ -121,7 +121,7 @@ pub(crate) mod remote_drain {
             // Conserver le plafond historique de signalisation. Un UID
             // différent interdit le signal, pas la récolte après les Child.
             match fs::metadata(format!("/proc/{pid}")) {
-                Ok(metadata) if metadata.uid() == unsafe { libc::geteuid() } => {}
+                Ok(metadata) if metadata.uid() == bridget_transport::fsutil::effective_uid() => {}
                 Ok(_) => {
                     failure = Some(io::Error::new(
                         io::ErrorKind::PermissionDenied,
