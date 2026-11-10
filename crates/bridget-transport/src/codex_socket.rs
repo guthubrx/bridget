@@ -27,7 +27,7 @@ pub(crate) fn validate_private_path(path: &Path) -> io::Result<()> {
         })?;
     let metadata = std::fs::symlink_metadata(parent)?;
     if !metadata.is_dir()
-        || metadata.uid() != unsafe { libc::geteuid() }
+        || metadata.uid() != crate::fsutil::effective_uid()
         || metadata.mode() & 0o077 != 0
     {
         return Err(io::Error::new(

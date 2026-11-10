@@ -65,7 +65,7 @@ pub fn read_guarded_hook_profile_manifest(context: &Value) -> Result<Value, Stri
     let descriptor = &w["profile"];
     let manifest_path = descriptor[format!("{side}_path")].as_str().ok_or_else(fail)?;
     let m = std::fs::metadata(manifest_path).map_err(|_| fail())?;
-    if !m.is_file() || m.len() > 8*1024*1024 || m.uid() != unsafe { libc::geteuid() } || m.mode() & 0o077 != 0 {
+    if !m.is_file() || m.len() > 8*1024*1024 || m.uid() != crate::fsutil::effective_uid() || m.mode() & 0o077 != 0 {
         return Err(fail());
     }
     let bytes = std::fs::read(manifest_path).map_err(|_| fail())?;

@@ -634,7 +634,7 @@ fn read_private_file_detailed(path: &Path) -> Result<String, PolicyFileLoadError
     if !metadata.is_file() {
         return Err(PolicyFileLoadError::UnsupportedType);
     }
-    if metadata.uid() != unsafe { libc::geteuid() }
+    if metadata.uid() != crate::fsutil::effective_uid()
         || metadata.permissions().mode() & 0o077 != 0
         || metadata.len() > MAX_POLICY_BYTES
     {
@@ -786,7 +786,7 @@ pub fn verify_private_regular_file(file: &File) -> std::io::Result<()> {
     if !metadata.is_file() {
         return Err(std::io::Error::other("fichier régulier requis"));
     }
-    if metadata.uid() != unsafe { libc::geteuid() } {
+    if metadata.uid() != crate::fsutil::effective_uid() {
         return Err(std::io::Error::other("propriétaire inattendu"));
     }
     let mode = metadata.permissions().mode() & 0o777;
