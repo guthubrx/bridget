@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.8.26
+
+- Les erreurs du contrôle préalable MCP indiquent que la commande n’a pas été transmise, avec l’étape constatée et la conservation des reçus antérieurs. Aucun délai ni droit changé.
+
 ## 0.8.25 — 2026-11-10
 
 - Piloter un enfant existant depuis sa conversation humaine : envoi, guidage, interruption et sélection confirmée du modèle/effort selon les capacités de sa session.

@@ -31,7 +31,7 @@ pub(crate) const WAIT_TIMEOUT_DEFAULT_SECS: u64 = 600;
 pub(crate) const WAIT_TIMEOUT_MAX_SECS: u64 = 3600;
 
 /// Validation commune des deux outils d'attente : forme JSON puis bornes métier.
-fn pre_dispatch_failure(error:ClientError, stage:&str, args:&Value)->ClientError {
+pub(crate) fn pre_dispatch_failure(error:ClientError, stage:&str, args:&Value)->ClientError {
     match error {
         ClientError::Technical{code,message} if matches!(code,"daemon_unreachable"|"outcome_unknown") => {
             let reference=args.get("task_id").and_then(Value::as_str).map(|id|format!("task_id={id}"))
@@ -2031,6 +2031,7 @@ mod tests {
                 "model",
                 "posture",
                 "project_id",
+                "quota_fallback_authorized",
                 "reply_timeout",
                 "request_id",
                 "resume_on_limit",

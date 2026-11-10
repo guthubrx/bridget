@@ -805,9 +805,21 @@ fn execute_tool_at_with_identity_once(
     }
     // Un échange authentifié par credential+instance lit la tâche sur le daemon.
     // for_child utilise l'index149 mesuré en T017, sans stockage ou cache client.
-    let mut scope_connection = registered_connection(principal, instance_id, socket)?;
+    let mut scope_connection = registered_connection(principal, instance_id, socket).map_err(|error| {
+        crate::delegation_mcp::pre_dispatch_failure(
+            error,
+            "raccordement préalable au plafond MCP",
+            &Value::Object(arguments.clone()),
+        )
+    })?;
     let caller_read_only = match scope_connection.exchange(&WrapperToDaemon::NativeDelegation {
         request: bridget_transport::protocol::NativeDelegationRequest::CallerScope {},
+    }).map_err(|error| {
+        crate::delegation_mcp::pre_dispatch_failure(
+            error,
+            "lecture préalable du plafond MCP",
+            &Value::Object(arguments.clone()),
+        )
     })? {
         DaemonToWrapper::NativeDelegationResult { result }
             if result.as_object().is_some_and(|object| object.len() == 2)
@@ -3723,6 +3735,52 @@ mod tests {
     }
 
     #[test]
+    fn spec259_ack_scope_timeout_is_pre_dispatch_without_ack() {
+        use std::os::fd::AsRawFd;
+        let socket = test_socket("259-scope-timeout");
+        let listener = UnixListener::bind(&socket).unwrap();
+        let server = thread::spawn(move || {
+            let (mut reader, writer) = registered196(&listener);
+            assert!(matches!(read_command(&mut reader), WrapperToDaemon::NativeDelegation {
+                request: bridget_transport::protocol::NativeDelegationRequest::CallerScope {}
+            }));
+            reader.get_ref().set_read_timeout(Some(Duration::from_secs(15))).unwrap();
+            // Le client doit fermer à son échéance, sans jamais envoyer l'ACK.
+            assert_eq!(reader.read_line(&mut String::new()).unwrap(), 0);
+            drop(writer);
+            let mut fd = libc::pollfd { fd: listener.as_raw_fd(), events: libc::POLLIN, revents: 0 };
+            assert_eq!(unsafe { libc::poll(&mut fd, 1, 100) }, 0, "aucune nouvelle connexion");
+        });
+        let args = json!({"task_ids":["task259"]});
+        let start = std::time::Instant::now();
+        let error = execute_tool_at("owner", "bridget_task_ack", args.as_object().unwrap(), &socket).unwrap_err();
+        assert!(start.elapsed() >= crate::communication::client::DAEMON_BUDGET);
+        assert!(matches!(error, ToolError::Technical { code:"daemon_unreachable", message }
+            if message.contains("budget JSONL dépassé")
+                && message.contains("lecture préalable du plafond MCP")
+                && message.contains("n'a pas été transmise")
+                && message.contains("tout reçu antérieur")
+                && message.contains("cause précise du retard reste inconnue")));
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn spec259_scope_disconnect_guides_read_and_ack_before_dispatch() {
+        for (name, args) in [
+            ("bridget_task_ack", json!({"task_ids":["task259"]})),
+            ("bridget_task_status", json!({"task_id":"task259"})),
+        ] {
+            let socket = test_socket(name);
+            let listener = UnixListener::bind(&socket).unwrap();
+            let server = thread::spawn(move || drop_scope196(&listener));
+            let error = execute_tool_at("owner", name, args.as_object().unwrap(), &socket).unwrap_err();
+            assert!(matches!(error, ToolError::Technical { code:"daemon_unreachable", message }
+                if message.contains("lecture préalable du plafond MCP") && message.contains("n'a pas été transmise")));
+            server.join().unwrap();
+        }
+    }
+
+    #[test]
     fn native151_ack_facade_schema_ferme_bornes_et_annotations() {
         let catalogue = tools();
         let ack = catalogue
@@ -5523,7 +5581,7 @@ mod tests {
             .next()
             .expect("bras fermés du répartiteur");
         let mut commands = BTreeSet::new();
-        for line in dispatch.lines().filter(|line| line.contains("=>")) {
+        for line in dispatch.lines().filter(|line| line.starts_with("        \"") && line.contains("=>")) {
             let left = line.split("=>").next().unwrap();
             for quoted in left.split('"').skip(1).step_by(2) {
                 commands.insert(quoted);
