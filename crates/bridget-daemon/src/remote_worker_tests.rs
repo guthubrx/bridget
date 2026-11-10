@@ -6150,7 +6150,7 @@ while not stop.exists(): time.sleep(.01)
     }
 
     /// Schémas copiés de 7478e9e7 (183) : tout champ inconnu ou délai incohérent échoue.
-    #[allow(dead_code)]
+    #[expect(dead_code, reason = "schéma copié de 7478e9e7 : les champs sont seulement désérialisés")]
     #[derive(Deserialize)]
     #[serde(deny_unknown_fields)]
     struct Legacy183Command {
@@ -6167,7 +6167,7 @@ while not stop.exists(): time.sleep(.01)
         #[serde(default)] routing: Option<RoutingPreparation>,
         created_at: i64, updated_at: i64,
     }
-    #[allow(dead_code)]
+    #[expect(dead_code, reason = "schéma copié de 7478e9e7 : les champs sont seulement désérialisés")]
     #[derive(Deserialize)]
     #[serde(deny_unknown_fields)]
     struct Legacy183Workspace {

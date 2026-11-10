@@ -156,7 +156,7 @@
         // Forme exacte du lecteur antérieur : matrice fermée à trois champs.
         #[derive(serde::Deserialize)]
         #[serde(deny_unknown_fields)]
-        #[allow(dead_code)]
+        #[expect(dead_code, reason = "schéma hérité désérialisé pour vérifier le refus des champs inconnus ; ses champs ne sont pas lus")]
         struct LegacyCapabilities {
             #[serde(default)] execution_paths:Vec<String>,
             #[serde(default)] models:serde_json::Value,

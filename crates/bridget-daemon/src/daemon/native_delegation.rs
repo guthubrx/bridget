@@ -3894,7 +3894,7 @@ struct WorkspaceReservation {
     task_id: String,
     owner_instance: String,
     // Lu par le banc de capacité 154 (union des chemins réservés).
-    #[cfg_attr(not(test), allow(dead_code))]
+    #[cfg_attr(not(test), expect(dead_code, reason = "lu par le banc de capacité 154 ; non utilisé en production"))]
     path: PathBuf,
 }
 

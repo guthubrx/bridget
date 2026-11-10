@@ -89,7 +89,7 @@ pub(crate) struct WorkspacePreflight {
     pub branch: Option<String>,
     pub base_commit: String,
     // Lu par les bancs d'inventaire (bornes de 127 chemins) ; non utilisé en production.
-    #[cfg_attr(not(test), allow(dead_code))]
+    #[cfg_attr(not(test), expect(dead_code, reason = "lu par les bancs d'inventaire ; non utilisé en production"))]
     pub listed_paths: Vec<PathBuf>,
 }
 

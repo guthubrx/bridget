@@ -2360,7 +2360,7 @@ pub(crate) fn observed_fact(
 // Numérotation stable des diagnostics : un code retiré n'est jamais réattribué.
 // G003, G072 et G078 (route gardée retirée en 243) ne sont plus produits ;
 // G001 sert de témoin aux bancs. ALL et code() gardent les 83 entrées.
-#[allow(dead_code)]
+#[cfg_attr(not(test), expect(dead_code, reason = "variantes gardées pour l'inventaire des 83 gardes ; G001 sert de témoin aux bancs"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ProjectionGuard {
     G001,

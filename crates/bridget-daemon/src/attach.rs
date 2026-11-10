@@ -553,7 +553,6 @@ const KEYBOARD_PROTOCOL_POP: &[u8] = b"\x1b[<u";
 /// Garde minimale du terminal d'entrée. Le mode désactive le traitement des
 /// signaux afin que Ctrl-C arrive comme l'octet `0x03` à la boucle de saisie.
 /// Ainsi la boucle peut restaurer le terminal avant de quitter.
-#[allow(dead_code)] // La boucle de saisie T806b en devient le propriétaire.
 struct RawTerminal {
     fd: RawFd,
     original: libc::termios,
@@ -561,7 +560,7 @@ struct RawTerminal {
     restored: bool,
 }
 
-#[allow(dead_code)] // API utilisée par la boucle T806b et les pseudo-TTY de T806a.
+#[expect(dead_code, reason = "code réservé à la boucle T806b, conservé par décision D12 (programme 260) : API utilisée par la boucle T806b et les pseudo-TTY de T806a")]
 impl RawTerminal {
     fn enable_for_fd(fd: RawFd) -> Result<Option<Self>, String> {
         Self::enable_for_fds(fd, fd)
@@ -699,7 +698,6 @@ impl Drop for RawTerminal {
     }
 }
 
-#[allow(dead_code)] // Le mode dégradé sera appelé par la boucle T806b.
 fn with_raw_terminal<T>(
     input_fd: RawFd,
     output_fd: RawFd,
