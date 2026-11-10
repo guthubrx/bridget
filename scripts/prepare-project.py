@@ -59,8 +59,8 @@ def no_links(path):
     for item in reversed((path, *path.parents)):
         try:
             require(not item.is_symlink(), "project_preparation_symlink")
-        except OSError:
-            raise Refused("project_preparation_path")
+        except OSError as exc:
+            raise Refused("project_preparation_path") from exc
     return path
 
 def private_dir(path):
@@ -83,10 +83,10 @@ def locked(path, wait=0.0):
             try:
                 fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
                 break
-            except BlockingIOError:
+            except BlockingIOError as exc:
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
-                    raise Refused("project_preparation_source_busy" if wait else "project_preparation_busy")
+                    raise Refused("project_preparation_source_busy" if wait else "project_preparation_busy") from exc
                 time.sleep(min(0.05, remaining))
         yield
 

@@ -834,7 +834,7 @@ def main():
         code = error.code if isinstance(error, Refused) else 'permission_hook_profile_unavailable'
         entry = error.entry if isinstance(error, Refused) else ''
         print(json.dumps({'status': 'refused', 'code': code, 'entry': entry}, separators=(',', ':')), file=sys.stderr)
-        raise SystemExit(2)
+        raise SystemExit(2) from error
 
 if __name__ == '__main__':
     main()

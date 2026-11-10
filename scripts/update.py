@@ -208,8 +208,8 @@ def client_check(binary, validator):
         if valid_code or json.loads(valid_raw) != {"valid": True}:
             raise ValueError("report")
         return report
-    except (OSError, subprocess.TimeoutExpired, ValueError):
-        raise Refused("update_client_check_unavailable")
+    except (OSError, subprocess.TimeoutExpired, ValueError) as exc:
+        raise Refused("update_client_check_unavailable") from exc
 
 
 def storage_check(binary, validator):
@@ -239,9 +239,9 @@ def storage_check(binary, validator):
     except Refused as error:
         if str(error) == "update_storage_reader_incompatible":
             raise
-        raise Refused("update_storage_reader_unverified")
-    except (OSError, subprocess.SubprocessError, ValueError):
-        raise Refused("update_storage_reader_unverified")
+        raise Refused("update_storage_reader_unverified") from error
+    except (OSError, subprocess.SubprocessError, ValueError) as exc:
+        raise Refused("update_storage_reader_unverified") from exc
 
 
 def extract_binary(archive, member, destination):
@@ -275,8 +275,8 @@ def rpc(binary, *args):
         raise Refused("update_response_invalid")
     try:
         value = json.loads(raw)
-    except (ValueError, UnicodeError):
-        raise Refused("update_daemon_unavailable")
+    except (ValueError, UnicodeError) as exc:
+        raise Refused("update_daemon_unavailable") from exc
     if result.returncode or value.get("status") != "ok":
         raise Refused(value.get("code", "update_daemon_unavailable"))
     return value
@@ -322,8 +322,8 @@ def setup(home, root, host, services):
     with os.fdopen(fd, "w") as lock:
         try:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError:
-            raise Refused("update_setup_watcher_busy")
+        except BlockingIOError as exc:
+            raise Refused("update_setup_watcher_busy") from exc
         if private_json(root / "update-host-state.json", {}).get("activation"):
             raise Refused("update_activation_active")
         old = private_json(root / "update-host.json")
@@ -686,7 +686,7 @@ class Updater:
             # Releasing the barrier is the final activation action; no rollback after this.
             switched = False
             rpc(self.binary, "finish", token)
-        except Exception:
+        except Exception as exc:
             if switched:
                 # The candidate may already have written data that the old reader
                 # cannot handle. Keep the durable activation if proof is missing.
@@ -694,7 +694,7 @@ class Updater:
                 switch_link(self.link, old)
                 restart(self.system, self.services, time.monotonic() + 35)
                 if not healthy(self.system, self.services, self.link, binary_version(old), time.monotonic() + 15):
-                    raise Refused("update_rollback_unconfirmed")
+                    raise Refused("update_rollback_unconfirmed") from exc
                 self.save(activation=None, failed_version=v)
                 self.report("rolled_back", v)
             raise

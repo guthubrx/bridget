@@ -1,8 +1,6 @@
 """Réparer une copie manquante d’une autorisation, sans en inventer."""
-import copy
 import importlib.util
 import json
-import os
 from pathlib import Path
 import tempfile
 import unittest
