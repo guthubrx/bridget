@@ -831,9 +831,8 @@ fn busy_turn_is_stale(presence: &Presence, ttl_secs: u64, now: Instant) -> bool 
     }
     let start = if presence.turn_attest {
         // Le délai n'expire pas un tour que le porteur réatteste encore.
-        if !presence
-            .last_attested_at
-            .is_some_and(|at| now.saturating_duration_since(at) > Duration::from_secs(90))
+        if presence
+            .last_attested_at.is_none_or(|at| now.saturating_duration_since(at) <= Duration::from_secs(90))
         {
             return false;
         }
@@ -3173,7 +3172,7 @@ fn observer_return_tick(state: &Arc<Mutex<DaemonState>>, now: i64, clock: Instan
                         presence.name == owner
                             && !crate::agent_tracking::dormant(st.store.connection(), &owner).unwrap_or(true)
                             && matches!(presence.state.as_str(), "connected" | "busy")
-                            && !presence.dnd_until.is_some_and(|until| clock < until),
+                            && presence.dnd_until.is_none_or(|until| clock >= until),
                     )
                 })
                 .unwrap_or(false);
@@ -5445,10 +5444,9 @@ impl DaemonState {
             .ok_or_else(|| "présence de l'équipier introuvable".to_string())?;
         if presence.turn_attest {
             let owner = presence.name.clone();
-            if !self
+            if self
                 .router
-                .get_agent(&owner)
-                .is_some_and(|route| route.connection_id == conn_id)
+                .get_agent(&owner).is_none_or(|route| route.connection_id != conn_id)
             {
                 return Err("signal de tour d’une ancienne connexion".into());
             }
@@ -7462,9 +7460,8 @@ fn handle_connection(
                 });
             if display_name_kind.as_deref() == Some("HumanLineage")
                 && (decode::<WrapperToDaemon>(line).is_err()
-                    || !serde_json::from_str::<serde_json::Value>(line)
-                        .ok()
-                        .is_some_and(|v| v.as_object().is_some_and(|o| o.len() == 2)))
+                    || serde_json::from_str::<serde_json::Value>(line)
+                        .ok().is_none_or(|v| v.as_object().is_none_or(|o| o.len() != 2)))
             {
                 writeln!(
                     my_writer,

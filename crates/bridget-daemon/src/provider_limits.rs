@@ -392,7 +392,7 @@ impl ProviderLimits {
             let Some(reset) = seen.fact.resets_at else {
                 continue;
             };
-            if reset <= now && !past_since.is_some_and(|at| seen.observed_at >= at) {
+            if reset <= now && past_since.is_none_or(|at| seen.observed_at < at) {
                 continue;
             }
             // La fenêtre reste épuisée ; seuls les crédits attestés dans cette

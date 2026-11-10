@@ -748,7 +748,7 @@ pub fn permission_marketplace_revision171(path: &std::path::Path, max_bytes: u64
     for row in value.as_object_mut().ok_or_else(fail)?.values_mut() {
         let row = row.as_object_mut().ok_or_else(fail)?;
         if let Some(stamp) = row.get("lastUpdated") {
-            if !stamp.as_str().is_some_and(|s| s.len() <= 64) { return Err(fail()); }
+            if stamp.as_str().is_none_or(|s| s.len() > 64) { return Err(fail()); }
             row.remove("lastUpdated");
         }
     }
@@ -1071,8 +1071,8 @@ pub fn validate_permission_source_equivalence(context: &Value) -> Result<(), Str
             let binding = &witness["binding"];
             if !equivalence_keys(binding, &["parent_revision", "parent_run_id", "parent_session_id", "parent_instance_id",
                 "parent_digest", "child_policy_digest", "source_host", "source_root", "remote_root", "mapping_revision", "source_identity"])
-                || !binding["parent_revision"].as_u64().is_some_and(|v| v > 0)
-                || !binding["mapping_revision"].as_u64().is_some_and(|v| v > 0)
+                || binding["parent_revision"].as_u64().is_none_or(|v| v <= 0)
+                || binding["mapping_revision"].as_u64().is_none_or(|v| v <= 0)
                 || !equivalence_path(&binding["source_root"]) || !equivalence_path(&binding["remote_root"])
                 || !equivalence_digest_value(&binding["parent_digest"]) || !equivalence_digest_value(&binding["child_policy_digest"])
                 || ["parent_run_id","parent_session_id","parent_instance_id","source_host","source_identity"].iter().any(|key|

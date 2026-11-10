@@ -258,9 +258,8 @@ pub(crate) fn is_native_projection(thread: &Value) -> Result<bool, ContractError
         || !marker["rootThreadId"].as_str().is_some_and(|s| {
             !s.is_empty() && s.len() <= 2048 && !s.chars().any(bridget_core::is_disallowed_control)
         })
-        || !marker["seq"]
-            .as_u64()
-            .is_some_and(|n| n <= bridget_transport::protocol::HUMAN_LINEAGE_MAX_SEQ)
+        || marker["seq"]
+            .as_u64().is_none_or(|n| n > bridget_transport::protocol::HUMAN_LINEAGE_MAX_SEQ)
         || !marker["status"].as_str().is_some_and(|s| {
             matches!(
                 s,

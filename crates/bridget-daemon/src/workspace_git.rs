@@ -503,7 +503,7 @@ fn capture_with_objects(cwd: &Path, args: &[&str], timeout: Duration,
             });
         if !output.success()
             || output.truncated
-            || !version.is_some_and(|version| version >= (2, 44))
+            || version.is_none_or(|version| version < (2, 44))
         {
             return Err("workspace_git_unsupported: Git 2.44 ou plus est requis".into());
         }

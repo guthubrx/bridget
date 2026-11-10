@@ -2579,9 +2579,8 @@ fn normalize_child_provider_request(
                         | "reason"
                         | "kind"
                 )
-            }) || !params
-                .get("startedAtMs")
-                .is_some_and(|value| value.as_i64().is_some())
+            }) || params
+                .get("startedAtMs").is_none_or(|value| value.as_i64().is_none())
                 || ["approvalId", "cwd", "reason"].iter().any(|key| {
                     params
                         .get(*key)
@@ -2707,7 +2706,7 @@ fn normalize_child_provider_request(
                             let list = list.as_array().ok_or("details_incomplete")?;
                             if list.len() > 64
                                 || list.iter().any(|path| {
-                                    !path.as_str().is_some_and(|path| path.len() <= 1024)
+                                    path.as_str().is_none_or(|path| path.len() > 1024)
                                 })
                             {
                                 return Err("details_incomplete");

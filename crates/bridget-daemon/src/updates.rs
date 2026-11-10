@@ -305,7 +305,7 @@ impl Gate {
     }
     pub(crate) fn finish(&self, token: &str) -> Result<Value, &'static str> {
         let mut i = self.inner.lock().map_err(|_| "update_state_unavailable")?;
-        if !i.lease.as_ref().is_some_and(|l| l.token == token) {
+        if i.lease.as_ref().is_none_or(|l| l.token != token) {
             return Err("update_lease_mismatch");
         }
         match fs::remove_file(&self.path) {

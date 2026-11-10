@@ -158,7 +158,7 @@ pub(super) fn contextual_refusal(encoded: &str) -> Value {
         .filter(|v|!v.is_empty() && v.len()<=16) else { return fallback(); };
     let mut previous: Option<&str> = None;
     for check in checks {
-        if !check.as_object().is_some_and(|v|v.len()==2) { return fallback(); }
+        if check.as_object().is_none_or(|v| v.len() != 2) { return fallback(); }
         let Some(machine) = check["machine_id"].as_str()
             .filter(|v|v.len()<=256 && bridget_core::host_is_attested(v)
                 && v.bytes().all(|b|b.is_ascii_alphanumeric()||matches!(b,b'.'|b'-'|b'_'))) else { return fallback(); };

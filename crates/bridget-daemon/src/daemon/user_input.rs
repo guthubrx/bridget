@@ -15,10 +15,9 @@ pub(super) fn live(st: &DaemonState, row: &Value) -> bool {
         return false;
     };
     if matches!(row["origin"].as_str(), Some("codex" | "claude"))
-        && !st
+        && st
             .presences
-            .get(row["instance"].as_str().unwrap_or(""))
-            .is_some_and(|p| p.state == "busy")
+            .get(row["instance"].as_str().unwrap_or("")).is_none_or(|p| p.state != "busy")
     {
         return false;
     }
@@ -421,11 +420,10 @@ pub(super) fn primary_request(
                 .is_none_or(|(fact, _)| fact.provider_session_id == request.provider_session))
         && !st.auxiliary_connections.contains(conn)
         && live_connection_identity(st, conn).is_some_and(|(_, i)| {
-            !st.fleet
+            st.fleet
                 .agent_link_for_child(&i)
                 .ok()
-                .flatten()
-                .is_some_and(|l| l.role == "native_delegate")
+                .flatten().is_none_or(|l| l.role != "native_delegate")
         })
 }
 pub(super) fn receive_native(

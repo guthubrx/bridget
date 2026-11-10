@@ -42,8 +42,8 @@ pub fn validate_guarded_hook_witness(context: &Value) -> Result<(), String> {
         if !keys(b, &["parent_revision","parent_run_id","parent_session_id","parent_instance_id",
                      "parent_digest","child_policy_digest","source_host","source_root","remote_root",
                      "mapping_revision","source_identity"])
-            || !b["parent_revision"].as_u64().is_some_and(|n| n > 0)
-            || !b["mapping_revision"].as_u64().is_some_and(|n| n > 0)
+            || b["parent_revision"].as_u64().is_none_or(|n| n <= 0)
+            || b["mapping_revision"].as_u64().is_none_or(|n| n <= 0)
             || !digest(&b["parent_digest"]) || !digest(&b["child_policy_digest"])
             || !path(&b["source_root"]) || !path(&b["remote_root"])
             || ["parent_run_id","parent_session_id","parent_instance_id","source_host","source_identity"].iter()

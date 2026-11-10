@@ -480,7 +480,7 @@ impl ManagedSession for ClaudeStreamJsonTransport {
             .ok_or_else(||TransportError::DeliveryFailed("request_unknown".into()))?;
         let (request, uncertain) = &pending[index];
         if *uncertain { return Err(TransportError::Io("child_request_write_uncertain: attente déjà incertaine".into())); }
-        if !self.queue.0.lock().unwrap_or_else(|e| e.into_inner()).active.as_ref().is_some_and(|a| a.message_id == request.turn_id) {
+        if self.queue.0.lock().unwrap_or_else(|e| e.into_inner()).active.as_ref().is_none_or(|a| a.message_id != request.turn_id) {
             return Err(TransportError::DeliveryFailed("request_unlinked".into()));
         }
         let frame = claude_user_input_response(request, answer)?;

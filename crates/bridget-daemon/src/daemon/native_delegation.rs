@@ -849,7 +849,7 @@ fn valid_probe_targets(targets: &[Value], reasons: &[Value]) -> bool {
     let mut previous=None;
     let mut sums=BTreeMap::<(&str,&str),u64>::new();
     for target in targets {
-        if !target.as_object().is_some_and(|o|o.len()==4) {return false;}
+        if target.as_object().is_none_or(|o| o.len() != 4) {return false;}
         let (Some(machine),Some(kind),Some(code),Some(count))=(target["machine_id"].as_str(),
             target["kind"].as_str(),target["code"].as_str(),target["candidates"].as_u64())
             else {return false;};
@@ -8810,7 +8810,7 @@ fn admit_delegate(
         let frozen_cwd = if let WorkspacePass::Remote { prepared, .. } = pass {
             let parent = fact.as_ref().ok_or("permission_attestation_unavailable")?;
             let expected_origin=if matches!(workspace,Some(WorkspaceRequest::CommitView {})) {
-                if !auto_receipt.is_some_and(|receipt|receipt.metadata_version==2) {
+                if auto_receipt.is_none_or(|receipt| receipt.metadata_version != 2) {
                     return Err("expected_base_commit_required".into());
                 }
                 let machine=machine_id.as_ref().ok_or("remote_placement_invalid")?;

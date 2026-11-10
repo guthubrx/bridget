@@ -349,8 +349,7 @@ fn check_profile_additional_root171(profile: &Value, mapping: &crate::registry::
 fn check_parent_additional_root171(parent: &ProviderPermissions, profile: &Value) -> Result<(), String> {
     if let Some(extra) = profile["mapping"].get("additional_root") {
         let root = extra["source_root"].as_str().ok_or_else(|| "permission_hook_equivalence_unavailable".to_owned())?;
-        if !parent.provider_policy["additional_directories"].as_array().is_some_and(|paths|
-            paths.iter().filter(|path| path.as_str() == Some(root)).count() == 1) {
+        if parent.provider_policy["additional_directories"].as_array().is_none_or(|paths| paths.iter().filter(|path| path.as_str() == Some(root)).count() != 1) {
             return Err("permission_hook_equivalence_unavailable".to_owned());
         }
     }
@@ -2831,7 +2830,7 @@ fn equivalence_settings(value: &Value, project: &Path, context: &Value) -> Resul
                         || hook.get("type") != Some(&json!("command"))
                         || hook
                             .get("timeout")
-                            .is_some_and(|v| !v.as_u64().is_some_and(|n| n <= 600))
+                            .is_some_and(|v| v.as_u64().is_none_or(|n| n > 600))
                     {
                         return Err(equivalence_fail_at(ProjectionGuard::G044));
                     }
