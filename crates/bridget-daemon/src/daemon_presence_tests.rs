@@ -5539,7 +5539,7 @@
     }
 
     #[test]
-    #[ignore]
+    #[ignore = "processus enfant lancé par un autre test (variable T908_DAEMON_CHILD_ENV) ; sans effet lancé seul"]
     fn recovery_daemon_child() {
         if std::env::var(T908_DAEMON_CHILD_ENV).ok().as_deref() != Some("1") {
             return;

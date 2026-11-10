@@ -646,7 +646,7 @@ mod arret_tests {
     }
 
     #[test]
-    #[ignore]
+    #[ignore = "processus enfant lancé par un autre test (variable ADAPTATEUR_CHILD_ENV) ; sans effet lancé seul"]
     fn adaptateur_d_arret_child() {
         if std::env::var(ADAPTATEUR_CHILD_ENV).ok().as_deref() != Some("1") {
             return;
@@ -21261,7 +21261,7 @@ mod signal_disposition_tests {
     /// Enfant de l'oracle : emprunte le chemin d'installation des signaux du
     /// daemon (no-op sous `cfg(test)`), puis reste vivant jusqu'à un TERM.
     #[test]
-    #[ignore]
+    #[ignore = "processus enfant lancé par un autre test (variable CHILD_ENV) ; sans effet lancé seul"]
     fn signal_disposition_child() {
         if std::env::var(CHILD_ENV).ok().as_deref() != Some("1") {
             return;

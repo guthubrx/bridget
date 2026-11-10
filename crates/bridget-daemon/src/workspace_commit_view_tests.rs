@@ -1021,7 +1021,7 @@ fn spec221_c19_export_submode_requires_managed_context_before_reading_proof_path
 }
 
 #[test]
-#[ignore]
+#[ignore = "processus enfant lancé par un autre test (variable B221_VIEW_PROOFS) ; sans effet lancé seul"]
 fn c19_export_child() {
     let Some(root) = std::env::var_os("B221_VIEW_PROOFS") else {
         return;

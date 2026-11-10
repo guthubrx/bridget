@@ -278,7 +278,7 @@ while True: time.sleep(.02)
     }
 
     #[test]
-    #[ignore]
+    #[ignore = "processus enfant lancé par un autre test (variable BOOTSTRAP_CHILD_ENV) ; sans effet lancé seul"]
     fn bootstrap_child() {
         if std::env::var(BOOTSTRAP_CHILD_ENV).ok().as_deref() != Some("1") {
             return;
@@ -315,7 +315,7 @@ while True: time.sleep(.02)
     }
 
     #[test]
-    #[ignore]
+    #[ignore = "processus enfant lancé par un autre test (variable FD_PROBE_ENV) ; sans effet lancé seul"]
     fn fd_probe_child() {
         if std::env::var(FD_PROBE_ENV).ok().as_deref() != Some("1") {
             return;
@@ -346,7 +346,7 @@ while True: time.sleep(.02)
     }
 
     #[test]
-    #[ignore]
+    #[ignore = "processus enfant lancé par un autre test (variable BRIDGET_TEST_BOOTSTRAP_ERROR162) ; sans effet lancé seul"]
     fn bootstrap_error_child() {
         let Ok(mode) = std::env::var("BRIDGET_TEST_BOOTSTRAP_ERROR162") else {
             return;
@@ -760,7 +760,7 @@ while True: time.sleep(.02)
     }
 
     #[test]
-    #[ignore]
+    #[ignore = "processus enfant lancé par un autre test (variable CONTROLLER_ENV) ; sans effet lancé seul"]
     fn crash_controller_child() {
         if std::env::var(CONTROLLER_ENV).ok().as_deref() != Some("1") {
             return;
