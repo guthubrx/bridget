@@ -1,6 +1,6 @@
 # Tâches 260 - Assainissement du code et du dépôt
 
-Statut : In Progress. 16 tâches cochées sur 157 (T001, T006, T025 à T035, T125 à T127). L'implémentation est hors de ce tour (demande de François, 10 novembre 2026).
+Statut : In Progress. 18 tâches cochées sur 157 (T001, T006, T025 à T035, T125 à T127, T141, T142). L'implémentation est hors de ce tour (demande de François, 10 novembre 2026).
 Spécification : `spec.md`. Plan : `plan.md`. Règles : `contracts/regles-implementeur.md`. Portes : `decisions.md`. Démarrage et clôture : `quickstart.md`.
 
 ## Comment lire ce fichier
@@ -199,8 +199,8 @@ Spécification : `spec.md`. Plan : `plan.md`. Règles : `contracts/regles-implem
 
 ## Lot 15 - Proposition de signature (guide : `guides/lot-15-signature.md`)
 
-- [ ] T141 [L15] [D8] Rédiger `validation/lot15-proposition-signature.md` (constat, options A/B/C, décision demandée).
-- [ ] T142 [L15] Porte : rien hors `specs/` modifié ; D8 reste en attente ; bilan ; fin de lot.
+- [x] T141 [L15] [D8] Rédiger `validation/lot15-proposition-signature.md` (constat, options A/B/C, décision demandée).
+- [x] T142 [L15] Porte : rien hors `specs/` modifié ; D8 reste en attente ; bilan ; fin de lot.
 
 ## Lot 16 - Écrans Android séparés (guide : `guides/lot-16-android.md`)
 

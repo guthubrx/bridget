@@ -10,6 +10,7 @@ Statut du programme : In Progress. Règles : `contracts/regles-implementeur.md`.
 | 2 | intégré | T025 à T030 faits |
 | 3 | intégré | T031 à T035 faits |
 | 12 | intégré | T125 à T127 faits |
+| 15 | intégré | T141, T142 faits |
 
 ## Journal
 
@@ -74,3 +75,14 @@ Pas d'activation : documentation seulement.
 
 ### Bilan lot 12
 Pas d'activation : documentation seulement. Décision à prendre par François : ADR `260-stockage-versions-schema.md`.
+
+### Lot 15 - Proposition de signature (T141 et T142)
+- Statut : fait
+- Commit : `5a92f1b4` sur la branche du lot.
+- Fichiers : `specs/260-assainissement-code/validation/lot15-proposition-signature.md`.
+- Vérifications : `check-docs.py` PASS ; `git diff origin/main --stat -- . ':!specs'` vide (rien hors `specs/`) ; D8 reste `en attente` (non modifiée).
+- Écarts : la procédure de publication n'est pas lisible dans le dépôt (le script `publier.py` cité par la mémoire de la séance est absent). Écrit « non lue » dans la proposition.
+- Non vérifié : la faisabilité de l'option C sur le flux de publication actuel.
+
+### Bilan lot 15
+Pas d'activation : documentation seulement. Décision D8 demandée à François.
