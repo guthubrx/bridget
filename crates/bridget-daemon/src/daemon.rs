@@ -17363,19 +17363,7 @@ fn handle_wrapper_message_with_peer(
             used_percent,
             credits,
             source,
-        } => {
-            let mut st = state.lock().recover_poison();
-            Some(handle_rate_limit(
-                &agent,
-                window,
-                status,
-                resets_at,
-                used_percent,
-                credits,
-                source,
-                &mut st,
-            ))
-        }
+        } => wrapper_dispatch::on_rate_limit(agent, window, status, resets_at, used_percent, credits, source, state),
 
         WrapperToDaemon::Usage {
             agent,

@@ -4318,3 +4318,17 @@ pub(super) fn on_delegated_runtime_event_acknowledged(event_id: String, conn_id:
                 }),
             }
         }
+
+pub(super) fn on_rate_limit(agent: String, window: String, status: String, resets_at: Option<i64>, used_percent: Option<u8>, credits: Option<bridget_transport::protocol::CodexCredits>, source: bridget_transport::protocol::RateLimitSource, state: &Arc<Mutex<DaemonState>>) -> Option<DaemonToWrapper> {
+            let mut st = state.lock().recover_poison();
+            Some(handle_rate_limit(
+                &agent,
+                window,
+                status,
+                resets_at,
+                used_percent,
+                credits,
+                source,
+                &mut st,
+            ))
+        }
