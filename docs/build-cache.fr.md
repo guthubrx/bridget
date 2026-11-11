@@ -73,6 +73,43 @@ avec la même empreinte SHA-256. L'exécutable temporaire et le verrou Cargo res
 en place. `make install` effectue cet appel après installation ; ce document ne
 constitue pas une autorisation de remplacer une installation active.
 
+## Stockage sur un autre volume
+
+Le compte peut choisir un volume pour toutes les prochaines compilations de ce
+dépôt. Préparer sur le volume monté un dossier réel, appartenant au compte,
+avec le mode `0700`. Il doit résider sur un autre système de fichiers que `/`.
+Le volume doit prendre en charge les permissions Unix ; un volume FAT ne convient
+pas à cette configuration. Ne pas remplacer une configuration existante sans
+vérifier les caches qui en dépendent.
+
+Générer une identité avec `python3 -c 'import uuid; print(uuid.uuid4().hex)'`.
+Créer dans ce dossier le fichier `.bridget-build-root.json`, mode `0600` :
+
+```json
+{"version":1,"id":"0123456789abcdef0123456789abcdef"}
+```
+
+Créer ensuite `~/.config/bridget/build.json`, mode `0600`, en remplaçant le chemin
+d’exemple par celui du dossier préparé et les deux identités par la valeur générée :
+
+```json
+{"version":1,"root":"/volume/compilation/bridget-cache","root_id":"0123456789abcdef0123456789abcdef"}
+```
+
+`python3 scripts/build.py target-dir` affiche la cible sans compiler. Make et
+l’installateur source utilisent ce même résolveur. Le script choisit un enfant
+`bridget-build-*` stable par dépôt. Un ancien `CARGO_TARGET_DIR` hors de cette
+racine doit être retiré ; une cible explicite peut désigner un autre enfant
+direct `bridget-build-*` pour une isolation utile.
+
+Sans configuration, les parcours existants sont conservés. Avec configuration,
+un volume absent ou une ancre invalide refuse cette compilation avant Cargo,
+sans repli vers le disque système. Le ménage local reste possible. Le budget
+commun inclut les caches externes lorsque le volume est disponible ; aucune
+taille ni purge de caches d’un volume absent n’est prétendue. Si le volume
+disparaît pendant Cargo, le résultat reste à vérifier et les fichiers sont
+conservés. Ce réglage ne déplace pas les toolchains ni le cache global Cargo.
+
 ## Périmètre et limites
 
 Un appel direct à `cargo` contourne cet entretien. Pour les nouveaux builds,

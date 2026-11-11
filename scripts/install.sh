@@ -450,7 +450,15 @@ main() {
         fi
         need cargo
         # Same registered cache on every invocation; the existing wrapper owns its budget.
-        CARGO_TARGET_DIR=$HOME/.cache/bridget-build-installer
+        if resolved_build_target=$(cd "$source" && CARGO_TARGET_DIR= python3 scripts/build.py target-dir --installer 2>"$work/build-storage-error") && [ -n "$resolved_build_target" ]; then
+            CARGO_TARGET_DIR=$resolved_build_target
+        else
+            if [ -e "$HOME/.config/bridget/build.json" ] || [ -L "$HOME/.config/bridget/build.json" ]; then
+                fail 'Configured build storage is unavailable or unsupported by this source version. Use a source version supporting build storage and verify the volume and private anchor. No local-disk fallback; existing services were preserved.'
+            fi
+            # Compatibilité des anciens paquets source, sans configuration de volume.
+            CARGO_TARGET_DIR=$HOME/.cache/bridget-build-installer
+        fi
         export CARGO_TARGET_DIR
         (cd "$source" && python3 scripts/build.py cargo build --locked --release -p bridget-daemon)
         cp "$CARGO_TARGET_DIR/release/bridget" "$candidate"

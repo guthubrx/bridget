@@ -70,6 +70,41 @@ temporary directory and a matching SHA-256 binary installed outside it. The
 temporary executable and Cargo lock remain. `make install` performs this step
 after installation; this guide does not authorize replacing an active installation.
 
+## Storage on another volume
+
+The account can configure a mounted volume for future builds. Prepare a real,
+account-owned directory with mode `0700`, on a filesystem different from `/`.
+Unix permissions are required; FAT volumes do not meet this contract. Check
+existing dependent caches before replacing an existing configuration.
+
+Generate an identity with `python3 -c 'import uuid; print(uuid.uuid4().hex)'`.
+Create `.bridget-build-root.json` inside that directory, mode `0600`:
+
+```json
+{"version":1,"id":"0123456789abcdef0123456789abcdef"}
+```
+
+Create `~/.config/bridget/build.json`, mode `0600`. Replace the example path with
+the prepared directory and both example identities with the generated value:
+
+```json
+{"version":1,"root":"/volume/compilation/bridget-cache","root_id":"0123456789abcdef0123456789abcdef"}
+```
+
+`python3 scripts/build.py target-dir` prints the target without compiling. Make
+and the source installer use the same resolver. It chooses a stable
+`bridget-build-*` child for the repository. Remove an old `CARGO_TARGET_DIR`
+outside that root; an explicit target may select another direct
+`bridget-build-*` child when isolation is needed.
+
+Without configuration, existing behavior is preserved. With configuration, a
+missing volume or invalid anchor refuses this build before Cargo, with no
+fallback to the system disk. Local cache maintenance remains available. The
+shared budget includes external caches while their volume is available; no
+size or cleanup is claimed for an unavailable volume. If the volume disappears
+during Cargo, outputs are preserved and the result requires inspection. This
+setting does not move toolchains or the global Cargo cache.
+
 ## Scope and limits
 
 Direct `cargo` calls bypass maintenance. Use Make or the wrapper for new builds,

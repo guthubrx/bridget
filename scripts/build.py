@@ -21,6 +21,9 @@ from collections import namedtuple
 
 CACHE_DIRS = ("deps", "build", "incremental", ".fingerprint")
 OWNER = ".bridget-build-owner.json"
+BUILD_SETTINGS = Path.home().resolve() / ".config/bridget/build.json"
+ROOT_ANCHOR = ".bridget-build-root.json"
+SYSTEM_DEVICE = Path("/").stat().st_dev
 GIB = 1024 ** 3
 
 
@@ -56,8 +59,85 @@ def staging_parent():
     return Path.home().resolve() / ".cache"
 
 
-def is_staging(path):
-    return (plain_dir(path) and path.parent == staging_parent()
+def owned_json(path, private=False):
+    """Lire un petit marqueur du compte, sans suivre son dernier composant."""
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    with os.fdopen(fd, encoding="utf-8") as stream:
+        info = os.fstat(stream.fileno())
+        if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid()
+                or info.st_size > 4096 or (private and info.st_mode & 0o077)):
+            raise ValueError("fichier du compte requis, privé pour la configuration")
+        raw = stream.read(4097)
+        if len(raw) > 4096:
+            raise ValueError("marqueur trop grand")
+        return json.loads(raw)
+
+
+def external_staging_parent():
+    if not BUILD_SETTINGS.exists() and not BUILD_SETTINGS.is_symlink():
+        return None
+    try:
+        settings = owned_json(BUILD_SETTINGS, private=True)
+        if (not isinstance(settings, dict) or set(settings) != {"version", "root", "root_id"}
+                or type(settings["version"]) is not int or settings["version"] != 1
+                or not isinstance(settings["root"], str)
+                or not isinstance(settings["root_id"], str)
+                or not re.fullmatch(r"[0-9a-f]{32}", settings["root_id"])):
+            raise ValueError("format de configuration non reconnu")
+        root = Path(settings["root"])
+        if (not plain_dir(root) or not root.is_absolute() or root.stat().st_uid != os.getuid()
+                or root.stat().st_mode & 0o077):
+            raise ValueError("volume absent ou racine réelle privée 0700 indisponible")
+        if root.stat().st_dev == SYSTEM_DEVICE:
+            raise ValueError("la racine configurée est sur le système de fichiers système")
+        if owned_json(root / ROOT_ANCHOR, private=True) != {"version": 1, "id": settings["root_id"]}:
+            raise ValueError("ancre du volume différente de la configuration")
+        return root
+    except (OSError, ValueError) as error:
+        raise ValueError(
+            f"configuration de compilation refusée ({error}). Vérifiez {BUILD_SETTINGS}, "
+            "le montage et son ancre privée ; aucun repli vers le disque système. "
+            "Les autres travaux autorisés suivent leur propre état."
+        ) from error
+
+
+def staging_parents():
+    try:
+        external = external_staging_parent()
+    except ValueError as error:
+        log(f"Racine externe ignorée pour cet entretien seulement : {error}")
+        external = None
+    return tuple(dict.fromkeys([staging_parent(), *([external] if external else [])]))
+
+
+def configure_build_target(repo, arguments):
+    root = external_staging_parent()
+    if root is None:
+        return
+    target = os.environ.get("CARGO_TARGET_DIR")
+    for index, argument in enumerate(arguments):
+        if argument.startswith("--target-dir="):
+            target = argument.split("=", 1)[1]
+        elif argument == "--target-dir" and index + 1 < len(arguments):
+            target = arguments[index + 1]
+    if not target:
+        key = hashlib.sha256(owner_id(repo).encode()).hexdigest()[:16]
+        target = str(root / f"bridget-build-{key}")
+        os.environ["CARGO_TARGET_DIR"] = target
+    path = Path(os.path.abspath(repo / target))
+    if (".." in Path(target).parts or path.parent != root or not path.name.startswith("bridget-build-")
+            or path.name == "bridget-build-" or path.is_symlink()
+            or (path.exists() and (not plain_dir(path) or path.stat().st_uid != os.getuid()))):
+        raise ValueError(
+            "cible Cargo hors de la racine configurée ou indirecte. Retirez l’ancien "
+            "CARGO_TARGET_DIR/--target-dir pour utiliser le cache configuré, ou choisissez "
+            "un enfant direct bridget-build-* de cette racine. Aucun repli automatique."
+        )
+    return root
+
+
+def is_staging(path, parents):
+    return (plain_dir(path) and path.parent in parents
             and path.name.startswith("bridget-build-") and path.name != "bridget-build-")
 
 
@@ -72,7 +152,8 @@ def register_staging(repo, arguments):
     if not target:
         return
     path = Path(os.path.abspath(repo / target))
-    if (path.parent != staging_parent() or not path.name.startswith("bridget-build-")
+    parents = staging_parents()
+    if (path.parent not in parents or not path.name.startswith("bridget-build-")
             or path.name == "bridget-build-"):
         return
     # Créer le cache avant Cargo : son mode par défaut pourrait le rendre
@@ -84,7 +165,7 @@ def register_staging(repo, arguments):
         path.mkdir(mode=0o700)
     except FileExistsError:
         pass  # Ne pas changer les droits d'un cache préexistant.
-    if not is_staging(path):
+    if not is_staging(path, parents):
         return
     marker = path / OWNER
     if marker.exists() or marker.is_symlink():
@@ -95,16 +176,18 @@ def register_staging(repo, arguments):
 
 def owned_staging(repo):
     identity = owner_id(repo)
-    for path in staging_parent().glob("bridget-build-*"):
-        marker = path / OWNER
-        if not is_staging(path) or marker.is_symlink() or not marker.is_file():
-            continue
-        try:
-            data = json.loads(marker.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            continue
-        if data == {"version": 1, "repo": identity}:
-            yield path
+    parents = staging_parents()
+    for parent in parents:
+        for path in parent.glob("bridget-build-*"):
+            marker = path / OWNER
+            if not is_staging(path, parents) or marker.is_symlink() or not marker.is_file():
+                continue
+            try:
+                data = owned_json(marker)
+            except (OSError, ValueError):
+                continue
+            if data == {"version": 1, "repo": identity}:
+                yield path
 
 
 def profiles(repo):
@@ -890,24 +973,61 @@ def main():
     done.add_argument("--target", required=True)
     done.add_argument("--binary", required=True)
     done.add_argument("--dry-run", action="store_true")
+    target = sub.add_parser("target-dir", help="résoudre la cible pour les recettes, sans lancer Cargo")
+    target.add_argument("--installer", action="store_true", help="staging historique si aucun volume configuré")
     inspect = sub.add_parser("worktrees", help="inventaire lecture seule des worktrees")
     inspect.add_argument("--repo", required=True)
     inspect.add_argument("--base-ref", default="main")
     inspect.add_argument("--json", action="store_true")
     args = parser.parse_args()
     repo = Path(__file__).resolve().parent.parent
+    if args.action == "target-dir":
+        try:
+            configure_build_target(repo, [])
+            target = os.environ.get("CARGO_TARGET_DIR")
+            path = Path(os.path.abspath(repo / target)) if target else (
+                staging_parent() / "bridget-build-installer" if args.installer else repo / "target")
+            print(path)
+            return 0
+        except (OSError, ValueError) as error:
+            log(f"Cible de compilation indisponible : {error}")
+            return 2
     if args.action == "worktrees":
         return report_worktrees(Path(args.repo), args.base_ref, args.json)
     if args.action == "cargo":
         if not args.arguments or args.arguments[0] not in ("build", "test", "check", "clippy"):
             parser.error("commande Cargo attendue : build, test, check ou clippy")
+        try:
+            build_root = configure_build_target(repo, args.arguments)
+            root_identity = (build_root.stat().st_dev, build_root.stat().st_ino) if build_root else None
+        except (OSError, ValueError) as error:
+            log(f"Cette compilation n’a pas été lancée : {error}")
+            return 2
         cargo_bin = os.environ.get("BRIDGET_CARGO") or shutil.which("cargo")
         if not cargo_bin:
             fallback = Path.home() / ".cargo/bin/cargo"
             cargo_bin = str(fallback) if fallback.is_file() else "cargo"
         maintain_build_caches(repo, args.arguments)
+        if build_root:
+            try:
+                if (external_staging_parent() != build_root
+                        or (build_root.stat().st_dev, build_root.stat().st_ino) != root_identity):
+                    raise ValueError("la racine configurée a changé pendant l’entretien préalable")
+            except (OSError, ValueError) as error:
+                log(f"Cette compilation n’a pas été lancée : {error}. Rétablissez le volume et sa configuration ; aucun repli.")
+                return 2
         result = subprocess.run([cargo_bin, *args.arguments], cwd=repo, check=False)
         maintain_build_caches(repo, args.arguments)
+        if build_root:
+            try:
+                if (external_staging_parent() != build_root
+                        or (build_root.stat().st_dev, build_root.stat().st_ino) != root_identity):
+                    raise ValueError("la racine configurée a changé pendant Cargo")
+            except (OSError, ValueError) as error:
+                log(f"Résultat de cette compilation à vérifier : {error}. "
+                    "Conservez les fichiers produits ; ne relancez pas avant le retour du volume. "
+                    "Aucun retrait sur une cible non qualifiée.")
+                return result.returncode or 2
         if result.returncode:
             return result.returncode  # Aucun retrait de worktree après un échec.
     try:

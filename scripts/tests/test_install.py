@@ -592,6 +592,10 @@ if sys.argv[1] == 'bootstrap': (r / 'service-active').touch()
         (source / "scripts/build.py").write_text('''import os, pathlib, sys
 r = pathlib.Path(os.environ['FIXTURE'])
 with (r / 'build-args').open('a') as f: f.write(' '.join(sys.argv[1:]) + '\\n')
+if sys.argv[1] == 'target-dir':
+    configured = r / 'build-target'
+    if not configured.exists(): sys.exit(2)
+    print(configured.read_text())
 if sys.argv[1] == 'cargo':
     target = pathlib.Path(os.environ['CARGO_TARGET_DIR']) / 'release/bridget'
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -630,6 +634,22 @@ else: print('1234567890abcdef1234567890abcdef12345678')
             if mode == 'error':
                 self.assertIn('Cannot inspect', result.stderr)
         (self.root / 'git-mode').unlink()
+        # Un volume configuré fournit aussi la cible de copie et de retrait.
+        settings = self.home / '.config/bridget/build.json'
+        settings.parent.mkdir(parents=True, exist_ok=True)
+        settings.write_text('{}')
+        external = self.root / 'external volume/bridget-build-installer'
+        (self.root / 'build-target').write_text(str(external))
+        self.run_install('--source')
+        self.assertEqual((external / 'release/bridget').read_bytes(), BINARY)
+        self.assertIn(f'installed --target {external}', (self.root / 'build-args').read_text())
+        before = (self.root / 'build-args').read_text().count('cargo build')
+        (self.root / 'build-target').unlink()
+        result = self.run_install('--source', ok=False)
+        self.assertIn('No local-disk fallback', result.stderr)
+        self.assertEqual((self.root / 'build-args').read_text().count('cargo build'), before)
+        self.assertEqual(self.installed.read_bytes(), BINARY)
+        settings.unlink()
         checkout = self.home / ".local/state/bridget-install/source"
         (checkout / "scripts/build.py").write_text("raise SystemExit(42)\n")
         self.run_install("--source", ok=False)

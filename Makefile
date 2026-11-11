@@ -1,10 +1,13 @@
-.PHONY: fmt fmt-check clippy lint lint-scripts build release test daemon install install-k1 test-install-k1-preflight install-ronde test-ronde uninstall clean clean-builds test-build-cleanup
+.PHONY: fmt fmt-check clippy lint lint-scripts build release test daemon install install-k1 test-install-k1-preflight install-ronde test-ronde uninstall clean clean-builds test-build-cleanup check-build-target
 
 BINARY = bridget
 INSTALL_DIR = $(HOME)/.local/bin
 LAUNCHD_PLIST = $(HOME)/Library/LaunchAgents/com.bridget.daemon.plist
-export CARGO_TARGET_DIR ?= $(CURDIR)/target
-RELEASE_BIN = $(CARGO_TARGET_DIR)/release/$(BINARY)
+ifeq ($(origin CARGO_TARGET_DIR), undefined)
+CARGO_TARGET_DIR := $(shell python3 scripts/build.py target-dir)
+endif
+export CARGO_TARGET_DIR
+RELEASE_BIN = $${CARGO_TARGET_DIR}/release/$(BINARY)
 MAICIE_CONFIG ?= $(HOME)/.config/maicie/config.json
 
 build:
@@ -25,6 +28,11 @@ fmt-check:
 
 clippy:
 	python3 scripts/build.py cargo clippy --workspace --all-targets --locked --features bridget-daemon/test-support -- -D warnings
+
+build release test clippy: check-build-target
+
+check-build-target:
+	@test -n "$$CARGO_TARGET_DIR" || { printf '%s\n' 'Cible de compilation indisponible : vérifiez la configuration et le volume avant de relancer cette recette.' >&2; exit 2; }
 
 lint: clippy fmt-check
 
@@ -75,7 +83,7 @@ install: release
 	@echo "  bridget send --to N  Envoie un message"
 	@echo "  bridget who          Liste les agents"
 	@echo "  bridget daemon       Lance le daemon manuellement"
-	python3 scripts/build.py installed --target "$(CARGO_TARGET_DIR)" --binary "$(INSTALL_DIR)/$(BINARY)"
+	python3 scripts/build.py installed --target "$$CARGO_TARGET_DIR" --binary "$(INSTALL_DIR)/$(BINARY)"
 
 uninstall:
 	@echo "Arrêt du daemon..."

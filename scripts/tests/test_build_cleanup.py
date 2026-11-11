@@ -36,6 +36,9 @@ class CleanupTests(unittest.TestCase):
         self.repo.mkdir()
         self.cache = self.repo.parent / "cache"
         self.cache.mkdir()
+        self.settings = self.repo.parent / "build.json"
+        self.enterContext(patch.object(build, "BUILD_SETTINGS", self.settings))
+        self.enterContext(patch.object(build, "SYSTEM_DEVICE", -1))
         for name, value in (("worktrees", [self.repo]), ("staging_parent", self.cache),
                             ("owner_id", "test-owner"), ("opened_paths", [])):
             self.enterContext(patch.object(build, name, return_value=value))
@@ -175,6 +178,198 @@ class CleanupTests(unittest.TestCase):
         self.assertEqual(json.loads((stage / build.OWNER).read_text()),
                          {"version": 1, "repo": "test-owner"})
 
+    def external_root(self):
+        root = self.repo.parent / "volume"
+        root.mkdir(mode=0o700)
+        identity = "a" * 32
+        (root / build.ROOT_ANCHOR).write_text(json.dumps({"version": 1, "id": identity}))
+        (root / build.ROOT_ANCHOR).chmod(0o600)
+        self.settings.write_text(json.dumps({"version": 1, "root": str(root), "root_id": identity}))
+        self.settings.chmod(0o600)
+        return root
+
+    def test_racine_configuree_choisit_un_cache_prive_enregistre(self):
+        root = self.external_root()
+        with patch.dict(os.environ, {"CARGO_TARGET_DIR": ""}):
+            build.configure_build_target(self.repo, ["build"])
+            target = Path(os.environ["CARGO_TARGET_DIR"])
+            self.assertEqual(target.parent, root)
+            build.register_staging(self.repo, ["build"])
+            self.assertEqual(target.stat().st_mode & 0o777, 0o700)
+            self.assertEqual(list(build.owned_staging(self.repo)), [target])
+
+    def test_volume_absent_ne_cree_pas_de_repli_et_ne_lance_pas_cargo(self):
+        root = self.external_root()
+        root.rename(self.repo.parent / "unmounted")
+        root.mkdir(mode=0o700)  # Point de montage sous-jacent, sans son ancre.
+        with patch.object(sys, "argv", ["build.py", "cargo", "build"]), \
+             patch.dict(os.environ, {"CARGO_TARGET_DIR": ""}), \
+             patch.object(build.subprocess, "run") as run:
+            self.assertEqual(build.main(), 2)
+            run.assert_not_called()
+        self.assertEqual(list(root.iterdir()), [])
+
+    def test_cible_explicite_hors_volume_et_lien_refuses(self):
+        root = self.external_root()
+        outside = self.repo.parent / "root-disk"
+        outside.mkdir()
+        indirect = root / "bridget-build-link"
+        indirect.symlink_to(outside, target_is_directory=True)
+        for target in [self.cache / "bridget-build-old", indirect, root / "arbitrary"]:
+            with patch.dict(os.environ, {"CARGO_TARGET_DIR": str(target)}):
+                with self.assertRaises(ValueError):
+                    build.configure_build_target(self.repo, ["build"])
+        self.assertEqual(list(outside.iterdir()), [])
+
+    def test_option_cargo_explicite_valide_prime_sur_environnement(self):
+        root = self.external_root()
+        target = root / "bridget-build-explicit"
+        for arguments in [["build", "--target-dir", str(target)],
+                          ["build", "--target-dir=" + str(target)]]:
+            with patch.dict(os.environ, {"CARGO_TARGET_DIR": str(self.cache / "bridget-build-old")}):
+                build.configure_build_target(self.repo, arguments)
+                build.register_staging(self.repo, arguments)
+        self.assertTrue((target / build.OWNER).is_file())
+
+    def test_budget_commun_aux_anciens_et_nouveaux_caches(self):
+        root = self.external_root()
+        old = self.cache / "bridget-build-old"
+        recent = root / "bridget-build-current"
+        for target, age in [(old, 500), (recent, 0)]:
+            with patch.dict(os.environ, {"CARGO_TARGET_DIR": str(target)}):
+                build.register_staging(self.repo, ["build"])
+            self.profile(target, age=age)
+        self.assertEqual(self.clean(max_bytes=512, max_age=86400), 512)
+        self.assertFalse((old / "debug/deps").exists())
+        self.assertTrue((recent / "debug/deps").exists())
+
+    def test_configuration_et_ancre_modifiees_refusent(self):
+        root = self.external_root()
+        for path in [self.settings, root / build.ROOT_ANCHOR]:
+            path.chmod(0o644)
+            with self.assertRaises(ValueError):
+                build.external_staging_parent()
+            path.chmod(0o600)
+        (root / build.ROOT_ANCHOR).write_text(json.dumps({"version": 1, "id": "b" * 32}))
+        with self.assertRaises(ValueError):
+            build.external_staging_parent()
+        root.chmod(0o755)
+        with self.assertRaises(ValueError):
+            build.external_staging_parent()
+
+    def test_marqueur_non_regulier_ne_bloque_pas_la_lecture(self):
+        root = self.external_root()
+        anchor = root / build.ROOT_ANCHOR
+        anchor.unlink()
+        os.mkfifo(anchor, 0o600)
+        with self.assertRaises(ValueError):
+            build.external_staging_parent()
+
+    def test_parent_dot_apres_lien_ne_peut_pas_sortir_du_volume(self):
+        root = self.external_root()
+        outside = self.repo.parent / "outside"
+        (outside / "child").mkdir(parents=True)
+        link = root / "bridget-build-link"
+        link.symlink_to(outside / "child", target_is_directory=True)
+        with patch.dict(os.environ, {"CARGO_TARGET_DIR": str(link / ".." / "bridget-build-escape")}):
+            with self.assertRaises(ValueError):
+                build.configure_build_target(self.repo, ["build"])
+        self.assertFalse((outside / "bridget-build-escape").exists())
+
+    def test_volume_disparu_pendant_entretien_refuse_avant_cargo(self):
+        root = self.external_root()
+        def unmount(*_args):
+            root.rename(self.repo.parent / "unmounted")
+            root.mkdir(mode=0o700)
+        with patch.object(sys, "argv", ["build.py", "cargo", "build"]), \
+             patch.dict(os.environ, {"CARGO_TARGET_DIR": "", "BRIDGET_CARGO": "/bin/false"}), \
+             patch.object(build, "maintain_build_caches", side_effect=unmount), \
+             patch.object(build.subprocess, "run") as run:
+            self.assertEqual(build.main(), 2)
+            run.assert_not_called()
+
+    def test_volume_absent_ne_bloque_pas_entretien_des_caches_locaux(self):
+        root = self.external_root()
+        root.rename(self.repo.parent / "unmounted")
+        old = self.cache / "bridget-build-local"
+        with patch.dict(os.environ, {"CARGO_TARGET_DIR": str(old)}):
+            build.register_staging(self.repo, ["build"])
+        self.profile(old)
+        self.assertEqual(self.clean(), 512)
+        self.assertFalse((old / "debug/deps").exists())
+
+    def test_ancre_residuelle_sur_disque_systeme_ne_suffit_pas(self):
+        root = self.external_root()
+        with patch.object(build, "SYSTEM_DEVICE", root.stat().st_dev):
+            with self.assertRaises(ValueError):
+                build.configure_build_target(self.repo, ["build"])
+
+    def test_volume_disparu_pendant_cargo_ne_donne_pas_un_succes_qualifie(self):
+        root = self.external_root()
+        def cargo(*_args, **_kwargs):
+            root.rename(self.repo.parent / "unmounted")
+            root.mkdir(mode=0o700)
+            return subprocess.CompletedProcess([], 0)
+        with patch.object(sys, "argv", ["build.py", "cargo", "build"]), \
+             patch.dict(os.environ, {"CARGO_TARGET_DIR": "", "BRIDGET_CARGO": "/bin/false"}), \
+             patch.object(build, "maintain_build_caches"), \
+             patch.object(build.subprocess, "run", side_effect=cargo):
+            self.assertEqual(build.main(), 2)
+
+    def test_make_installe_depuis_la_cible_configuree_et_nettoie_si_volume_absent(self):
+        root = self.external_root()
+        volume = root.with_name("external volume")
+        root.rename(volume)
+        config = json.loads(self.settings.read_text())
+        config["root"] = str(volume)
+        self.settings.write_text(json.dumps(config))
+        scripts = self.repo / "scripts"
+        scripts.mkdir()
+        shutil.copyfile(SCRIPT.parent.parent / "Makefile", self.repo / "Makefile")
+        wrapper = ("import importlib.util,sys\nfrom pathlib import Path\n"
+                   f"s=importlib.util.spec_from_file_location('real_build',{str(SCRIPT)!r})\n"
+                   "m=importlib.util.module_from_spec(s);s.loader.exec_module(m)\n"
+                   f"m.BUILD_SETTINGS=Path({str(self.settings)!r})\n"
+                   "m.SYSTEM_DEVICE=-1;m.__file__=__file__\n"
+                   "m.busy_paths=lambda *a,**k: []\nsys.exit(m.main())\n")
+        (scripts / "build.py").write_text(wrapper)
+        log = self.repo / "wire.jsonl"
+        fake = self.repo / "fake-cargo"
+        fake.write_text(f"#!{sys.executable}\n" +
+            "import os,json\nfrom pathlib import Path\n"
+            "p=Path(os.environ['CARGO_TARGET_DIR'])/'release';p.mkdir(parents=True,exist_ok=True)\n"
+            "(p/'.cargo-lock').touch();(p/'deps').mkdir(exist_ok=True)\n"
+            "(p/'deps'/'generated').write_text('fixture')\n"
+            "(p/'bridget').write_text('#!/bin/sh\\nexit 0\\n');(p/'bridget').chmod(0o700)\n"
+            f"with Path({str(log)!r}).open('a') as f:f.write(json.dumps({{'target':str(p.parent)}})+'\\n')\n")
+        fake.chmod(0o700)
+        (scripts / "check-linux-abi.py").write_text("import sys\nfrom pathlib import Path\nassert Path(sys.argv[1]).is_file()\n")
+        bin_dir = self.repo / "bin"
+        bin_dir.mkdir()
+        (bin_dir / "launchctl").write_text("#!/bin/sh\nexit 0\n")
+        (bin_dir / "launchctl").chmod(0o700)
+        home = self.repo / "home"
+        home.mkdir()
+        env = {**os.environ, "HOME": str(home), "BRIDGET_CARGO": str(fake),
+               "PATH": str(bin_dir) + os.pathsep + os.environ["PATH"]}
+        env.pop("CARGO_TARGET_DIR", None)
+        installed = self.repo / "installed/bridget"
+        result = subprocess.run(["make", "-s", "install", f"INSTALL_DIR={installed.parent}",
+            f"LAUNCHD_PLIST={self.repo}/fixture.plist"], cwd=self.repo, env=env,
+            capture_output=True, text=True, timeout=30)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        target = Path(json.loads(log.read_text().splitlines()[0])["target"])
+        self.assertEqual(target.parent, volume)
+        self.assertEqual(installed.read_bytes(), (target / "release/bridget").read_bytes())
+        self.assertFalse((target / "release/deps").exists())
+        self.assertFalse((self.repo / "target").exists())
+        volume.rename(volume.with_name("unmounted"))
+        local = self.profile()
+        result = subprocess.run(["make", "-s", "clean-builds"], cwd=self.repo,
+            env={**env, "BRIDGET_BUILD_CACHE_GIB": "0"}, capture_output=True, text=True, timeout=30)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse((local / "deps").exists())
+
     def test_staging_existant_ne_change_pas_de_droits(self):
         stage = self.cache / "bridget-build-existing"
         stage.mkdir(mode=0o755)
@@ -280,6 +475,20 @@ class CleanupTests(unittest.TestCase):
 
 
 class ProcessTests(unittest.TestCase):
+    def setUp(self):
+        # Les sous-processus de recette ne doivent pas charger le réglage réel
+        # de compilation du compte. Les outils installés restent réutilisés.
+        caller_home = Path.home()
+        self.profile_home = tempfile.TemporaryDirectory(prefix="bridget-build-profile-")
+        self.addCleanup(self.profile_home.cleanup)
+        self.enterContext(patch.object(build, "BUILD_SETTINGS", Path(self.profile_home.name) / "build.json"))
+        self.enterContext(patch.dict(os.environ, {
+            "HOME": self.profile_home.name,
+            "CARGO_HOME": os.environ.get("CARGO_HOME", str(caller_home / ".cargo")),
+            "RUSTUP_HOME": os.environ.get("RUSTUP_HOME", str(caller_home / ".rustup")),
+            "CARGO_TARGET_DIR": "",
+        }))
+
     def test_cli_succes_nettoie_automatiquement_dans_un_depot_isole(self):
         with tempfile.TemporaryDirectory(prefix="bridget-success-test-") as root:
             root = Path(root).resolve()
