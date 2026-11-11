@@ -22,6 +22,7 @@ Statut du programme : In Progress. Règles : `contracts/regles-implementeur.md`.
 | 13 | intégré | T128 à T137 faits (job CI en observation) |
 | 14 | intégré | T138 à T140 faits |
 | 15 | intégré | T141, T142 faits |
+| 9 | partiel (compléments) | T106 et T107 faites par extraction ; SC09 non atteint (launch_session_with_status) |
 | 17 | intégré | T151 à T154 faits |
 
 ## Journal
@@ -362,3 +363,12 @@ D1 tranchée (sources seules) ; D9 et D10 tranchées (formater, renommer) ; déf
 - Risques : (1) 174 phrases `SAFETY` de repli à établir par un relecteur ; (2) les réécritures automatiques de `clippy` ont perdu des parenthèses à deux endroits (corrigés, détectés par les tests) : toute future correction automatique doit être suivie d'une porte de tests ; (3) l'activation n'a pas eu lieu (D1) : le binaire installé reste l'ancien ; (4) tests instables connus (`base-instables.txt`) ; (5) `scripts/sentinel.py` embarqué dans le démon par `include_str!`.
 - Contre-revue adverse : `bridget who` -> « Aucun agent connecté ». Aucune revue indépendante n'a eu lieu.
 - Contrôle de secrets : `gitleaks` ciblé sur les commits de chaque lot (aucune fuite) ; le scan complet de l'historique (`scripts/check-secrets.sh`) a été arrêté par le système lors du premier essai et n'a pas été relancé.
+
+### CI Linux (11 novembre 2026, fin de séance)
+- Run `42953665089` : jobs `clippy` (bloquant), `format` (bloquant) et `scripts` (observation) au vert sur Linux ; le job `tests` (observation) était encore en cours à la clôture. Le job d'audit hebdomadaire (`rust-audit.yml`) a réussi lors de son lancement manuel du 10 novembre.
+- T155 : critères relevés ci-dessus. T156 : portes relevées ci-dessus. T157 : voir « Nettoyage ».
+
+### Nettoyage (T157)
+- Worktrees et branches `session-260-*` : aucun (travail sur `main`, décision de François du 10 novembre au soir).
+- Cache de build `$HOME/.cache/bridget-build-260`, cliché `/private/tmp/b260-snap` et dossiers d'environnement de test `/private/tmp/b.*` créés par cette séance : supprimés en fin de séance après vérification qu'aucun processus ne les utilisait. Les sorties de tests complètes (`validation/*-tests.txt`) restent hors Git (ignorées).
+- Conservés : `specs/260-assainissement-code/validation/reprise-nettoyage-20261110/` (créé par une autre session, intact), les lignes de base et preuves commitées.

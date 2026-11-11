@@ -1,6 +1,6 @@
 # Tâches 260 - Assainissement du code et du dépôt
 
-Statut : In Progress. 135 tâches cochées sur 157 (voir `implementation.md` pour le détail et les lots bloqués). La mise en oeuvre est en cours : lots 0, 1 (sauf T024), 2, 3, 4, 5, 6, 7, 8 (partiel), 9 (partiel), 10, 12, 14, 13 (T137 partiel), 15, 17 traités.
+Statut : In Progress. 140 tâches cochées sur 157. Restent ouvertes : T024 (porte D16), T096, T101, T104, T105, T108 à T111 (fonctions et textes non traités), T143 à T150 (Android, environnement de build absent), T090 faite avec décision D7 différée. Détail, preuves et critères : `implementation.md`.
 Spécification : `spec.md`. Plan : `plan.md`. Règles : `contracts/regles-implementeur.md`. Portes : `decisions.md`. Démarrage et clôture : `quickstart.md`.
 
 ## Comment lire ce fichier
@@ -146,8 +146,8 @@ Spécification : `spec.md`. Plan : `plan.md`. Règles : `contracts/regles-implem
 - [x] T103 [L9] Structures d'arguments : `reconnect_managed_session`, `connect_and_register_at`, `connect_and_register_with_domain_at`.
 - [ ] T104 [L9] Structures d'arguments : `post` (threads), `apply` (réparation d'espace), `spawn_reader` (flux JSON Claude).
 - [ ] T105 [L9] Découper `launch_session_with_status` (1371 lignes) sous 1000.
-- [ ] T106 [L9] Découper `spawn_reader` de `codex_app_server.rs` (1101 lignes) sous 1000.
-- [ ] T107 [L9] Réduire `tick` (983 lignes) sans déplacer de verrou, sinon arrêt.
+- [x] T106 [L9] Découper `spawn_reader` de `codex_app_server.rs` (1101 lignes) sous 1000.
+- [x] T107 [L9] Réduire `tick` (983 lignes) sans déplacer de verrou, sinon arrêt.
 - [ ] T108 [L9] Réduire `launch` (796 lignes).
 - [ ] T109 [L9] Réduire `admit_delegate` (777 lignes).
 - [ ] T110 [L9] Réduire `apply_specialist_inner` (727 lignes).
@@ -222,9 +222,9 @@ Spécification : `spec.md`. Plan : `plan.md`. Règles : `contracts/regles-implem
 
 ## Clôture (guide : `quickstart.md`)
 
-- [ ] T155 [L-] Critères SC01 à SC14 : mesure, lot, preuve (ou « non atteint » avec raison) dans `implementation.md`.
-- [ ] T156 [L-] Contrôle des portes D1 à D16 sur `origin/main` : tranchée ou action par défaut appliquée.
-- [ ] T157 [L-] Nettoyage des worktrees et branches `260-*`, disque, statut final du programme.
+- [x] T155 [L-] Critères SC01 à SC14 : mesure, lot, preuve (ou « non atteint » avec raison) dans `implementation.md`.
+- [x] T156 [L-] Contrôle des portes D1 à D16 sur `origin/main` : tranchée ou action par défaut appliquée.
+- [x] T157 [L-] Nettoyage des worktrees et branches `260-*`, disque, statut final du programme.
 
 ## Dépendances
 
