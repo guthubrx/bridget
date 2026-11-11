@@ -314,6 +314,8 @@ def run(variants):
         kind, d = defs[v]
         bind = bindings(pattern, kind, d, v)
         body = text[bs:e]
+        if body.lstrip().startswith("wrapper_dispatch::"):
+            raise Refus(f"la branche {v} est déjà extraite")
         if body.startswith("{"):
             fn_body = body
         else:
