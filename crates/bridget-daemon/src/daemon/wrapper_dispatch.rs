@@ -1274,3 +1274,44 @@ pub(super) fn on_subscribed(subscription_id: String, conn_id: &str, state: &Arc<
             }
             None
         }
+
+pub(super) fn on_turn_state(in_progress: bool, conn_id: &str, state: &Arc<Mutex<DaemonState>>) -> Option<DaemonToWrapper> {
+            let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+            let finished=!in_progress && st.conn_instances.get(conn_id).and_then(|id| st.presences.get(id)).is_some_and(|p| p.state=="busy");
+            match st.set_turn_state(conn_id, in_progress) {
+                Ok(()) => {
+                    if finished && let Some(notifier)=&st.mobile_notifier { notifier.changed(); }
+                    // La levée peut précéder le terminal de `turn/interrupt`.
+                    // Le retour à l'état disponible rejoue alors la reprise
+                    // durable. Celle-ci reste refusée tant que le contrôle est
+                    // toujours en pause.
+                    let controls = if !in_progress {
+                        resume_executions_after_pause(&mut st)
+                    } else {
+                        Vec::new()
+                    };
+                    if !in_progress && controls.is_empty()
+                        && let Some((agent, _)) = live_connection_identity(&st, conn_id) {
+                            schedule_held_release(&mut st, &agent, Instant::now());
+                        }
+                    drop(st);
+                    for (target_conn, controls) in controls {
+                        let retry = execute_controls(controls);
+                        if !retry.is_empty() {
+                            state
+                                .lock()
+                                .unwrap_or_else(|e| e.into_inner())
+                                .pending_post_response_controls
+                                .entry(target_conn)
+                                .or_default()
+                                .extend(retry);
+                        }
+                    }
+                    None
+                }
+                Err(reason) => Some(DaemonToWrapper::Nack {
+                    id: "turn-state".to_string(),
+                    reason,
+                }),
+            }
+        }
