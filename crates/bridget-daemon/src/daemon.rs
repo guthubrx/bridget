@@ -16877,28 +16877,7 @@ fn handle_wrapper_message_with_peer(
             conn_id,
             state,
         ),
-        WrapperToDaemon::DelegatedRuntimeEventAcknowledged { event_id } => {
-            let (parent_instance_id, fleet) = {
-                let st = state.lock().recover_poison();
-                let Some(parent_instance_id) = st.conn_instances.get(conn_id).cloned() else {
-                    return Some(DaemonToWrapper::Nack {
-                        id: event_id,
-                        reason: "wrapper non enregistré".to_string(),
-                    });
-                };
-                (parent_instance_id, Arc::clone(&st.fleet))
-            };
-            match fleet.acknowledge_delegated_runtime_event(&event_id, &parent_instance_id) {
-                Ok(_) => Some(DaemonToWrapper::Ack {
-                    project_warnings: Vec::new(),
-                    id: event_id,
-                }),
-                Err(_) => Some(DaemonToWrapper::Nack {
-                    id: event_id,
-                    reason: "accusé runtime délégué refusé".to_string(),
-                }),
-            }
-        }
+        WrapperToDaemon::DelegatedRuntimeEventAcknowledged { event_id } => wrapper_dispatch::on_delegated_runtime_event_acknowledged(event_id, conn_id, state),
         WrapperToDaemon::WaitAgentLinks {
             after_cursor,
             timeout_ms,

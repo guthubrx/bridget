@@ -4295,3 +4295,26 @@ pub(super) fn on_end(subscription_id: String, reason: String, conn_id: &str, sta
             }
             None
         }
+
+pub(super) fn on_delegated_runtime_event_acknowledged(event_id: String, conn_id: &str, state: &Arc<Mutex<DaemonState>>) -> Option<DaemonToWrapper> {
+            let (parent_instance_id, fleet) = {
+                let st = state.lock().recover_poison();
+                let Some(parent_instance_id) = st.conn_instances.get(conn_id).cloned() else {
+                    return Some(DaemonToWrapper::Nack {
+                        id: event_id,
+                        reason: "wrapper non enregistré".to_string(),
+                    });
+                };
+                (parent_instance_id, Arc::clone(&st.fleet))
+            };
+            match fleet.acknowledge_delegated_runtime_event(&event_id, &parent_instance_id) {
+                Ok(_) => Some(DaemonToWrapper::Ack {
+                    project_warnings: Vec::new(),
+                    id: event_id,
+                }),
+                Err(_) => Some(DaemonToWrapper::Nack {
+                    id: event_id,
+                    reason: "accusé runtime délégué refusé".to_string(),
+                }),
+            }
+        }
