@@ -1176,3 +1176,52 @@ pub(super) fn on_t3_thread_binding_fact(version: u16, t3_thread_id: String, conn
             invalidate_human_authority(&mut st);
             response
         }
+
+pub(super) fn on_daemon_identity_request(state: &Arc<Mutex<DaemonState>>) -> Option<DaemonToWrapper> {
+            let st = state.lock().unwrap_or_else(|e| e.into_inner());
+            Some(DaemonToWrapper::DaemonIdentityReport {
+                host: st.host.clone(),
+                db_path: st.db_path.display().to_string(),
+                instance_id: st.instance_id.clone(),
+                features: {
+                    let mut features=vec![
+                    "sentinel_status_v1".to_string(),
+                    "native_reply_outbox_v1".to_string(),
+                    "wait_v1".to_string(),
+                    "user_input_v1".to_string(),
+                    "specialists_v1".to_string(),
+                    "remote_worker_v1".to_string(),
+                    "worker_candidate_probe_v1".to_string(),
+                    "auto_delegate_v1".to_string(),
+                    "auto_delegate_v2".to_string(),
+                    "worker_candidate_probe_v2".to_string(),
+                    "worker_workload_tools_v1".to_string(),
+                    "worker_release_lease_v2".to_string(),
+                    "worker_parent_source_proof_v1".to_string(),
+                    "worker_result_slot_deadline_v1".to_string(),
+                    "worker_workspace_diagnostics_v1".to_string(),
+                    "worker_origin_proof_v1".to_string(),
+                    "worker_origin_project_context_v1".to_string(),
+                    "worker_workspace_repair_v1".to_string(),
+                    "task_workspace_repair_v1".to_string(),
+                    "worker_start_recovery_v1".to_string(),
+                    "worker_workspace_failure_v1".to_string(),
+                    "worker_provider_catalogue_v1".to_string(),
+                    "worker_model_options_v1".to_string(),
+                    "worker_provider_accounts_v1".to_string(),
+                    "worker_execution_status_v1".to_string(),
+                    "worker_program_compatibility_v1".to_string(),
+                    "worker_workspace_view_v1".to_string(),
+                    "commit_view_files_v1".to_string(),
+                    "routing_catalogue_v1".to_string(),
+                    ];
+                    if crate::workspace_git::COMMIT_VIEW_LAUNCH_ENABLED {
+                        features.push("worker_workspace_view_create_v1".to_string());
+                    }
+                    if crate::provider_catalogue220::MODEL_OPTIONS_LAUNCH_ENABLED {
+                        features.push("model_options_v1".to_string());
+                    }
+                    features
+                },
+            })
+        }
