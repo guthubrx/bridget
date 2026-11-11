@@ -5076,23 +5076,23 @@ turn_attest: true,
                     break;
                 }
                 relay.reset_generation();
-                let Some((new_reader, registered_name)) = reconnect_managed_session(
-                    socket,
-                    &writer,
-                    transport.as_ref(),
-                    &descriptor,
-                    &definition.protocol,
-                    agent_type,
-                    &name_state_path,
-                    &host,
-                    channel.as_deref(),
-                    &os,
-                    &instance_id,
-                    &my_name,
-                    interactive.is_some(),
-                    native_termination.as_ref(),
-                    remote_result_context.as_ref().map(|_| Instant::now() + REMOTE_MASTER_RECONNECT_GRACE),
-                ) else {
+                let Some((new_reader, registered_name)) = reconnect_managed_session(ReconnectManagedSessionArgs {
+socket,
+writer: &writer,
+transport: transport.as_ref(),
+descriptor: &descriptor,
+protocol: &definition.protocol,
+agent_type,
+name_state_path: &name_state_path,
+host: &host,
+channel: channel.as_deref(),
+os: &os,
+instance_id: &instance_id,
+fallback_name: &my_name,
+terminal_session: interactive.is_some(),
+termination: native_termination.as_ref(),
+deadline: remote_result_context.as_ref().map(|_| Instant::now() + REMOTE_MASTER_RECONNECT_GRACE),
+}) else {
                     break;
                 };
                 idempotent_deliveries.modern_reply_core=false;
@@ -5510,23 +5510,23 @@ turn_attest: true,
                     break;
                 }
                 relay.reset_generation();
-                let Some((new_reader, registered_name)) = reconnect_managed_session(
-                    socket,
-                    &writer,
-                    transport.as_ref(),
-                    &descriptor,
-                    &definition.protocol,
-                    agent_type,
-                    &name_state_path,
-                    &host,
-                    channel.as_deref(),
-                    &os,
-                    &instance_id,
-                    &my_name,
-                    interactive.is_some(),
-                    native_termination.as_ref(),
-                    remote_result_context.as_ref().map(|_| Instant::now() + REMOTE_MASTER_RECONNECT_GRACE),
-                ) else {
+                let Some((new_reader, registered_name)) = reconnect_managed_session(ReconnectManagedSessionArgs {
+socket,
+writer: &writer,
+transport: transport.as_ref(),
+descriptor: &descriptor,
+protocol: &definition.protocol,
+agent_type,
+name_state_path: &name_state_path,
+host: &host,
+channel: channel.as_deref(),
+os: &os,
+instance_id: &instance_id,
+fallback_name: &my_name,
+terminal_session: interactive.is_some(),
+termination: native_termination.as_ref(),
+deadline: remote_result_context.as_ref().map(|_| Instant::now() + REMOTE_MASTER_RECONNECT_GRACE),
+}) else {
                     break;
                 };
                 idempotent_deliveries.modern_reply_core=false;
@@ -6360,23 +6360,26 @@ pub(crate) fn record_interactive_turn(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn reconnect_managed_session(
-    socket: &std::path::Path,
-    writer: &Arc<Mutex<Option<BufWriter<UnixStream>>>>,
-    transport: &dyn ManagedSession,
-    descriptor: &ManagedSessionDescriptor,
-    protocol: &str,
-    agent_type: &str,
-    name_state_path: &std::path::Path,
-    host: &str,
-    channel: Option<&str>,
-    os: &str,
-    instance_id: &str,
-    fallback_name: &str,
-    terminal_session: bool,
-    termination: Option<&NativeTerminationSignal>,
-    deadline: Option<Instant>,
-) -> Option<(BufReader<UnixStream>, String)> {
+struct ReconnectManagedSessionArgs<'a> {
+    pub socket: &'a std::path::Path,
+    pub writer: &'a Arc<Mutex<Option<BufWriter<UnixStream>>>>,
+    pub transport: &'a dyn ManagedSession,
+    pub descriptor: &'a ManagedSessionDescriptor,
+    pub protocol: &'a str,
+    pub agent_type: &'a str,
+    pub name_state_path: &'a std::path::Path,
+    pub host: &'a str,
+    pub channel: Option<&'a str>,
+    pub os: &'a str,
+    pub instance_id: &'a str,
+    pub fallback_name: &'a str,
+    pub terminal_session: bool,
+    pub termination: Option<&'a NativeTerminationSignal>,
+    pub deadline: Option<Instant>,
+}
+
+fn reconnect_managed_session(args: ReconnectManagedSessionArgs<'_>) -> Option<(BufReader<UnixStream>, String)> {
+    let ReconnectManagedSessionArgs { socket, writer, transport, descriptor, protocol, agent_type, name_state_path, host, channel, os, instance_id, fallback_name, terminal_session, termination, deadline } = args;
     let expired = || deadline.is_some_and(|deadline| Instant::now() >= deadline);
     let mut attempts = 0_u32;
     while transport.is_alive() && !termination.is_some_and(NativeTerminationSignal::requested) && !expired() {

@@ -74,11 +74,23 @@
         let writer = Arc::new(Mutex::new(None));
         let started = Instant::now();
         let absent = std::env::temp_dir().join(format!("reconnect172-absent-{}", uuid::Uuid::new_v4()));
-        let result = reconnect_managed_session(
-            &absent, &writer, &session, &session.descriptor(), "codex_app_server", "fixture",
-            &absent, "fixture", None, "test", "instance172", "agent172", false, None,
-            Some(started + Duration::from_millis(60)),
-        );
+        let result = reconnect_managed_session(ReconnectManagedSessionArgs {
+socket: &absent,
+writer: &writer,
+transport: &session,
+descriptor: &session.descriptor(),
+protocol: "codex_app_server",
+agent_type: "fixture",
+name_state_path: &absent,
+host: "fixture",
+channel: None,
+os: "test",
+instance_id: "instance172",
+fallback_name: "agent172",
+terminal_session: false,
+termination: None,
+deadline: Some(started + Duration::from_millis(60)),
+});
         assert!(result.is_none());
         assert!(started.elapsed() < Duration::from_secs(2));
         assert!(writer.lock().unwrap().is_none());
