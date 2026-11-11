@@ -4812,3 +4812,12 @@ pub(super) fn on_lookup(operation_kind: String, idempotency_key: String, conn_id
                 &st,
             ))
         }
+
+pub(super) fn on_request_wait(request_id: String, wait_timeout: u64, conn_id: &str, state: &Arc<Mutex<DaemonState>>, peer: Option<&UnixStream>) -> Option<DaemonToWrapper> { Some(wait_request(
+            conn_id,
+            &request_id,
+            wait_timeout,
+            state,
+            peer,
+            Duration::from_secs(5),
+        )) }

@@ -16940,14 +16940,7 @@ fn handle_wrapper_message_with_peer(
         WrapperToDaemon::RequestWait {
             request_id,
             wait_timeout,
-        } => Some(wait_request(
-            conn_id,
-            &request_id,
-            wait_timeout,
-            state,
-            peer,
-            Duration::from_secs(5),
-        )),
+        } => wrapper_dispatch::on_request_wait(request_id, wait_timeout, conn_id, state, peer),
         WrapperToDaemon::NativeDelegation { request } => Some(native_delegation::handle_with_peer(
             conn_id, request, state, peer,
         )),
