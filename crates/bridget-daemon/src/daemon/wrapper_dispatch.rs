@@ -4367,3 +4367,23 @@ pub(super) fn on_control_state_set(version: u16, command_id: String, expected_ge
             agent_posture,
             auto_reassignment,
         )) }
+
+pub(super) fn on_thread_notice_capability(versions: Vec<u16>, conn_id: &str, state: &Arc<Mutex<DaemonState>>) -> Option<DaemonToWrapper> {
+            let mut st = state.lock().recover_poison();
+            // Capacité de réception d'une connexion principale enregistrée ; un
+            // client auxiliaire ne reçoit jamais d'alerte. Au plus 8 valeurs lues.
+            let eligible =
+                st.conn_names.contains_key(conn_id) && !st.auxiliary_connections.contains(conn_id);
+            if eligible
+                && versions
+                    .iter()
+                    .take(8)
+                    .any(|version| *version == crate::threads::THREAD_NOTICE_VERSION)
+            {
+                st.thread_notice_versions
+                    .insert(conn_id.to_string(), crate::threads::THREAD_NOTICE_VERSION);
+            } else {
+                st.thread_notice_versions.remove(conn_id);
+            }
+            None
+        }

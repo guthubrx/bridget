@@ -16610,25 +16610,7 @@ fn handle_wrapper_message_with_peer(
             version,
             t3_thread_id,
         } => wrapper_dispatch::on_t3_thread_binding_fact(version, t3_thread_id, conn_id, state),
-        WrapperToDaemon::ThreadNoticeCapability { versions } => {
-            let mut st = state.lock().recover_poison();
-            // Capacité de réception d'une connexion principale enregistrée ; un
-            // client auxiliaire ne reçoit jamais d'alerte. Au plus 8 valeurs lues.
-            let eligible =
-                st.conn_names.contains_key(conn_id) && !st.auxiliary_connections.contains(conn_id);
-            if eligible
-                && versions
-                    .iter()
-                    .take(8)
-                    .any(|version| *version == crate::threads::THREAD_NOTICE_VERSION)
-            {
-                st.thread_notice_versions
-                    .insert(conn_id.to_string(), crate::threads::THREAD_NOTICE_VERSION);
-            } else {
-                st.thread_notice_versions.remove(conn_id);
-            }
-            None
-        }
+        WrapperToDaemon::ThreadNoticeCapability { versions } => wrapper_dispatch::on_thread_notice_capability(versions, conn_id, state),
         WrapperToDaemon::ThreadRequest { request } => {
             wrapper_dispatch::on_thread_request(request, conn_id, state)
         }
