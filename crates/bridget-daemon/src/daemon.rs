@@ -18403,54 +18403,7 @@ fn handle_wrapper_message_with_peer(
             }
             None
         }
-        WrapperToDaemon::Subscribed { subscription_id } => {
-            let control = {
-                let st = state.lock().unwrap_or_else(|e| e.into_inner());
-                let subscription = st.attach_subscriptions.get(&subscription_id).cloned()?;
-                if subscription.wrapper_conn != conn_id {
-                    return None;
-                }
-                log::debug!(
-                    "abonnement attach {} accepté par {}",
-                    subscription_id,
-                    subscription.agent
-                );
-                st.connections
-                    .get(&subscription.attach_conn)
-                    .map(|writer| DeferredControl {
-                        writer: writer.clone(),
-                        message: DaemonToWrapper::Subscribed {
-                            subscription_id: subscription_id.clone(),
-                        },
-                    })
-            };
-            let delivered =
-                control.is_some_and(|control| execute_controls(vec![control]).is_empty());
-            if !delivered {
-                let (control, view) = {
-                    let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
-                    let subscription = st.attach_subscriptions.remove(&subscription_id);
-                    let control = subscription.and_then(|subscription| {
-                        st.connections
-                            .get(&subscription.wrapper_conn)
-                            .map(|writer| DeferredControl {
-                                writer: writer.clone(),
-                                message: DaemonToWrapper::Unsubscribe {
-                                    subscription_id: subscription_id.clone(),
-                                },
-                            })
-                    });
-                    (control, st.attach_views.remove(&subscription_id))
-                };
-                if let Some(control) = control {
-                    let _ = execute_controls(vec![control]);
-                }
-                if let Some(view) = view {
-                    view.close_and_join();
-                }
-            }
-            None
-        }
+        WrapperToDaemon::Subscribed { subscription_id } => wrapper_dispatch::on_subscribed(subscription_id, conn_id, state),
         WrapperToDaemon::AttachRejected {
             subscription_id,
             reason,
