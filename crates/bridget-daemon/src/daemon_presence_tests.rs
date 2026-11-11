@@ -8213,6 +8213,46 @@ fn guidance156_send_steer_transmis_tel_quel() {
 }
 
 #[test]
+fn spec269_steer_claude_stream_refuse_durablement_avant_remise() {
+    let (template_state, template_config, tasks) = control158_state_with_tasks("steer269");
+    let mut task = tasks[1].clone();
+    drop(template_state);
+    let _ = std::fs::remove_file(template_config.db_path);
+    let (mut st, config) = state_with_registered_agent("steer269");
+    let (writer, reader) = control_socket("steer269");
+    st.connections.insert("conn-1".into(), writer);
+    let shared = Arc::new(Mutex::new(st));
+    negotiate_idempotent_client(&shared, "guidance-client", "012_scope_guidance_steer269", "89000000-0000-4000-8000-000000000200");
+    {
+        let mut st = shared.lock().unwrap();
+        guidance156_link_parent(&mut st, "guidance-client", "conn-1");
+        task.child = "89000000-0000-4000-8000-000000000102".into();
+        task.child_instance = Some(st.conn_instances["conn-1"].clone());
+        task.definition.protocol = "claude_stream_json".into();
+        task.state = "working".into();
+        st.delegation_store.insert(&task, "steer269", &serde_json::to_vec(&task.request).unwrap()).unwrap();
+    }
+    let mut message = idempotent_message("guidage269");
+    message.intent = Some(bridget_core::MessageIntent::SteerCurrent);
+    let issued_at = unix_now_secs();
+    for _ in 0..2 {
+        let response = handle_wrapper_message("guidance-client", WrapperToDaemon::SendIdempotent {
+            message: message.clone(), message_id: "steer269".into(), issued_at,
+        }, &shared).unwrap();
+        let DaemonToWrapper::IdempotencyResult { issue: IdempotencyIssue::Rejected { category, reason, .. }, .. } = response else {
+            panic!("refus avant remise attendu : {response:?}")
+        };
+        assert_eq!(category, "steer_unavailable");
+        assert!(reason.contains("avant remise") && reason.contains("intent=queue"));
+    }
+    reader.get_ref().set_nonblocking(true).unwrap();
+    let mut byte = [0];
+    assert!(matches!(std::io::Read::read(&mut &*reader.get_ref(), &mut byte), Err(e) if e.kind() == std::io::ErrorKind::WouldBlock));
+    drop(shared);
+    let _ = std::fs::remove_file(config.db_path);
+}
+
+#[test]
 fn guidance156_send_interrupt_admet_execution() {
     let (mut st, config) = state_with_registered_agent("guidance156-interrupt");
     let (writer, mut reader) = control_socket("guidance156-interrupt");

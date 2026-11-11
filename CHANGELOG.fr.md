@@ -1,5 +1,12 @@
 # Journal des changements
 
+## 0.8.36
+
+- Rendre la cause native d’un lancement refusé par le plafond de flotte et terminer sa demande sans inventer de démarrage.
+- Conserver les dossiers préparés avant ce refus avec un rapport indisponible, sans suppression implicite.
+- Expliquer le guidage non pris en charge avant remise et solder un rejet corrélé sans changer la mission active.
+- Créer les nouveaux caches de compilation privés avant Cargo ; conserver les gardes des caches existants.
+
 ## 0.8.28
 
 - Transmettre le refus d’un chemin protégé dans l’admission, avec sa cause constatée et une capacité négociée compatible avec les anciens pairs. Conserver les causes distinctes d’un même lot.

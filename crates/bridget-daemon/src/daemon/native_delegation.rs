@@ -5826,7 +5826,16 @@ fn remote_result_slot_error_reason(error: &str) -> Option<&str> {
 }
 
 // Texte fermé : conserver le code technique et ne jamais recopier stderr.
+fn remote_spawn_quota_limit(error: &str) -> Option<usize> {
+    error.strip_prefix("remote_start_failed:").unwrap_or(error)
+        .strip_prefix("remote_spawn_refused:quota_exceeded:")?
+        .parse::<usize>().ok().filter(|limit| *limit > 0)
+}
+
 fn remote_start_error_message(error: &str) -> Option<&'static str> {
+    if remote_spawn_quota_limit(error).is_some() {
+        return Some("La limite interne du nombre d’agents de la flotte a refusé ce lancement avant tout démarrage. Ce refus ne mesure ni le CPU ni la mémoire de la machine cible.");
+    }
     if let Some(reason) = super::origin_proof::rejected_reason(
         error.strip_prefix("remote_start_failed:").unwrap_or(error),
     ) {
@@ -6561,6 +6570,12 @@ fn task_view(task: &Task, phase: Option<&str>, full: bool) -> Value {
             }
         });
     }
+    if let Some(limit) = task.projected_error().and_then(remote_spawn_quota_limit) {
+        view["detail"]["spawn_refusal"] = json!({"scope":"this_task","capacity_scope":"fleet","cause":"quota_exceeded","fleet_limit":limit,"start_issued":false});
+        view["error_message"] = json!(format!("La limite interne de la flotte ({limit} agents) a refusé ce lancement avant tout démarrage. Ce refus ne mesure ni le CPU ni la mémoire de la machine cible."));
+        view["error_recovery"] = json!("Conservez cette même tâche, sa request_id et son dossier. La commande de lancement a un refus définitif ; rejouer sa clé ne la redémarre pas. Attendez la clôture native et vérifiez le rapport du dossier avant une nouvelle demande autorisée. Une place doit réellement se libérer, ou l’utilisateur doit choisir un nouveau plafond de flotte. Aucun remplacement pendant une issue inconnue ; les autres travaux autorisés suivent leur propre état.");
+        view["error_human_action"] = json!("Si une place ne se libère pas dans le travail autorisé, demandez à l’utilisateur s’il veut augmenter BRIDGET_FLEET_QUOTA dans l’environnement du service superviseur. Un export dans le terminal appelant ne change pas ce service ; son réglage est lu au démarrage. Ne modifiez pas le plafond et n’arrêtez pas une autre mission de votre propre initiative.");
+    }
     if !full {
         view.as_object_mut().unwrap().remove("result");
     }
@@ -6722,6 +6737,16 @@ fn current_task_view(st: &DaemonState, task: &Task, full: bool) -> Result<Value,
     let control = crate::referent_control::read(st.store.connection())
         .map_err(|_| "control_state_unavailable")?;
     let mut view = task_view(task, phase.as_deref(), full);
+    if remote_spawn_quota_limit(task.projected_error().unwrap_or_default()).is_none()
+        && let Some(command) = unstarted_spawn_refusal(st, task)
+        && let Some(crate::idempotency::SpawnCommandIssue::Failed { category, reason }) = command.issue
+    {
+        let limit = reason.strip_prefix("quota de flotte atteint (")
+            .and_then(|rest| rest.split_once(')')).and_then(|(value, _)| value.parse::<usize>().ok());
+        view["detail"]["spawn_refusal"] = json!({"scope":"this_task","capacity_scope":"fleet","cause":category,"fleet_limit":limit,"start_issued":false,"workspace_report":if task.workspace.as_ref().is_some_and(|workspace| workspace.dirty.is_some()) {"observed"} else {"unavailable"}});
+        view["error_message"] = json!(format!("Le reçu natif atteste un refus par le plafond de flotte{} avant tout démarrage de cette commande. Aucun travail métier n’a été remis à cet agent.", limit.map(|value| format!(" ({value} agents)")).unwrap_or_default()));
+        view["error_recovery"] = json!("Conservez cette même tâche et son dossier. Attendez la clôture native et vérifiez les fichiers préservés avant une suite autorisée. Le rapport Git peut rester indisponible : la clôture ne permet alors aucune suppression. Un refus terminal de commande ne reprend pas par rejeu ; ne créez aucun remplacement d’issue inconnue. Les autres travaux autorisés suivent leur propre état.");
+    }
     project_continuation(st, task, &mut view, unix_timestamp(), None);
     view["suspended"] = json!(
         control.paused
@@ -8952,6 +8977,9 @@ fn remote_admission_outcome(
     {
         // L’admission et la clé sont déjà durables. Rendre leur reçu avec
         // l’erreur de démarrage, comme au rejeu ; aucun nouveau lancement.
+        if remote_spawn_quota_limit(&code).is_some() {
+            task.state = "failed".into();
+        }
         task.error = Some(format!("remote_start_failed:{code}"));
         st.delegation_store.save(&task)?;
     }
@@ -9670,6 +9698,13 @@ fn start_remote_task_with(
                         &st, &mut task, &issue,
                     )?);
                 }
+                crate::fleet::SpawnSubmission::Terminal(crate::idempotency::SpawnCommandIssue::Failed { category, reason })
+                    if category == "quota_exceeded" => {
+                        let limit = reason.strip_prefix("quota de flotte atteint (")
+                            .and_then(|rest| rest.split_once(')')).and_then(|(value, _)| value.parse::<usize>().ok())
+                            .filter(|limit| *limit > 0).ok_or("remote_spawn_not_new")?;
+                        return Err(format!("remote_spawn_refused:quota_exceeded:{limit}"));
+                    }
                 _ => return Err("remote_spawn_not_new".into()),
             };
             st.fleet
@@ -14206,7 +14241,25 @@ fn workspace_report_ready(task: &Task) -> bool {
         || task.workspace_report_mission.as_deref() == Some(task.mission.as_str())
 }
 
+/// Refus durable avant la lease : aucun Start n'a pu être émis pour cette commande.
+fn unstarted_spawn_refusal(st: &DaemonState, task: &Task) -> Option<crate::idempotency::SpawnCommand> {
+    if task.remote_placement.is_none() || !task.remote_prepared
+        || task.child_instance.is_some() || task.started_at.is_some() || task.launch_issued_at.is_some()
+        || task.mission_issued_at.is_some() || task.start_recovery.is_some()
+    {
+        return None;
+    }
+    st.idempotency.spawn_command(&st.fleet.supervisor_scope(), &task.task_id).ok().flatten()
+        .filter(|command| command.name == task.child
+            && command.remote_placement == task.remote_placement
+            && command.resolved_definition.is_none()
+            && command.state == crate::idempotency::SpawnCommandState::Failed
+            && matches!(&command.issue, Some(crate::idempotency::SpawnCommandIssue::Failed { category, .. })
+                if category == "quota_exceeded"))
+}
+
 struct WorkspaceReportJob {
+    unstarted: bool,
     remote: Option<(
         bridget_transport::protocol::WorkerIdentity,
         bridget_transport::protocol::WorkerCommandIdentity,
@@ -14234,9 +14287,18 @@ fn claim_workspace_report(
     if !work.reports.insert(key.clone()) {
         return None;
     }
+    let mut unstarted = false;
     let remote = if let Some(placement) = &task.remote_placement {
         match remote_command_identity(st, task) {
             Ok(command) => Some((remote_worker_identity(placement), command)),
+            Err(_) if stopped && task.terminal()
+                && (matches!(workspace.strategy, crate::delegation::WorkspaceStrategy::Worktree)
+                    || (matches!(workspace.strategy, crate::delegation::WorkspaceStrategy::CommitView)
+                        && task.commit_view_binding().is_some()))
+                && unstarted_spawn_refusal(st, task).is_some() => {
+                    unstarted = true;
+                    None
+                }
             Err(_) => {
                 work.reports.remove(&key);
                 return None;
@@ -14246,6 +14308,7 @@ fn claim_workspace_report(
         None
     };
     Some(WorkspaceReportJob {
+        unstarted,
         remote,
         task_id: task.task_id.clone(),
         mission: task.mission.clone(),
@@ -14334,7 +14397,11 @@ fn append_workspace_result(task: &mut Task) {
 /// Git sans verrou. CAS court par tâche/mission/ronde et premier rapport gagnant.
 /// O(B+log n), B sortie Git bornée ; la garde se libère aussi sur panique.
 fn complete_workspace_report(state: &Arc<Mutex<DaemonState>>, job: WorkspaceReportJob) {
-    let report: Result<WorkspaceRecord, String> = if let Some((worker, command)) = &job.remote {
+    let report: Result<WorkspaceRecord, String> = if job.unstarted {
+        // Pas d'exécution ni d'inspection Git inventée : la conservation garde
+        // les faits de fichiers inconnus et interdit leur retrait automatique.
+        Err("spawn_refused_before_worker_start".into())
+    } else if let Some((worker, command)) = &job.remote {
         use bridget_transport::protocol::WorkerResponseOperation;
         remote_worker_roundtrip(
             state,

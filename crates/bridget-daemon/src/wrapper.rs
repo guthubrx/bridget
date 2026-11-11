@@ -7919,6 +7919,17 @@ fn forward_managed_events_with_redaction(
             }
             ManagedEventKind::DeliveryRejected { message_id, reason } => {
                 let reason = redact_managed_text(redaction, "provider_rejection", reason);
+                // Un refus de guidage concerne sa livraison, pas la mission active.
+                if !bindings.contains_key(&message_id)
+                    && !idempotent_deliveries.ordinary_active(&message_id)
+                    && idempotent_deliveries.pending.get(&message_id).is_some_and(|items|
+                        matches!(items.front(), Some(PendingAcpDispatch::Idempotent(_))))
+                {
+                    if let Some(report) = idempotent_deliveries.injection_rejected(&message_id) {
+                        send_wrapper_message(writer, report);
+                    }
+                    continue;
+                }
                 if (!bindings.is_empty() || idempotent_deliveries.requires_binding)
                     && !bindings.contains_key(&message_id)
                     && !idempotent_deliveries.ordinary_active(&message_id)

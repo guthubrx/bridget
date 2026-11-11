@@ -1,4 +1,224 @@
 use super::*;
+
+#[test]
+fn spec269_refus_avant_lease_conserve_sans_inventer_un_rapport_git() {
+    for commit_view in [false, true] {
+        let (state, config, mut task, _parent, _child) = native160_mission(false);
+        task.task_id = Uuid::new_v4().to_string();
+        task.child = Uuid::new_v4().to_string();
+        task.mission = Uuid::new_v4().to_string();
+        task.child_instance = None;
+        task.started_at = None;
+        task.mission_deadline_at = None;
+        task.launch_issued_at = None;
+        task.mission_issued_at = None;
+        task.state = "cancelled".into();
+        task.cleanup_done = false;
+        task.error = Some("remote_start_failed:remote_spawn_not_new".into());
+        task.remote_prepared = true;
+        task.remote_placement = Some(bridget_transport::protocol::RemotePlacement {
+            machine_id: "remote269".into(),
+            worker_id: "worker269".into(),
+            provisioning_revision: 1,
+            project_id: "project269".into(),
+            mapping_revision: 1,
+            origin_host: "source269".into(),
+            origin_cwd: "/source269".into(),
+            source_root_identity: "repo269".into(),
+            relative_cwd: ".".into(),
+            execution_cwd: "/remote269/retained".into(),
+            base_commit: Some("a".repeat(40)),
+            definition_digest: "b".repeat(64),
+            permission_digest: "c".repeat(64),
+        });
+        task.cwd = "/remote269/retained".into();
+        task.workspace = Some(WorkspaceRecord {
+            strategy: crate::delegation::WorkspaceStrategy::Worktree,
+            state: WorkspaceState::Active,
+            commit_view: None,
+            toplevel: "/remote269".into(),
+            path: "/remote269/retained".into(),
+            branch: "kept269".into(),
+            base_commit: "a".repeat(40),
+            head_commit: None,
+            branch_commit: None,
+            head_on_branch: None,
+            commit_count: None,
+            commits: vec![],
+            truncated: false,
+            dirty: None,
+        });
+        if commit_view {
+            let binding = crate::delegation::ViewBinding {
+                worker: remote_worker_identity(task.remote_placement.as_ref().unwrap()),
+                command: bridget_transport::protocol::WorkerCommandIdentity {
+                    command_id: task.task_id.clone(),
+                    task_id: task.task_id.clone(),
+                    instance_id: String::new(),
+                    generation: 0,
+                },
+                prepare_digest: "e".repeat(64),
+            };
+            task.commit_view_prepare = Some(binding.clone());
+            let workspace = task.workspace.as_mut().unwrap();
+            workspace.strategy = crate::delegation::WorkspaceStrategy::CommitView;
+            workspace.branch.clear();
+            workspace.commit_view = Some(crate::delegation::CommitViewRecord {
+                proof_root: "/remote269/proof".into(),
+                intent_digest: "f".repeat(64),
+                binding,
+            });
+        }
+        task.workspace_report_mission = None;
+        let request_id = format!("retention269-{}", task.task_id);
+        {
+            let st = state.lock().unwrap();
+            st.delegation_store
+                .insert(
+                    &task,
+                    &request_id,
+                    &serde_json::to_vec(&task.request).unwrap(),
+                )
+                .unwrap();
+            assert!(
+                claim_workspace_report(&st, &task, true).is_none(),
+                "absence de preuve native"
+            );
+            let now = unix_timestamp();
+            for n in st.fleet.active_count()..st.fleet.quota() {
+                let order = FleetSpawnOrder {
+                    posture: None,
+                    agent_type: "native-test".into(),
+                    project: None,
+                    requested_name: Some(Uuid::new_v4().to_string()),
+                    cwd: std::env::temp_dir(),
+                    persistent: false,
+                    command_id: format!("blocker269-{n}"),
+                    issued_at: now,
+                    deadline_at: now + 300,
+                    ownership: None,
+                    remote_placement: None,
+                };
+                assert!(matches!(
+                    st.fleet.request_spawn(&order, now).unwrap(),
+                    crate::fleet::SpawnSubmission::Start(_)
+                ));
+            }
+            let order = FleetSpawnOrder {
+                posture: None,
+                agent_type: "native-test".into(),
+                project: None,
+                requested_name: Some(task.child.clone()),
+                cwd: task.cwd.clone().into(),
+                persistent: false,
+                command_id: task.task_id.clone(),
+                issued_at: now,
+                deadline_at: now + 300,
+                ownership: None,
+                remote_placement: task.remote_placement.clone(),
+            };
+            assert!(matches!(st.fleet.request_spawn(&order, now).unwrap(),
+            crate::fleet::SpawnSubmission::Terminal(crate::idempotency::SpawnCommandIssue::Failed { category, .. }) if category == "quota_exceeded"));
+            for changed in ["child", "started", "instance", "placement", "state"] {
+                let mut invalid = task.clone();
+                match changed {
+                    "child" => invalid.child = Uuid::new_v4().to_string(),
+                    "started" => invalid.launch_issued_at = Some(now),
+                    "instance" => invalid.child_instance = Some("instance269".into()),
+                    "placement" => invalid.remote_placement.as_mut().unwrap().mapping_revision += 1,
+                    _ => invalid.state = "working".into(),
+                }
+                assert!(
+                    claim_workspace_report(&st, &invalid, true).is_none(),
+                    "garde {changed}"
+                );
+            }
+        }
+        let job = claim_workspace_report(&state.lock().unwrap(), &task, true).unwrap();
+        assert!(job.unstarted && job.remote.is_none());
+        complete_workspace_report(&state, job);
+        let st = state.lock().unwrap();
+        let saved = st.delegation_store.get(&task.task_id).unwrap().unwrap();
+        assert_eq!(saved.state, "cancelled");
+        assert!(saved.started_at.is_none());
+        assert_eq!(saved.error, task.error);
+        assert!(workspace_report_ready(&saved));
+        let workspace = saved.workspace.as_ref().unwrap();
+        assert_eq!(workspace.state, WorkspaceState::Kept);
+        assert_eq!(workspace.path, "/remote269/retained");
+        assert!(
+            workspace.dirty.is_none()
+                && workspace.commit_count.is_none()
+                && workspace.head_commit.is_none()
+        );
+        assert!(workspace.commits.is_empty());
+        let view = current_task_view(&st, &saved, true).unwrap();
+        if !commit_view {
+            assert_eq!(view["workspace"]["retention"]["code"], "stop_unconfirmed");
+        }
+        assert_eq!(view["detail"]["spawn_refusal"]["cause"], "quota_exceeded");
+        assert_eq!(view["detail"]["spawn_refusal"]["start_issued"], false);
+        drop(st);
+        cancel_tree(&state, &saved);
+        let final_task = state
+            .lock()
+            .unwrap()
+            .delegation_store
+            .get(&task.task_id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            final_task.cleanup_done, !commit_view,
+            "une vue exige encore son ACK worker"
+        );
+        assert_eq!(final_task.state, "cancelled");
+        assert!(final_task.workspace.as_ref().unwrap().dirty.is_none());
+        if !commit_view {
+            assert_eq!(
+                current_task_view(&state.lock().unwrap(), &final_task, true).unwrap()["workspace"]
+                    ["retention"]["code"],
+                "report_unavailable"
+            );
+        }
+        drop(state);
+        cleanup(&config);
+    }
+}
+
+#[test]
+fn spec269_refus_flotte_avant_start_termine_la_demande_sans_mission() {
+    let (state, config, mut task, _parent, _child) = native160_mission(false);
+    task.state = "queued".into();
+    task.launch_issued_at = None;
+    task.mission_issued_at = None;
+    task.child_instance = None;
+    task.workspace = None;
+    state.lock().unwrap().delegation_store.save(&task).unwrap();
+    let code = "remote_spawn_refused:quota_exceeded:24";
+    let view = remote_admission_outcome(&state, &task.task_id, Err(code.into())).unwrap();
+    assert_eq!(view["status"], "failed");
+    assert_eq!(view["work_state"], "failed");
+    assert_eq!(view["detail"]["spawn_refusal"]["fleet_limit"], 24);
+    assert!(view["error_message"].as_str().unwrap().contains("flotte"));
+    assert!(view["error_recovery"].as_str().unwrap().contains("même"));
+    let saved = state
+        .lock()
+        .unwrap()
+        .delegation_store
+        .get(&task.task_id)
+        .unwrap()
+        .unwrap();
+    assert!(saved.child_instance.is_none() && saved.mission_issued_at.is_none());
+    assert_eq!(
+        saved.error.as_deref(),
+        Some("remote_start_failed:remote_spawn_refused:quota_exceeded:24")
+    );
+    let replay =
+        remote_admission_outcome(&state, &task.task_id, Err("permission_changed".into())).unwrap();
+    assert_eq!(replay["error"], view["error"]);
+    drop(state);
+    cleanup(&config);
+}
 #[path = "local_result265_tests.rs"]
 mod local_result265_tests;
 use bridget_transport::poison::RecoverPoison;

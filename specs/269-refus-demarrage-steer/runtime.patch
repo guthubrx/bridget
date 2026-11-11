@@ -1,0 +1,581 @@
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -7,7 +7,7 @@
+ ]
+ 
+ [workspace.package]
+-version = "0.8.35"
++version = "0.8.36"
+ edition = "2024"
+ license = "MIT"
+ 
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -192,7 +192,7 @@
+ 
+ [[package]]
+ name = "bridget-core"
+-version = "0.8.35"
++version = "0.8.36"
+ dependencies = [
+  "serde",
+  "serde_json",
+@@ -201,7 +201,7 @@
+ 
+ [[package]]
+ name = "bridget-daemon"
+-version = "0.8.35"
++version = "0.8.36"
+ dependencies = [
+  "axum",
+  "base64",
+@@ -229,7 +229,7 @@
+ 
+ [[package]]
+ name = "bridget-transport"
+-version = "0.8.35"
++version = "0.8.36"
+ dependencies = [
+  "bridget-core",
+  "libc",
+--- a/scripts/build.py
++++ b/scripts/build.py
+@@ -72,6 +72,18 @@
+     if not target:
+         return
+     path = Path(os.path.abspath(repo / target))
++    if (path.parent != staging_parent() or not path.name.startswith("bridget-build-")
++            or path.name == "bridget-build-"):
++        return
++    # Créer le cache avant Cargo : son mode par défaut pourrait le rendre
++    # traversable et empêcher toute observation limitée au compte propriétaire.
++    path.parent.mkdir(mode=0o700, exist_ok=True)
++    if not plain_dir(path.parent):
++        return
++    try:
++        path.mkdir(mode=0o700)
++    except FileExistsError:
++        pass  # Ne pas changer les droits d'un cache préexistant.
+     if not is_staging(path):
+         return
+     marker = path / OWNER
+--- a/scripts/tests/test_build_cleanup.py
++++ b/scripts/tests/test_build_cleanup.py
+@@ -152,6 +152,22 @@
+         (stage / build.OWNER).write_text(json.dumps({"version": 1, "repo": "autre"}))
+         self.assertEqual(self.clean(), 0)
+         self.assertTrue((path / "deps").exists())
++
++    def test_staging_neuf_prive_et_enregistre_avant_cargo(self):
++        stage = self.cache / "bridget-build-new"
++        with patch.dict(os.environ, {"CARGO_TARGET_DIR": str(stage)}):
++            build.register_staging(self.repo, ["test"])
++        self.assertTrue(stage.is_dir())
++        self.assertEqual(stage.stat().st_mode & 0o777, 0o700)
++        self.assertEqual(json.loads((stage / build.OWNER).read_text()),
++                         {"version": 1, "repo": "test-owner"})
++
++    def test_staging_existant_ne_change_pas_de_droits(self):
++        stage = self.cache / "bridget-build-existing"
++        stage.mkdir(mode=0o755)
++        with patch.dict(os.environ, {"CARGO_TARGET_DIR": str(stage)}):
++            build.register_staging(self.repo, ["test"])
++        self.assertEqual(stage.stat().st_mode & 0o777, 0o755)
+ 
+     def staging(self):
+         stage = self.cache / "bridget-build-test"
+--- a/crates/bridget-daemon/src/daemon.rs
++++ b/crates/bridget-daemon/src/daemon.rs
+@@ -12502,6 +12502,18 @@
+             reason: error,
+         });
+     };
++    if message.intent == Some(bridget_core::MessageIntent::SteerCurrent)
++        && st.delegation_store.for_child(&message.to).ok().flatten().is_some_and(|task|
++            task.child_instance.as_deref() == Some(recipient_instance_id.as_str())
++                && task.definition.protocol == "claude_stream_json")
++    {
++        if let Some(facts) = &guidance_admission {
++            let _ = record_guidance_outcome(st, facts, &message.to, &message.id, "refused:steer_unavailable");
++        }
++        return reject_idempotent_send(st, &key, "steer_unavailable",
++            "Ce pilote natif ne prend pas en charge le guidage pendant un tour. Cette demande est refusée avant remise, sans interrompre l’agent. Pour attendre sa fin de tour, envoyer explicitement un message ordinaire intent=queue ; aucun repli automatique n’a été effectué. Si la consigne doit être appliquée immédiatement, demander au propriétaire de choisir une interruption autorisée. Les autres travaux autorisés suivent leur propre état.")
++            .unwrap_or_else(|reason| DaemonToWrapper::Nack { id: message.id.clone(), reason });
++    }
+     // O(log N): messages mobiles retenus avant le porteur, même pour T3.
+     let mobile_hold = scoped_mobile_human && message.intent.is_none()
+         && st.presences.get(&recipient_instance_id).is_some_and(|p| p.turn_attest
+--- a/crates/bridget-daemon/src/daemon/native_delegation.rs
++++ b/crates/bridget-daemon/src/daemon/native_delegation.rs
+@@ -4894,7 +4894,16 @@
+ }
+ 
+ // Texte fermé : conserver le code technique et ne jamais recopier stderr.
++fn remote_spawn_quota_limit(error: &str) -> Option<usize> {
++    error.strip_prefix("remote_start_failed:").unwrap_or(error)
++        .strip_prefix("remote_spawn_refused:quota_exceeded:")?
++        .parse::<usize>().ok().filter(|limit| *limit > 0)
++}
++
+ fn remote_start_error_message(error: &str) -> Option<&'static str> {
++    if remote_spawn_quota_limit(error).is_some() {
++        return Some("La limite interne du nombre d’agents de la flotte a refusé ce lancement avant tout démarrage. Ce refus ne mesure ni le CPU ni la mémoire de la machine cible.");
++    }
+     if let Some(reason)=super::origin_proof::rejected_reason(error.strip_prefix("remote_start_failed:").unwrap_or(error)) {
+         return Some(super::origin_proof::rejection_message(reason));
+     }
+@@ -5350,6 +5359,12 @@
+             }
+         });
+     }
++    if let Some(limit) = task.projected_error().and_then(remote_spawn_quota_limit) {
++        view["detail"]["spawn_refusal"] = json!({"scope":"this_task","capacity_scope":"fleet","cause":"quota_exceeded","fleet_limit":limit,"start_issued":false});
++        view["error_message"] = json!(format!("La limite interne de la flotte ({limit} agents) a refusé ce lancement avant tout démarrage. Ce refus ne mesure ni le CPU ni la mémoire de la machine cible."));
++        view["error_recovery"] = json!("Conservez cette même tâche, sa request_id et son dossier. La commande de lancement a un refus définitif ; rejouer sa clé ne la redémarre pas. Attendez la clôture native et vérifiez le rapport du dossier avant une nouvelle demande autorisée. Une place doit réellement se libérer, ou l’utilisateur doit choisir un nouveau plafond de flotte. Aucun remplacement pendant une issue inconnue ; les autres travaux autorisés suivent leur propre état.");
++        view["error_human_action"] = json!("Si une place ne se libère pas dans le travail autorisé, demandez à l’utilisateur s’il veut augmenter BRIDGET_FLEET_QUOTA dans l’environnement du service superviseur. Un export dans le terminal appelant ne change pas ce service ; son réglage est lu au démarrage. Ne modifiez pas le plafond et n’arrêtez pas une autre mission de votre propre initiative.");
++    }
+     if !full {
+         view.as_object_mut().unwrap().remove("result");
+     }
+@@ -5453,6 +5468,16 @@
+     let control = crate::referent_control::read(st.store.connection())
+         .map_err(|_| "control_state_unavailable")?;
+     let mut view = task_view(task, phase.as_deref(), full);
++    if remote_spawn_quota_limit(task.projected_error().unwrap_or_default()).is_none()
++        && let Some(command) = unstarted_spawn_refusal(st, task)
++        && let Some(crate::idempotency::SpawnCommandIssue::Failed { category, reason }) = command.issue
++    {
++        let limit = reason.strip_prefix("quota de flotte atteint (")
++            .and_then(|rest| rest.split_once(')')).and_then(|(value, _)| value.parse::<usize>().ok());
++        view["detail"]["spawn_refusal"] = json!({"scope":"this_task","capacity_scope":"fleet","cause":category,"fleet_limit":limit,"start_issued":false,"workspace_report":if task.workspace.as_ref().is_some_and(|workspace| workspace.dirty.is_some()) {"observed"} else {"unavailable"}});
++        view["error_message"] = json!(format!("Le reçu natif atteste un refus par le plafond de flotte{} avant tout démarrage de cette commande. Aucun travail métier n’a été remis à cet agent.", limit.map(|value| format!(" ({value} agents)")).unwrap_or_default()));
++        view["error_recovery"] = json!("Conservez cette même tâche et son dossier. Attendez la clôture native et vérifiez les fichiers préservés avant une suite autorisée. Le rapport Git peut rester indisponible : la clôture ne permet alors aucune suppression. Un refus terminal de commande ne reprend pas par rejeu ; ne créez aucun remplacement d’issue inconnue. Les autres travaux autorisés suivent leur propre état.");
++    }
+     project_continuation(st,task,&mut view,unix_timestamp(),None);
+     view["suspended"] = json!(
+         control.paused
+@@ -7090,6 +7115,9 @@
+     {
+         // L’admission et la clé sont déjà durables. Rendre leur reçu avec
+         // l’erreur de démarrage, comme au rejeu ; aucun nouveau lancement.
++        if remote_spawn_quota_limit(&code).is_some() {
++            task.state = "failed".into();
++        }
+         task.error = Some(format!("remote_start_failed:{code}"));
+         st.delegation_store.save(&task)?;
+     }
+@@ -7760,6 +7788,13 @@
+             crate::fleet::SpawnSubmission::Terminal(issue) if recovery.is_some()=>{
+                 return Err(start_recovery::local_reservation_refusal(&st,&mut task,&issue)?);
+             },
++                crate::fleet::SpawnSubmission::Terminal(crate::idempotency::SpawnCommandIssue::Failed { category, reason })
++                    if category == "quota_exceeded" => {
++                        let limit = reason.strip_prefix("quota de flotte atteint (")
++                            .and_then(|rest| rest.split_once(')')).and_then(|(value, _)| value.parse::<usize>().ok())
++                            .filter(|limit| *limit > 0).ok_or("remote_spawn_not_new")?;
++                        return Err(format!("remote_spawn_refused:quota_exceeded:{limit}"));
++                    }
+             _=>return Err("remote_spawn_not_new".into()),
+         };
+         st.fleet
+@@ -12006,7 +12041,25 @@
+         || task.workspace_report_mission.as_deref() == Some(task.mission.as_str())
+ }
+ 
++/// Refus durable avant la lease : aucun Start n'a pu être émis pour cette commande.
++fn unstarted_spawn_refusal(st: &DaemonState, task: &Task) -> Option<crate::idempotency::SpawnCommand> {
++    if task.remote_placement.is_none() || !task.remote_prepared
++        || task.child_instance.is_some() || task.started_at.is_some() || task.launch_issued_at.is_some()
++        || task.mission_issued_at.is_some() || task.start_recovery.is_some()
++    {
++        return None;
++    }
++    st.idempotency.spawn_command(&st.fleet.supervisor_scope(), &task.task_id).ok().flatten()
++        .filter(|command| command.name == task.child
++            && command.remote_placement == task.remote_placement
++            && command.resolved_definition.is_none()
++            && command.state == crate::idempotency::SpawnCommandState::Failed
++            && matches!(&command.issue, Some(crate::idempotency::SpawnCommandIssue::Failed { category, .. })
++                if category == "quota_exceeded"))
++}
++
+ struct WorkspaceReportJob {
++    unstarted: bool,
+     remote: Option<(
+         bridget_transport::protocol::WorkerIdentity,
+         bridget_transport::protocol::WorkerCommandIdentity,
+@@ -12034,9 +12087,18 @@
+     if !work.reports.insert(key.clone()) {
+         return None;
+     }
++    let mut unstarted = false;
+     let remote = if let Some(placement) = &task.remote_placement {
+         match remote_command_identity(st, task) {
+             Ok(command) => Some((remote_worker_identity(placement), command)),
++            Err(_) if stopped && task.terminal()
++                && (matches!(workspace.strategy, crate::delegation::WorkspaceStrategy::Worktree)
++                    || (matches!(workspace.strategy, crate::delegation::WorkspaceStrategy::CommitView)
++                        && task.commit_view_binding().is_some()))
++                && unstarted_spawn_refusal(st, task).is_some() => {
++                    unstarted = true;
++                    None
++                }
+             Err(_) => {
+                 work.reports.remove(&key);
+                 return None;
+@@ -12046,6 +12108,7 @@
+         None
+     };
+     Some(WorkspaceReportJob {
++        unstarted,
+         remote,
+         task_id: task.task_id.clone(),
+         mission: task.mission.clone(),
+@@ -12123,7 +12186,11 @@
+ /// Git sans verrou. CAS court par tâche/mission/ronde et premier rapport gagnant.
+ /// O(B+log n), B sortie Git bornée ; la garde se libère aussi sur panique.
+ fn complete_workspace_report(state: &Arc<Mutex<DaemonState>>, job: WorkspaceReportJob) {
+-    let report: Result<WorkspaceRecord, String> = if let Some((worker, command)) = &job.remote {
++    let report: Result<WorkspaceRecord, String> = if job.unstarted {
++        // Pas d'exécution ni d'inspection Git inventée : la conservation garde
++        // les faits de fichiers inconnus et interdit leur retrait automatique.
++        Err("spawn_refused_before_worker_start".into())
++    } else if let Some((worker, command)) = &job.remote {
+         use bridget_transport::protocol::WorkerResponseOperation;
+         remote_worker_roundtrip(
+             state,
+--- a/crates/bridget-daemon/src/daemon/native_delegation_tests.rs
++++ b/crates/bridget-daemon/src/daemon/native_delegation_tests.rs
+@@ -22622,3 +22622,223 @@
+     assert!(refusal["message"].as_str().unwrap().contains("borne interne"));
+     assert!(refusal["detail"]["recovery"].as_str().unwrap().contains("bridget_prepare_capacity"));
+ }
++
++#[test]
++fn spec269_refus_avant_lease_conserve_sans_inventer_un_rapport_git() {
++    for commit_view in [false, true] {
++        let (state, config, mut task, _parent, _child) = native160_mission(false);
++        task.task_id = Uuid::new_v4().to_string();
++        task.child = Uuid::new_v4().to_string();
++        task.mission = Uuid::new_v4().to_string();
++        task.child_instance = None;
++        task.started_at = None;
++        task.mission_deadline_at = None;
++        task.launch_issued_at = None;
++        task.mission_issued_at = None;
++        task.state = "cancelled".into();
++        task.cleanup_done = false;
++        task.error = Some("remote_start_failed:remote_spawn_not_new".into());
++        task.remote_prepared = true;
++        task.remote_placement = Some(bridget_transport::protocol::RemotePlacement {
++            machine_id: "remote269".into(),
++            worker_id: "worker269".into(),
++            provisioning_revision: 1,
++            project_id: "project269".into(),
++            mapping_revision: 1,
++            origin_host: "source269".into(),
++            origin_cwd: "/source269".into(),
++            source_root_identity: "repo269".into(),
++            relative_cwd: ".".into(),
++            execution_cwd: "/remote269/retained".into(),
++            base_commit: Some("a".repeat(40)),
++            definition_digest: "b".repeat(64),
++            permission_digest: "c".repeat(64),
++        });
++        task.cwd = "/remote269/retained".into();
++        task.workspace = Some(WorkspaceRecord {
++            strategy: crate::delegation::WorkspaceStrategy::Worktree,
++            state: WorkspaceState::Active,
++            commit_view: None,
++            toplevel: "/remote269".into(),
++            path: "/remote269/retained".into(),
++            branch: "kept269".into(),
++            base_commit: "a".repeat(40),
++            head_commit: None,
++            branch_commit: None,
++            head_on_branch: None,
++            commit_count: None,
++            commits: vec![],
++            truncated: false,
++            dirty: None,
++        });
++        if commit_view {
++            let binding = crate::delegation::ViewBinding {
++                worker: remote_worker_identity(task.remote_placement.as_ref().unwrap()),
++                command: bridget_transport::protocol::WorkerCommandIdentity {
++                    command_id: task.task_id.clone(),
++                    task_id: task.task_id.clone(),
++                    instance_id: String::new(),
++                    generation: 0,
++                },
++                prepare_digest: "e".repeat(64),
++            };
++            task.commit_view_prepare = Some(binding.clone());
++            let workspace = task.workspace.as_mut().unwrap();
++            workspace.strategy = crate::delegation::WorkspaceStrategy::CommitView;
++            workspace.branch.clear();
++            workspace.commit_view = Some(crate::delegation::CommitViewRecord {
++                proof_root: "/remote269/proof".into(),
++                intent_digest: "f".repeat(64),
++                binding,
++            });
++        }
++        task.workspace_report_mission = None;
++        let request_id = format!("retention269-{}", task.task_id);
++        {
++            let st = state.lock().unwrap();
++            st.delegation_store
++                .insert(
++                    &task,
++                    &request_id,
++                    &serde_json::to_vec(&task.request).unwrap(),
++                )
++                .unwrap();
++            assert!(
++                claim_workspace_report(&st, &task, true).is_none(),
++                "absence de preuve native"
++            );
++            let now = unix_timestamp();
++            for n in st.fleet.active_count()..st.fleet.quota() {
++                let order = FleetSpawnOrder {
++                    posture: None,
++                    agent_type: "native-test".into(),
++                    project: None,
++                    requested_name: Some(Uuid::new_v4().to_string()),
++                    cwd: std::env::temp_dir(),
++                    persistent: false,
++                    command_id: format!("blocker269-{n}"),
++                    issued_at: now,
++                    deadline_at: now + 300,
++                    ownership: None,
++                    remote_placement: None,
++                };
++                assert!(matches!(
++                    st.fleet.request_spawn(&order, now).unwrap(),
++                    crate::fleet::SpawnSubmission::Start(_)
++                ));
++            }
++            let order = FleetSpawnOrder {
++                posture: None,
++                agent_type: "native-test".into(),
++                project: None,
++                requested_name: Some(task.child.clone()),
++                cwd: task.cwd.clone().into(),
++                persistent: false,
++                command_id: task.task_id.clone(),
++                issued_at: now,
++                deadline_at: now + 300,
++                ownership: None,
++                remote_placement: task.remote_placement.clone(),
++            };
++            assert!(matches!(st.fleet.request_spawn(&order, now).unwrap(),
++            crate::fleet::SpawnSubmission::Terminal(crate::idempotency::SpawnCommandIssue::Failed { category, .. }) if category == "quota_exceeded"));
++            for changed in ["child", "started", "instance", "placement", "state"] {
++                let mut invalid = task.clone();
++                match changed {
++                    "child" => invalid.child = Uuid::new_v4().to_string(),
++                    "started" => invalid.launch_issued_at = Some(now),
++                    "instance" => invalid.child_instance = Some("instance269".into()),
++                    "placement" => invalid.remote_placement.as_mut().unwrap().mapping_revision += 1,
++                    _ => invalid.state = "working".into(),
++                }
++                assert!(
++                    claim_workspace_report(&st, &invalid, true).is_none(),
++                    "garde {changed}"
++                );
++            }
++        }
++        let job = claim_workspace_report(&state.lock().unwrap(), &task, true).unwrap();
++        assert!(job.unstarted && job.remote.is_none());
++        complete_workspace_report(&state, job);
++        let st = state.lock().unwrap();
++        let saved = st.delegation_store.get(&task.task_id).unwrap().unwrap();
++        assert_eq!(saved.state, "cancelled");
++        assert!(saved.started_at.is_none());
++        assert_eq!(saved.error, task.error);
++        assert!(workspace_report_ready(&saved));
++        let workspace = saved.workspace.as_ref().unwrap();
++        assert_eq!(workspace.state, WorkspaceState::Kept);
++        assert_eq!(workspace.path, "/remote269/retained");
++        assert!(
++            workspace.dirty.is_none()
++                && workspace.commit_count.is_none()
++                && workspace.head_commit.is_none()
++        );
++        assert!(workspace.commits.is_empty());
++        let view = current_task_view(&st, &saved, true).unwrap();
++        if !commit_view {
++            assert_eq!(view["workspace"]["retention"]["code"], "stop_unconfirmed");
++        }
++        assert_eq!(view["detail"]["spawn_refusal"]["cause"], "quota_exceeded");
++        assert_eq!(view["detail"]["spawn_refusal"]["start_issued"], false);
++        drop(st);
++        cancel_tree(&state, &saved);
++        let final_task = state
++            .lock()
++            .unwrap()
++            .delegation_store
++            .get(&task.task_id)
++            .unwrap()
++            .unwrap();
++        assert_eq!(
++            final_task.cleanup_done, !commit_view,
++            "une vue exige encore son ACK worker"
++        );
++        assert_eq!(final_task.state, "cancelled");
++        assert!(final_task.workspace.as_ref().unwrap().dirty.is_none());
++        if !commit_view {
++            assert_eq!(
++                current_task_view(&state.lock().unwrap(), &final_task, true).unwrap()["workspace"]
++                    ["retention"]["code"],
++                "report_unavailable"
++            );
++        }
++        drop(state);
++        cleanup(&config);
++    }
++}
++
++#[test]
++fn spec269_refus_flotte_avant_start_termine_la_demande_sans_mission() {
++    let (state, config, mut task, _parent, _child) = native160_mission(false);
++    task.state = "queued".into();
++    task.launch_issued_at = None;
++    task.mission_issued_at = None;
++    task.child_instance = None;
++    task.workspace = None;
++    state.lock().unwrap().delegation_store.save(&task).unwrap();
++    let code = "remote_spawn_refused:quota_exceeded:24";
++    let view = remote_admission_outcome(&state, &task.task_id, Err(code.into())).unwrap();
++    assert_eq!(view["status"], "failed");
++    assert_eq!(view["work_state"], "failed");
++    assert_eq!(view["detail"]["spawn_refusal"]["fleet_limit"], 24);
++    assert!(view["error_message"].as_str().unwrap().contains("flotte"));
++    assert!(view["error_recovery"].as_str().unwrap().contains("même"));
++    let saved = state
++        .lock()
++        .unwrap()
++        .delegation_store
++        .get(&task.task_id)
++        .unwrap()
++        .unwrap();
++    assert!(saved.child_instance.is_none() && saved.mission_issued_at.is_none());
++    assert_eq!(
++        saved.error.as_deref(),
++        Some("remote_start_failed:remote_spawn_refused:quota_exceeded:24")
++    );
++    let replay =
++        remote_admission_outcome(&state, &task.task_id, Err("permission_changed".into())).unwrap();
++    assert_eq!(replay["error"], view["error"]);
++    drop(state);
++    cleanup(&config);
++}
+--- a/crates/bridget-daemon/src/daemon_presence_tests.rs
++++ b/crates/bridget-daemon/src/daemon_presence_tests.rs
+@@ -24442,3 +24442,44 @@
+         drop(state);
+         let _ = std::fs::remove_file(config.db_path);
+     }
++
++#[test]
++fn spec269_steer_claude_stream_refuse_durablement_avant_remise() {
++    let (template_state, template_config, tasks) = control158_state_with_tasks("steer269");
++    let mut task = tasks[1].clone();
++    drop(template_state);
++    let _ = std::fs::remove_file(template_config.db_path);
++    let (mut st, config) = state_with_registered_agent("steer269");
++    let (writer, reader) = control_socket("steer269");
++    st.connections.insert("conn-1".into(), writer);
++    let shared = Arc::new(Mutex::new(st));
++    negotiate_idempotent_client(&shared, "guidance-client", "012_scope_guidance_steer269", "89000000-0000-4000-8000-000000000200");
++    {
++        let mut st = shared.lock().unwrap();
++        guidance156_link_parent(&mut st, "guidance-client", "conn-1");
++        task.child = "89000000-0000-4000-8000-000000000102".into();
++        task.child_instance = Some(st.conn_instances["conn-1"].clone());
++        task.definition.protocol = "claude_stream_json".into();
++        task.state = "working".into();
++        st.delegation_store.insert(&task, "steer269", &serde_json::to_vec(&task.request).unwrap()).unwrap();
++    }
++    let mut message = idempotent_message("guidage269");
++    message.intent = Some(bridget_core::MessageIntent::SteerCurrent);
++    let issued_at = unix_now_secs();
++    for _ in 0..2 {
++        let response = handle_wrapper_message("guidance-client", WrapperToDaemon::SendIdempotent {
++            message: message.clone(), message_id: "steer269".into(), issued_at,
++        }, &shared).unwrap();
++        let DaemonToWrapper::IdempotencyResult { issue: IdempotencyIssue::Rejected { category, reason, .. }, .. } = response else {
++            panic!("refus avant remise attendu : {response:?}")
++        };
++        assert_eq!(category, "steer_unavailable");
++        assert!(reason.contains("avant remise") && reason.contains("intent=queue"));
++    }
++    reader.get_ref().set_nonblocking(true).unwrap();
++    let mut byte = [0];
++    assert!(matches!(std::io::Read::read(&mut &*reader.get_ref(), &mut byte), Err(e) if e.kind() == std::io::ErrorKind::WouldBlock));
++    drop(shared);
++    let _ = std::fs::remove_file(config.db_path);
++}
++
+--- a/crates/bridget-daemon/src/wrapper.rs
++++ b/crates/bridget-daemon/src/wrapper.rs
+@@ -7550,6 +7550,17 @@
+             }
+             ManagedEventKind::DeliveryRejected { message_id, reason } => {
+                 let reason = redact_managed_text(redaction, "provider_rejection", reason);
++                // Un refus de guidage concerne sa livraison, pas la mission active.
++                if !bindings.contains_key(&message_id)
++                    && !idempotent_deliveries.ordinary_active(&message_id)
++                    && idempotent_deliveries.pending.get(&message_id).is_some_and(|items|
++                        matches!(items.front(), Some(PendingAcpDispatch::Idempotent(_))))
++                {
++                    if let Some(report) = idempotent_deliveries.injection_rejected(&message_id) {
++                        send_wrapper_message(writer, report);
++                    }
++                    continue;
++                }
+                 if (!bindings.is_empty() || idempotent_deliveries.requires_binding) && !bindings.contains_key(&message_id) && !idempotent_deliveries.ordinary_active(&message_id) {
+                     warn!("refus fournisseur ignoré: message hors exécution active");
+                     continue;
+--- a/crates/bridget-daemon/src/wrapper_remote162_result_tests.rs
++++ b/crates/bridget-daemon/src/wrapper_remote162_result_tests.rs
+@@ -299,3 +299,39 @@
+             .is_err()
+         );
+     }
++
++#[test]
++fn spec269_steer_rejete_pending_solde_sans_ack_ni_terminal_natif() {
++    let fixture = Fixture::new();
++    let mut tracker = IdempotentDeliveryTracker::open_at(&fixture.root.join("receipts269"), "instance162").unwrap();
++    tracker.requires_binding = true;
++    let mut message = fixture.message();
++    message.id = "steer269".into();
++    message.reply = false;
++    message.intent = Some(bridget_core::MessageIntent::SteerCurrent);
++    let now = unix_now_secs();
++    assert!(matches!(tracker.receive("delivery269".into(), "instance162".into(), 1, now + 600, message.clone(), now), IdempotentDeliveryAction::Inject { .. }));
++    let (stream, peer) = UnixStream::pair().unwrap();
++    let writer = Arc::new(Mutex::new(Some(BufWriter::new(stream))));
++    let mut bindings = HashMap::from([("mission162".into(), fixture.binding())]);
++    let event = ManagedEvent::internal(bridget_transport::ManagedEventSource::ClaudeStreamJson, vec![],
++        ManagedEventKind::DeliveryRejected { message_id: message.id.clone(), reason: "pilotage Claude indisponible".into() });
++    assert!(!forward_managed_events(&writer, "child", vec![event], &mut tracker, &mut bindings));
++    peer.set_nonblocking(true).unwrap();
++    let mut reader = std::io::BufReader::new(peer);
++    let mut controls = Vec::new();
++    loop {
++        let mut line = String::new();
++        match std::io::BufRead::read_line(&mut reader, &mut line) {
++            Ok(0) => break,
++            Ok(_) => controls.push(serde_json::from_str::<WrapperToDaemon>(&line).unwrap()),
++            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => break,
++            Err(error) => panic!("lecture du reçu : {error}"),
++        }
++    }
++    assert!(controls.iter().any(|control| matches!(control, WrapperToDaemon::DeliveryIndeterminate { delivery_id, .. } if delivery_id == "delivery269")));
++    assert!(!controls.iter().any(|control| matches!(control, WrapperToDaemon::DeliverAcked { .. } | WrapperToDaemon::ExecutionStateChanged { .. } | WrapperToDaemon::TurnState { .. })));
++    assert_eq!(bindings["mission162"].state, "running");
++    assert!(!tracker.receipts.is_acknowledged("delivery269", now));
++    assert!(matches!(tracker.receive("delivery269".into(), "instance162".into(), 1, now + 600, message, now), IdempotentDeliveryAction::Report(WrapperToDaemon::DeliveryIndeterminate { .. })));
++}

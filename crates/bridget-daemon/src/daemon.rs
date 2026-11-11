@@ -12783,6 +12783,18 @@ fn handle_idempotent_send_with_result_authority(
             reason: error,
         });
     };
+    if message.intent == Some(bridget_core::MessageIntent::SteerCurrent)
+        && st.delegation_store.for_child(&message.to).ok().flatten().is_some_and(|task|
+            task.child_instance.as_deref() == Some(recipient_instance_id.as_str())
+                && task.definition.protocol == "claude_stream_json")
+    {
+        if let Some(facts) = &guidance_admission {
+            let _ = record_guidance_outcome(st, facts, &message.to, &message.id, "refused:steer_unavailable");
+        }
+        return reject_idempotent_send(st, &key, "steer_unavailable",
+            "Ce pilote natif ne prend pas en charge le guidage pendant un tour. Cette demande est refusée avant remise, sans interrompre l’agent. Pour attendre sa fin de tour, envoyer explicitement un message ordinaire intent=queue ; aucun repli automatique n’a été effectué. Si la consigne doit être appliquée immédiatement, demander au propriétaire de choisir une interruption autorisée. Les autres travaux autorisés suivent leur propre état.")
+            .unwrap_or_else(|reason| DaemonToWrapper::Nack { id: message.id.clone(), reason });
+    }
     // O(log N): messages mobiles retenus avant le porteur, même pour T3.
     let mobile_hold = scoped_mobile_human && message.intent.is_none()
         && st.presences.get(&recipient_instance_id).is_some_and(|p| p.turn_attest

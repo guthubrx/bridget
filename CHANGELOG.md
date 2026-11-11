@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.8.36
+
+- Report the native fleet quota refusal and finish the request without claiming an execution started.
+- Preserve prepared workspaces with an unavailable report and no implicit deletion.
+- Explain unsupported guidance before dispatch and settle correlated rejections without changing the active mission.
+- Create new build caches privately before Cargo, preserving existing cleanup guards.
+
 ## 0.8.35 - 2026-11-11
 
 - Le refus de journal reconnaît une tâche terminée et nettoyée depuis son état durable, même après disparition de sa présence en mémoire.
