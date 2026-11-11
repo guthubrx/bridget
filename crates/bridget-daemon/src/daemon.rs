@@ -16916,24 +16916,7 @@ fn handle_wrapper_message_with_peer(
                 &st,
             ))
         }
-        WrapperToDaemon::ControlExecution { command } => {
-            let mut st = state.lock().recover_poison();
-            let Some(issuer_scope) = st
-                .client_negotiations
-                .get(conn_id)
-                .map(|negotiated| negotiated.issuer_scope.clone())
-            else {
-                return Some(DaemonToWrapper::ClientRejected {
-                    reason: ClientRefusal::NegotiationRequired,
-                });
-            };
-            Some(handle_execution_control(
-                Some(conn_id),
-                &issuer_scope,
-                command,
-                &mut st,
-            ))
-        }
+        WrapperToDaemon::ControlExecution { command } => wrapper_dispatch::on_control_execution(command, conn_id, state),
         WrapperToDaemon::ControlExecutionReported {
             issuer_scope,
             command_id,

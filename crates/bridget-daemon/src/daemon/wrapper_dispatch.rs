@@ -4445,3 +4445,22 @@ pub(super) fn on_ledger_read(request: bridget_transport::protocol::LedgerReadReq
             };
             Some(DaemonToWrapper::LedgerReadResult { outcome })
         }
+
+pub(super) fn on_control_execution(command: bridget_transport::protocol::ExecutionControlCommand, conn_id: &str, state: &Arc<Mutex<DaemonState>>) -> Option<DaemonToWrapper> {
+            let mut st = state.lock().recover_poison();
+            let Some(issuer_scope) = st
+                .client_negotiations
+                .get(conn_id)
+                .map(|negotiated| negotiated.issuer_scope.clone())
+            else {
+                return Some(DaemonToWrapper::ClientRejected {
+                    reason: ClientRefusal::NegotiationRequired,
+                });
+            };
+            Some(handle_execution_control(
+                Some(conn_id),
+                &issuer_scope,
+                command,
+                &mut st,
+            ))
+        }
