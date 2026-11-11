@@ -4426,3 +4426,22 @@ pub(super) fn on_ledger_search(request: bridget_transport::protocol::LedgerSearc
             };
             Some(DaemonToWrapper::LedgerSearchResult { outcome })
         }
+
+pub(super) fn on_ledger_read(request: bridget_transport::protocol::LedgerReadRequest, conn_id: &str, state: &Arc<Mutex<DaemonState>>) -> Option<DaemonToWrapper> {
+            let outcome = match ledger_read_context(state, conn_id) {
+                Err(outcome) => crate::ledger::search::read_error(outcome.0, outcome.1),
+                Ok((actor, db_path, permit)) => {
+                    let outcome = crate::ledger::search::read(&db_path, &actor, &request);
+                    drop(permit);
+                    if ledger_identity_still_live(state, conn_id, &actor) {
+                        outcome
+                    } else {
+                        crate::ledger::search::read_error(
+                            "identity_unavailable",
+                            "identité révoquée pendant la relecture : aucun contenu publié",
+                        )
+                    }
+                }
+            };
+            Some(DaemonToWrapper::LedgerReadResult { outcome })
+        }
