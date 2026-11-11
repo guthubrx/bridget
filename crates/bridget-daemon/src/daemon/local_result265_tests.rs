@@ -11,7 +11,34 @@ fn spec265_native_timeout_closes_tracking_after_cleanup_without_reopening_the_ta
     task.failure_sent = true;
     task.acknowledged_at = Some(unix_timestamp());
     state.lock().unwrap().delegation_store.save(&task).unwrap();
-    let before = serde_json::to_value(state.lock().unwrap().delegation_store.get(&task.task_id).unwrap().unwrap()).unwrap();
+    let before = serde_json::to_value(
+        state
+            .lock()
+            .unwrap()
+            .delegation_store
+            .get(&task.task_id)
+            .unwrap()
+            .unwrap(),
+    )
+    .unwrap();
+    {
+        let st = state.lock().unwrap();
+        assert!(st.pending_replies.iter().any(|p| p.msg_id == task.mission));
+        st.store.connection().execute_batch("CREATE TRIGGER timeout265_fail BEFORE UPDATE OF state ON tracked_requests WHEN NEW.state='timed_out' BEGIN SELECT RAISE(ABORT,'test265'); END;").unwrap();
+    }
+    tick(&state);
+    {
+        let st = state.lock().unwrap();
+        assert_eq!(
+            st.store.get_request(&task.mission).unwrap().unwrap().state,
+            "open"
+        );
+        assert!(st.pending_replies.iter().any(|p| p.msg_id == task.mission));
+        st.store
+            .connection()
+            .execute_batch("DROP TRIGGER timeout265_fail;")
+            .unwrap();
+    }
     for _ in 0..2 {
         tick(&state);
     }
@@ -39,6 +66,9 @@ fn spec265_other_failure_and_foreign_tracking_are_not_reclassified_as_timeout() 
     assert!(!settle_terminal_tracked_request247(&mut st, &task).unwrap());
     task.error = Some("mission_reply_timeout".into());
     task.owner = "foreign-owner".into();
+    assert!(!settle_terminal_tracked_request247(&mut st, &task).unwrap());
+    task.owner = st.store.get_request(&task.mission).unwrap().unwrap().sender;
+    task.child = "foreign-child".into();
     assert!(!settle_terminal_tracked_request247(&mut st, &task).unwrap());
     assert_eq!(
         st.store.get_request(&task.mission).unwrap().unwrap().state,
