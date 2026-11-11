@@ -36,8 +36,8 @@ use bridget_transport::protocol::{
     PresenceMode, ProjectAdminOutcome, ProjectAdminRequest, ProjectBindOutcome, ProjectBindRequest,
     ProjectBindStatus, ProjectProfileOutcome, ProjectProfileRefusal, ProjectProfileRequest,
     ProjectRegistryRefusal, ProjectRoundOutcome, ProjectRoundRefusal, ProjectRoundRequest,
-    ProjectRuntimeOutcome, ProjectRuntimeRefusal, ProjectRuntimeRequest, ProjectSystemOutcome,
-    ProjectSystemRefusal, REVIEW_DELEGATE_CONTRACT_VERSION, RelaunchOutcome, RuntimeIngressRefusal,
+    ProjectRuntimeOutcome, ProjectRuntimeRefusal, ProjectRuntimeRequest,
+    REVIEW_DELEGATE_CONTRACT_VERSION, RelaunchOutcome, RuntimeIngressRefusal,
     SERVICE_CONTRACT_VERSION, ServiceCapability, ServiceRefusal, SpawnRefusal, StopOutcome, decode,
     encode,
 };
@@ -16574,11 +16574,15 @@ fn handle_wrapper_message_with_peer(
         WrapperToDaemon::DirectoryScoped { scope } => {
             wrapper_dispatch::on_directory_scoped(scope, conn_id, state)
         }
-        WrapperToDaemon::ObservationGap { dropped } => wrapper_dispatch::on_observation_gap(dropped, conn_id, state),
+        WrapperToDaemon::ObservationGap { dropped } => {
+            wrapper_dispatch::on_observation_gap(dropped, conn_id, state)
+        }
         WrapperToDaemon::ObservationCapabilities {
             events,
             runtime_catalogue,
-        } => wrapper_dispatch::on_observation_capabilities(events, runtime_catalogue, conn_id, state),
+        } => {
+            wrapper_dispatch::on_observation_capabilities(events, runtime_catalogue, conn_id, state)
+        }
         WrapperToDaemon::HumanLineage { request } => {
             native_lineage::handle(conn_id, &request, state)
         }
@@ -16592,15 +16596,21 @@ fn handle_wrapper_message_with_peer(
             version,
             t3_thread_id,
         } => wrapper_dispatch::on_t3_thread_binding_fact(version, t3_thread_id, conn_id, state),
-        WrapperToDaemon::ThreadNoticeCapability { versions } => wrapper_dispatch::on_thread_notice_capability(versions, conn_id, state),
+        WrapperToDaemon::ThreadNoticeCapability { versions } => {
+            wrapper_dispatch::on_thread_notice_capability(versions, conn_id, state)
+        }
         WrapperToDaemon::ThreadRequest { request } => {
             wrapper_dispatch::on_thread_request(request, conn_id, state)
         }
         // Session 104 : lecture seule hors verrou. Identité et permis sous
         // verrou bref ; SQL et repli sur le thread de connexion ; identité
         // revérifiée avant publication ; permis relâché par RAII.
-        WrapperToDaemon::LedgerSearch { request } => wrapper_dispatch::on_ledger_search(request, conn_id, state),
-        WrapperToDaemon::LedgerRead { request } => wrapper_dispatch::on_ledger_read(request, conn_id, state),
+        WrapperToDaemon::LedgerSearch { request } => {
+            wrapper_dispatch::on_ledger_search(request, conn_id, state)
+        }
+        WrapperToDaemon::LedgerRead { request } => {
+            wrapper_dispatch::on_ledger_read(request, conn_id, state)
+        }
         WrapperToDaemon::ObservationRequest { request } => {
             wrapper_dispatch::on_observation_request(request, conn_id, state)
         }
@@ -16632,7 +16642,15 @@ fn handle_wrapper_message_with_peer(
             halted,
             reason,
             cancel_active,
-        } => wrapper_dispatch::on_delegation_halt_set(version, command_id, halted, reason, cancel_active, conn_id, state),
+        } => wrapper_dispatch::on_delegation_halt_set(
+            version,
+            command_id,
+            halted,
+            reason,
+            cancel_active,
+            conn_id,
+            state,
+        ),
         WrapperToDaemon::ControlStateRead { version } => {
             Some(handle_control_state_read(state, version))
         }
@@ -16651,7 +16669,18 @@ fn handle_wrapper_message_with_peer(
             reason,
             agent_posture,
             auto_reassignment,
-        } => wrapper_dispatch::on_control_state_set(version, command_id, expected_generation, paused, auto_objectives_cap, reason, agent_posture, auto_reassignment, conn_id, state),
+        } => wrapper_dispatch::on_control_state_set(
+            version,
+            command_id,
+            expected_generation,
+            paused,
+            auto_objectives_cap,
+            reason,
+            agent_posture,
+            auto_reassignment,
+            conn_id,
+            state,
+        ),
         WrapperToDaemon::HumanInboxDeposit {
             version,
             dedup_key,
@@ -16698,7 +16727,9 @@ fn handle_wrapper_message_with_peer(
                 reason: RuntimeIngressRefusal::ReservationMissing,
             })
         }
-        WrapperToDaemon::ArtifactRead { request } => wrapper_dispatch::on_artifact_read(request, conn_id, state),
+        WrapperToDaemon::ArtifactRead { request } => {
+            wrapper_dispatch::on_artifact_read(request, conn_id, state)
+        }
         WrapperToDaemon::ArtifactPublish {
             contract_version,
             canonical_publication,
@@ -16723,7 +16754,9 @@ fn handle_wrapper_message_with_peer(
                 unix_now_secs(),
             ))
         }
-        WrapperToDaemon::ProjectSystemRequest { request } => wrapper_dispatch::on_project_system_request(request),
+        WrapperToDaemon::ProjectSystemRequest { request } => {
+            wrapper_dispatch::on_project_system_request(request)
+        }
         WrapperToDaemon::ProjectRoundRequest { request } => Some(project_round_failure(
             &request,
             ProjectRoundRefusal::PolicyDisabled,
@@ -16757,7 +16790,9 @@ fn handle_wrapper_message_with_peer(
             conn_id,
             state,
         ),
-        WrapperToDaemon::DelegatedRuntimeEventAcknowledged { event_id } => wrapper_dispatch::on_delegated_runtime_event_acknowledged(event_id, conn_id, state),
+        WrapperToDaemon::DelegatedRuntimeEventAcknowledged { event_id } => {
+            wrapper_dispatch::on_delegated_runtime_event_acknowledged(event_id, conn_id, state)
+        }
         WrapperToDaemon::WaitAgentLinks {
             after_cursor,
             timeout_ms,
@@ -16800,13 +16835,22 @@ fn handle_wrapper_message_with_peer(
             conn_id,
             state,
         ),
-        WrapperToDaemon::GuichetClaimNext { version } => wrapper_dispatch::on_guichet_claim_next(version, conn_id, state),
+        WrapperToDaemon::GuichetClaimNext { version } => {
+            wrapper_dispatch::on_guichet_claim_next(version, conn_id, state)
+        }
         WrapperToDaemon::GuichetClaim {
             version,
             issuer_scope,
             request_id,
             claim_token,
-        } => wrapper_dispatch::on_guichet_claim(version, issuer_scope, request_id, claim_token, conn_id, state),
+        } => wrapper_dispatch::on_guichet_claim(
+            version,
+            issuer_scope,
+            request_id,
+            claim_token,
+            conn_id,
+            state,
+        ),
         WrapperToDaemon::GuichetLookup {
             version,
             issuer_scope,
@@ -16850,9 +16894,15 @@ fn handle_wrapper_message_with_peer(
             agent_id,
             instance_id,
             credential,
-        } => wrapper_dispatch::on_register_auxiliary(agent_id, instance_id, credential, conn_id, state),
+        } => wrapper_dispatch::on_register_auxiliary(
+            agent_id,
+            instance_id,
+            credential,
+            conn_id,
+            state,
+        ),
         WrapperToDaemon::SendIdempotent {
-            mut message,
+            message,
             message_id,
             issued_at,
         } => wrapper_dispatch::on_send_idempotent(message, message_id, issued_at, conn_id, state),
@@ -16868,7 +16918,9 @@ fn handle_wrapper_message_with_peer(
                 &st,
             ))
         }
-        WrapperToDaemon::ControlExecution { command } => wrapper_dispatch::on_control_execution(command, conn_id, state),
+        WrapperToDaemon::ControlExecution { command } => {
+            wrapper_dispatch::on_control_execution(command, conn_id, state)
+        }
         WrapperToDaemon::ControlExecutionReported {
             issuer_scope,
             command_id,
@@ -16993,14 +17045,29 @@ fn handle_wrapper_message_with_peer(
             line,
             offset,
             reason,
-        } => wrapper_dispatch::on_journal_read_error(subscription_id, line, offset, reason, conn_id, state),
+        } => wrapper_dispatch::on_journal_read_error(
+            subscription_id,
+            line,
+            offset,
+            reason,
+            conn_id,
+            state,
+        ),
         WrapperToDaemon::JournalFragment {
             subscription_id,
             seq,
             offset,
             final_fragment,
             bytes,
-        } => wrapper_dispatch::on_journal_fragment(subscription_id, seq, offset, final_fragment, bytes, conn_id, state),
+        } => wrapper_dispatch::on_journal_fragment(
+            subscription_id,
+            seq,
+            offset,
+            final_fragment,
+            bytes,
+            conn_id,
+            state,
+        ),
         WrapperToDaemon::LiveJournalFragment {
             seq,
             offset,
@@ -17060,13 +17127,17 @@ fn handle_wrapper_message_with_peer(
             state,
         ),
 
-        WrapperToDaemon::DiskSpace { fact } => wrapper_dispatch::on_disk_space(fact, conn_id, state),
+        WrapperToDaemon::DiskSpace { fact } => {
+            wrapper_dispatch::on_disk_space(fact, conn_id, state)
+        }
 
         WrapperToDaemon::JournalReady { receipt_probe } => {
             wrapper_dispatch::on_journal_ready(receipt_probe, conn_id, state)
         }
 
-        WrapperToDaemon::TerminalSessionReady => wrapper_dispatch::on_terminal_session_ready(conn_id, state),
+        WrapperToDaemon::TerminalSessionReady => {
+            wrapper_dispatch::on_terminal_session_ready(conn_id, state)
+        }
 
         WrapperToDaemon::Unregister => wrapper_dispatch::on_unregister(conn_id, state),
 
@@ -17172,7 +17243,16 @@ fn handle_wrapper_message_with_peer(
             used_percent,
             credits,
             source,
-        } => wrapper_dispatch::on_rate_limit(agent, window, status, resets_at, used_percent, credits, source, state),
+        } => wrapper_dispatch::on_rate_limit(
+            agent,
+            window,
+            status,
+            resets_at,
+            used_percent,
+            credits,
+            source,
+            state,
+        ),
 
         WrapperToDaemon::Usage {
             agent,
@@ -17184,7 +17264,18 @@ fn handle_wrapper_message_with_peer(
             cache_read_input_tokens,
             provider_kind,
             source,
-        } => wrapper_dispatch::on_usage(agent, input_tokens, execution_id, execution_generation, output_tokens, cache_creation_input_tokens, cache_read_input_tokens, provider_kind, source, state),
+        } => wrapper_dispatch::on_usage(
+            agent,
+            input_tokens,
+            execution_id,
+            execution_generation,
+            output_tokens,
+            cache_creation_input_tokens,
+            cache_read_input_tokens,
+            provider_kind,
+            source,
+            state,
+        ),
 
         WrapperToDaemon::UsageWindow {
             agent,
@@ -17209,7 +17300,9 @@ fn handle_wrapper_message_with_peer(
             ))
         }
 
-        WrapperToDaemon::Availability { agent, until_secs } => wrapper_dispatch::on_availability(agent, until_secs, conn_id, state),
+        WrapperToDaemon::Availability { agent, until_secs } => {
+            wrapper_dispatch::on_availability(agent, until_secs, conn_id, state)
+        }
 
         WrapperToDaemon::DeliveryRejected {
             id,
@@ -17251,7 +17344,9 @@ fn handle_wrapper_message_with_peer(
             request_id,
             applied,
             reason,
-        } => wrapper_dispatch::on_child_request_answered(request_id, applied, reason, conn_id, state),
+        } => {
+            wrapper_dispatch::on_child_request_answered(request_id, applied, reason, conn_id, state)
+        }
         WrapperToDaemon::ChildRequestClosed {
             request_id,
             state: closed_state,

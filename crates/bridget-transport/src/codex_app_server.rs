@@ -3611,7 +3611,7 @@ fn on_item_completed(
     sandbox_lines_by_item: &mut HashMap<String, String>,
     refusals_recorded: &mut HashSet<(String, String)>,
 ) {
-    record_context_compaction(&journal, &observations, &active_detail, &value);
+    record_context_compaction(journal, observations, active_detail, value);
     let item = value.pointer("/params/item");
     if item.and_then(|i| i.get("type")).and_then(Value::as_str) == Some("fileChange")
         && item.and_then(|i| i.get("status")).and_then(Value::as_str) == Some("completed")
@@ -3620,7 +3620,7 @@ fn on_item_completed(
             .lock()
             .recover_poison()
             .as_ref()
-            .filter(|active| source_matches_active_turn(active, &value))
+            .filter(|active| source_matches_active_turn(active, value))
             .map(|active| active.message_id.clone());
         if let Some(message_id) = message_id
             && let Some(changes) = item
@@ -3650,13 +3650,7 @@ fn on_item_completed(
                     && let Some(payload) =
                         crate::journal::confirmed_write_payload(path, Path::new(&cwd))
                 {
-                    record_or_terminal(
-                        &journal,
-                        &observations,
-                        "update",
-                        Some(&message_id),
-                        payload,
-                    );
+                    record_or_terminal(journal, observations, "update", Some(&message_id), payload);
                 }
             }
             if changes.len() > 256 {
@@ -3671,7 +3665,7 @@ fn on_item_completed(
         let active = queue.0.lock().recover_poison();
         let mut detail = active_detail.lock().recover_poison();
         if let Some(detail) = detail.as_mut().filter(|d| {
-            source_matches_active_turn(d, &value)
+            source_matches_active_turn(d, value)
                 && d.message_id == client_id
                 && !d.prompt_dispatched
         }) && active
@@ -3681,15 +3675,15 @@ fn on_item_completed(
         {
             detail.prompt_dispatched = true;
             push_source(
-                &observations,
+                observations,
                 raw.clone(),
                 ManagedEventKind::PromptDispatched {
                     message_id: client_id.into(),
                 },
             );
             record_or_terminal(
-                &journal,
-                &observations,
+                journal,
+                observations,
                 "prompt_dispatched",
                 Some(client_id),
                 json!({"provider_turn_id": value.pointer("/params/turnId")}),
@@ -3705,10 +3699,10 @@ fn on_item_completed(
         == Some("commandExecution")
     {
         record_command_completion(
-            &journal,
-            &observations,
-            &active_detail,
-            &value,
+            journal,
+            observations,
+            active_detail,
+            value,
             sandbox_posture,
             sandbox_lines_by_item,
             refusals_recorded,
@@ -3733,10 +3727,10 @@ fn on_item_completed(
                 entry.push_str(text);
             }
         }
-        maybe_record_final_agent_message(&journal, &observations, &active_detail, &value, text);
+        maybe_record_final_agent_message(journal, observations, active_detail, value, text);
     }
     push_source(
-        &observations,
+        observations,
         raw,
         ManagedEventKind::Update {
             detail: "item/completed Codex".to_string(),
