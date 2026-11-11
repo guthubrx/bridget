@@ -1,3 +1,4 @@
+use crate::poison::RecoverPoison;
     #[test]
     fn spec100_acp_correlates_permission_path_and_separate_edit_kind() {
         let mut memory = std::collections::HashMap::new();
@@ -459,7 +460,7 @@
                 .expect("thought_chunk productif");
             reasoning_raw
                 .lock()
-                .unwrap_or_else(|err| err.into_inner())
+                .recover_poison()
                 .push_str(thought);
         }
         take_reasoning_journal_payload(&reasoning_raw)
@@ -517,7 +518,7 @@
         assert!(
             reasoning_raw
                 .lock()
-                .unwrap_or_else(|err| err.into_inner())
+                .recover_poison()
                 .is_empty()
         );
     }

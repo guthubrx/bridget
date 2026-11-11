@@ -1,3 +1,4 @@
+use crate::poison::RecoverPoison;
     use super::*;
     use std::fs;
     use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
@@ -1931,7 +1932,7 @@ for line in sys.stdin:
         *transport
             .journal
             .lock()
-            .unwrap_or_else(|poison| poison.into_inner()) =
+            .recover_poison() =
             Some(JournalWriter::saturated_for_test());
         transport
             .deliver(&message("provider-journal-full-019"))
@@ -2790,7 +2791,7 @@ for line in sys.stdin:
 
         let observed = active_detail
             .lock()
-            .unwrap_or_else(|poison| poison.into_inner());
+            .recover_poison();
         assert_eq!(
             observed
                 .as_ref()
@@ -2813,7 +2814,7 @@ for line in sys.stdin:
         let mut observed = observations
             .0
             .lock()
-            .unwrap_or_else(|poison| poison.into_inner());
+            .recover_poison();
         let consumed = observed
             .consumed_steers_by_turn
             .get(&("thread-native".to_string(), "turn-native".to_string()))
@@ -2852,7 +2853,7 @@ for line in sys.stdin:
         let mut observed = observations
             .0
             .lock()
-            .unwrap_or_else(|poison| poison.into_inner());
+            .recover_poison();
         let mut accepted = vec![message("message-humain-001")];
         assert!(
             consume_accepted_steers(&mut observed, "thread-native", "turn-native", &mut accepted,)
@@ -2868,7 +2869,7 @@ for line in sys.stdin:
             late_observations
                 .0
                 .lock()
-                .unwrap_or_else(|poison| poison.into_inner())
+                .recover_poison()
                 .consumed_steers_by_turn
                 .is_empty(),
             "un événement d'un autre tour ne doit laisser aucune preuve"
@@ -2888,7 +2889,7 @@ for line in sys.stdin:
             observations
                 .0
                 .lock()
-                .unwrap_or_else(|poison| poison.into_inner())
+                .recover_poison()
                 .consumed_steers_by_turn
                 .is_empty(),
             "sans clientId il n'existe aucune preuve de consommation"

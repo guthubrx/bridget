@@ -1,5 +1,6 @@
 //! Journal JSONL versionné des sessions ACP.
 
+use crate::poison::RecoverPoison;
 use crate::acp::{AcpEvent, AcpEventQueue};
 use crate::fsutil::create_private_dir;
 use crate::protocol::AttachWindow;
@@ -192,7 +193,7 @@ impl JournalLiveFeed {
         let receiver = self
             .observation_receiver
             .lock()
-            .unwrap_or_else(|e| e.into_inner());
+            .recover_poison();
         (
             receiver.try_iter().take(WRITER_QUEUE_CAPACITY).collect(),
             self.observation_dropped.swap(0, Ordering::Relaxed),
@@ -203,7 +204,7 @@ impl JournalLiveFeed {
         let receiver = self
             .receiver
             .lock()
-            .unwrap_or_else(|poison| poison.into_inner());
+            .recover_poison();
         let expected = cursor.map_or(1, |seq| seq.saturating_add(1));
         let dropped = self.dropped_through.load(Ordering::SeqCst);
         let gap = (dropped >= expected).then_some((expected, dropped));
@@ -261,7 +262,7 @@ impl AppendLatencyProbe {
         let samples = Arc::new(Mutex::new(Vec::new()));
         append_probes()
             .lock()
-            .unwrap_or_else(|poison| poison.into_inner())
+            .recover_poison()
             .insert(
                 root.clone(),
                 AppendProbeRegistration {
@@ -275,7 +276,7 @@ impl AppendLatencyProbe {
     pub fn sample_count(&self) -> usize {
         self.samples
             .lock()
-            .unwrap_or_else(|poison| poison.into_inner())
+            .recover_poison()
             .len()
     }
 
@@ -284,7 +285,7 @@ impl AppendLatencyProbe {
             &mut *self
                 .samples
                 .lock()
-                .unwrap_or_else(|poison| poison.into_inner()),
+                .recover_poison(),
         )
         .into_iter()
         .map(|sample| sample.elapsed)
@@ -298,7 +299,7 @@ impl AppendLatencyProbe {
             &mut *self
                 .samples
                 .lock()
-                .unwrap_or_else(|poison| poison.into_inner()),
+                .recover_poison(),
         )
     }
 }
@@ -308,7 +309,7 @@ impl Drop for AppendLatencyProbe {
     fn drop(&mut self) {
         let mut probes = append_probes()
             .lock()
-            .unwrap_or_else(|poison| poison.into_inner());
+            .recover_poison();
         if probes
             .get(&self.root)
             .and_then(|registration| registration.samples.upgrade())
@@ -344,7 +345,7 @@ impl JournalWriter {
             Arc::new(move |detail| {
                 failure_events
                     .lock()
-                    .unwrap_or_else(|poison| poison.into_inner())
+                    .recover_poison()
                     .push_back(AcpEvent::JournalFailed { detail });
             }),
             live_feed,
@@ -371,7 +372,7 @@ impl JournalWriter {
         #[cfg(feature = "test-support")]
         let thread_probe = append_probes()
             .lock()
-            .unwrap_or_else(|poison| poison.into_inner())
+            .recover_poison()
             .get(root)
             .and_then(|registration| {
                 registration
@@ -395,7 +396,7 @@ impl JournalWriter {
                                 let detail = format!("écriture du journal ACP impossible: {error}");
                                 *thread_failure
                                     .lock()
-                                    .unwrap_or_else(|poison| poison.into_inner()) =
+                                    .recover_poison() =
                                     Some(detail.clone());
                                 on_failure(detail);
                                 break;
@@ -425,7 +426,7 @@ impl JournalWriter {
                         #[cfg(test)]
                         thread_append_latencies
                             .lock()
-                            .unwrap_or_else(|poison| poison.into_inner())
+                            .recover_poison()
                             .push(append_elapsed);
                         #[cfg(feature = "test-support")]
                         if let Some((samples, all_events)) = &thread_probe
@@ -433,7 +434,7 @@ impl JournalWriter {
                         {
                             samples
                                 .lock()
-                                .unwrap_or_else(|poison| poison.into_inner())
+                                .recover_poison()
                                 .push(AppendLatencySample {
                                     seq: sequence,
                                     completed_at,
@@ -469,7 +470,7 @@ impl JournalWriter {
         if let Some(error) = self
             .failure
             .lock()
-            .unwrap_or_else(|poison| poison.into_inner())
+            .recover_poison()
             .clone()
         {
             return Err(error);
@@ -483,7 +484,7 @@ impl JournalWriter {
                 mpsc::TrySendError::Disconnected(_) => self
                     .failure
                     .lock()
-                    .unwrap_or_else(|poison| poison.into_inner())
+                    .recover_poison()
                     .clone()
                     .unwrap_or_else(|| "journal ACP arrêté".to_string()),
             })
@@ -493,7 +494,7 @@ impl JournalWriter {
         let Some(handle) = self
             .handle
             .lock()
-            .unwrap_or_else(|poison| poison.into_inner())
+            .recover_poison()
             .take()
         else {
             return;
@@ -525,7 +526,7 @@ impl JournalWriter {
             &mut *self
                 .append_latencies
                 .lock()
-                .unwrap_or_else(|poison| poison.into_inner()),
+                .recover_poison(),
         )
     }
 }

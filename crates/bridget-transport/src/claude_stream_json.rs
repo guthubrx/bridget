@@ -4,6 +4,7 @@
 //! module ne projette ni modèle, ni quota, ni consommation : G5 ne couvre que
 //! la session gérée, le journal et son cycle de vie.
 
+use crate::poison::RecoverPoison;
 use crate::claude_provider_session::{
     ProviderSessionStore, classify_resume_failure, prepare_launch_args,
     session_id_from_system_init, strip_resume_arg,
@@ -349,7 +350,7 @@ impl ClaudeStreamJsonTransport {
         }
         self.alive.store(false, Ordering::SeqCst);
         let (lock, wake) = &*self.queue;
-        let mut queue = lock.lock().unwrap_or_else(|poison| poison.into_inner());
+        let mut queue = lock.lock().recover_poison();
         queue.closed = true;
         while let Some(message) = queue.messages.pop_front() {
             self.push_internal(ManagedEventKind::DeliveryRejected {
@@ -366,18 +367,18 @@ impl ClaudeStreamJsonTransport {
         drop(queue);
         self.writer
             .lock()
-            .unwrap_or_else(|poison| poison.into_inner())
+            .recover_poison()
             .take();
         let mut child = self
             .child
             .lock()
-            .unwrap_or_else(|poison| poison.into_inner());
+            .recover_poison();
         terminate_group(&mut child);
         drop(child);
         if let Some(handle) = self
             .reader_handle
             .lock()
-            .unwrap_or_else(|poison| poison.into_inner())
+            .recover_poison()
             .take()
         {
             let _ = handle.join();
@@ -385,7 +386,7 @@ impl ClaudeStreamJsonTransport {
         if let Some(handle) = self
             .worker_handle
             .lock()
-            .unwrap_or_else(|poison| poison.into_inner())
+            .recover_poison()
             .take()
         {
             let _ = handle.join();
@@ -393,7 +394,7 @@ impl ClaudeStreamJsonTransport {
         if let Some(journal) = self
             .journal
             .lock()
-            .unwrap_or_else(|poison| poison.into_inner())
+            .recover_poison()
             .take()
         {
             journal.stop();
@@ -413,7 +414,7 @@ impl Transport for ClaudeStreamJsonTransport {
             return Err(TransportError::AgentDead);
         }
         let (lock, wake) = &*self.queue;
-        let mut queue = lock.lock().unwrap_or_else(|poison| poison.into_inner());
+        let mut queue = lock.lock().recover_poison();
         let steer_or_queue = message.intent == Some(MessageIntent::SteerCurrent)
             && message
                 .references
@@ -475,12 +476,12 @@ impl Transport for ClaudeStreamJsonTransport {
 impl ManagedSession for ClaudeStreamJsonTransport {
     fn answer_provider_request(&mut self, answer: &ChildRequestAnswer) -> Result<(), TransportError> {
         if !self.alive.load(Ordering::SeqCst) { return Err(TransportError::AgentDead); }
-        let mut pending = self.user_inputs.lock().unwrap_or_else(|e| e.into_inner());
+        let mut pending = self.user_inputs.lock().recover_poison();
         let index = pending.iter().position(|(r,_)|r.provider_session == answer.provider_session && r.turn_id == answer.turn_id && r.provider_request_id == answer.provider_request_id)
             .ok_or_else(||TransportError::DeliveryFailed("request_unknown".into()))?;
         let (request, uncertain) = &pending[index];
         if *uncertain { return Err(TransportError::Io("child_request_write_uncertain: attente déjà incertaine".into())); }
-        if self.queue.0.lock().unwrap_or_else(|e| e.into_inner()).active.as_ref().is_none_or(|a| a.message_id != request.turn_id) {
+        if self.queue.0.lock().recover_poison().active.as_ref().is_none_or(|a| a.message_id != request.turn_id) {
             return Err(TransportError::DeliveryFailed("request_unlinked".into()));
         }
         let frame = claude_user_input_response(request, answer)?;
@@ -496,7 +497,7 @@ impl ManagedSession for ClaudeStreamJsonTransport {
     fn provider_permissions(&self) -> Option<(String, Value, u64, Option<String>)> {
         self.permission_observation
             .lock()
-            .unwrap_or_else(|e| e.into_inner())
+            .recover_poison()
             .clone()
     }
     fn set_private_profile_instructions(
@@ -506,7 +507,7 @@ impl ManagedSession for ClaudeStreamJsonTransport {
         *self
             .private_profile_instructions
             .lock()
-            .unwrap_or_else(|poison| poison.into_inner()) = Some(instructions.to_string());
+            .recover_poison() = Some(instructions.to_string());
         Ok(())
     }
 
@@ -522,7 +523,7 @@ impl ManagedSession for ClaudeStreamJsonTransport {
         let session_id = self
             .session_store
             .lock()
-            .unwrap_or_else(|poison| poison.into_inner())
+            .recover_poison()
             .as_ref()
             .and_then(ProviderSessionStore::load);
         Some(ManagedProviderIdentity {
@@ -542,7 +543,7 @@ impl ManagedSession for ClaudeStreamJsonTransport {
     fn process_id(&self) -> u32 {
         self.child
             .lock()
-            .unwrap_or_else(|poison| poison.into_inner())
+            .recover_poison()
             .id()
     }
 
@@ -559,7 +560,7 @@ impl ManagedSession for ClaudeStreamJsonTransport {
         *self
             .journal
             .lock()
-            .unwrap_or_else(|poison| poison.into_inner()) =
+            .recover_poison() =
             Some(JournalWriter::start_with_live_feed_and_failure(
                 root,
                 agent,
@@ -572,7 +573,7 @@ impl ManagedSession for ClaudeStreamJsonTransport {
         *self
             .session_store
             .lock()
-            .unwrap_or_else(|poison| poison.into_inner()) =
+            .recover_poison() =
             Some(ProviderSessionStore::new(root, agent));
         Ok(())
     }
@@ -585,14 +586,14 @@ impl ManagedSession for ClaudeStreamJsonTransport {
     fn drain_events(&self) -> Vec<ManagedEvent> {
         self.events
             .lock()
-            .unwrap_or_else(|poison| poison.into_inner())
+            .recover_poison()
             .drain(..)
             .collect()
     }
 
     fn cancel_delivery(&self, message_id: &str, reason: &str) -> bool {
         let (lock, wake) = &*self.queue;
-        let mut queue = lock.lock().unwrap_or_else(|poison| poison.into_inner());
+        let mut queue = lock.lock().recover_poison();
         if queue
             .active
             .as_ref()
@@ -625,12 +626,12 @@ impl ManagedSession for ClaudeStreamJsonTransport {
             self.alive.store(false, Ordering::SeqCst);
             self.writer
                 .lock()
-                .unwrap_or_else(|poison| poison.into_inner())
+                .recover_poison()
                 .take();
             let mut child = self
                 .child
                 .lock()
-                .unwrap_or_else(|poison| poison.into_inner());
+                .recover_poison();
             terminate_group(&mut child);
             return true;
         }
@@ -1072,7 +1073,7 @@ fn relaunch_after_resume_failure(
 ) -> (ChildStdout, Vec<String>) {
     if let Some(store) = session_store
         .lock()
-        .unwrap_or_else(|poison| poison.into_inner())
+        .recover_poison()
         .as_ref()
     {
         let _ = store.clear();
@@ -1082,7 +1083,7 @@ fn relaunch_after_resume_failure(
         let mut child = bootstrap
             .child
             .lock()
-            .unwrap_or_else(|poison| poison.into_inner());
+            .recover_poison();
         terminate_group(&mut child);
     }
     strip_resume_arg(&mut bootstrap.args);
@@ -1103,14 +1104,14 @@ fn relaunch_after_resume_failure(
         let mut writer = bootstrap
             .writer
             .lock()
-            .unwrap_or_else(|poison| poison.into_inner());
+            .recover_poison();
         *writer = Some(spawned.stdin);
     }
     {
         let mut child = bootstrap
             .child
             .lock()
-            .unwrap_or_else(|poison| poison.into_inner());
+            .recover_poison();
         *child = spawned.child;
     }
     (spawned.stdout, Vec::new())
@@ -1152,7 +1153,7 @@ fn bootstrap_resume_in_reader(
                 if let Some(session_id) = session_id_from_system_init(&value)
                     && let Some(store) = session_store
                         .lock()
-                        .unwrap_or_else(|poison| poison.into_inner())
+                        .recover_poison()
                         .as_ref()
                 {
                     let _ = store.store(&session_id);
@@ -1216,11 +1217,11 @@ fn spawn_worker(
         loop {
             let message = {
                 let (lock, wake) = &*queue;
-                let mut state = lock.lock().unwrap_or_else(|poison| poison.into_inner());
+                let mut state = lock.lock().recover_poison();
                 while state.messages.is_empty() && !state.closed {
                     state = wake
                         .wait(state)
-                        .unwrap_or_else(|poison| poison.into_inner());
+                        .recover_poison();
                 }
                 if state.closed {
                     return;
@@ -1241,7 +1242,7 @@ fn spawn_worker(
             queue
                 .0
                 .lock()
-                .unwrap_or_else(|poison| poison.into_inner())
+                .recover_poison()
                 .active = Some(ActiveTurn {
                 message_id: message.id.clone(),
                 completion,
@@ -1274,7 +1275,7 @@ fn spawn_worker(
             );
             let instructions = private_profile_instructions
                 .lock()
-                .unwrap_or_else(|poison| poison.into_inner())
+                .recover_poison()
                 .clone();
             let terminal = match write_input(&writer, &message, instructions.as_deref()) {
                 Ok(()) => {
@@ -1312,7 +1313,7 @@ fn spawn_worker(
                 },
             };
             let (response, stop_reason) = {
-                let mut state = queue.0.lock().unwrap_or_else(|poison| poison.into_inner());
+                let mut state = queue.0.lock().recover_poison();
                 match state.active.take() {
                     Some(active) => (active.response, active.stop_reason),
                     None => (String::new(), None),
@@ -1633,7 +1634,7 @@ fn spawn_reader(
                 let session = value.get("session_id").and_then(Value::as_str);
                 let mut observed = permission_observation
                     .lock()
-                    .unwrap_or_else(|e| e.into_inner());
+                    .recover_poison();
                 if let Some(mode) = mode {
                     if matches!(
                         mode,
@@ -1689,7 +1690,7 @@ fn spawn_reader(
                 provider_session = Some(session_id.clone());
                 if let Some(store) = session_store
                     .lock()
-                    .unwrap_or_else(|poison| poison.into_inner())
+                    .recover_poison()
                     .as_ref()
                 {
                     let _ = store.store(&session_id);
@@ -1717,7 +1718,7 @@ fn spawn_reader(
             if let Some(active) = queue
                 .0
                 .lock()
-                .unwrap_or_else(|e| e.into_inner())
+                .recover_poison()
                 .active
                 .as_mut()
             {
@@ -1727,7 +1728,7 @@ fn spawn_reader(
                 let message_id = queue
                     .0
                     .lock()
-                    .unwrap_or_else(|e| e.into_inner())
+                    .recover_poison()
                     .active
                     .as_ref()
                     .map(|a| a.message_id.clone());
@@ -1741,7 +1742,7 @@ fn spawn_reader(
             // Sans cela le fil ne voit que « a travaillé Ns ».
             if let Some(delta) = value.pointer("/event/delta/text").and_then(Value::as_str) {
                 let message_id = {
-                    let mut state = queue.0.lock().unwrap_or_else(|poison| poison.into_inner());
+                    let mut state = queue.0.lock().recover_poison();
                     if let Some(active) = state.active.as_mut() {
                         active.response.push_str(delta);
                         active.text_updates = active.text_updates.saturating_add(1);
@@ -1788,10 +1789,10 @@ fn spawn_reader(
                         break;
                     }
                     if permission_requests.insert(request_id.to_owned()) {
-                        let turn = queue.0.lock().unwrap_or_else(|e| e.into_inner()).active.as_ref().map(|a| a.message_id.clone());
+                        let turn = queue.0.lock().recover_poison().active.as_ref().map(|a| a.message_id.clone());
                         if let (Some(session), Some(turn)) = (provider_session.as_deref(), turn.as_deref())
                             && let Some(request) = claude_user_input(&value, session, turn) {
-                                let mut pending = user_inputs.lock().unwrap_or_else(|e| e.into_inner());
+                                let mut pending = user_inputs.lock().recover_poison();
                                 pending.retain(|(r,_)|r.turn_id == turn);
                                 if pending.len() < 4 {
                                     pending.push((request.clone(), false));
@@ -1803,7 +1804,7 @@ fn spawn_reader(
                         if let Some(active) = queue
                             .0
                             .lock()
-                            .unwrap_or_else(|e| e.into_inner())
+                            .recover_poison()
                             .active
                             .as_mut()
                         {
@@ -1829,7 +1830,7 @@ fn spawn_reader(
                 } else if let Some(active) = queue
                     .0
                     .lock()
-                    .unwrap_or_else(|e| e.into_inner())
+                    .recover_poison()
                     .active
                     .as_mut()
                 {
@@ -1849,7 +1850,7 @@ fn spawn_reader(
                     .and_then(Value::as_str)
                 {
                     let matched = {
-                        let mut state = queue.0.lock().unwrap_or_else(|poison| poison.into_inner());
+                        let mut state = queue.0.lock().recover_poison();
                         if state.pending_interrupt.as_deref() == Some(acked) {
                             state.pending_interrupt = None;
                             true
@@ -1879,7 +1880,7 @@ fn spawn_reader(
                 // T3 conserve ce code structuré même si le résultat dit api_error.
                 // Une réponse ultérieure remplace le refus ; aucune date n'est déduite du texte.
                 let limited = value.get("error").and_then(Value::as_str) == Some("rate_limit");
-                let mut state = queue.0.lock().unwrap_or_else(|poison| poison.into_inner());
+                let mut state = queue.0.lock().recover_poison();
                 if let Some(active) = state.active.as_mut() {
                     // Une vraie réponse sans erreur lève un refus sans fenêtre
                     // d'une ancienne mission du même compte. Elle ne prouve aucun crédit.
@@ -1924,7 +1925,7 @@ fn spawn_reader(
                     .unwrap_or_default();
                 if !assistant_text.is_empty() && !limited {
                     let message_id = {
-                        let mut state = queue.0.lock().unwrap_or_else(|poison| poison.into_inner());
+                        let mut state = queue.0.lock().recover_poison();
                         if let Some(active) = state.active.as_mut() {
                             if active.text_updates == 0 {
                                 if active.response.is_empty() {
@@ -1956,7 +1957,7 @@ fn spawn_reader(
                     .and_then(Value::as_array)
                     .map_or(0, Vec::len);
                 let (interrupted_for_permission, terminal) = {
-                    let state=queue.0.lock().unwrap_or_else(|e|e.into_inner());
+                    let state=queue.0.lock().recover_poison();
                     let active=state.active.as_ref();
                     let interrupted=active.is_some_and(|active|active.permission_denied);
                     let terminal=classify_claude_result(&value,interrupted,
@@ -1964,14 +1965,14 @@ fn spawn_reader(
                         active.filter(|active|active.latest_assistant_api_error).map(|active|active.response.as_str()));
                     (interrupted,terminal)
                 };
-                let active_id = queue.0.lock().unwrap_or_else(|e| e.into_inner())
+                let active_id = queue.0.lock().recover_poison()
                     .active.as_ref().map(|active| active.message_id.clone());
                 if let Some(message_id) = active_id {
                     record_or_terminal(&journal, &events, "provider_result", Some(&message_id),
                         claude_result_metadata(&value, &terminal, interrupted_for_permission));
                 }
                 if tool_denials > 0 {
-                    let mut state = queue.0.lock().unwrap_or_else(|e| e.into_inner());
+                    let mut state = queue.0.lock().recover_poison();
                     if let Some(active) = state.active.as_mut() {
                         if active.response.is_empty()
                             && let Some(result) = value.get("result").and_then(Value::as_str) {
@@ -2006,7 +2007,7 @@ fn spawn_reader(
                             .map(str::to_string)
                     }) };
                 let pending_result_update = {
-                    let mut state = queue.0.lock().unwrap_or_else(|poison| poison.into_inner());
+                    let mut state = queue.0.lock().recover_poison();
                     if let Some(active) = state.active.as_mut() {
                         active.stop_reason = stop_reason;
                         // (B) Repli result-only : texte final dans le fil SSI
@@ -2043,7 +2044,7 @@ fn spawn_reader(
                         json!({ "kind": "text", "content": result }),
                     );
                 }
-                let mut state = queue.0.lock().unwrap_or_else(|poison| poison.into_inner());
+                let mut state = queue.0.lock().recover_poison();
                 if let Some(active) = state.active.as_mut() {
                     if matches!(terminal, ManagedTerminal::Completed)
                         && active.background_tasks.pending()
@@ -2075,7 +2076,7 @@ fn spawn_reader(
                     && let Some(active) = queue
                         .0
                         .lock()
-                        .unwrap_or_else(|poison| poison.into_inner())
+                        .recover_poison()
                         .active
                         .as_mut()
                 {
@@ -2097,7 +2098,7 @@ fn spawn_reader(
             push_source(&events, raw, managed_event);
         }
         alive.store(false, Ordering::SeqCst);
-        let mut state = queue.0.lock().unwrap_or_else(|poison| poison.into_inner());
+        let mut state = queue.0.lock().recover_poison();
         // Un fournisseur qui sort juste après son résultat ferme stdout avant
         // que le fil de la mission ne relève sa réponse : la lui laisser.
         if state.active.as_ref().is_some_and(|active| !active.terminal_sent)
@@ -2277,7 +2278,7 @@ fn record_tool_uses_from_assistant(
         return;
     };
     let message_id = {
-        let state = queue.0.lock().unwrap_or_else(|poison| poison.into_inner());
+        let state = queue.0.lock().recover_poison();
         state
             .active
             .as_ref()
@@ -2335,7 +2336,7 @@ fn record(
 ) -> Result<(), String> {
     journal
         .lock()
-        .unwrap_or_else(|poison| poison.into_inner())
+        .recover_poison()
         .as_ref()
         .map_or(Ok(()), |journal| {
             journal.enqueue(event, message_id, payload)
@@ -2361,7 +2362,7 @@ fn push_internal(events: &Arc<Mutex<VecDeque<ManagedEvent>>>, kind: ManagedEvent
         .expect("fait interne Claude sérialisable");
     events
         .lock()
-        .unwrap_or_else(|poison| poison.into_inner())
+        .recover_poison()
         .push_back(ManagedEvent::internal(
             ManagedEventSource::ClaudeStreamJson,
             raw,
@@ -2372,7 +2373,7 @@ fn push_internal(events: &Arc<Mutex<VecDeque<ManagedEvent>>>, kind: ManagedEvent
 fn push_source(events: &Arc<Mutex<VecDeque<ManagedEvent>>>, raw: Vec<u8>, kind: ManagedEventKind) {
     events
         .lock()
-        .unwrap_or_else(|poison| poison.into_inner())
+        .recover_poison()
         .push_back(ManagedEvent {
             source: ManagedEventSource::ClaudeStreamJson,
             origin: ManagedEventOrigin::SourceLine,

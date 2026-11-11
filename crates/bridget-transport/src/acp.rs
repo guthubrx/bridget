@@ -1,6 +1,7 @@
 //! Transport ACP synchrone : un lecteur stdout, un writer sérialisé et un
 //! worker FIFO. Le lecteur est l'unique propriétaire du flux de l'adaptateur.
 
+use crate::poison::RecoverPoison;
 use crate::journal::{JournalLiveFeed, JournalWriter, with_turn_failed_kind};
 use crate::managed_session::{
     ManagedEvent, ManagedEventKind, ManagedEventSource, ManagedProviderIdentity, ManagedSession,
@@ -210,7 +211,7 @@ impl AcpTransport {
     pub fn process_id(&self) -> u32 {
         self.child
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .recover_poison()
             .id()
     }
 
@@ -414,8 +415,8 @@ impl AcpTransport {
         let session_id = match setup {
             Ok(session_id) => session_id,
             Err(error) => {
-                writer.lock().unwrap_or_else(|err| err.into_inner()).take();
-                let mut child = child.lock().unwrap_or_else(|err| err.into_inner());
+                writer.lock().recover_poison().take();
+                let mut child = child.lock().recover_poison();
                 let _ = child.kill();
                 let _ = child.wait();
                 drop(child);
@@ -423,7 +424,7 @@ impl AcpTransport {
                 return Err(error);
             }
         };
-        *active_session.lock().unwrap_or_else(|err| err.into_inner()) = Some(session_id.clone());
+        *active_session.lock().recover_poison() = Some(session_id.clone());
 
         let state = Arc::new(Mutex::new(TurnState::Idle));
         let private_profile_instructions = Arc::new(Mutex::new(None));
@@ -472,7 +473,7 @@ impl AcpTransport {
     pub fn state(&self) -> TurnState {
         self.state
             .lock()
-            .unwrap_or_else(|err| err.into_inner())
+            .recover_poison()
             .clone()
     }
 
@@ -486,7 +487,7 @@ impl AcpTransport {
         agent: &str,
         live_feed: Option<JournalLiveFeed>,
     ) -> std::io::Result<()> {
-        *self.journal.lock().unwrap_or_else(|err| err.into_inner()) =
+        *self.journal.lock().recover_poison() =
             Some(JournalWriter::start_with_live_feed(
                 root,
                 agent,
@@ -500,7 +501,7 @@ impl AcpTransport {
     pub fn drain_events(&self) -> Vec<AcpEvent> {
         self.events
             .lock()
-            .unwrap_or_else(|err| err.into_inner())
+            .recover_poison()
             .drain_acp()
     }
 
@@ -509,7 +510,7 @@ impl AcpTransport {
     pub fn cancel_delivery(&self, message_id: &str, reason: &str) -> bool {
         let message = {
             let (queue, wakeup) = &*self.queue;
-            let mut queue = queue.lock().unwrap_or_else(|err| err.into_inner());
+            let mut queue = queue.lock().recover_poison();
             if let Some(active) = queue
                 .active
                 .as_ref()
@@ -532,7 +533,7 @@ impl AcpTransport {
         };
         self.events
             .lock()
-            .unwrap_or_else(|err| err.into_inner())
+            .recover_poison()
             .push_back(AcpEvent::DeliveryRejected {
                 message_id: message.id,
                 reason: reason.to_string(),
@@ -548,7 +549,7 @@ impl AcpTransport {
         }
         self.alive.store(false, Ordering::SeqCst);
         let (queue, wakeup) = &*self.queue;
-        let mut queue = queue.lock().unwrap_or_else(|err| err.into_inner());
+        let mut queue = queue.lock().recover_poison();
         queue.closed = true;
         drain_queue(&mut queue, &self.events, "équipier arrêté");
         wakeup.notify_all();
@@ -563,16 +564,16 @@ impl AcpTransport {
         );
         self.writer
             .lock()
-            .unwrap_or_else(|err| err.into_inner())
+            .recover_poison()
             .take();
-        let mut child = self.child.lock().unwrap_or_else(|err| err.into_inner());
+        let mut child = self.child.lock().recover_poison();
         let _ = child.kill();
         let _ = child.wait();
         drop(child);
         if let Some(handle) = self
             .reader_handle
             .lock()
-            .unwrap_or_else(|err| err.into_inner())
+            .recover_poison()
             .take()
         {
             let _ = handle.join();
@@ -580,7 +581,7 @@ impl AcpTransport {
         if let Some(handle) = self
             .worker_handle
             .lock()
-            .unwrap_or_else(|err| err.into_inner())
+            .recover_poison()
             .take()
         {
             let _ = handle.join();
@@ -588,7 +589,7 @@ impl AcpTransport {
         if let Some(journal) = self
             .journal
             .lock()
-            .unwrap_or_else(|err| err.into_inner())
+            .recover_poison()
             .take()
         {
             journal.stop();
@@ -610,7 +611,7 @@ impl Transport for AcpTransport {
         if message_expired_at(msg, (self.clock)()) {
             self.events
                 .lock()
-                .unwrap_or_else(|poison| poison.into_inner())
+                .recover_poison()
                 .push_back(AcpEvent::DeliveryRejected {
                     message_id: msg.id.clone(),
                     reason: "échéance de livraison dépassée".to_string(),
@@ -625,7 +626,7 @@ impl Transport for AcpTransport {
         if msg.intent == Some(MessageIntent::SteerCurrent) && !steer_or_queue {
             self.events
                 .lock()
-                .unwrap_or_else(|poison| poison.into_inner())
+                .recover_poison()
                 .push_back(AcpEvent::DeliveryRejected {
                     message_id: msg.id.clone(),
                     reason: "pilotage ACP indisponible".to_string(),
@@ -649,7 +650,7 @@ impl Transport for AcpTransport {
         let Some(active_message_id) = active_message_id else {
             self.events
                 .lock()
-                .unwrap_or_else(|poison| poison.into_inner())
+                .recover_poison()
                 .push_back(AcpEvent::DeliveryRejected {
                     message_id: msg.id.clone(),
                     reason: "file ACP pleine".to_string(),
@@ -679,7 +680,7 @@ impl ManagedSession for AcpTransport {
         *self
             .private_profile_instructions
             .lock()
-            .unwrap_or_else(|poison| poison.into_inner()) = Some(instructions.to_string());
+            .recover_poison() = Some(instructions.to_string());
         Ok(())
     }
 
@@ -722,7 +723,7 @@ impl ManagedSession for AcpTransport {
         let mut events = self
             .events
             .lock()
-            .unwrap_or_else(|err| err.into_inner())
+            .recover_poison()
             .drain_managed();
         if !self.context_published.swap(true, Ordering::SeqCst) {
             events.insert(
@@ -745,7 +746,7 @@ impl ManagedSession for AcpTransport {
     fn cancel_queued(&self, message_id: &str, reason: &str) -> bool {
         let message = {
             let (queue, wakeup) = &*self.queue;
-            let mut queue = queue.lock().unwrap_or_else(|err| err.into_inner());
+            let mut queue = queue.lock().recover_poison();
             if queue
                 .active
                 .as_ref()
@@ -766,7 +767,7 @@ impl ManagedSession for AcpTransport {
         };
         self.events
             .lock()
-            .unwrap_or_else(|err| err.into_inner())
+            .recover_poison()
             .push_back(AcpEvent::DeliveryRejected {
                 message_id: message.id,
                 reason: reason.to_string(),
@@ -879,9 +880,9 @@ fn spawn_worker(worker: TurnWorker) -> thread::JoinHandle<()> {
         loop {
             let (message, cancellation, cancelled) = {
                 let (queue, wakeup) = &*worker.queue;
-                let mut queue = queue.lock().unwrap_or_else(|err| err.into_inner());
+                let mut queue = queue.lock().recover_poison();
                 while queue.messages.is_empty() && !queue.closed {
-                    queue = wakeup.wait(queue).unwrap_or_else(|err| err.into_inner());
+                    queue = wakeup.wait(queue).recover_poison();
                 }
                 if queue.closed {
                     break;
@@ -900,7 +901,7 @@ fn spawn_worker(worker: TurnWorker) -> thread::JoinHandle<()> {
                 worker
                     .events
                     .lock()
-                    .unwrap_or_else(|err| err.into_inner())
+                    .recover_poison()
                     .push_back(AcpEvent::DeliveryRejected {
                         message_id: message.id,
                         reason: "équipier arrêté".to_string(),
@@ -912,7 +913,7 @@ fn spawn_worker(worker: TurnWorker) -> thread::JoinHandle<()> {
                 worker
                     .events
                     .lock()
-                    .unwrap_or_else(|err| err.into_inner())
+                    .recover_poison()
                     .push_back(AcpEvent::DeliveryRejected {
                         message_id: message.id.clone(),
                         reason: "échéance de livraison dépassée".to_string(),
@@ -920,21 +921,21 @@ fn spawn_worker(worker: TurnWorker) -> thread::JoinHandle<()> {
                 clear_active_turn(&worker.queue);
                 continue;
             }
-            *worker.state.lock().unwrap_or_else(|err| err.into_inner()) = TurnState::InProgress {
+            *worker.state.lock().recover_poison() = TurnState::InProgress {
                 message_id: message.id.clone(),
                 since: SystemTime::now(),
             };
             worker
                 .events
                 .lock()
-                .unwrap_or_else(|err| err.into_inner())
+                .recover_poison()
                 .push_back(AcpEvent::TurnStarted {
                     message_id: message.id.clone(),
                 });
             worker
                 .reasoning_raw
                 .lock()
-                .unwrap_or_else(|err| err.into_inner())
+                .recover_poison()
                 .clear();
             record_or_terminal(
                 &worker.journal,
@@ -950,12 +951,12 @@ fn spawn_worker(worker: TurnWorker) -> thread::JoinHandle<()> {
             worker
                 .response
                 .lock()
-                .unwrap_or_else(|err| err.into_inner())
+                .recover_poison()
                 .clear();
             let instructions = worker
                 .private_profile_instructions
                 .lock()
-                .unwrap_or_else(|poison| poison.into_inner())
+                .recover_poison()
                 .clone();
             let result = prompt_request(
                 &worker.writer,
@@ -991,9 +992,9 @@ fn spawn_worker(worker: TurnWorker) -> thread::JoinHandle<()> {
             let collected = worker
                 .response
                 .lock()
-                .unwrap_or_else(|err| err.into_inner())
+                .recover_poison()
                 .clone();
-            *worker.state.lock().unwrap_or_else(|err| err.into_inner()) = TurnState::Idle;
+            *worker.state.lock().recover_poison() = TurnState::Idle;
             clear_active_turn(&worker.queue);
             let event = finish_turn(message, collected, result);
             match &event {
@@ -1048,14 +1049,14 @@ fn spawn_worker(worker: TurnWorker) -> thread::JoinHandle<()> {
             worker
                 .events
                 .lock()
-                .unwrap_or_else(|err| err.into_inner())
+                .recover_poison()
                 .push_back(event);
         }
     })
 }
 
 fn clear_active_turn(queue: &Arc<(Mutex<QueueState>, Condvar)>) {
-    queue.0.lock().unwrap_or_else(|err| err.into_inner()).active = None;
+    queue.0.lock().recover_poison().active = None;
 }
 
 fn record_journal(
@@ -1066,7 +1067,7 @@ fn record_journal(
 ) -> Result<(), String> {
     let writer = journal
         .lock()
-        .unwrap_or_else(|err| err.into_inner())
+        .recover_poison()
         .clone();
     writer.map_or(Ok(()), |writer| writer.enqueue(event, message_id, payload))
 }
@@ -1081,7 +1082,7 @@ fn record_or_terminal(
     if let Err(detail) = record_journal(journal, event, message_id, payload) {
         events
             .lock()
-            .unwrap_or_else(|err| err.into_inner())
+            .recover_poison()
             .push_back(AcpEvent::JournalFailed { detail });
     }
 }
@@ -1090,7 +1091,7 @@ fn active_message_id(queue: &Arc<(Mutex<QueueState>, Condvar)>) -> Option<String
     queue
         .0
         .lock()
-        .unwrap_or_else(|err| err.into_inner())
+        .recover_poison()
         .active
         .as_ref()
         .map(|turn| turn.message_id.clone())
@@ -1102,7 +1103,7 @@ fn enqueue(
     message: BridgetMessage,
 ) -> bool {
     let (queue, wakeup) = &**queue;
-    let mut queue = queue.lock().unwrap_or_else(|err| err.into_inner());
+    let mut queue = queue.lock().recover_poison();
     if queue.messages.len() >= capacity || queue.closed {
         return false;
     }
@@ -1117,7 +1118,7 @@ fn enqueue_and_capture_active_message_id(
     message: BridgetMessage,
 ) -> Option<Option<String>> {
     let (queue, wakeup) = &**queue;
-    let mut queue = queue.lock().unwrap_or_else(|err| err.into_inner());
+    let mut queue = queue.lock().recover_poison();
     if queue.messages.len() >= capacity || queue.closed {
         return None;
     }
@@ -1191,7 +1192,7 @@ fn spawn_reader(
                 );
                 events
                     .lock()
-                    .unwrap_or_else(|err| err.into_inner())
+                    .recover_poison()
                     .push_source(
                         AcpEvent::Error {
                             detail: "ligne ACP invalide".to_string(),
@@ -1209,7 +1210,7 @@ fn spawn_reader(
             let waiter = rpc_result.as_ref().and_then(|(id, _)| {
                 waiters
                     .lock()
-                    .unwrap_or_else(|err| err.into_inner())
+                    .recover_poison()
                     .remove(id)
             });
             if let (Some((id, result)), Some(waiter)) = (rpc_result.as_ref(), waiter) {
@@ -1226,7 +1227,7 @@ fn spawn_reader(
                 Some("session/update") => {
                     let session_id = active_session
                         .lock()
-                        .unwrap_or_else(|err| err.into_inner())
+                        .recover_poison()
                         .clone();
                     if let (Some(observer), Some(text)) =
                         (&test_observer, update_text(&value, session_id.as_deref()))
@@ -1246,7 +1247,7 @@ fn spawn_reader(
                         );
                         events
                             .lock()
-                            .unwrap_or_else(|err| err.into_inner())
+                            .recover_poison()
                             .push_source(
                                 AcpEvent::Error {
                                     detail: "update ACP ignorée pour une session étrangère"
@@ -1265,7 +1266,7 @@ fn spawn_reader(
                         );
                         events
                             .lock()
-                            .unwrap_or_else(|err| err.into_inner())
+                            .recover_poison()
                             .push_source(
                                 AcpEvent::Error {
                                     detail: "update ACP ignorée après annulation du tour"
@@ -1284,14 +1285,14 @@ fn spawn_reader(
                         );
                         response
                             .lock()
-                            .unwrap_or_else(|err| err.into_inner())
+                            .recover_poison()
                             .push_str(text);
                         let event = AcpEvent::Update {
                             detail: text.to_string(),
                         };
                         events
                             .lock()
-                            .unwrap_or_else(|err| err.into_inner())
+                            .recover_poison()
                             .push_source(event, raw_line.clone());
                     } else if let Some(thought) = update_thought_text(&value, session_id.as_deref())
                     {
@@ -1300,11 +1301,11 @@ fn spawn_reader(
                         // Pas de journal par chunk — alignement C3 / L3.
                         reasoning_raw
                             .lock()
-                            .unwrap_or_else(|err| err.into_inner())
+                            .recover_poison()
                             .push_str(thought);
                         events
                             .lock()
-                            .unwrap_or_else(|err| err.into_inner())
+                            .recover_poison()
                             .push_source(
                                 AcpEvent::Update {
                                     detail: format!("reasoning:{thought}"),
@@ -1384,7 +1385,7 @@ fn spawn_reader(
                     );
                     events
                         .lock()
-                        .unwrap_or_else(|err| err.into_inner())
+                        .recover_poison()
                         .push_source(
                             AcpEvent::Error {
                                 detail: format!("méthode ACP inconnue: {method}"),
@@ -1403,7 +1404,7 @@ fn spawn_reader(
                     );
                     events
                         .lock()
-                        .unwrap_or_else(|err| err.into_inner())
+                        .recover_poison()
                         .push_source(
                             AcpEvent::Error {
                                 detail: format!("notification ACP inconnue: {method}"),
@@ -1422,7 +1423,7 @@ fn spawn_reader(
                     );
                     events
                         .lock()
-                        .unwrap_or_else(|err| err.into_inner())
+                        .recover_poison()
                         .push_source(
                             AcpEvent::Error {
                                 detail: "message ACP inattendu".to_string(),
@@ -1434,7 +1435,7 @@ fn spawn_reader(
         }
         alive.store(false, Ordering::SeqCst);
         let (queue_state, wakeup) = &*queue;
-        let mut queue_state = queue_state.lock().unwrap_or_else(|err| err.into_inner());
+        let mut queue_state = queue_state.lock().recover_poison();
         queue_state.closed = true;
         drain_queue(&mut queue_state, &events, "EOF ACP");
         wakeup.notify_all();
@@ -1453,7 +1454,7 @@ fn spawn_reader(
         );
         events
             .lock()
-            .unwrap_or_else(|err| err.into_inner())
+            .recover_poison()
             .push_back(AcpEvent::Error {
                 detail: "EOF ACP".to_string(),
             });
@@ -1464,7 +1465,7 @@ fn drain_queue(queue: &mut QueueState, events: &Arc<Mutex<AcpEventQueue>>, reaso
     for message in queue.messages.drain(..) {
         events
             .lock()
-            .unwrap_or_else(|err| err.into_inner())
+            .recover_poison()
             .push_back(AcpEvent::DeliveryRejected {
                 message_id: message.id,
                 reason: reason.to_string(),
@@ -1503,11 +1504,11 @@ fn prompt_request(
     let key = id.to_string();
     waiters
         .lock()
-        .unwrap_or_else(|err| err.into_inner())
+        .recover_poison()
         .insert(key.clone(), sender);
     completions
         .lock()
-        .unwrap_or_else(|err| err.into_inner())
+        .recover_poison()
         .insert(key.clone(), completion_sender);
     if let Err(error) = write_json(
         writer,
@@ -1515,11 +1516,11 @@ fn prompt_request(
     ) {
         waiters
             .lock()
-            .unwrap_or_else(|err| err.into_inner())
+            .recover_poison()
             .remove(&key);
         completions
             .lock()
-            .unwrap_or_else(|err| err.into_inner())
+            .recover_poison()
             .remove(&key);
         return Err(error);
     }
@@ -1533,7 +1534,7 @@ fn prompt_request(
     }
     events
         .lock()
-        .unwrap_or_else(|err| err.into_inner())
+        .recover_poison()
         .push_back(dispatched);
     let started = std::time::Instant::now();
     loop {
@@ -1551,7 +1552,7 @@ fn prompt_request(
             cancelled.store(true, Ordering::SeqCst);
             waiters
                 .lock()
-                .unwrap_or_else(|err| err.into_inner())
+                .recover_poison()
                 .remove(&key);
             let _ = write_json(
                 writer,
@@ -1587,7 +1588,7 @@ fn prompt_request(
             Ok(result) => {
                 completions
                     .lock()
-                    .unwrap_or_else(|err| err.into_inner())
+                    .recover_poison()
                     .remove(&key);
                 return result.map_err(TransportError::DeliveryFailed);
             }
@@ -1600,7 +1601,7 @@ fn prompt_request(
 fn complete_request(completions: &Completions, id: &str) -> bool {
     completions
         .lock()
-        .unwrap_or_else(|err| err.into_inner())
+        .recover_poison()
         .remove(id)
         .is_some_and(|completion| completion.send(()).is_ok())
 }
@@ -1609,7 +1610,7 @@ fn active_turn_is_cancelled(queue: &Arc<(Mutex<QueueState>, Condvar)>) -> bool {
     queue
         .0
         .lock()
-        .unwrap_or_else(|err| err.into_inner())
+        .recover_poison()
         .active
         .as_ref()
         .is_some_and(|active| active.cancelled.load(Ordering::SeqCst))
@@ -1630,19 +1631,19 @@ fn force_stop_transport(
 ) {
     alive.store(false, Ordering::SeqCst);
     let (queue_state, wakeup) = &**queue;
-    let mut queue_state = queue_state.lock().unwrap_or_else(|err| err.into_inner());
+    let mut queue_state = queue_state.lock().recover_poison();
     queue_state.closed = true;
     drain_queue(&mut queue_state, events, reason);
     wakeup.notify_all();
     drop(queue_state);
-    writer.lock().unwrap_or_else(|err| err.into_inner()).take();
-    let mut child = child.lock().unwrap_or_else(|err| err.into_inner());
+    writer.lock().recover_poison().take();
+    let mut child = child.lock().recover_poison();
     let _ = child.kill();
     let _ = child.wait();
     fail_waiters(waiters, reason);
     completions
         .lock()
-        .unwrap_or_else(|err| err.into_inner())
+        .recover_poison()
         .clear();
 }
 
@@ -1658,7 +1659,7 @@ fn request(
     let key = id.to_string();
     waiters
         .lock()
-        .unwrap_or_else(|err| err.into_inner())
+        .recover_poison()
         .insert(key.clone(), sender);
     if let Err(error) = write_json(
         writer,
@@ -1666,7 +1667,7 @@ fn request(
     ) {
         waiters
             .lock()
-            .unwrap_or_else(|err| err.into_inner())
+            .recover_poison()
             .remove(&key);
         return Err(error);
     }
@@ -1676,7 +1677,7 @@ fn request(
     if result.is_err() {
         waiters
             .lock()
-            .unwrap_or_else(|err| err.into_inner())
+            .recover_poison()
             .remove(&key);
     }
     result?.map_err(TransportError::DeliveryFailed)
@@ -1773,7 +1774,7 @@ fn reasoning_journal_payload_from_raw(raw: &str) -> Value {
 }
 
 fn take_reasoning_journal_payload(reasoning_raw: &Arc<Mutex<String>>) -> Value {
-    let mut raw = reasoning_raw.lock().unwrap_or_else(|err| err.into_inner());
+    let mut raw = reasoning_raw.lock().recover_poison();
     let payload = reasoning_journal_payload_from_raw(&raw);
     raw.clear();
     payload
@@ -2019,7 +2020,7 @@ fn build_tool_journal_payload(
 }
 
 fn fail_waiters(waiters: &Waiters, reason: &str) {
-    let pending = std::mem::take(&mut *waiters.lock().unwrap_or_else(|err| err.into_inner()));
+    let pending = std::mem::take(&mut *waiters.lock().recover_poison());
     for (_, waiter) in pending {
         let _ = waiter.send(Err(reason.to_string()));
     }

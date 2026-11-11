@@ -8,6 +8,7 @@
 //! recopier Effect Schema : en Rust, un enum fermé + une garde à l'écriture
 //! partagée par tous les pilotes via [`crate::journal::JournalWriter`].
 
+use crate::poison::RecoverPoison;
 use serde_json::Value;
 
 #[cfg(test)]
@@ -30,7 +31,7 @@ static PILOT_KIND_SUITE_LOCK: Mutex<()> = Mutex::new(());
 pub fn pilot_kind_suite_lock() -> std::sync::MutexGuard<'static, ()> {
     PILOT_KIND_SUITE_LOCK
         .lock()
-        .unwrap_or_else(|poison| poison.into_inner())
+        .recover_poison()
 }
 
 /// Exécute `f` en forçant le kind que les pilotes écrivent via
@@ -42,14 +43,14 @@ pub fn with_forced_pilot_update_kind<R>(kind: &'static str, f: impl FnOnce() -> 
     {
         let mut slot = FORCED_PILOT_UPDATE_KIND
             .lock()
-            .unwrap_or_else(|poison| poison.into_inner());
+            .recover_poison();
         *slot = Some(kind);
     }
     let result = f();
     {
         let mut slot = FORCED_PILOT_UPDATE_KIND
             .lock()
-            .unwrap_or_else(|poison| poison.into_inner());
+            .recover_poison();
         *slot = None;
     }
     result
@@ -64,7 +65,7 @@ pub fn pilot_kind_str(canonical: JournalUpdateKind) -> &'static str {
     {
         if let Some(forced) = FORCED_PILOT_UPDATE_KIND
             .lock()
-            .unwrap_or_else(|poison| poison.into_inner())
+            .recover_poison()
             .as_ref()
             .copied()
         {

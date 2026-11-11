@@ -8,6 +8,7 @@
 //! lecture de l'écran : le succès de l'écriture est l'observable, comme pour
 //! la voie tmux.
 
+use crate::poison::RecoverPoison;
 use crate::tmux::validate_injection_content;
 use crate::transport::{Transport, TransportError};
 use bridget_core::{BridgetMessage, envelope::wrap_envelope};
@@ -140,7 +141,7 @@ impl Transport for PtyTransport {
         let master = self
             .master
             .lock()
-            .unwrap_or_else(|poison| poison.into_inner());
+            .recover_poison();
         let fd = master.as_raw_fd();
         let deadline = Instant::now() + WRITE_DEADLINE;
         Self::write_all_bounded(fd, BRACKETED_PASTE_START, deadline)?;

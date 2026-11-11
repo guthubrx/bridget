@@ -5,6 +5,7 @@
 //! crate publiée `codex-app-server-protocol` suit un autre produit et une
 //! autre numérotation ; la lier ici cacherait une incompatibilité possible.
 
+use crate::poison::RecoverPoison;
 use crate::journal::{JournalFailureSink, JournalLiveFeed, JournalWriter, with_turn_failed_kind};
 use crate::managed_session::{
     ManagedEvent, ManagedEventKind, ManagedEventOrigin, ManagedEventSource,
@@ -703,7 +704,7 @@ impl CodexAppServerTransport {
                 }
                 writer
                     .lock()
-                    .unwrap_or_else(|poison| poison.into_inner())
+                    .recover_poison()
                     .take();
                 if let Some(socket) = interactive_socket {
                     stop_interactive_server(&mut child, socket)
@@ -716,7 +717,7 @@ impl CodexAppServerTransport {
                 return Err(error);
             }
         };
-        *selected_thread.lock().unwrap_or_else(|e| e.into_inner()) = Some(thread_id.clone());
+        *selected_thread.lock().recover_poison() = Some(thread_id.clone());
         let child = Arc::new(Mutex::new(child));
         let busy = Arc::new(AtomicBool::new(false));
         let worker_handle = spawn_worker(Worker {
@@ -790,7 +791,7 @@ impl CodexAppServerTransport {
         self.observations
             .0
             .lock()
-            .unwrap_or_else(|poison| poison.into_inner())
+            .recover_poison()
             .events
             .push_back(ManagedEvent::internal(
                 ManagedEventSource::CodexAppServer,
@@ -827,7 +828,7 @@ impl CodexAppServerTransport {
             observations
                 .0
                 .lock()
-                .unwrap_or_else(|poison| poison.into_inner())
+                .recover_poison()
                 .events
                 .push_back(ManagedEvent::internal(
                     ManagedEventSource::CodexAppServer,
@@ -839,7 +840,7 @@ impl CodexAppServerTransport {
         *self
             .journal
             .lock()
-            .unwrap_or_else(|poison| poison.into_inner()) =
+            .recover_poison() =
             Some(JournalWriter::start_with_live_feed_and_failure(
                 root,
                 agent,
@@ -857,11 +858,11 @@ impl CodexAppServerTransport {
         self.alive.store(false, Ordering::SeqCst);
         self.child_requests
             .lock()
-            .unwrap_or_else(|e| e.into_inner())
+            .recover_poison()
             .clear();
         self.observations.1.notify_all();
         let (queue, wake) = &*self.queue;
-        let mut queue = queue.lock().unwrap_or_else(|poison| poison.into_inner());
+        let mut queue = queue.lock().recover_poison();
         queue.closed = true;
         while let Some(message) = queue.messages.pop_front() {
             self.push_internal(ManagedEventKind::DeliveryRejected {
@@ -878,7 +879,7 @@ impl CodexAppServerTransport {
             let turn = self
                 .active_detail
                 .lock()
-                .unwrap_or_else(|e| e.into_inner())
+                .recover_poison()
                 .as_ref()
                 .and_then(|detail| {
                     detail
@@ -899,12 +900,12 @@ impl CodexAppServerTransport {
         }
         self.writer
             .lock()
-            .unwrap_or_else(|poison| poison.into_inner())
+            .recover_poison()
             .take();
         let mut child = self
             .child
             .lock()
-            .unwrap_or_else(|poison| poison.into_inner());
+            .recover_poison();
         if let Some(socket) = &self.interactive_socket {
             if let Err(error) = stop_interactive_server(&mut child, socket) {
                 // Garder le socket de récupération, jamais supprimer la seule
@@ -922,7 +923,7 @@ impl CodexAppServerTransport {
         if let Some(handle) = self
             .reader_handle
             .lock()
-            .unwrap_or_else(|poison| poison.into_inner())
+            .recover_poison()
             .take()
         {
             let _ = handle.join();
@@ -930,7 +931,7 @@ impl CodexAppServerTransport {
         if let Some(handle) = self
             .worker_handle
             .lock()
-            .unwrap_or_else(|poison| poison.into_inner())
+            .recover_poison()
             .take()
         {
             let _ = handle.join();
@@ -938,7 +939,7 @@ impl CodexAppServerTransport {
         if let Some(journal) = self
             .journal
             .lock()
-            .unwrap_or_else(|poison| poison.into_inner())
+            .recover_poison()
             .take()
         {
             journal.stop();
@@ -958,7 +959,7 @@ impl Transport for CodexAppServerTransport {
             return Err(TransportError::AgentDead);
         }
         let (queue, wake) = &*self.queue;
-        let mut queue = queue.lock().unwrap_or_else(|poison| poison.into_inner());
+        let mut queue = queue.lock().recover_poison();
         let human_message = message.origin == Some(MessageOrigin::Human);
         let has_active_turn = queue.active.is_some();
         // Un message humain ordinaire doit obtenir son propre tour. Le piloter
@@ -1116,7 +1117,7 @@ impl ManagedSession for CodexAppServerTransport {
         let mut pending = self
             .child_requests
             .lock()
-            .unwrap_or_else(|e| e.into_inner());
+            .recover_poison();
         let index = pending
             .iter()
             .position(|entry| {
@@ -1134,7 +1135,7 @@ impl ManagedSession for CodexAppServerTransport {
         let linked = self
             .active_detail
             .lock()
-            .unwrap_or_else(|e| e.into_inner())
+            .recover_poison()
             .as_ref()
             .is_some_and(|detail| {
                 detail.message_id == entry.message_id
@@ -1225,7 +1226,7 @@ impl ManagedSession for CodexAppServerTransport {
     fn provider_permissions(&self) -> Option<(String, Value, u64, Option<String>)> {
         self.permission_observation
             .lock()
-            .unwrap_or_else(|e| e.into_inner())
+            .recover_poison()
             .clone()
     }
     fn runtime_catalogue(&mut self)->crate::protocol::RuntimeCatalogueOutcome {
@@ -1260,7 +1261,7 @@ impl ManagedSession for CodexAppServerTransport {
         *self
             .private_profile_instructions
             .lock()
-            .unwrap_or_else(|poison| poison.into_inner()) = Some(instructions.to_string());
+            .recover_poison() = Some(instructions.to_string());
         Ok(())
     }
 
@@ -1276,7 +1277,7 @@ impl ManagedSession for CodexAppServerTransport {
         let active = self
             .active_detail
             .lock()
-            .unwrap_or_else(|poison| poison.into_inner());
+            .recover_poison();
         Some(ManagedProviderIdentity {
             provider_kind: "codex".to_string(),
             provider_session_id: Some(self.connection_id.clone()),
@@ -1295,7 +1296,7 @@ impl ManagedSession for CodexAppServerTransport {
     fn process_id(&self) -> u32 {
         self.child
             .lock()
-            .unwrap_or_else(|poison| poison.into_inner())
+            .recover_poison()
             .id()
     }
 
@@ -1318,7 +1319,7 @@ impl ManagedSession for CodexAppServerTransport {
         self.observations
             .0
             .lock()
-            .unwrap_or_else(|poison| poison.into_inner())
+            .recover_poison()
             .events
             .drain(..)
             .collect()
@@ -1326,7 +1327,7 @@ impl ManagedSession for CodexAppServerTransport {
 
     fn cancel_delivery(&self, message_id: &str, reason: &str) -> bool {
         let (queue, wake) = &*self.queue;
-        let mut queue = queue.lock().unwrap_or_else(|poison| poison.into_inner());
+        let mut queue = queue.lock().recover_poison();
         if let Some(active) = queue
             .active
             .as_ref()
@@ -1334,7 +1335,7 @@ impl ManagedSession for CodexAppServerTransport {
         {
             self.child_requests
                 .lock()
-                .unwrap_or_else(|e| e.into_inner())
+                .recover_poison()
                 .retain(|entry| entry.message_id != message_id);
             let _ = active.cancel.send(reason.to_string());
             queue.steering_open = false;
@@ -1371,7 +1372,7 @@ impl ManagedSession for CodexAppServerTransport {
         let turn = self
             .active_detail
             .lock()
-            .unwrap_or_else(|e| e.into_inner())
+            .recover_poison()
             .as_ref()
             .filter(|detail| detail.message_id == message_id)
             .and_then(|detail| {
@@ -1384,7 +1385,7 @@ impl ManagedSession for CodexAppServerTransport {
         // doit pas permettre au worker de prendre une nouvelle remise.
         self.alive.store(false, Ordering::SeqCst);
         let (queue, wake) = &*self.queue;
-        queue.lock().unwrap_or_else(|e| e.into_inner()).closed = true;
+        queue.lock().recover_poison().closed = true;
         wake.notify_all();
         if let Some((thread_id, turn_id)) = turn {
             let _ = request_with_timeout(
@@ -1405,7 +1406,7 @@ impl ManagedSession for CodexAppServerTransport {
                 .queue
                 .0
                 .lock()
-                .unwrap_or_else(|e| e.into_inner())
+                .recover_poison()
                 .external_turn
                 .is_some()
     }
@@ -1435,12 +1436,12 @@ fn spawn_worker(worker: Worker) -> thread::JoinHandle<()> {
         loop {
             let (message, cancel) = {
                 let (queue, wake) = &*worker.queue;
-                let mut queue = queue.lock().unwrap_or_else(|poison| poison.into_inner());
+                let mut queue = queue.lock().recover_poison();
                 while (queue.messages.is_empty() || queue.external_turn.is_some()) && !queue.closed
                 {
                     queue = wake
                         .wait(queue)
-                        .unwrap_or_else(|poison| poison.into_inner());
+                        .recover_poison();
                 }
                 if queue.closed {
                     break;
@@ -1486,7 +1487,7 @@ fn spawn_worker(worker: Worker) -> thread::JoinHandle<()> {
                 *worker
                     .active_detail
                     .lock()
-                    .unwrap_or_else(|poison| poison.into_inner()) = Some(CodexTurnDetail {
+                    .recover_poison() = Some(CodexTurnDetail {
                     message_id: message.id.clone(),
                     thread_id: worker.thread_id.clone(),
                     ..CodexTurnDetail::default()
@@ -1536,7 +1537,7 @@ fn spawn_worker(worker: Worker) -> thread::JoinHandle<()> {
                 worker
                     .active_detail
                     .lock()
-                    .unwrap_or_else(|poison| poison.into_inner())
+                    .recover_poison()
                     .take();
             }
             // (C) Succès / annulation attestés → turn_end avec issue exacte.
@@ -1579,7 +1580,7 @@ fn spawn_worker(worker: Worker) -> thread::JoinHandle<()> {
             worker
                 .child_requests
                 .lock()
-                .unwrap_or_else(|e| e.into_inner())
+                .recover_poison()
                 .retain(|entry| entry.message_id != message.id);
             push_internal(&worker.observations, event);
             worker.busy.store(false, Ordering::SeqCst);
@@ -1645,7 +1646,7 @@ fn start_turn_with_retry(worker: &Worker, message: &BridgetMessage) -> Result<St
     let instructions = worker
         .private_profile_instructions
         .lock()
-        .unwrap_or_else(|poison| poison.into_inner())
+        .recover_poison()
         .clone();
     // Les outils exposent leurs capacités ; le pilote ne promet ni interface
     // de rendu ni disponibilité du sandbox et ne transforme pas un document
@@ -1687,7 +1688,7 @@ fn observe_native_permissions(
     session: &str,
     value: &Value,
 ) {
-    let mut observed = observation.lock().unwrap_or_else(|e| e.into_inner());
+    let mut observed = observation.lock().recover_poison();
     let previous = observed.as_ref().filter(|o| o.0 == session);
     let mut policy = previous
         .map(|o| o.1.clone())
@@ -1767,7 +1768,7 @@ fn wait_for_turn(
         // d'interrompre un tour dont la remise humaine est déjà attestée.
         let consumed = {
             let (lock, _) = &*worker.observations;
-            let mut observed = lock.lock().unwrap_or_else(|poison| poison.into_inner());
+            let mut observed = lock.lock().recover_poison();
             consume_accepted_steers(
                 &mut observed,
                 &worker.thread_id,
@@ -1798,7 +1799,7 @@ fn wait_for_turn(
             interrupt_terminal_deadline = Some(now + INTERRUPT_TERMINAL_TIMEOUT);
         }
         let (lock, wake) = &*worker.observations;
-        let mut observed = lock.lock().unwrap_or_else(|poison| poison.into_inner());
+        let mut observed = lock.lock().recover_poison();
         let consumed = consume_accepted_steers(
             &mut observed,
             &worker.thread_id,
@@ -1878,10 +1879,10 @@ fn wait_for_turn(
         }
         let remaining = terminal_deadline.duration_since(now).unwrap_or(TURN_POLL);
         let wait = remaining.min(TURN_POLL);
-        let observed = lock.lock().unwrap_or_else(|poison| poison.into_inner());
+        let observed = lock.lock().recover_poison();
         let (next, _) = wake
             .wait_timeout(observed, wait)
-            .unwrap_or_else(|poison| poison.into_inner());
+            .recover_poison();
         drop(next);
     }
 }
@@ -1895,7 +1896,7 @@ fn earliest_unconfirmed_steer_deadline(
     accepted: &[BridgetMessage],
 ) -> Option<SystemTime> {
     let (lock, _) = &**queue;
-    let state = lock.lock().unwrap_or_else(|poison| poison.into_inner());
+    let state = lock.lock().recover_poison();
     accepted
         .iter()
         .chain(state.steer.iter())
@@ -1969,7 +1970,7 @@ fn requeue_unconfirmed(
     pending: &mut Vec<BridgetMessage>,
 ) {
     let (lock, wake) = &**queue;
-    let mut state = lock.lock().unwrap_or_else(|poison| poison.into_inner());
+    let mut state = lock.lock().recover_poison();
     state.steering_open = false;
     let steered: Vec<_> = state.steer.drain(..).collect();
     for mut message in steered.into_iter().rev().chain(pending.drain(..).rev()) {
@@ -2002,7 +2003,7 @@ fn steer_into_turn(worker: &Worker, turn_id: &str, accepted: &mut Vec<BridgetMes
     loop {
         let next = {
             let (lock, _) = &*worker.queue;
-            let mut state = lock.lock().unwrap_or_else(|poison| poison.into_inner());
+            let mut state = lock.lock().recover_poison();
             state.steer.pop_front()
         };
         let Some(message) = next else {
@@ -2037,7 +2038,7 @@ fn steer_into_turn(worker: &Worker, turn_id: &str, accepted: &mut Vec<BridgetMes
                 let message_id = message.id.clone();
                 let non_pilotable = error.to_string().contains("tour non pilotable");
                 let (lock, wake) = &*worker.queue;
-                let mut state = lock.lock().unwrap_or_else(|poison| poison.into_inner());
+                let mut state = lock.lock().recover_poison();
                 // Le message reste ici jusqu’au repli atomique : déplacer un
                 // refus non pilotable dans `messages` ferait doubler les
                 // messages acceptés antérieurs au prochain tour.
@@ -2064,7 +2065,7 @@ fn steer_into_turn(worker: &Worker, turn_id: &str, accepted: &mut Vec<BridgetMes
 
 fn clear_active(queue: &Arc<(Mutex<QueueState>, Condvar)>) {
     let (lock, wake) = &**queue;
-    let mut state = lock.lock().unwrap_or_else(|poison| poison.into_inner());
+    let mut state = lock.lock().recover_poison();
     state.steering_open = false;
     // `turn/start` peut échouer avant `wait_for_turn`. Dans ce chemin, aucun
     // repli précédent n’a vidé `steer` : le restituer évite une perte humaine.
@@ -2093,7 +2094,7 @@ fn record(
     let payload = codex_journal_payload(event, payload);
     journal
         .lock()
-        .unwrap_or_else(|poison| poison.into_inner())
+        .recover_poison()
         .as_ref()
         .map_or(Ok(()), |journal| {
             journal.enqueue(event, message_id.filter(|id| !id.is_empty()), payload)
@@ -2124,7 +2125,7 @@ fn source_matches_active_turn(detail: &CodexTurnDetail, value: &Value) -> bool {
 fn set_active_turn_id(active_detail: &ActiveTurnDetail, message_id: &str, turn_id: &str) {
     let mut active = active_detail
         .lock()
-        .unwrap_or_else(|poison| poison.into_inner());
+        .recover_poison();
     if let Some(detail) = active
         .as_mut()
         .filter(|detail| detail.message_id == message_id)
@@ -2143,7 +2144,7 @@ fn observe_provider_item_id(active_detail: &ActiveTurnDetail, value: &Value) {
     };
     let mut active = active_detail
         .lock()
-        .unwrap_or_else(|poison| poison.into_inner());
+        .recover_poison();
     if let Some(detail) = active
         .as_mut()
         .filter(|detail| source_matches_active_turn(detail, value))
@@ -2166,7 +2167,7 @@ fn observe_steered_user_message_visibility(
     };
     let active = active_detail
         .lock()
-        .unwrap_or_else(|poison| poison.into_inner());
+        .recover_poison();
     let Some(detail) = active.as_ref() else {
         return;
     };
@@ -2183,7 +2184,7 @@ fn observe_steered_user_message_visibility(
     observations
         .0
         .lock()
-        .unwrap_or_else(|poison| poison.into_inner())
+        .recover_poison()
         .consumed_steers_by_turn
         .entry(key)
         .or_default()
@@ -2215,7 +2216,7 @@ fn record_context_compaction(
     value: &Value,
 ) {
     let observed = {
-        let active = active_detail.lock().unwrap_or_else(|e| e.into_inner());
+        let active = active_detail.lock().recover_poison();
         active.as_ref().and_then(|a| compaction_payload(value, &a.thread_id, a.turn_id.as_deref()?)
             .map(|payload| (a.message_id.clone(), payload)))
     };
@@ -2235,7 +2236,7 @@ fn record_active_act(
 ) {
     let message_id = active_detail
         .lock()
-        .unwrap_or_else(|poison| poison.into_inner())
+        .recover_poison()
         .as_ref()
         .filter(|active| source_matches_active_turn(active, value))
         .map(|active| active.message_id.clone());
@@ -2287,7 +2288,7 @@ fn record_command_completion(
 ) {
     let message_id = active_detail
         .lock()
-        .unwrap_or_else(|poison| poison.into_inner())
+        .recover_poison()
         .as_ref()
         .filter(|active| source_matches_active_turn(active, value))
         .map(|active| active.message_id.clone());
@@ -2387,7 +2388,7 @@ fn record_agent_text_delta(
     let message_id = {
         let mut active = active_detail
             .lock()
-            .unwrap_or_else(|poison| poison.into_inner());
+            .recover_poison();
         let Some(detail) = active
             .as_mut()
             .filter(|active| source_matches_active_turn(active, value))
@@ -2421,7 +2422,7 @@ fn maybe_record_final_agent_message(
     let message_id = {
         let mut active = active_detail
             .lock()
-            .unwrap_or_else(|poison| poison.into_inner());
+            .recover_poison();
         let Some(detail) = active
             .as_mut()
             .filter(|active| source_matches_active_turn(active, value))
@@ -2466,7 +2467,7 @@ fn append_indexed(
 fn observe_reasoning(active_detail: &ActiveTurnDetail, method: &str, value: &Value) {
     let mut active = active_detail
         .lock()
-        .unwrap_or_else(|poison| poison.into_inner());
+        .recover_poison();
     let Some(detail) = active.as_mut() else {
         return;
     };
@@ -2506,7 +2507,7 @@ fn observe_reasoning(active_detail: &ActiveTurnDetail, method: &str, value: &Val
 fn finish_reasoning(active_detail: &ActiveTurnDetail, message_id: &str) -> Value {
     let detail = active_detail
         .lock()
-        .unwrap_or_else(|poison| poison.into_inner())
+        .recover_poison()
         .take();
     let Some(detail) = detail.filter(|detail| detail.message_id == message_id) else {
         return json!({ "available": false });
@@ -3091,7 +3092,7 @@ fn push_internal(observations: &Arc<(Mutex<Observations>, Condvar)>, kind: Manag
     observations
         .0
         .lock()
-        .unwrap_or_else(|poison| poison.into_inner())
+        .recover_poison()
         .events
         .push_back(ManagedEvent::internal(
             ManagedEventSource::CodexAppServer,
@@ -3287,7 +3288,7 @@ fn request_with_timeout(
     let (sender, receiver) = mpsc::channel();
     waiters
         .lock()
-        .unwrap_or_else(|poison| poison.into_inner())
+        .recover_poison()
         .insert(id, sender);
     if let Err(error) = write_value(
         writer,
@@ -3295,7 +3296,7 @@ fn request_with_timeout(
     ) {
         waiters
             .lock()
-            .unwrap_or_else(|poison| poison.into_inner())
+            .recover_poison()
             .remove(&id);
         return Err(error);
     }
@@ -3305,7 +3306,7 @@ fn request_with_timeout(
     if result.is_err() {
         waiters
             .lock()
-            .unwrap_or_else(|poison| poison.into_inner())
+            .recover_poison()
             .remove(&id);
     }
     result
@@ -3570,7 +3571,7 @@ fn spawn_reader(lines: SourceLines, context: ReaderContext) -> thread::JoinHandl
                 && (value.get("result").is_some() || value.get("error").is_some())
                 && let Some(waiter) = waiters
                     .lock()
-                    .unwrap_or_else(|poison| poison.into_inner())
+                    .recover_poison()
                     .remove(&id)
             {
                 // Le vrai résultat turn/start établit le tour avant de rendre
@@ -3584,7 +3585,7 @@ fn spawn_reader(lines: SourceLines, context: ReaderContext) -> thread::JoinHandl
                     let message_id = queue
                         .0
                         .lock()
-                        .unwrap_or_else(|e| e.into_inner())
+                        .recover_poison()
                         .active
                         .as_ref()
                         .map(|active| active.message_id.clone());
@@ -3627,7 +3628,7 @@ fn spawn_reader(lines: SourceLines, context: ReaderContext) -> thread::JoinHandl
             if interactive {
                 let selected = selected_thread
                     .lock()
-                    .unwrap_or_else(|e| e.into_inner())
+                    .recover_poison()
                     .clone();
                 let incoming_thread = value
                     .pointer("/params/threadId")
@@ -3688,7 +3689,7 @@ fn spawn_reader(lines: SourceLines, context: ReaderContext) -> thread::JoinHandl
             {
                 let method = method.unwrap();
                 let message_id = {
-                    let state = queue.0.lock().unwrap_or_else(|e| e.into_inner());
+                    let state = queue.0.lock().recover_poison();
                     state
                         .active
                         .as_ref()
@@ -3698,7 +3699,7 @@ fn spawn_reader(lines: SourceLines, context: ReaderContext) -> thread::JoinHandl
                 let linked = alive.load(Ordering::SeqCst)
                     && active_detail
                         .lock()
-                        .unwrap_or_else(|e| e.into_inner())
+                        .recover_poison()
                         .as_ref()
                         .is_some_and(|detail| {
                             message_id.as_deref() == Some(detail.message_id.as_str())
@@ -3746,7 +3747,7 @@ fn spawn_reader(lines: SourceLines, context: ReaderContext) -> thread::JoinHandl
                     match normalize_child_provider_request(&value, &provider_session) {
                         Ok((request, approval)) => {
                             let mut pending =
-                                child_requests.lock().unwrap_or_else(|e| e.into_inner());
+                                child_requests.lock().recover_poison();
                             if let Some(index) = pending.iter().position(|entry| {
                                 entry.request.provider_session == request.provider_session
                                     && entry.request.turn_id == request.turn_id
@@ -3847,7 +3848,7 @@ fn spawn_reader(lines: SourceLines, context: ReaderContext) -> thread::JoinHandl
                     let request_id = value.pointer("/params/requestId").and_then(|value| {
                         serde_json::from_value::<ChildProviderRequestId>(value.clone()).ok()
                     });
-                    let mut pending = child_requests.lock().unwrap_or_else(|e| e.into_inner());
+                    let mut pending = child_requests.lock().recover_poison();
                     let index = pending.iter().position(|entry| {
                         Some(entry.thread_id.as_str()) == thread_id
                             && Some(&entry.request.provider_request_id) == request_id.as_ref()
@@ -3878,11 +3879,11 @@ fn spawn_reader(lines: SourceLines, context: ReaderContext) -> thread::JoinHandl
                 Some("turn/started") if interactive => {
                     if let Some(turn_id) = value.pointer("/params/turn/id").and_then(Value::as_str)
                     {
-                        let mut state = queue.0.lock().unwrap_or_else(|e| e.into_inner());
+                        let mut state = queue.0.lock().recover_poison();
                         // Le tour OBSERVÉ est indépendant de la réservation
                         // d'un RPC Bridget, y compris pendant sa finalisation.
                         state.external_turn = Some(turn_id.into());
-                        *active_detail.lock().unwrap_or_else(|e| e.into_inner()) =
+                        *active_detail.lock().recover_poison() =
                             Some(CodexTurnDetail {
                                 thread_id: value
                                     .pointer("/params/threadId")
@@ -3915,7 +3916,7 @@ fn spawn_reader(lines: SourceLines, context: ReaderContext) -> thread::JoinHandl
                 Some("thread/settings/updated") => {
                     let selected = selected_thread
                         .lock()
-                        .unwrap_or_else(|e| e.into_inner())
+                        .recover_poison()
                         .clone();
                     if let Some(thread_id) = selected.as_deref()
                         && value.pointer("/params/threadId").and_then(Value::as_str)
@@ -3955,7 +3956,7 @@ fn spawn_reader(lines: SourceLines, context: ReaderContext) -> thread::JoinHandl
                         observations
                             .0
                             .lock()
-                            .unwrap_or_else(|poison| poison.into_inner())
+                            .recover_poison()
                             .response_by_turn
                             .entry(turn_id.to_string())
                             .or_default()
@@ -3988,7 +3989,7 @@ fn spawn_reader(lines: SourceLines, context: ReaderContext) -> thread::JoinHandl
                     {
                         let message_id = active_detail
                             .lock()
-                            .unwrap_or_else(|e| e.into_inner())
+                            .recover_poison()
                             .as_ref()
                             .filter(|active| source_matches_active_turn(active, &value))
                             .map(|active| active.message_id.clone());
@@ -4046,8 +4047,8 @@ fn spawn_reader(lines: SourceLines, context: ReaderContext) -> thread::JoinHandl
                         && let Some(client_id) =
                             item.and_then(|i| i.get("clientId")).and_then(Value::as_str)
                     {
-                        let active = queue.0.lock().unwrap_or_else(|e| e.into_inner());
-                        let mut detail = active_detail.lock().unwrap_or_else(|e| e.into_inner());
+                        let active = queue.0.lock().recover_poison();
+                        let mut detail = active_detail.lock().recover_poison();
                         if let Some(detail) = detail.as_mut().filter(|d| {
                             source_matches_active_turn(d, &value)
                                 && d.message_id == client_id
@@ -4107,7 +4108,7 @@ fn spawn_reader(lines: SourceLines, context: ReaderContext) -> thread::JoinHandl
                             let mut observed = observations
                                 .0
                                 .lock()
-                                .unwrap_or_else(|poison| poison.into_inner());
+                                .recover_poison();
                             let entry = observed
                                 .response_by_turn
                                 .entry(turn_id.to_string())
@@ -4141,11 +4142,11 @@ fn spawn_reader(lines: SourceLines, context: ReaderContext) -> thread::JoinHandl
                     if interactive
                         && item.get("type").and_then(Value::as_str) == Some("userMessage")
                     {
-                        let state = queue.0.lock().unwrap_or_else(|e| e.into_inner());
+                        let state = queue.0.lock().recover_poison();
                         let client_id = item.get("clientId").and_then(Value::as_str).filter(|id| {
                             state.active.as_ref().is_some_and(|a| a.message_id == *id)
                         });
-                        let mut active = active_detail.lock().unwrap_or_else(|e| e.into_inner());
+                        let mut active = active_detail.lock().recover_poison();
                         if let Some(detail) = active
                             .as_mut()
                             .filter(|a| source_matches_active_turn(a, &value))
@@ -4238,7 +4239,7 @@ fn spawn_reader(lines: SourceLines, context: ReaderContext) -> thread::JoinHandl
                     // sortie d'un autre tour ne contamine pas l'item actif.
                     let from_active_turn = active_detail
                         .lock()
-                        .unwrap_or_else(|poison| poison.into_inner())
+                        .recover_poison()
                         .as_ref()
                         .is_some_and(|active| source_matches_active_turn(active, &value));
                     if from_active_turn
@@ -4353,7 +4354,7 @@ fn spawn_reader(lines: SourceLines, context: ReaderContext) -> thread::JoinHandl
                         let message_id = queue
                             .0
                             .lock()
-                            .unwrap_or_else(|poison| poison.into_inner())
+                            .recover_poison()
                             .active
                             .as_ref()
                             .map(|active| active.message_id.clone());
@@ -4406,7 +4407,7 @@ fn spawn_reader(lines: SourceLines, context: ReaderContext) -> thread::JoinHandl
                         let message_id = queue
                             .0
                             .lock()
-                            .unwrap_or_else(|poison| poison.into_inner())
+                            .recover_poison()
                             .active
                             .as_ref()
                             .map(|active| active.message_id.clone());
@@ -4436,14 +4437,14 @@ fn spawn_reader(lines: SourceLines, context: ReaderContext) -> thread::JoinHandl
                                 value.pointer("/params/threadId").and_then(Value::as_str);
                             child_requests
                                 .lock()
-                                .unwrap_or_else(|e| e.into_inner())
+                                .recover_poison()
                                 .retain(|entry| {
                                     entry.request.turn_id != turn_id
                                         || Some(entry.thread_id.as_str()) != thread_id
                                 });
                         }
                         if interactive {
-                            let mut state = queue.0.lock().unwrap_or_else(|e| e.into_inner());
+                            let mut state = queue.0.lock().recover_poison();
                             if state.external_turn.as_deref() != Some(turn_id) {
                                 // Un ancien terminal ou sa répétition ne peut
                                 // ni clore le tour courant ni remplir la table.
@@ -4452,7 +4453,7 @@ fn spawn_reader(lines: SourceLines, context: ReaderContext) -> thread::JoinHandl
                             if state.external_turn.as_deref() == Some(turn_id) {
                                 let message_id = active_detail
                                     .lock()
-                                    .unwrap_or_else(|e| e.into_inner())
+                                    .recover_poison()
                                     .as_ref()
                                     .map(|a| a.message_id.clone())
                                     .unwrap_or_default();
@@ -4471,7 +4472,7 @@ fn spawn_reader(lines: SourceLines, context: ReaderContext) -> thread::JoinHandl
                                     Some(&message_id),
                                     json!({"provider_turn_id": turn_id, "stop_reason": codex_turn_stop_reason(&value, status)}),
                                 );
-                                *active_detail.lock().unwrap_or_else(|e| e.into_inner()) = None;
+                                *active_detail.lock().recover_poison() = None;
                                 state.external_turn = None;
                                 push_source(
                                     &observations,
@@ -4485,7 +4486,7 @@ fn spawn_reader(lines: SourceLines, context: ReaderContext) -> thread::JoinHandl
                                     observations
                                         .0
                                         .lock()
-                                        .unwrap_or_else(|e| e.into_inner())
+                                        .recover_poison()
                                         .response_by_turn
                                         .remove(turn_id);
                                     continue;
@@ -4496,7 +4497,7 @@ fn spawn_reader(lines: SourceLines, context: ReaderContext) -> thread::JoinHandl
                         observations
                             .0
                             .lock()
-                            .unwrap_or_else(|poison| poison.into_inner())
+                            .recover_poison()
                             .terminal_by_turn
                             .insert(turn_id.to_string(), terminal);
                         observations.1.notify_all();
@@ -4550,7 +4551,7 @@ fn spawn_reader(lines: SourceLines, context: ReaderContext) -> thread::JoinHandl
                         let message_id = queue
                             .0
                             .lock()
-                            .unwrap_or_else(|poison| poison.into_inner())
+                            .recover_poison()
                             .active
                             .as_ref()
                             .map(|active| active.message_id.clone());
@@ -4602,10 +4603,10 @@ fn spawn_reader(lines: SourceLines, context: ReaderContext) -> thread::JoinHandl
         alive.store(false, Ordering::SeqCst);
         child_requests
             .lock()
-            .unwrap_or_else(|e| e.into_inner())
+            .recover_poison()
             .clear();
         let pending =
-            std::mem::take(&mut *waiters.lock().unwrap_or_else(|poison| poison.into_inner()));
+            std::mem::take(&mut *waiters.lock().recover_poison());
         for (_, waiter) in pending {
             let _ = waiter.send(Err(termination.clone()));
         }
@@ -4619,7 +4620,7 @@ fn take_pending_request(
 ) -> Option<PendingProviderRequest> {
     let mut pending = pending_request
         .lock()
-        .unwrap_or_else(|poison| poison.into_inner());
+        .recover_poison();
     if pending
         .as_ref()
         .and_then(|request| request.message_id.as_deref())
@@ -4643,11 +4644,11 @@ fn record_provider_request(
     // la dernière requête pendante.
     let mut pending = pending_request
         .lock()
-        .unwrap_or_else(|poison| poison.into_inner());
+        .recover_poison();
     let message_id = if let Some(detail) = interactive_detail {
         detail
             .lock()
-            .unwrap_or_else(|e| e.into_inner())
+            .recover_poison()
             .as_ref()
             .filter(|d| source_matches_active_turn(d, frame) && !d.message_id.is_empty())
             .map(|d| d.message_id.clone())
@@ -4655,7 +4656,7 @@ fn record_provider_request(
         queue
             .0
             .lock()
-            .unwrap_or_else(|poison| poison.into_inner())
+            .recover_poison()
             .active
             .as_ref()
             .map(|active| active.message_id.clone())
@@ -4798,7 +4799,7 @@ fn push_source(
     observations
         .0
         .lock()
-        .unwrap_or_else(|poison| poison.into_inner())
+        .recover_poison()
         .events
         .push_back(ManagedEvent {
             source: ManagedEventSource::CodexAppServer,

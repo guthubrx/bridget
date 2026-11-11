@@ -1,5 +1,6 @@
 //! Cadrage WebSocket sur Unix du Codex local. Aucun RPC ni événement métier
 //! n'est reconstruit ici : une trame texte reste ses octets d'origine.
+use crate::poison::RecoverPoison;
 use crate::jsonl::{MAX_DAEMON_FRAME_BYTES, connect_nonblocking};
 use std::io::{self, Write};
 use std::net::Shutdown;
@@ -144,7 +145,7 @@ impl Iterator for SocketLines {
             // Socket NON bloquante : le verrou n'est jamais gardé pendant poll.
             // Le writer peut donc envoyer un RPC pendant une lecture inactive.
             let (result, fd) = {
-                let mut socket = self.shared.lock().unwrap_or_else(|e| e.into_inner());
+                let mut socket = self.shared.lock().recover_poison();
                 (socket.read(), socket.get_ref().as_raw_fd())
             };
             match result {
@@ -201,7 +202,7 @@ impl Write for SocketWriter {
         let text =
             String::from_utf8(bytes).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
         let deadline = Instant::now() + IO_BUDGET;
-        let mut socket = self.shared.lock().unwrap_or_else(|e| e.into_inner());
+        let mut socket = self.shared.lock().recover_poison();
         match socket.send(Message::text(text)) {
             Ok(()) => return Ok(()),
             // tungstenite conserve les bytes en attente : NE PAS renvoyer le
@@ -222,7 +223,7 @@ impl Write for SocketWriter {
 
 impl Drop for SocketWriter {
     fn drop(&mut self) {
-        let socket = self.shared.lock().unwrap_or_else(|e| e.into_inner());
+        let socket = self.shared.lock().recover_poison();
         let _ = socket.get_ref().shutdown(Shutdown::Both);
     }
 }
