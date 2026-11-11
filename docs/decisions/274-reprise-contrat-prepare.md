@@ -1,6 +1,6 @@
 # 274 : reprendre le contexte effectivement préparé
 
-Statut : correction validée en cours de livraison.
+Statut : correction activée dans 0.8.40 / 274-reprise-contrat-prepare-r1.
 
 Une sonde de routage porte le dépôt source. La préparation d’un worktree ou
 d’une vue de commit adapte ensuite les chemins de la définition et de la
