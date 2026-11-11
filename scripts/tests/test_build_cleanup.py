@@ -166,6 +166,22 @@ class CleanupTests(unittest.TestCase):
         self.assertEqual(self.clean(), 0)
         self.assertTrue((path / "deps").exists())
 
+    def test_staging_neuf_prive_et_enregistre_avant_cargo(self):
+        stage = self.cache / "bridget-build-new"
+        with patch.dict(os.environ, {"CARGO_TARGET_DIR": str(stage)}):
+            build.register_staging(self.repo, ["test"])
+        self.assertTrue(stage.is_dir())
+        self.assertEqual(stage.stat().st_mode & 0o777, 0o700)
+        self.assertEqual(json.loads((stage / build.OWNER).read_text()),
+                         {"version": 1, "repo": "test-owner"})
+
+    def test_staging_existant_ne_change_pas_de_droits(self):
+        stage = self.cache / "bridget-build-existing"
+        stage.mkdir(mode=0o755)
+        with patch.dict(os.environ, {"CARGO_TARGET_DIR": str(stage)}):
+            build.register_staging(self.repo, ["test"])
+        self.assertEqual(stage.stat().st_mode & 0o777, 0o755)
+
     def staging(self):
         stage = self.cache / "bridget-build-test"
         profile = self.profile(stage)

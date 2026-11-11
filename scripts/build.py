@@ -72,6 +72,18 @@ def register_staging(repo, arguments):
     if not target:
         return
     path = Path(os.path.abspath(repo / target))
+    if (path.parent != staging_parent() or not path.name.startswith("bridget-build-")
+            or path.name == "bridget-build-"):
+        return
+    # Créer le cache avant Cargo : son mode par défaut pourrait le rendre
+    # traversable et empêcher toute observation limitée au compte propriétaire.
+    path.parent.mkdir(mode=0o700, exist_ok=True)
+    if not plain_dir(path.parent):
+        return
+    try:
+        path.mkdir(mode=0o700)
+    except FileExistsError:
+        pass  # Ne pas changer les droits d'un cache préexistant.
     if not is_staging(path):
         return
     marker = path / OWNER
