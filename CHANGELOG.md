@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.8.40 - 2026-11-11
+
+- La reprise d’un démarrage refusé conserve le contrat du worktree ou de la vue de commit effectivement préparé.
+- Les changements réels de définition et de droits restent refusés ; le contexte partagé garde sa comparaison à la sonde source.
+
 ## 0.8.36
 
 - Report the native fleet quota refusal and finish the request without claiming an execution started.

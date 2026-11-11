@@ -1,0 +1,298 @@
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -192,7 +192,7 @@
+ 
+ [[package]]
+ name = "bridget-core"
+-version = "0.8.39"
++version = "0.8.40"
+ dependencies = [
+  "serde",
+  "serde_json",
+@@ -201,7 +201,7 @@
+ 
+ [[package]]
+ name = "bridget-daemon"
+-version = "0.8.39"
++version = "0.8.40"
+ dependencies = [
+  "axum",
+  "base64",
+@@ -229,7 +229,7 @@
+ 
+ [[package]]
+ name = "bridget-transport"
+-version = "0.8.39"
++version = "0.8.40"
+ dependencies = [
+  "bridget-core",
+  "libc",
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -7,7 +7,7 @@
+ ]
+ 
+ [workspace.package]
+-version = "0.8.39"
++version = "0.8.40"
+ edition = "2024"
+ license = "MIT"
+ 
+--- a/crates/bridget-daemon/src/daemon/native_start_recovery.rs
++++ b/crates/bridget-daemon/src/daemon/native_start_recovery.rs
+@@ -339,32 +339,75 @@
+         .remote_placement
+         .as_ref()
+         .ok_or("remote_placement_missing")?;
+-    // La sonde figée décrit le profil initial. Quand le décideur a changé
+-    // l'effort, sa définition diffère légitimement de celle attestée à Prepare.
+-    // Le tuple Task/placement porte cette définition d'exécution admise ; le
+-    // worker la revalide encore sur le même dossier avant Start et Release.
+-    let initial_definition_matches = if decision.effort == candidate.default_effort {
++    // Prepare rematérialise le contexte des vues et worktrees : leurs chemins
++    // et empreintes diffèrent légitimement de ceux de la sonde du dépôt source.
++    let isolated = matches!(&task.request, NativeDelegationRequest::Delegate {
++        workspace: Some(WorkspaceRequest::Worktree { .. } | WorkspaceRequest::CommitView {}), ..
++    });
++    if isolated && !task.remote_prepared {
++        return Err("start_recovery_prepared_changed".into());
++    }
++    let definition_valid = AgentRegistry::from_resolved(agent_type, &task.definition).is_ok();
++    let prepared_permissions_match = task.permission_snapshot.as_ref()
++        .and_then(|snapshot| serde_json::to_vec(&snapshot.child_policy).ok())
++        .map(|bytes| format!("{:x}", sha2::Sha256::digest(bytes)))
++        .is_some_and(|digest| digest == placement.permission_digest);
++    // Sans matérialisation isolée, conserver aussi la comparaison à la sonde,
++    // y compris la normalisation historique de l’effort choisi.
++    let initial_definition_matches = if isolated {
++        true
++    } else if decision.effort == candidate.default_effort {
+         observed.definition_digest == placement.definition_digest
+     } else {
+         AgentRegistry::from_resolved(agent_type, &task.definition)
+-            .and_then(|registry| registry.pin_delegation_model(agent_type, model, candidate.default_effort.as_deref()))
++            .and_then(|registry| {
++                registry.pin_delegation_model(
++                    agent_type,
++                    model,
++                    candidate.default_effort.as_deref(),
++                )
++            })
+             .and_then(|registry| registry.resolved_definition(agent_type))
+             .is_ok_and(|initial| initial.digest == observed.definition_digest)
+     };
+-    if let Some(code) = routing_change_error("start_recovery", &[
+-        ("machine", machine_id.as_deref() != Some(candidate.machine_id.as_str())
+-            || decision.machine_id != candidate.machine_id),
+-        ("profile", *agent_type != candidate.agent_type
+-            || decision.candidate_id != receipt.candidate_id.as_deref().unwrap_or_default()
+-            || decision.connection_id != candidate.connection_id || decision.engine != candidate.engine),
+-        ("model", *model != candidate.model || decision.model != candidate.model
+-            || task.service_tier!=auto.service_tier),
+-        ("effort", *effort != decision.effort),
+-        ("canonical", *cwd != auto.cwd),
+-        ("base", auto.expected_base_commit != placement.base_commit),
+-        ("definition", task.definition.digest != placement.definition_digest || !initial_definition_matches),
+-        ("permissions", observed.permission_digest != placement.permission_digest),
+-    ]) { return Err(code); }
++    if let Some(code) = routing_change_error(
++        "start_recovery",
++        &[
++            (
++                "machine",
++                machine_id.as_deref() != Some(candidate.machine_id.as_str())
++                    || decision.machine_id != candidate.machine_id,
++            ),
++            (
++                "profile",
++                *agent_type != candidate.agent_type
++                    || decision.candidate_id != receipt.candidate_id.as_deref().unwrap_or_default()
++                    || decision.connection_id != candidate.connection_id
++                    || decision.engine != candidate.engine,
++            ),
++            (
++                "model",
++                *model != candidate.model
++                    || decision.model != candidate.model
++                    || task.service_tier != auto.service_tier,
++            ),
++            ("effort", *effort != decision.effort),
++            ("canonical", *cwd != auto.cwd),
++            ("base", auto.expected_base_commit != placement.base_commit),
++            (
++                "definition",
++                task.definition.digest != placement.definition_digest
++                    || !definition_valid || !initial_definition_matches,
++            ),
++            (
++                "permissions",
++                (!isolated && observed.permission_digest != placement.permission_digest)
++                    || !prepared_permissions_match,
++            ),
++        ],
++    ) {
++        return Err(code);
++    }
+     Ok(Some(WorkerFencedRouting {
+         workload: auto.workload,
+         connection_id: candidate.connection_id.clone(),
+--- a/crates/bridget-daemon/src/daemon/native_start_recovery198_tests.rs
++++ b/crates/bridget-daemon/src/daemon/native_start_recovery198_tests.rs
+@@ -1594,37 +1594,76 @@
+ 
+ 
+ // Reproduit le reçu de92965 : profil low, exécution high, empreintes distinctes.
+-fn v2_receipt202(task: &Task, mut receipt: AutoAdmissionReceipt, distinct: bool) -> AutoAdmissionReceipt {
++fn v2_receipt202(
++    task: &Task,
++    mut receipt: AutoAdmissionReceipt,
++    distinct: bool,
++) -> AutoAdmissionReceipt {
+     use super::super::tests::{routing168_fixture, routing168_observation, routing168_plan};
+     use bridget_transport::protocol::{LineageDecisionSourceV4, LineageDecisionV4};
+     let (routing_state, routing_config, _rx, _reader, mut auto, _root) = routing168_fixture(1);
+     let mut plan = routing168_plan(&routing_state, &auto);
+-    let NativeDelegationRequest::Delegate { request_id, cwd, .. } = &task.request else { unreachable!() };
+-    auto.request_id = request_id.clone(); auto.cwd = cwd.clone();
++    let NativeDelegationRequest::Delegate {
++        request_id, cwd, ..
++    } = &task.request
++    else {
++        unreachable!()
++    };
++    auto.request_id = request_id.clone();
++    auto.cwd = cwd.clone();
++    if let NativeDelegationRequest::Delegate { workspace, posture, .. } = &task.request {
++        auto.workspace = workspace.clone();
++        auto.posture = *posture;
++    }
+     auto.expected_base_commit = task.remote_placement.as_ref().unwrap().base_commit.clone();
+     let candidate = &mut plan.candidates[0];
+-    candidate.machine_id = "cartae".into(); candidate.agent_type = "native-test".into();
++    candidate.machine_id = "cartae".into();
++    candidate.agent_type = "native-test".into();
+     candidate.model = "custom/model".into();
+     candidate.default_effort = Some(if distinct { "low" } else { "high" }.into());
+     candidate.supported_efforts = vec!["low".into(), "high".into()];
+     let candidate = candidate.clone();
+-    let initial = AgentRegistry::from_resolved("native-test", &task.definition).unwrap()
+-        .pin_delegation_model("native-test", "custom/model", candidate.default_effort.as_deref())
+-        .unwrap().resolved_definition("native-test").unwrap();
++    let initial = AgentRegistry::from_resolved("native-test", &task.definition)
++        .unwrap()
++        .pin_delegation_model(
++            "native-test",
++            "custom/model",
++            candidate.default_effort.as_deref(),
++        )
++        .unwrap()
++        .resolved_definition("native-test")
++        .unwrap();
+     let mut observed = routing168_observation();
+     observed.definition_digest = initial.digest;
+-    observed.permission_digest = task.remote_placement.as_ref().unwrap().permission_digest.clone();
+-    plan.observations = vec![observed]; plan.scores = vec![0];
++    observed.permission_digest = task
++        .remote_placement
++        .as_ref()
++        .unwrap()
++        .permission_digest
++        .clone();
++    plan.observations = vec![observed];
++    plan.scores = vec![0];
+     let decision = LineageDecisionV4 {
+-        candidate_id: "c001".into(), connection_id: candidate.connection_id.clone(),
+-        machine_id: candidate.machine_id.clone(), engine: candidate.engine.clone(), model: candidate.model.clone(),
+-        effort: Some("high".into()), source: LineageDecisionSourceV4::Deterministic, facts: None, reason: None,
+-    };
+-    receipt.metadata_version = 2; receipt.candidate_id = Some("c001".into());
+-    receipt.policy_revision = plan.policy.revision as i64; receipt.policy_digest = plan.policy_digest.clone();
++        candidate_id: "c001".into(),
++        connection_id: candidate.connection_id.clone(),
++        machine_id: candidate.machine_id.clone(),
++        engine: candidate.engine.clone(),
++        model: candidate.model.clone(),
++        effort: Some("high".into()),
++        source: LineageDecisionSourceV4::Deterministic,
++        facts: None,
++        reason: None,
++    };
++    receipt.metadata_version = 2;
++    receipt.delegate_canonical = Some(serde_json::to_vec(&task.request).unwrap());
++    receipt.candidate_id = Some("c001".into());
++    receipt.policy_revision = plan.policy.revision as i64;
++    receipt.policy_digest = plan.policy_digest.clone();
+     receipt.canonical = serde_json::to_vec(&NativeDelegationRequest::AutoDelegateV2(auto)).unwrap();
+     receipt.metadata = serde_json::to_vec(&routing_snapshot(&plan, Some(decision))).unwrap();
+-    drop(routing_state); cleanup(&routing_config); receipt
++    drop(routing_state);
++    cleanup(&routing_config);
++    receipt
+ }
+ 
+ #[test]
+@@ -1718,3 +1757,64 @@
+ fn spec241_admitted_start_uses_task_authority_when_caller_has_next_turn_fact() {
+     native_flow_with_routing202(false,false,true,false,true);
+ }
++
++#[test]
++fn spec274_recovery_uses_prepared_context_after_worktree_materialization() {
++    // Matrice bornée : deux stratégies et deux choix d’effort, soit quatre cas.
++    for isolated in ["worktree", "commit_view"] {
++        for distinct in [false, true] {
++            let (state, config, mut task, receipt, _) = fixture_guarded202(false, true);
++            let original_task = task.clone();
++            let shared_receipt = v2_receipt202(&task, receipt.clone(), distinct);
++            assert!(frozen_start_routing(&task, &shared_receipt).is_ok(), "shared inchangé reste admis");
++            if let NativeDelegationRequest::Delegate { workspace, posture, .. } = &mut task.request {
++                *workspace = Some(if isolated == "worktree" {
++                    WorkspaceRequest::Worktree { base_ref: Some("a".repeat(40)), branch: Some("branch274".into()) }
++                } else { WorkspaceRequest::CommitView {} });
++                *posture = Some(bridget_transport::protocol::SpawnPosture::Discovery);
++            }
++            let receipt = v2_receipt202(&task, receipt, distinct);
++            // Le reçu garde la sonde antérieure à la préparation du dossier.
++            let mut definition = serde_json::to_value(&task.definition).unwrap();
++            definition.as_object_mut().unwrap().remove("digest");
++            definition["args"].as_array_mut().unwrap().extend([json!("--add-dir"), json!("/tmp/prepared274")]);
++            task.definition = AgentRegistry::from_json(
++                &json!({"agents":{"native-test":definition}}).to_string(),
++                config.db_path.with_extension("registry274.json"),
++            ).unwrap().resolved_definition("native-test").unwrap();
++            task.permission_snapshot.as_mut().unwrap().child_policy["additional_directories"] = json!(["/tmp/prepared274"]);
++            let placement = task.remote_placement.as_mut().unwrap();
++            placement.definition_digest = task.definition.digest.clone();
++            placement.permission_digest = format!("{:x}", sha2::Sha256::digest(serde_json::to_vec(&task.permission_snapshot.as_ref().unwrap().child_policy).unwrap()));
++            let expected_definition = placement.definition_digest.clone();
++            let expected_permission = placement.permission_digest.clone();
++            let before = serde_json::to_value(&task).unwrap();
++            let selected = frozen_start_routing(&task, &receipt).expect("la préparation admise peut différer de la sonde").unwrap();
++            assert_eq!(selected.expected_definition_digest, expected_definition);
++            assert_eq!(selected.expected_permission_digest, expected_permission);
++            assert_eq!(serde_json::to_value(&task).unwrap(), before, "aucune réécriture de tâche");
++            let mut misplaced = task.clone();
++            misplaced.remote_placement.as_mut().unwrap().definition_digest = "f".repeat(64);
++            assert_eq!(frozen_start_routing(&misplaced, &receipt).unwrap_err(), "routing_connection_changed:start_recovery:definition");
++            let mut corrupted = task.clone();
++            corrupted.definition.args.push("--changed-after-prepare".into());
++            assert_eq!(frozen_start_routing(&corrupted, &receipt).unwrap_err(), "routing_connection_changed:start_recovery:definition");
++            let mut corrupted = task.clone();
++            corrupted.permission_snapshot.as_mut().unwrap().child_policy["additional_directories"] = json!(["/tmp/other274"]);
++            assert_eq!(frozen_start_routing(&corrupted, &receipt).unwrap_err(), "routing_connection_changed:start_recovery:permissions");
++            let mut missing = task.clone();
++            missing.permission_snapshot = None;
++            assert_eq!(frozen_start_routing(&missing, &receipt).unwrap_err(), "routing_connection_changed:start_recovery:permissions");
++            let mut unprepared = task.clone();
++            unprepared.remote_prepared = false;
++            assert_eq!(frozen_start_routing(&unprepared, &receipt).unwrap_err(), "start_recovery_prepared_changed");
++            let mut shared = task.clone();
++            shared.request = original_task.request.clone();
++            assert_eq!(frozen_start_routing(&shared, &shared_receipt).unwrap_err(), "routing_connection_changed:start_recovery:definition,permissions");
++            assert_eq!(saved(&state, &task.task_id), serde_json::to_value(&original_task).unwrap(), "projection sans mutation du store");
++            assert!(state.lock().unwrap().pending_worker_responses.is_empty());
++            drop(state);
++            cleanup(&config);
++        }
++    }
++}
