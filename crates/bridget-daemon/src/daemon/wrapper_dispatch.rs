@@ -4549,3 +4549,13 @@ pub(super) fn on_artifact_read(request: bridget_transport::protocol::ArtifactRea
                 result.unwrap_or_else(|reason| ArtifactReadOutcome::Rejected { reason }),
             ))
         }
+
+pub(super) fn on_delegation_halt_set(version: u16, command_id: String, halted: bool, reason: Option<String>, cancel_active: bool, conn_id: &str, state: &Arc<Mutex<DaemonState>>) -> Option<DaemonToWrapper> { Some(handle_delegation_halt_set(
+            state,
+            conn_id,
+            version,
+            &command_id,
+            halted,
+            reason.as_deref(),
+            cancel_active,
+        )) }

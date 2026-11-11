@@ -16632,15 +16632,7 @@ fn handle_wrapper_message_with_peer(
             halted,
             reason,
             cancel_active,
-        } => Some(handle_delegation_halt_set(
-            state,
-            conn_id,
-            version,
-            &command_id,
-            halted,
-            reason.as_deref(),
-            cancel_active,
-        )),
+        } => wrapper_dispatch::on_delegation_halt_set(version, command_id, halted, reason, cancel_active, conn_id, state),
         WrapperToDaemon::ControlStateRead { version } => {
             Some(handle_control_state_read(state, version))
         }
