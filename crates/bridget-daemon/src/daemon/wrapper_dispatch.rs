@@ -4479,3 +4479,21 @@ pub(super) fn on_child_request_answered(request_id: String, applied: bool, reaso
             );
             None
         }
+
+pub(super) fn on_project_system_request(request: bridget_transport::protocol::ProjectSystemRequest) -> Option<DaemonToWrapper> {
+            Some(DaemonToWrapper::ProjectSystemOutcome {
+                outcome: ProjectSystemOutcome {
+                    contract_version: request.contract_version,
+                    command_id: request.command_id,
+                    operation: request.operation,
+                    project_id: request.project_id,
+                    binding_generation: None,
+                    role: None,
+                    setting_generation: None,
+                    dogfooding_mode: None,
+                    runtime_state: None,
+                    reason: Some(ProjectSystemRefusal::RuntimePolicyRequired),
+                    observed_at: unix_now_secs(),
+                },
+            })
+        }

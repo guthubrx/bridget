@@ -16746,23 +16746,7 @@ fn handle_wrapper_message_with_peer(
                 unix_now_secs(),
             ))
         }
-        WrapperToDaemon::ProjectSystemRequest { request } => {
-            Some(DaemonToWrapper::ProjectSystemOutcome {
-                outcome: ProjectSystemOutcome {
-                    contract_version: request.contract_version,
-                    command_id: request.command_id,
-                    operation: request.operation,
-                    project_id: request.project_id,
-                    binding_generation: None,
-                    role: None,
-                    setting_generation: None,
-                    dogfooding_mode: None,
-                    runtime_state: None,
-                    reason: Some(ProjectSystemRefusal::RuntimePolicyRequired),
-                    observed_at: unix_now_secs(),
-                },
-            })
-        }
+        WrapperToDaemon::ProjectSystemRequest { request } => wrapper_dispatch::on_project_system_request(request),
         WrapperToDaemon::ProjectRoundRequest { request } => Some(project_round_failure(
             &request,
             ProjectRoundRefusal::PolicyDisabled,
