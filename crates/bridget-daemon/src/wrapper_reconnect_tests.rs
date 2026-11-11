@@ -55,20 +55,20 @@ use bridget_transport::poison::RecoverPoison;
             }
         });
         for _ in 0..2 {
-            let (mut reader, _writer, _) = connect_and_register_with_domain_at(
-                &socket,
-                "codex",
-                None,
-                &host,
-                INTERACTIVE_AGENT_PROTOCOL,
-                None,
-                PresenceMode::Cli,
-                None,
-                "Linux",
-                "instance138",
-                false,
-                false,
-            )
+            let (mut reader, _writer, _) = connect_and_register_with_domain_at(ConnectAndRegisterWithDomainAtArgs {
+socket: &socket,
+agent_type: "codex",
+agent_id: None,
+host: &host,
+protocol: INTERACTIVE_AGENT_PROTOCOL,
+channel: None,
+mode: PresenceMode::Cli,
+location: None,
+os: "Linux",
+instance_id: "instance138",
+turn_in_progress: false,
+turn_attest: false,
+})
             .unwrap();
             let mut line = String::new();
             reader.read_line(&mut line).unwrap();
@@ -1849,20 +1849,20 @@ turn_attest: false,
             auxiliary.flush().unwrap();
         });
 
-        let (mut reader, _writer, registered_name) = connect_and_register_with_domain_at(
-            &socket,
-            "codex",
-            Some(identity),
-            "hote-094",
-            INTERACTIVE_AGENT_PROTOCOL,
-            None,
-            PresenceMode::Cli,
-            None,
-            "Linux",
-            instance_id,
-            false,
-            false,
-        )
+        let (mut reader, _writer, registered_name) = connect_and_register_with_domain_at(ConnectAndRegisterWithDomainAtArgs {
+socket: &socket,
+agent_type: "codex",
+agent_id: Some(identity),
+host: "hote-094",
+protocol: INTERACTIVE_AGENT_PROTOCOL,
+channel: None,
+mode: PresenceMode::Cli,
+location: None,
+os: "Linux",
+instance_id,
+turn_in_progress: false,
+turn_attest: false,
+})
         .unwrap();
         assert_eq!(registered_name, identity);
         assert_eq!(reader.get_ref().read_timeout().unwrap(), Some(Duration::from_secs(1)));
@@ -2044,20 +2044,20 @@ turn_attest: false,
 
         let reconnect_socket = socket.clone();
         let reconnect = std::thread::spawn(move || {
-            let (mut reader, _writer, registered_name) = connect_and_register_with_domain_at(
-                &reconnect_socket,
-                "codex",
-                Some(identity),
-                "hote-094",
-                INTERACTIVE_AGENT_PROTOCOL,
-                None,
-                PresenceMode::Cli,
-                None,
-                "Linux",
-                instance_id,
-                false,
-                false,
-            )?;
+            let (mut reader, _writer, registered_name) = connect_and_register_with_domain_at(ConnectAndRegisterWithDomainAtArgs {
+socket: &reconnect_socket,
+agent_type: "codex",
+agent_id: Some(identity),
+host: "hote-094",
+protocol: INTERACTIVE_AGENT_PROTOCOL,
+channel: None,
+mode: PresenceMode::Cli,
+location: None,
+os: "Linux",
+instance_id,
+turn_in_progress: false,
+turn_attest: false,
+})?;
             let mut deferred = String::new();
             reader
                 .read_line(&mut deferred)

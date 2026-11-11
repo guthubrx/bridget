@@ -2073,37 +2073,40 @@ fn connect_and_register(
     instance_id: &str,
     turn_in_progress: bool,
 ) -> Result<(BufReader<UnixStream>, BufWriter<UnixStream>, String), String> {
-    connect_and_register_with_domain_at(
-        &socket_path(),
-        agent_type,
-        agent_id,
-        host,
-        protocol,
-        channel,
-        mode,
-        location,
-        os,
-        instance_id,
-        turn_in_progress,
-        false,
-    )
+    connect_and_register_with_domain_at(ConnectAndRegisterWithDomainAtArgs {
+socket: &socket_path(),
+agent_type,
+agent_id,
+host,
+protocol,
+channel,
+mode,
+location,
+os,
+instance_id,
+turn_in_progress,
+turn_attest: false,
+})
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn connect_and_register_with_domain_at(
-    socket: &std::path::Path,
-    agent_type: &str,
-    agent_id: Option<&str>,
-    host: &str,
-    protocol: &str,
-    channel: Option<&str>,
-    mode: PresenceMode,
-    location: Option<&str>,
-    os: &str,
-    instance_id: &str,
-    turn_in_progress: bool,
-    turn_attest: bool,
-) -> Result<(BufReader<UnixStream>, BufWriter<UnixStream>, String), String> {
+pub(crate) struct ConnectAndRegisterWithDomainAtArgs<'a> {
+    pub socket: &'a std::path::Path,
+    pub agent_type: &'a str,
+    pub agent_id: Option<&'a str>,
+    pub host: &'a str,
+    pub protocol: &'a str,
+    pub channel: Option<&'a str>,
+    pub mode: PresenceMode,
+    pub location: Option<&'a str>,
+    pub os: &'a str,
+    pub instance_id: &'a str,
+    pub turn_in_progress: bool,
+    pub turn_attest: bool,
+}
+
+pub(crate) fn connect_and_register_with_domain_at(args: ConnectAndRegisterWithDomainAtArgs<'_>) -> Result<(BufReader<UnixStream>, BufWriter<UnixStream>, String), String> {
+    let ConnectAndRegisterWithDomainAtArgs { socket, agent_type, agent_id, host, protocol, channel, mode, location, os, instance_id, turn_in_progress, turn_attest } = args;
     let derived_domain = derive_domain();
     let Some(identity) =
         agent_id.filter(|value| bridget_core::router::validate_agent_id(value).is_ok())
@@ -4738,20 +4741,20 @@ fn launch_session_with_status(
     }
     let descriptor = transport.descriptor();
     let channel = connection_channel();
-    let (mut reader, initial_writer, mut my_name) = match connect_and_register_with_domain_at(
-        socket,
-        agent_type,
-        effective_name.as_deref(),
-        &host,
-        &definition.protocol,
-        channel.as_deref(),
-        descriptor.mode,
-        descriptor.location.as_deref(),
-        &os,
-        &instance_id,
-        false,
-        true,
-    ) {
+    let (mut reader, initial_writer, mut my_name) = match connect_and_register_with_domain_at(ConnectAndRegisterWithDomainAtArgs {
+socket,
+agent_type,
+agent_id: effective_name.as_deref(),
+host: &host,
+protocol: &definition.protocol,
+channel: channel.as_deref(),
+mode: descriptor.mode,
+location: descriptor.location.as_deref(),
+os: &os,
+instance_id: &instance_id,
+turn_in_progress: false,
+turn_attest: true,
+}) {
         Ok(connection) => connection,
         Err(error) => {
             #[cfg(target_os = "linux")]
@@ -6397,20 +6400,20 @@ fn reconnect_managed_session(
         attempts = attempts.saturating_add(1);
         let wanted_name = resolve_current_name(name_state_path, fallback_name);
         let busy = transport.is_busy();
-        match connect_and_register_with_domain_at(
-            socket,
-            agent_type,
-            Some(&wanted_name),
-            host,
-            protocol,
-            channel,
-            descriptor.mode,
-            descriptor.location.as_deref(),
-            os,
-            instance_id,
-            busy,
-            true,
-        ) {
+        match connect_and_register_with_domain_at(ConnectAndRegisterWithDomainAtArgs {
+socket,
+agent_type,
+agent_id: Some(&wanted_name),
+host,
+protocol,
+channel,
+mode: descriptor.mode,
+location: descriptor.location.as_deref(),
+os,
+instance_id,
+turn_in_progress: busy,
+turn_attest: true,
+}) {
             Ok((reader, new_writer, registered_name)) if registered_name == wanted_name => {
                 if termination.is_some_and(NativeTerminationSignal::requested)
                     || !transport.is_alive()
