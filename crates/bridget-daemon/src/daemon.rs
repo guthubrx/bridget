@@ -18475,39 +18475,7 @@ fn handle_wrapper_message_with_peer(
             None
         }
 
-        WrapperToDaemon::JournalReady { receipt_probe } => {
-            let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
-            let Some(instance_id) = st.conn_instances.get(conn_id).cloned() else {
-                return Some(DaemonToWrapper::Nack {
-                    id: "journal-ready".to_string(),
-                    reason: "journal annoncé avant l'enregistrement".to_string(),
-                });
-            };
-            let Some(presence) = st.presences.get_mut(&instance_id) else {
-                return Some(DaemonToWrapper::Nack {
-                    id: "journal-ready".to_string(),
-                    reason: "présence introuvable pour le journal annoncé".to_string(),
-                });
-            };
-            presence.journal_available = true;
-            if receipt_probe {
-                // La connexion et l'instance sont authentifiées comme pour un
-                // ACK normal. Aucun corps ni ordre d'exécution n'est renvoyé.
-                match st.idempotency.unknown_delivery_receipts(&instance_id,unix_now_secs()) {
-                    Ok(receipts) => {
-                        let mut controls=Vec::new();
-                        for (delivery_id,delivery_generation) in receipts {
-                            defer_control(&st,conn_id,DaemonToWrapper::DeliveryReceiptQuery {
-                                delivery_id,recipient_instance_id:instance_id.clone(),delivery_generation,
-                            },&mut controls);
-                        }
-                        st.pending_post_response_controls.entry(conn_id.into()).or_default().extend(controls);
-                    }
-                    Err(error) => warn!("lecture des reçus indéterminés indisponible : {error}"),
-                }
-            }
-            None
-        }
+        WrapperToDaemon::JournalReady { receipt_probe } => wrapper_dispatch::on_journal_ready(receipt_probe, conn_id, state),
 
         WrapperToDaemon::TerminalSessionReady => {
             let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
