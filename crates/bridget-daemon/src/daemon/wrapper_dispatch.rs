@@ -3109,3 +3109,38 @@ pub(super) fn on_display_name_resolve(request: bridget_transport::protocol::Disp
             };
             Some(DaemonToWrapper::DisplayNameResolved { outcome })
         }
+
+pub(super) fn on_directory_scoped(scope: bridget_transport::protocol::CommunicationDirectoryScope, conn_id: &str, state: &Arc<Mutex<DaemonState>>) -> Option<DaemonToWrapper> {
+            use bridget_transport::protocol::{
+                CommunicationDirectoryScope, ProjectRelation,
+            };
+            let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+            let project = connection_communication_project(&st, conn_id);
+            let all = match agent_tracking230::directory(&mut st) {
+                Ok(all)=>all,
+                Err(reason)=>return Some(DaemonToWrapper::Nack{id:"directory".into(),reason:reason.into()}),
+            };
+            let agents = all
+                .into_iter()
+                .filter_map(|mut scoped| {
+                    let communication_project = scoped.communication_project.clone();
+                    let project_relation = crate::communication::project_relation(
+                        project.as_ref(),
+                        communication_project.as_ref(),
+                    );
+                    (scope == CommunicationDirectoryScope::Global
+                        || project_relation == ProjectRelation::Same)
+                        .then(|| {scoped.project_relation=project_relation; scoped})
+                })
+                .collect();
+            let project_warnings = if project.is_none() {
+                crate::communication::project_scope(None, None, "", None).unwrap_or_default()
+            } else {
+                Vec::new()
+            };
+            Some(DaemonToWrapper::CommunicationDirectory {
+                agents,
+                project,
+                project_warnings,
+            })
+        }
