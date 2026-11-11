@@ -4789,3 +4789,16 @@ pub(super) fn on_communication_project_fact(root: String, source: bridget_transp
             &host,
             worktree_root.as_deref(),
         )) }
+
+pub(super) fn on_runtime_catalogue_reported(token: String, outcome: bridget_transport::protocol::RuntimeCatalogueOutcome, conn_id: &str, state: &Arc<Mutex<DaemonState>>) -> Option<DaemonToWrapper> {
+            let mut st = state.lock().recover_poison();
+            if st
+                .pending_runtime_catalogues
+                .get(&token)
+                .is_some_and(|(target, _)| target == conn_id)
+                && let Some((_, sender)) = st.pending_runtime_catalogues.remove(&token)
+            {
+                let _ = sender.send(outcome);
+            }
+            None
+        }

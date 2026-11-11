@@ -17138,18 +17138,7 @@ fn handle_wrapper_message_with_peer(
             state, conn_id, &agent, selection,
         )),
         WrapperToDaemon::RuntimeSelectionReported { token, outcome } => wrapper_dispatch::on_runtime_selection_reported(token, outcome, conn_id, state),
-        WrapperToDaemon::RuntimeCatalogueReported { token, outcome } => {
-            let mut st = state.lock().recover_poison();
-            if st
-                .pending_runtime_catalogues
-                .get(&token)
-                .is_some_and(|(target, _)| target == conn_id)
-                && let Some((_, sender)) = st.pending_runtime_catalogues.remove(&token)
-            {
-                let _ = sender.send(outcome);
-            }
-            None
-        }
+        WrapperToDaemon::RuntimeCatalogueReported { token, outcome } => wrapper_dispatch::on_runtime_catalogue_reported(token, outcome, conn_id, state),
         WrapperToDaemon::Send(bridge_msg) => wrapper_dispatch::on_send(bridge_msg, conn_id, state),
 
         WrapperToDaemon::Heartbeat => {
