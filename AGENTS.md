@@ -125,7 +125,7 @@ Ne pas décrire le produit par comparaison avec un client externe.
 
 Ces huit consignes figurent dans les reçus de `specs/recus-de-session.md` et restent valables. Chacune cite sa source.
 
-- Ne pas arrêter, redémarrer ni remplacer T3 sans assentiment explicite de François, et ne pas reposer la question (reçus 237 à 259).
+- Avant chaque arrêt, redémarrage ou remplacement de T3, demander à François une confirmation avec l’outil interactif de question disponible, ou une question explicite à défaut, puis attendre sa réponse. Un ancien accord ou une autorisation générale de maintenance ne vaut pas accord pour cette nouvelle opération. Décision du 11 novembre 2026, qui remplace la consigne de ne pas reposer la question des reçus 237 à 259.
 - Registre Mac spécial : dernier repère connu `2b4f409e464066f099a6541009332e567ae6a0fb772596421b6172c93f9d32c9` (reçus 256 et 257). Ne pas restaurer un ancien registre à l'aveugle.
 - Worker Mac : préserver le registre dédié `/Users/moi/.cache/bridget-core/worker-monordinateur-agents.json`. Son dossier parent reste le namespace attesté (reçu 221, worker Mac).
 - SYS02 : ne plus la reprendre (reçus 236 et 237).
