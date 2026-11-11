@@ -26,10 +26,15 @@ pub(crate) const DAEMON_BUDGET: Duration = Duration::from_secs(10);
 /// identité d'agent : le daemon vérifie le rôle Client, la négociation et le
 /// UID Unix observé avant toute projection.
 pub(crate) fn routing_catalogue(socket: &Path) -> Result<serde_json::Value, ClientError> {
-    routing_catalogue_observed(socket,false,false,None)
+    routing_catalogue_observed(socket, false, false, None)
 }
 
-pub(crate) fn routing_catalogue_observed(socket:&Path,observed:bool,refresh:bool,machine:Option<String>)->Result<serde_json::Value,ClientError> {
+pub(crate) fn routing_catalogue_observed(
+    socket: &Path,
+    observed: bool,
+    refresh: bool,
+    machine: Option<String>,
+) -> Result<serde_json::Value, ClientError> {
     let mut connection = DaemonConnection::connect(socket)?;
     match connection.exchange(&WrapperToDaemon::RoleHandshake {
         role: ConnectionRole::Client,
@@ -47,7 +52,14 @@ pub(crate) fn routing_catalogue_observed(socket:&Path,observed:bool,refresh:bool
     let capabilities = match connection.exchange(&WrapperToDaemon::ClientHello {
         contract_version: CLIENT_CONTRACT_VERSION,
         issuer_scope: crate::communication::issuer_scope("routing-catalogue"),
-        capabilities: if observed {vec![ClientCapability::RoutingCatalogueV1,ClientCapability::ProviderCatalogueV1]} else {vec![ClientCapability::RoutingCatalogueV1]},
+        capabilities: if observed {
+            vec![
+                ClientCapability::RoutingCatalogueV1,
+                ClientCapability::ProviderCatalogueV1,
+            ]
+        } else {
+            vec![ClientCapability::RoutingCatalogueV1]
+        },
     })? {
         DaemonToWrapper::ClientWelcome {
             version,
@@ -56,14 +68,23 @@ pub(crate) fn routing_catalogue_observed(socket:&Path,observed:bool,refresh:bool
         } if version == CLIENT_CONTRACT_VERSION => capabilities,
         _ => Vec::new(),
     };
-    if !capabilities.contains(&ClientCapability::RoutingCatalogueV1) || observed && !capabilities.contains(&ClientCapability::ProviderCatalogueV1) {
+    if !capabilities.contains(&ClientCapability::RoutingCatalogueV1)
+        || observed && !capabilities.contains(&ClientCapability::ProviderCatalogueV1)
+    {
         return Err(ClientError::Technical {
             code: "capability_unavailable",
             message: "le daemon ne négocie pas routing_catalogue_v1".into(),
         });
     }
     match connection.exchange(&WrapperToDaemon::NativeDelegation {
-        request: if observed {bridget_transport::protocol::NativeDelegationRequest::ProviderCatalogueV1 {refresh,machine_id:machine}} else {bridget_transport::protocol::NativeDelegationRequest::RoutingCatalogueV1 {}},
+        request: if observed {
+            bridget_transport::protocol::NativeDelegationRequest::ProviderCatalogueV1 {
+                refresh,
+                machine_id: machine,
+            }
+        } else {
+            bridget_transport::protocol::NativeDelegationRequest::RoutingCatalogueV1 {}
+        },
     })? {
         DaemonToWrapper::NativeDelegationResult { result } => Ok(result),
         other => unexpected_response(other),
@@ -73,11 +94,11 @@ pub(crate) fn routing_catalogue_observed(socket:&Path,observed:bool,refresh:bool
 /// Sonde sans identité auxiliaire : budget client commun, avant toute trame151.
 /// Le premier octet du relais SSH observé arrive parfois après3secondes.
 pub(crate) fn daemon_supports_wait(socket: &Path) -> Result<bool, ClientError> {
-    let mut connection =
-        DaemonConnection::connect_until(socket, Instant::now() + DAEMON_BUDGET)?;
+    let mut connection = DaemonConnection::connect_until(socket, Instant::now() + DAEMON_BUDGET)?;
     match connection.exchange(&WrapperToDaemon::DaemonIdentityRequest)? {
-        DaemonToWrapper::DaemonIdentityReport { features, .. } =>
-            Ok(features.iter().any(|feature| feature == "wait_v1")),
+        DaemonToWrapper::DaemonIdentityReport { features, .. } => {
+            Ok(features.iter().any(|feature| feature == "wait_v1"))
+        }
         other => unexpected_response(other),
     }
 }
@@ -177,11 +198,11 @@ pub(crate) fn observation_request(
     if let bridget_transport::protocol::ObservationRequest::Missed { limit, after_seq } = &request
         && (limit.is_some_and(|value| !(1..=64).contains(&value))
             || after_seq.is_some_and(|value| value > i64::MAX as u64))
-        {
-            return Err(ClientError::InvalidParams(
-                "missed : limit 1..64 et curseur de séquence borné requis".into(),
-            ));
-        }
+    {
+        return Err(ClientError::InvalidParams(
+            "missed : limit 1..64 et curseur de séquence borné requis".into(),
+        ));
+    }
     let mut connection = registered_connection(identity, instance_id, socket)?;
     match connection.send_then_wait(&WrapperToDaemon::ObservationRequest { request })? {
         DaemonToWrapper::ObservationResult { result } => Ok(result),
@@ -641,18 +662,14 @@ static DOMAIN_TEST_OBSERVER_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(
 
 #[cfg(test)]
 pub(crate) fn lock_domain_test_observers() -> std::sync::MutexGuard<'static, ()> {
-    DOMAIN_TEST_OBSERVER_MUTEX
-        .lock()
-        .recover_poison()
+    DOMAIN_TEST_OBSERVER_MUTEX.lock().recover_poison()
 }
 
 #[cfg(test)]
 pub(crate) fn replace_domain_lock_contention_observer(
     observer: Option<DomainLockContentionObserver>,
 ) {
-    *DOMAIN_LOCK_CONTENTION_OBSERVER
-        .lock()
-        .recover_poison() = observer;
+    *DOMAIN_LOCK_CONTENTION_OBSERVER.lock().recover_poison() = observer;
 }
 
 fn acquire_domain_lock_until(
@@ -763,9 +780,7 @@ static DOMAIN_AFTER_ACK_OBSERVER: std::sync::Mutex<Option<DomainAfterAckObserver
 
 #[cfg(test)]
 pub(crate) fn replace_domain_after_ack_observer(observer: Option<DomainAfterAckObserver>) {
-    *DOMAIN_AFTER_ACK_OBSERVER
-        .lock()
-        .recover_poison() = observer;
+    *DOMAIN_AFTER_ACK_OBSERVER.lock().recover_poison() = observer;
 }
 
 #[cfg(test)]
@@ -1234,8 +1249,10 @@ impl DaemonConnection {
                 | WrapperToDaemon::NativeDelegationT3 { .. } => "native_operation",
                 _ => "operation_response",
             };
-            eprintln!("bridget_client_exchange_failed phase={phase} code={code} elapsed_ms={}",
-                started.elapsed().as_millis());
+            eprintln!(
+                "bridget_client_exchange_failed phase={phase} code={code} elapsed_ms={}",
+                started.elapsed().as_millis()
+            );
         }
         response
     }
@@ -1386,10 +1403,14 @@ pub(crate) fn registered_connection_until(
             Ok(connection)
         })();
         match result {
-            Err(ClientError::Technical { code: "daemon_unreachable", .. })
-                if !retried && Instant::now() < deadline => retried = true,
+            Err(ClientError::Technical {
+                code: "daemon_unreachable",
+                ..
+            }) if !retried && Instant::now() < deadline => retried = true,
             Ok(connection) => {
-                if retried { eprintln!("bridget_registration_recovered attempts=2"); }
+                if retried {
+                    eprintln!("bridget_registration_recovered attempts=2");
+                }
                 return Ok(connection);
             }
             other => return other,
@@ -1430,78 +1451,177 @@ pub(crate) fn unexpected_response<T>(_response: DaemonToWrapper) -> Result<T, Cl
 mod security_tests;
 
 /// Contrat181 : négociation explicite, preuve d’agent ou principal humain local séparés.
-pub(crate) fn user_input_request(socket:&Path,identity:Option<(&str,&str)>,request:serde_json::Value)->Result<serde_json::Value,ClientError> {
-    let wait=if request["action"]=="wait" {request["wait_timeout"].as_u64().unwrap_or(3600).min(3600)} else {0};
-    let mut connection=DaemonConnection::connect_until(socket,Instant::now()+Duration::from_secs(wait+10))?;
-    let issuer=if let Some((name,instance))=identity {
-        authenticate_auxiliary(&mut connection,name,instance,socket)?;
+pub(crate) fn user_input_request(
+    socket: &Path,
+    identity: Option<(&str, &str)>,
+    request: serde_json::Value,
+) -> Result<serde_json::Value, ClientError> {
+    let wait = if request["action"] == "wait" {
+        request["wait_timeout"].as_u64().unwrap_or(3600).min(3600)
+    } else {
+        0
+    };
+    let mut connection =
+        DaemonConnection::connect_until(socket, Instant::now() + Duration::from_secs(wait + 10))?;
+    let issuer = if let Some((name, instance)) = identity {
+        authenticate_auxiliary(&mut connection, name, instance, socket)?;
         crate::communication::issuer_scope(instance)
-    }else {
-        match connection.exchange(&WrapperToDaemon::RoleHandshake{role:ConnectionRole::Client})? {
-            DaemonToWrapper::RoleAccepted{role:ConnectionRole::Client}=>{},other=>return unexpected_response(other)
+    } else {
+        match connection.exchange(&WrapperToDaemon::RoleHandshake {
+            role: ConnectionRole::Client,
+        })? {
+            DaemonToWrapper::RoleAccepted {
+                role: ConnectionRole::Client,
+            } => {}
+            other => return unexpected_response(other),
         }
         crate::communication::issuer_scope("bridget-control-cli")
     };
-    let mut capabilities=vec![ClientCapability::UserInputV1];
-    if identity.is_none(){capabilities.push(ClientCapability::ControlStateV1);}
-    match connection.exchange(&WrapperToDaemon::ClientHello{contract_version:CLIENT_CONTRACT_VERSION,issuer_scope:issuer,capabilities})? {
-        DaemonToWrapper::ClientWelcome{capabilities,..} if capabilities.contains(&ClientCapability::UserInputV1)=>{},
-        _=>return Err(ClientError::Technical{code:"capability_unavailable",message:"le daemon ne négocie pas user_input_v1".into()})
+    let mut capabilities = vec![ClientCapability::UserInputV1];
+    if identity.is_none() {
+        capabilities.push(ClientCapability::ControlStateV1);
     }
-    match connection.send_then_wait(&WrapperToDaemon::UserInput{request})? {
-        DaemonToWrapper::UserInputResult{result}=>Ok(result),other=>unexpected_response(other)
+    match connection.exchange(&WrapperToDaemon::ClientHello {
+        contract_version: CLIENT_CONTRACT_VERSION,
+        issuer_scope: issuer,
+        capabilities,
+    })? {
+        DaemonToWrapper::ClientWelcome { capabilities, .. }
+            if capabilities.contains(&ClientCapability::UserInputV1) => {}
+        _ => {
+            return Err(ClientError::Technical {
+                code: "capability_unavailable",
+                message: "le daemon ne négocie pas user_input_v1".into(),
+            });
+        }
     }
-}
-
-pub(crate) fn human_agent_tracking(socket:&Path,request:bridget_transport::agent_tracking::AgentTrackingRequest)->Result<serde_json::Value,ClientError> {
-    let mut connection=DaemonConnection::connect(socket)?;
-    if !matches!(connection.exchange(&WrapperToDaemon::RoleHandshake{role:ConnectionRole::Client})?,DaemonToWrapper::RoleAccepted{role:ConnectionRole::Client}) {
-        return Err(ClientError::Technical{code:"human_principal_required",message:"Le rôle client humain est requis.".into()});
-    }
-    let capability=ClientCapability::AgentTrackingV1;
-    match connection.exchange(&WrapperToDaemon::ClientHello{contract_version:CLIENT_CONTRACT_VERSION,
-        issuer_scope:crate::communication::issuer_scope("bridget-control-cli"),capabilities:vec![capability]})? {
-        DaemonToWrapper::ClientWelcome{version,capabilities,..} if version==CLIENT_CONTRACT_VERSION&&capabilities.contains(&capability)=>{},
-        _=>return Err(ClientError::Technical{code:"agent_tracking_unavailable",message:"Le client et le service doivent charger agents dormants avant cette action.".into()}),
-    }
-    match connection.exchange(&WrapperToDaemon::AgentTracking{request})? {
-        DaemonToWrapper::AgentTrackingResult{result}=>Ok(result),other=>unexpected_response(other),
+    match connection.send_then_wait(&WrapperToDaemon::UserInput { request })? {
+        DaemonToWrapper::UserInputResult { result } => Ok(result),
+        other => unexpected_response(other),
     }
 }
 
-pub(crate) fn human_specialists(socket:&Path,request:bridget_transport::specialists::SpecialistRequest)->Result<serde_json::Value,ClientError> {
-    let mut connection=DaemonConnection::connect(socket)?;
-    if !matches!(connection.exchange(&WrapperToDaemon::RoleHandshake{role:ConnectionRole::Client})?,
-        DaemonToWrapper::RoleAccepted{role:ConnectionRole::Client}) {
-        return Err(ClientError::Technical{code:"human_principal_required",message:"Le rôle client humain est requis.".into()});
+pub(crate) fn human_agent_tracking(
+    socket: &Path,
+    request: bridget_transport::agent_tracking::AgentTrackingRequest,
+) -> Result<serde_json::Value, ClientError> {
+    let mut connection = DaemonConnection::connect(socket)?;
+    if !matches!(
+        connection.exchange(&WrapperToDaemon::RoleHandshake {
+            role: ConnectionRole::Client
+        })?,
+        DaemonToWrapper::RoleAccepted {
+            role: ConnectionRole::Client
+        }
+    ) {
+        return Err(ClientError::Technical {
+            code: "human_principal_required",
+            message: "Le rôle client humain est requis.".into(),
+        });
     }
-    let capability=ClientCapability::SpecialistsV1;
-    match connection.exchange(&WrapperToDaemon::ClientHello{contract_version:CLIENT_CONTRACT_VERSION,
-        issuer_scope:crate::communication::issuer_scope("bridget-control-cli"),capabilities:vec![capability]})? {
-        DaemonToWrapper::ClientWelcome{version,capabilities,..} if version==CLIENT_CONTRACT_VERSION&&capabilities.contains(&capability)=>{},
-        _=>return Err(ClientError::Technical{code:"specialists_capability_required",message:"Faire charger le daemon et le client specialists_v1.".into()}),
+    let capability = ClientCapability::AgentTrackingV1;
+    match connection.exchange(&WrapperToDaemon::ClientHello {
+        contract_version: CLIENT_CONTRACT_VERSION,
+        issuer_scope: crate::communication::issuer_scope("bridget-control-cli"),
+        capabilities: vec![capability],
+    })? {
+        DaemonToWrapper::ClientWelcome {
+            version,
+            capabilities,
+            ..
+        } if version == CLIENT_CONTRACT_VERSION && capabilities.contains(&capability) => {}
+        _ => {
+            return Err(ClientError::Technical {
+                code: "agent_tracking_unavailable",
+                message:
+                    "Le client et le service doivent charger agents dormants avant cette action."
+                        .into(),
+            });
+        }
     }
-    match connection.exchange(&WrapperToDaemon::Specialists{request})? {
-        DaemonToWrapper::NativeDelegationResult{result}=>Ok(result),
-        other=>unexpected_response(other),
+    match connection.exchange(&WrapperToDaemon::AgentTracking { request })? {
+        DaemonToWrapper::AgentTrackingResult { result } => Ok(result),
+        other => unexpected_response(other),
+    }
+}
+
+pub(crate) fn human_specialists(
+    socket: &Path,
+    request: bridget_transport::specialists::SpecialistRequest,
+) -> Result<serde_json::Value, ClientError> {
+    let mut connection = DaemonConnection::connect(socket)?;
+    if !matches!(
+        connection.exchange(&WrapperToDaemon::RoleHandshake {
+            role: ConnectionRole::Client
+        })?,
+        DaemonToWrapper::RoleAccepted {
+            role: ConnectionRole::Client
+        }
+    ) {
+        return Err(ClientError::Technical {
+            code: "human_principal_required",
+            message: "Le rôle client humain est requis.".into(),
+        });
+    }
+    let capability = ClientCapability::SpecialistsV1;
+    match connection.exchange(&WrapperToDaemon::ClientHello {
+        contract_version: CLIENT_CONTRACT_VERSION,
+        issuer_scope: crate::communication::issuer_scope("bridget-control-cli"),
+        capabilities: vec![capability],
+    })? {
+        DaemonToWrapper::ClientWelcome {
+            version,
+            capabilities,
+            ..
+        } if version == CLIENT_CONTRACT_VERSION && capabilities.contains(&capability) => {}
+        _ => {
+            return Err(ClientError::Technical {
+                code: "specialists_capability_required",
+                message: "Faire charger le daemon et le client specialists_v1.".into(),
+            });
+        }
+    }
+    match connection.exchange(&WrapperToDaemon::Specialists { request })? {
+        DaemonToWrapper::NativeDelegationResult { result } => Ok(result),
+        other => unexpected_response(other),
     }
 }
 
 #[cfg(test)]
 mod tracking230_federated_wait_tests {
     use super::*;
-    use std::io::{BufRead,Write};
+    use std::io::{BufRead, Write};
     #[test]
     fn tracking230_capacites_attente_acceptent_amorcage_relais_dans_budget_client() {
-        let path=std::env::temp_dir().join(format!("bg230-wait-{}.sock",uuid::Uuid::new_v4().simple()));
-        let listener=std::os::unix::net::UnixListener::bind(&path).unwrap();
-        let server=std::thread::spawn(move|| {
-            let (mut stream,_)=listener.accept().unwrap(); let mut line=String::new();
-            BufReader::new(stream.try_clone().unwrap()).read_line(&mut line).unwrap();
-            assert!(matches!(bridget_transport::protocol::decode::<WrapperToDaemon>(&line).unwrap(),WrapperToDaemon::DaemonIdentityRequest));
+        let path =
+            std::env::temp_dir().join(format!("bg230-wait-{}.sock", uuid::Uuid::new_v4().simple()));
+        let listener = std::os::unix::net::UnixListener::bind(&path).unwrap();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut line = String::new();
+            BufReader::new(stream.try_clone().unwrap())
+                .read_line(&mut line)
+                .unwrap();
+            assert!(matches!(
+                bridget_transport::protocol::decode::<WrapperToDaemon>(&line).unwrap(),
+                WrapperToDaemon::DaemonIdentityRequest
+            ));
             std::thread::sleep(Duration::from_millis(3200));
-            writeln!(stream,"{}",bridget_transport::protocol::encode(&DaemonToWrapper::DaemonIdentityReport{host:"fixture".into(),db_path:"/fixture/db".into(),instance_id:"fixture".into(),features:vec!["wait_v1".into()]}).unwrap()).unwrap();
+            writeln!(
+                stream,
+                "{}",
+                bridget_transport::protocol::encode(&DaemonToWrapper::DaemonIdentityReport {
+                    host: "fixture".into(),
+                    db_path: "/fixture/db".into(),
+                    instance_id: "fixture".into(),
+                    features: vec!["wait_v1".into()]
+                })
+                .unwrap()
+            )
+            .unwrap();
         });
-        assert!(daemon_supports_wait(&path).unwrap());server.join().unwrap();std::fs::remove_file(path).unwrap();
+        assert!(daemon_supports_wait(&path).unwrap());
+        server.join().unwrap();
+        std::fs::remove_file(path).unwrap();
     }
 }

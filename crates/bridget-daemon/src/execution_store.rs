@@ -227,7 +227,7 @@ impl ExecutionStore {
         let mut conn = Connection::open(path)?;
         conn.busy_timeout(std::time::Duration::from_secs(2))?;
         Self::init_schema(&mut conn)?;
-        let store=Self {conn};
+        let store = Self { conn };
         store.init_specialist_requests()?;
         Ok(store)
     }
@@ -235,7 +235,7 @@ impl ExecutionStore {
     pub fn open_in_memory() -> rusqlite::Result<Self> {
         let mut conn = Connection::open_in_memory()?;
         Self::init_schema(&mut conn)?;
-        let store=Self {conn};
+        let store = Self { conn };
         store.init_specialist_requests()?;
         Ok(store)
     }

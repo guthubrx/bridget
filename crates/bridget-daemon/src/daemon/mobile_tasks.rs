@@ -1,7 +1,7 @@
 //! Projections et annulation humaines des tâches ; le magasin natif reste l'autorité.
-use bridget_transport::poison::RecoverPoison;
 use super::*;
 use crate::mobile::store::{Device, Operation, Store};
+use bridget_transport::poison::RecoverPoison;
 use bridget_transport::protocol::{
     HumanLineageError as E, MobileOperation, MobileOperationRequest,
 };

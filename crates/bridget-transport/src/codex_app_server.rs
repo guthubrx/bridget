@@ -5,12 +5,12 @@
 //! crate publiée `codex-app-server-protocol` suit un autre produit et une
 //! autre numérotation ; la lier ici cacherait une incompatibilité possible.
 
-use crate::poison::RecoverPoison;
 use crate::journal::{JournalFailureSink, JournalLiveFeed, JournalWriter, with_turn_failed_kind};
 use crate::managed_session::{
     ManagedEvent, ManagedEventKind, ManagedEventOrigin, ManagedEventSource,
     ManagedProviderIdentity, ManagedSession, ManagedSessionDescriptor, ManagedTerminal,
 };
+use crate::poison::RecoverPoison;
 use crate::protocol::{
     ChildProviderRequest, ChildProviderRequestId, ChildRequestAnswer, ChildRequestDecision,
     ChildRequestKind, PresenceMode, ProviderObservation, ProviderOperation,
@@ -303,28 +303,52 @@ pub struct CodexAppServerTransport {
 }
 
 impl CodexAppServerTransport {
-    fn runtime_catalogue_until(&mut self,deadline:Instant)->Result<Vec<crate::provider_catalogue::CatalogueModel>,crate::protocol::RuntimeSelectionRefusal> {
+    fn runtime_catalogue_until(
+        &mut self,
+        deadline: Instant,
+    ) -> Result<
+        Vec<crate::provider_catalogue::CatalogueModel>,
+        crate::protocol::RuntimeSelectionRefusal,
+    > {
         use crate::protocol::RuntimeSelectionRefusal as Refusal;
-        if self.interactive_socket.is_some() {return Err(Refusal::Unsupported);}
-        if !self.alive.load(Ordering::SeqCst) {return Err(Refusal::TargetUnavailable);}
-        let mut cursor=Value::Null;
-        let mut cursors=std::collections::HashSet::new();
-        let mut ids=std::collections::HashSet::new();
-        let mut result=Vec::new();
+        if self.interactive_socket.is_some() {
+            return Err(Refusal::Unsupported);
+        }
+        if !self.alive.load(Ordering::SeqCst) {
+            return Err(Refusal::TargetUnavailable);
+        }
+        let mut cursor = Value::Null;
+        let mut cursors = std::collections::HashSet::new();
+        let mut ids = std::collections::HashSet::new();
+        let mut result = Vec::new();
         for _ in 0..4 {
-            let remaining=deadline.checked_duration_since(Instant::now()).ok_or(Refusal::CatalogueUnavailable)?;
-            let response=request_with_timeout(&self.writer,&self.waiters,&self.next_id,"model/list",
-                json!({"cursor":cursor,"limit":100,"includeHidden":false}),remaining).map_err(|_|Refusal::CatalogueUnavailable)?;
-            let (models,next)=crate::provider_catalogue::model_page(&response.value).map_err(|_|Refusal::CatalogueUnavailable)?;
+            let remaining = deadline
+                .checked_duration_since(Instant::now())
+                .ok_or(Refusal::CatalogueUnavailable)?;
+            let response = request_with_timeout(
+                &self.writer,
+                &self.waiters,
+                &self.next_id,
+                "model/list",
+                json!({"cursor":cursor,"limit":100,"includeHidden":false}),
+                remaining,
+            )
+            .map_err(|_| Refusal::CatalogueUnavailable)?;
+            let (models, next) = crate::provider_catalogue::model_page(&response.value)
+                .map_err(|_| Refusal::CatalogueUnavailable)?;
             for model in models {
-                if !ids.insert(model.model.clone()) {return Err(Refusal::CatalogueUnavailable);}
+                if !ids.insert(model.model.clone()) {
+                    return Err(Refusal::CatalogueUnavailable);
+                }
                 result.push(model);
             }
-            if result.len()>crate::provider_catalogue::MAX_CATALOGUE_MODELS {return Err(Refusal::CatalogueUnavailable);}
+            if result.len() > crate::provider_catalogue::MAX_CATALOGUE_MODELS {
+                return Err(Refusal::CatalogueUnavailable);
+            }
             match next {
-                None=>return Ok(result),
-                Some(next) if cursors.insert(next.clone())=>cursor=Value::String(next),
-                Some(_)=>return Err(Refusal::CatalogueUnavailable),
+                None => return Ok(result),
+                Some(next) if cursors.insert(next.clone()) => cursor = Value::String(next),
+                Some(_) => return Err(Refusal::CatalogueUnavailable),
             }
         }
         Err(Refusal::CatalogueUnavailable)
@@ -351,9 +375,12 @@ impl CodexAppServerTransport {
 
     /// Réparation native : tous les échecs de négociation gardent un arrêt
     /// borné et rendent le propriétaire du processus si cet arrêt est incertain.
-    pub fn spawn_repair_with_environment(options:CodexAppServerOptions,
-        environment:&[(String,String)],inherit_stderr:bool)->Result<Self,TransportError> {
-        Self::spawn_endpoint(options,environment,inherit_stderr,None,None,true)
+    pub fn spawn_repair_with_environment(
+        options: CodexAppServerOptions,
+        environment: &[(String, String)],
+        inherit_stderr: bool,
+    ) -> Result<Self, TransportError> {
+        Self::spawn_endpoint(options, environment, inherit_stderr, None, None, true)
     }
 
     /// Un app-server privé, partagé avec la TUI native. Aucun octet terminal
@@ -393,7 +420,7 @@ impl CodexAppServerTransport {
         inherit_stderr: bool,
         interactive_socket: Option<&Path>,
         selector: Option<InteractiveThreadSelector<'_>>,
-        bounded_failure:bool,
+        bounded_failure: bool,
     ) -> Result<Self, TransportError> {
         if options.queue_capacity == 0 {
             return Err(TransportError::DeliveryFailed(
@@ -690,22 +717,24 @@ impl CodexAppServerTransport {
             Ok(thread_id) => thread_id,
             Err(error) => {
                 if bounded_failure {
-                    alive.store(false,Ordering::SeqCst);
-                    if let Ok(mut queue)=queue.0.try_lock() {queue.closed=true;}
+                    alive.store(false, Ordering::SeqCst);
+                    if let Ok(mut queue) = queue.0.try_lock() {
+                        queue.closed = true;
+                    }
                     observations.1.notify_all();
-                    if let Ok(mut writer)=writer.try_lock() {writer.take();}
-                    let mut owner=crate::transport::RetainedStart::new(child,reader_handle);
+                    if let Ok(mut writer) = writer.try_lock() {
+                        writer.take();
+                    }
+                    let mut owner = crate::transport::RetainedStart::new(child, reader_handle);
                     if owner.stop(Duration::from_secs(4)).is_err() {
                         return Err(TransportError::StartUnconfirmed {
-                            reason:error.to_string(),owner:Box::new(owner)
+                            reason: error.to_string(),
+                            owner: Box::new(owner),
                         });
                     }
                     return Err(error);
                 }
-                writer
-                    .lock()
-                    .recover_poison()
-                    .take();
+                writer.lock().recover_poison().take();
                 if let Some(socket) = interactive_socket {
                     stop_interactive_server(&mut child, socket)
                         .map_err(|stop| TransportError::Io(format!("{error} ; {stop}")))?;
@@ -721,9 +750,13 @@ impl CodexAppServerTransport {
         let child = Arc::new(Mutex::new(child));
         let busy = Arc::new(AtomicBool::new(false));
         let worker_handle = spawn_worker(Worker {
-            native_policy: environment.iter().rev().find(|(key,_)|key=="BRIDGET_NATIVE_CHILD_POLICY")
-                .map(|(_,value)|value.clone()).or_else(||std::env::var("BRIDGET_NATIVE_CHILD_POLICY").ok())
-                .and_then(|raw|serde_json::from_str(&raw).ok()),
+            native_policy: environment
+                .iter()
+                .rev()
+                .find(|(key, _)| key == "BRIDGET_NATIVE_CHILD_POLICY")
+                .map(|(_, value)| value.clone())
+                .or_else(|| std::env::var("BRIDGET_NATIVE_CHILD_POLICY").ok())
+                .and_then(|raw| serde_json::from_str(&raw).ok()),
             queue: queue.clone(),
             writer: writer.clone(),
             waiters: waiters.clone(),
@@ -807,12 +840,20 @@ impl CodexAppServerTransport {
         if !self.alive.load(Ordering::SeqCst) || self.busy.load(Ordering::SeqCst) {
             return;
         }
-        let Ok(mut read_at) = self.quota_read_at.try_lock() else { return; };
-        if read_at.elapsed() < RATE_LIMIT_REFRESH_INTERVAL { return; }
+        let Ok(mut read_at) = self.quota_read_at.try_lock() else {
+            return;
+        };
+        if read_at.elapsed() < RATE_LIMIT_REFRESH_INTERVAL {
+            return;
+        }
         *read_at = Instant::now();
         let _ = request_with_timeout(
-            &self.writer, &self.waiters, &self.next_id,
-            "account/rateLimits/read", Value::Null, RATE_LIMIT_READ_TIMEOUT,
+            &self.writer,
+            &self.waiters,
+            &self.next_id,
+            "account/rateLimits/read",
+            Value::Null,
+            RATE_LIMIT_READ_TIMEOUT,
         );
     }
 
@@ -837,10 +878,7 @@ impl CodexAppServerTransport {
                 ));
             observations.1.notify_all();
         });
-        *self
-            .journal
-            .lock()
-            .recover_poison() =
+        *self.journal.lock().recover_poison() =
             Some(JournalWriter::start_with_live_feed_and_failure(
                 root,
                 agent,
@@ -856,10 +894,7 @@ impl CodexAppServerTransport {
             return;
         }
         self.alive.store(false, Ordering::SeqCst);
-        self.child_requests
-            .lock()
-            .recover_poison()
-            .clear();
+        self.child_requests.lock().recover_poison().clear();
         self.observations.1.notify_all();
         let (queue, wake) = &*self.queue;
         let mut queue = queue.lock().recover_poison();
@@ -898,14 +933,8 @@ impl CodexAppServerTransport {
                 );
             }
         }
-        self.writer
-            .lock()
-            .recover_poison()
-            .take();
-        let mut child = self
-            .child
-            .lock()
-            .recover_poison();
+        self.writer.lock().recover_poison().take();
+        let mut child = self.child.lock().recover_poison();
         if let Some(socket) = &self.interactive_socket {
             if let Err(error) = stop_interactive_server(&mut child, socket) {
                 // Garder le socket de récupération, jamais supprimer la seule
@@ -920,28 +949,13 @@ impl CodexAppServerTransport {
             let _ = child.wait();
         }
         drop(child);
-        if let Some(handle) = self
-            .reader_handle
-            .lock()
-            .recover_poison()
-            .take()
-        {
+        if let Some(handle) = self.reader_handle.lock().recover_poison().take() {
             let _ = handle.join();
         }
-        if let Some(handle) = self
-            .worker_handle
-            .lock()
-            .recover_poison()
-            .take()
-        {
+        if let Some(handle) = self.worker_handle.lock().recover_poison().take() {
             let _ = handle.join();
         }
-        if let Some(journal) = self
-            .journal
-            .lock()
-            .recover_poison()
-            .take()
-        {
+        if let Some(journal) = self.journal.lock().recover_poison().take() {
             journal.stop();
         }
     }
@@ -1046,62 +1060,100 @@ impl Transport for CodexAppServerTransport {
 
 impl ManagedSession for CodexAppServerTransport {
     fn stop_for_workspace_repair(
-        &mut self, budget: Duration,
+        &mut self,
+        budget: Duration,
     ) -> Result<ManagedProviderIdentity, TransportError> {
-        let deadline=Instant::now()+budget;
-        let busy=||TransportError::DeliveryFailed("workspace_repair_busy".into());
-        let uncertain=||TransportError::DeliveryFailed("workspace_repair_stop_unconfirmed".into());
+        let deadline = Instant::now() + budget;
+        let busy = || TransportError::DeliveryFailed("workspace_repair_busy".into());
+        let uncertain =
+            || TransportError::DeliveryFailed("workspace_repair_stop_unconfirmed".into());
         if self.interactive_socket.is_some() {
-            return Err(TransportError::DeliveryFailed("workspace_repair_unsupported".into()));
+            return Err(TransportError::DeliveryFailed(
+                "workspace_repair_unsupported".into(),
+            ));
         }
         // Même ordre que record_provider_request. Ne jamais attendre un verrou
         // imbriqué : une arrivée concurrente refuse cette tentative sans effet.
-        let pending=self.pending_request.try_lock().map_err(|_|busy())?;
-        let (queue,wake)=&*self.queue;
-        let mut queue=queue.try_lock().map_err(|_|busy())?;
-        if queue.closed || queue.active.is_some() || queue.external_turn.is_some()
-            || !queue.messages.is_empty() || !queue.steer.is_empty() || pending.is_some() {
+        let pending = self.pending_request.try_lock().map_err(|_| busy())?;
+        let (queue, wake) = &*self.queue;
+        let mut queue = queue.try_lock().map_err(|_| busy())?;
+        if queue.closed
+            || queue.active.is_some()
+            || queue.external_turn.is_some()
+            || !queue.messages.is_empty()
+            || !queue.steer.is_empty()
+            || pending.is_some()
+        {
             return Err(busy());
         }
-        let children=self.child_requests.try_lock().map_err(|_|busy())?;
-        let active=self.active_detail.try_lock().map_err(|_|busy())?;
-        let observations=self.observations.0.try_lock().map_err(|_|busy())?;
+        let children = self.child_requests.try_lock().map_err(|_| busy())?;
+        let active = self.active_detail.try_lock().map_err(|_| busy())?;
+        let observations = self.observations.0.try_lock().map_err(|_| busy())?;
         if !children.is_empty() || active.is_some() || !observations.events.is_empty() {
             return Err(busy());
         }
-        if self.provider_observation.as_ref().is_none_or(|v|!v.supports(ProviderOperation::Resume))
-            || self.thread_id.is_empty() {
-            return Err(TransportError::DeliveryFailed("workspace_repair_resume_unattested".into()));
+        if self
+            .provider_observation
+            .as_ref()
+            .is_none_or(|v| !v.supports(ProviderOperation::Resume))
+            || self.thread_id.is_empty()
+        {
+            return Err(TransportError::DeliveryFailed(
+                "workspace_repair_resume_unattested".into(),
+            ));
         }
         // Les champs sont ceux du pilote vivant. active est gardé à None ;
         // provider_identity() reprendrait son verrou sous queue et pending.
-        let identity=ManagedProviderIdentity {
-            provider_kind:"codex".into(),provider_session_id:Some(self.connection_id.clone()),
-            provider_thread_id:Some(self.thread_id.clone()),active_turn_id:None,provider_item_id:None,
-            capabilities_revision:self.provider_observation.as_ref().map(|v|v.contract_version.clone()),
-            provider_observation:self.provider_observation.clone(),
+        let identity = ManagedProviderIdentity {
+            provider_kind: "codex".into(),
+            provider_session_id: Some(self.connection_id.clone()),
+            provider_thread_id: Some(self.thread_id.clone()),
+            active_turn_id: None,
+            provider_item_id: None,
+            capabilities_revision: self
+                .provider_observation
+                .as_ref()
+                .map(|v| v.contract_version.clone()),
+            provider_observation: self.provider_observation.clone(),
         };
-        if self.shutdown_started.swap(true,Ordering::SeqCst) {return Err(uncertain());}
-        queue.closed=true;
-        self.alive.store(false,Ordering::SeqCst);
-        wake.notify_all();self.observations.1.notify_all();
-        drop(observations);drop(active);drop(children);drop(queue);drop(pending);
-        self.writer.try_lock().map_err(|_|uncertain())?.take();
-        let mut child=self.child.try_lock().map_err(|_|uncertain())?;
+        if self.shutdown_started.swap(true, Ordering::SeqCst) {
+            return Err(uncertain());
+        }
+        queue.closed = true;
+        self.alive.store(false, Ordering::SeqCst);
+        wake.notify_all();
+        self.observations.1.notify_all();
+        drop(observations);
+        drop(active);
+        drop(children);
+        drop(queue);
+        drop(pending);
+        self.writer.try_lock().map_err(|_| uncertain())?.take();
+        let mut child = self.child.try_lock().map_err(|_| uncertain())?;
         crate::managed_session::stop_owned_child(
-            &mut child,true,deadline.saturating_duration_since(Instant::now()),
-        ).map_err(|_|uncertain())?;
+            &mut child,
+            true,
+            deadline.saturating_duration_since(Instant::now()),
+        )
+        .map_err(|_| uncertain())?;
         drop(child);
-        for handle in [&self.reader_handle,&self.worker_handle] {
+        for handle in [&self.reader_handle, &self.worker_handle] {
             loop {
-                let finished=handle.try_lock().map_err(|_|uncertain())?
-                    .as_ref().is_none_or(|thread|thread.is_finished());
-                if finished {break;}
-                if Instant::now()>=deadline {return Err(uncertain());}
+                let finished = handle
+                    .try_lock()
+                    .map_err(|_| uncertain())?
+                    .as_ref()
+                    .is_none_or(|thread| thread.is_finished());
+                if finished {
+                    break;
+                }
+                if Instant::now() >= deadline {
+                    return Err(uncertain());
+                }
                 thread::sleep(Duration::from_millis(10));
             }
-            if let Some(thread)=handle.try_lock().map_err(|_|uncertain())?.take() {
-                thread.join().map_err(|_|uncertain())?;
+            if let Some(thread) = handle.try_lock().map_err(|_| uncertain())?.take() {
+                thread.join().map_err(|_| uncertain())?;
             }
         }
         Ok(identity)
@@ -1114,10 +1166,7 @@ impl ManagedSession for CodexAppServerTransport {
         if !self.alive.load(Ordering::SeqCst) {
             return Err(TransportError::AgentDead);
         }
-        let mut pending = self
-            .child_requests
-            .lock()
-            .recover_poison();
+        let mut pending = self.child_requests.lock().recover_poison();
         let index = pending
             .iter()
             .position(|entry| {
@@ -1185,7 +1234,7 @@ impl ManagedSession for CodexAppServerTransport {
                         .as_ref()
                         .and_then(Value::as_object)
                         .ok_or_else(|| TransportError::DeliveryFailed("answer_invalid".into()))?;
-                    if serde_json::to_vec(input).map_or(true, |bytes| bytes.len() > 32*1024)
+                    if serde_json::to_vec(input).map_or(true, |bytes| bytes.len() > 32 * 1024)
                         || input.len() != entry.request.question_ids.len()
                         || entry.request.question_ids.iter().any(|qid| {
                             !input.get(qid).is_some_and(|value| {
@@ -1224,44 +1273,58 @@ impl ManagedSession for CodexAppServerTransport {
         Ok(())
     }
     fn provider_permissions(&self) -> Option<(String, Value, u64, Option<String>)> {
-        self.permission_observation
-            .lock()
-            .recover_poison()
-            .clone()
+        self.permission_observation.lock().recover_poison().clone()
     }
-    fn runtime_catalogue(&mut self)->crate::protocol::RuntimeCatalogueOutcome {
-        match self.runtime_catalogue_until(Instant::now()+Duration::from_secs(2)) {
-            Ok(models)=>crate::protocol::RuntimeCatalogueOutcome::Observed{models},
-            Err(reason)=>crate::protocol::RuntimeCatalogueOutcome::Refused{reason},
+    fn runtime_catalogue(&mut self) -> crate::protocol::RuntimeCatalogueOutcome {
+        match self.runtime_catalogue_until(Instant::now() + Duration::from_secs(2)) {
+            Ok(models) => crate::protocol::RuntimeCatalogueOutcome::Observed { models },
+            Err(reason) => crate::protocol::RuntimeCatalogueOutcome::Refused { reason },
         }
     }
     fn select_runtime(
-        &mut self,selection:crate::protocol::RuntimeSelection,
-    )->crate::protocol::RuntimeSelectionOutcome {
-        use crate::protocol::{RuntimeSelectionOutcome as Outcome,RuntimeSelectionRefusal as Refusal};
-        let refuse=|reason|Outcome::Refused{reason};
-        if !selection.valid() {return refuse(Refusal::InvalidSelection);}
-        let deadline=Instant::now()+Duration::from_secs(2);
-        let models=match self.runtime_catalogue_until(deadline) {Ok(models)=>models,Err(reason)=>return refuse(reason)};
-        let Some(model)=models.iter().find(|model|model.model==selection.model) else {return refuse(Refusal::ModelUnavailable);};
-        if !model.supported_efforts.contains(&selection.effort) {return refuse(Refusal::EffortUnavailable);}
-        let Some(remaining)=deadline.checked_duration_since(Instant::now()) else {return refuse(Refusal::CatalogueUnavailable);};
+        &mut self,
+        selection: crate::protocol::RuntimeSelection,
+    ) -> crate::protocol::RuntimeSelectionOutcome {
+        use crate::protocol::{
+            RuntimeSelectionOutcome as Outcome, RuntimeSelectionRefusal as Refusal,
+        };
+        let refuse = |reason| Outcome::Refused { reason };
+        if !selection.valid() {
+            return refuse(Refusal::InvalidSelection);
+        }
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let models = match self.runtime_catalogue_until(deadline) {
+            Ok(models) => models,
+            Err(reason) => return refuse(reason),
+        };
+        let Some(model) = models.iter().find(|model| model.model == selection.model) else {
+            return refuse(Refusal::ModelUnavailable);
+        };
+        if !model.supported_efforts.contains(&selection.effort) {
+            return refuse(Refusal::EffortUnavailable);
+        }
+        let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
+            return refuse(Refusal::CatalogueUnavailable);
+        };
         // Le fil natif confirme le réglage ; aucun tour de convenance n'est créé.
-        match request_with_timeout(&self.writer,&self.waiters,&self.next_id,"thread/settings/update",
-            json!({"threadId":self.thread_id,"model":selection.model,"effort":selection.effort}),remaining) {
-            Ok(_)=>Outcome::Selected{selection},
-            Err(error) if error.to_string().contains("-32601")=>refuse(Refusal::Unsupported),
-            Err(_)=>Outcome::OutcomeUnknown{},
+        match request_with_timeout(
+            &self.writer,
+            &self.waiters,
+            &self.next_id,
+            "thread/settings/update",
+            json!({"threadId":self.thread_id,"model":selection.model,"effort":selection.effort}),
+            remaining,
+        ) {
+            Ok(_) => Outcome::Selected { selection },
+            Err(error) if error.to_string().contains("-32601") => refuse(Refusal::Unsupported),
+            Err(_) => Outcome::OutcomeUnknown {},
         }
     }
     fn set_private_profile_instructions(
         &mut self,
         instructions: &str,
     ) -> Result<(), TransportError> {
-        *self
-            .private_profile_instructions
-            .lock()
-            .recover_poison() = Some(instructions.to_string());
+        *self.private_profile_instructions.lock().recover_poison() = Some(instructions.to_string());
         Ok(())
     }
 
@@ -1274,10 +1337,7 @@ impl ManagedSession for CodexAppServerTransport {
     }
 
     fn provider_identity(&self) -> Option<ManagedProviderIdentity> {
-        let active = self
-            .active_detail
-            .lock()
-            .recover_poison();
+        let active = self.active_detail.lock().recover_poison();
         Some(ManagedProviderIdentity {
             provider_kind: "codex".to_string(),
             provider_session_id: Some(self.connection_id.clone()),
@@ -1294,10 +1354,7 @@ impl ManagedSession for CodexAppServerTransport {
         })
     }
     fn process_id(&self) -> u32 {
-        self.child
-            .lock()
-            .recover_poison()
-            .id()
+        self.child.lock().recover_poison().id()
     }
 
     fn activate_journal(
@@ -1310,7 +1367,10 @@ impl ManagedSession for CodexAppServerTransport {
     }
 
     fn journal_writer(&self) -> Option<(JournalWriter, String)> {
-        self.journal.lock().ok().and_then(|journal| journal.clone())
+        self.journal
+            .lock()
+            .ok()
+            .and_then(|journal| journal.clone())
             .map(|writer| (writer, self.thread_id.clone()))
     }
 
@@ -1402,13 +1462,7 @@ impl ManagedSession for CodexAppServerTransport {
 
     fn is_busy(&self) -> bool {
         self.busy.load(Ordering::SeqCst)
-            || self
-                .queue
-                .0
-                .lock()
-                .recover_poison()
-                .external_turn
-                .is_some()
+            || self.queue.0.lock().recover_poison().external_turn.is_some()
     }
 }
 
@@ -1439,9 +1493,7 @@ fn spawn_worker(worker: Worker) -> thread::JoinHandle<()> {
                 let mut queue = queue.lock().recover_poison();
                 while (queue.messages.is_empty() || queue.external_turn.is_some()) && !queue.closed
                 {
-                    queue = wake
-                        .wait(queue)
-                        .recover_poison();
+                    queue = wake.wait(queue).recover_poison();
                 }
                 if queue.closed {
                     break;
@@ -1484,10 +1536,7 @@ fn spawn_worker(worker: Worker) -> thread::JoinHandle<()> {
                         "body": message.body,
                     }),
                 );
-                *worker
-                    .active_detail
-                    .lock()
-                    .recover_poison() = Some(CodexTurnDetail {
+                *worker.active_detail.lock().recover_poison() = Some(CodexTurnDetail {
                     message_id: message.id.clone(),
                     thread_id: worker.thread_id.clone(),
                     ..CodexTurnDetail::default()
@@ -1534,11 +1583,7 @@ fn spawn_worker(worker: Worker) -> thread::JoinHandle<()> {
                     reasoning,
                 );
             } else if !worker.interactive {
-                worker
-                    .active_detail
-                    .lock()
-                    .recover_poison()
-                    .take();
+                worker.active_detail.lock().recover_poison().take();
             }
             // (C) Succès / annulation attestés → turn_end avec issue exacte.
             // L'échéance (DeliveryRejected « échéance Codex dépassée ») n'écrit
@@ -1620,26 +1665,69 @@ fn communication_prompt(message: &BridgetMessage, interactive: bool) -> String {
 }
 
 /// Même initialisation pour l'observation sans tour et le transport natif.
-pub fn initialization_parameters()->Value {
+pub fn initialization_parameters() -> Value {
     json!({"clientInfo":{"name":"bridget","version":env!("CARGO_PKG_VERSION")},"capabilities":{"experimentalApi":true}})
 }
-fn turn_start_parameters(thread:&str,message:&str,prompt:&str,policy:Option<&Value>,cwd:Option<&Path>)->Value {
-    let mut params=json!({"threadId":thread,"clientUserMessageId":message,"input":[{"type":"text","text":prompt}]});
-    if let Some(policy)=policy {
-        params["approvalPolicy"]=policy["approval_policy"].clone();params["approvalsReviewer"]=policy["approvals_reviewer"].clone();params["sandboxPolicy"]=policy["sandbox_policy"].clone();
-        if let Some(cwd)=cwd {params["cwd"]=json!(cwd);}
-    }params
+fn turn_start_parameters(
+    thread: &str,
+    message: &str,
+    prompt: &str,
+    policy: Option<&Value>,
+    cwd: Option<&Path>,
+) -> Value {
+    let mut params = json!({"threadId":thread,"clientUserMessageId":message,"input":[{"type":"text","text":prompt}]});
+    if let Some(policy) = policy {
+        params["approvalPolicy"] = policy["approval_policy"].clone();
+        params["approvalsReviewer"] = policy["approvals_reviewer"].clone();
+        params["sandboxPolicy"] = policy["sandbox_policy"].clone();
+        if let Some(cwd) = cwd {
+            params["cwd"] = json!(cwd);
+        }
+    }
+    params
 }
 /// Témoins des enveloppes émises : aucune requête n'est envoyée par ce helper.
-pub fn program_contract_requests()->Vec<(&'static str,Value)> {
-    let id="00000000-0000-4000-8000-000000000001";let cwd=Path::new("/tmp");
-    let policy=json!({"approval_policy":"never","approvals_reviewer":"user","sandbox_policy":{"type":"readOnly","networkAccess":false}});
-    let start=thread_bootstrap_request(&CodexThreadBootstrap::Start,cwd,Some("gpt-6.1-sol"),false);
-    let resume=thread_bootstrap_request(&CodexThreadBootstrap::Resume{thread_id:id.into()},cwd,Some("gpt-6.1-sol"),false);
-    let fork=thread_bootstrap_request(&CodexThreadBootstrap::Fork{thread_id:id.into()},cwd,Some("gpt-6.1-sol"),false);
-    vec![("initialize",initialization_parameters()),start,("turn/start",turn_start_parameters(id,id,"bridget-contract",Some(&policy),Some(cwd))),
-        ("turn/interrupt",json!({"threadId":id,"turnId":id})),
-        ("turn/steer",json!({"threadId":id,"expectedTurnId":id,"input":[{"type":"text","text":"bridget-contract"}]})),resume,fork]
+pub fn program_contract_requests() -> Vec<(&'static str, Value)> {
+    let id = "00000000-0000-4000-8000-000000000001";
+    let cwd = Path::new("/tmp");
+    let policy = json!({"approval_policy":"never","approvals_reviewer":"user","sandbox_policy":{"type":"readOnly","networkAccess":false}});
+    let start = thread_bootstrap_request(
+        &CodexThreadBootstrap::Start,
+        cwd,
+        Some("gpt-6.1-sol"),
+        false,
+    );
+    let resume = thread_bootstrap_request(
+        &CodexThreadBootstrap::Resume {
+            thread_id: id.into(),
+        },
+        cwd,
+        Some("gpt-6.1-sol"),
+        false,
+    );
+    let fork = thread_bootstrap_request(
+        &CodexThreadBootstrap::Fork {
+            thread_id: id.into(),
+        },
+        cwd,
+        Some("gpt-6.1-sol"),
+        false,
+    );
+    vec![
+        ("initialize", initialization_parameters()),
+        start,
+        (
+            "turn/start",
+            turn_start_parameters(id, id, "bridget-contract", Some(&policy), Some(cwd)),
+        ),
+        ("turn/interrupt", json!({"threadId":id,"turnId":id})),
+        (
+            "turn/steer",
+            json!({"threadId":id,"expectedTurnId":id,"input":[{"type":"text","text":"bridget-contract"}]}),
+        ),
+        resume,
+        fork,
+    ]
 }
 
 fn start_turn_with_retry(worker: &Worker, message: &BridgetMessage) -> Result<String, String> {
@@ -1654,8 +1742,18 @@ fn start_turn_with_retry(worker: &Worker, message: &BridgetMessage) -> Result<St
     // L'enveloppe est une projection fournisseur ; le corps durable reste intact.
     let body = communication_prompt(message, worker.interactive);
     let prompt = private_prompt(instructions.as_deref(), &body);
-    let cwd=if worker.native_policy.is_some(){Some(std::env::current_dir().map_err(|_|"cwd_unavailable")?)}else{None};
-    let params=turn_start_parameters(&worker.thread_id,&message.id,&prompt,worker.native_policy.as_ref(),cwd.as_deref());
+    let cwd = if worker.native_policy.is_some() {
+        Some(std::env::current_dir().map_err(|_| "cwd_unavailable")?)
+    } else {
+        None
+    };
+    let params = turn_start_parameters(
+        &worker.thread_id,
+        &message.id,
+        &prompt,
+        worker.native_policy.as_ref(),
+        cwd.as_deref(),
+    );
     for attempt in 0..=SATURATION_RETRIES {
         match request(
             &worker.writer,
@@ -1880,9 +1978,7 @@ fn wait_for_turn(
         let remaining = terminal_deadline.duration_since(now).unwrap_or(TURN_POLL);
         let wait = remaining.min(TURN_POLL);
         let observed = lock.lock().recover_poison();
-        let (next, _) = wake
-            .wait_timeout(observed, wait)
-            .recover_poison();
+        let (next, _) = wake.wait_timeout(observed, wait).recover_poison();
         drop(next);
     }
 }
@@ -2123,9 +2219,7 @@ fn source_matches_active_turn(detail: &CodexTurnDetail, value: &Value) -> bool {
 }
 
 fn set_active_turn_id(active_detail: &ActiveTurnDetail, message_id: &str, turn_id: &str) {
-    let mut active = active_detail
-        .lock()
-        .recover_poison();
+    let mut active = active_detail.lock().recover_poison();
     if let Some(detail) = active
         .as_mut()
         .filter(|detail| detail.message_id == message_id)
@@ -2142,9 +2236,7 @@ fn observe_provider_item_id(active_detail: &ActiveTurnDetail, value: &Value) {
     else {
         return;
     };
-    let mut active = active_detail
-        .lock()
-        .recover_poison();
+    let mut active = active_detail.lock().recover_poison();
     if let Some(detail) = active
         .as_mut()
         .filter(|detail| source_matches_active_turn(detail, value))
@@ -2165,9 +2257,7 @@ fn observe_steered_user_message_visibility(
     else {
         return;
     };
-    let active = active_detail
-        .lock()
-        .recover_poison();
+    let active = active_detail.lock().recover_poison();
     let Some(detail) = active.as_ref() else {
         return;
     };
@@ -2201,12 +2291,17 @@ fn compaction_payload(value: &Value, thread: &str, turn: &str) -> Option<Value> 
     };
     if value.pointer("/params/threadId")?.as_str()? != thread
         || value.pointer("/params/turnId")?.as_str()? != turn
-        || value.pointer("/params/item/type")?.as_str()? != "contextCompaction" {
+        || value.pointer("/params/item/type")?.as_str()? != "contextCompaction"
+    {
         return None;
     }
     let item = value.pointer("/params/item/id")?.as_str()?;
-    if item.is_empty() || item.len() > 256 || item.chars().any(char::is_control) { return None; }
-    Some(json!({"kind":"tool","tool_type":"context_compaction","tool_id":format!("compaction:{thread}:{turn}:{item}"),"text":"Compactage du contexte","status":status,"turn_id":turn,"item_id":item}))
+    if item.is_empty() || item.len() > 256 || item.chars().any(char::is_control) {
+        return None;
+    }
+    Some(
+        json!({"kind":"tool","tool_type":"context_compaction","tool_id":format!("compaction:{thread}:{turn}:{item}"),"text":"Compactage du contexte","status":status,"turn_id":turn,"item_id":item}),
+    )
 }
 
 fn record_context_compaction(
@@ -2217,8 +2312,10 @@ fn record_context_compaction(
 ) {
     let observed = {
         let active = active_detail.lock().recover_poison();
-        active.as_ref().and_then(|a| compaction_payload(value, &a.thread_id, a.turn_id.as_deref()?)
-            .map(|payload| (a.message_id.clone(), payload)))
+        active.as_ref().and_then(|a| {
+            compaction_payload(value, &a.thread_id, a.turn_id.as_deref()?)
+                .map(|payload| (a.message_id.clone(), payload))
+        })
     };
     if let Some((message, payload)) = observed {
         record_or_terminal(journal, observations, "update", Some(&message), payload);
@@ -2386,9 +2483,7 @@ fn record_agent_text_delta(
     content: &str,
 ) {
     let message_id = {
-        let mut active = active_detail
-            .lock()
-            .recover_poison();
+        let mut active = active_detail.lock().recover_poison();
         let Some(detail) = active
             .as_mut()
             .filter(|active| source_matches_active_turn(active, value))
@@ -2420,9 +2515,7 @@ fn maybe_record_final_agent_message(
         return;
     }
     let message_id = {
-        let mut active = active_detail
-            .lock()
-            .recover_poison();
+        let mut active = active_detail.lock().recover_poison();
         let Some(detail) = active
             .as_mut()
             .filter(|active| source_matches_active_turn(active, value))
@@ -2465,9 +2558,7 @@ fn append_indexed(
 }
 
 fn observe_reasoning(active_detail: &ActiveTurnDetail, method: &str, value: &Value) {
-    let mut active = active_detail
-        .lock()
-        .recover_poison();
+    let mut active = active_detail.lock().recover_poison();
     let Some(detail) = active.as_mut() else {
         return;
     };
@@ -2505,10 +2596,7 @@ fn observe_reasoning(active_detail: &ActiveTurnDetail, method: &str, value: &Val
 }
 
 fn finish_reasoning(active_detail: &ActiveTurnDetail, message_id: &str) -> Value {
-    let detail = active_detail
-        .lock()
-        .recover_poison()
-        .take();
+    let detail = active_detail.lock().recover_poison().take();
     let Some(detail) = detail.filter(|detail| detail.message_id == message_id) else {
         return json!({ "available": false });
     };
@@ -2604,7 +2692,8 @@ fn normalize_child_provider_request(
                         | "kind"
                 )
             }) || params
-                .get("startedAtMs").is_none_or(|value| value.as_i64().is_none())
+                .get("startedAtMs")
+                .is_none_or(|value| value.as_i64().is_none())
                 || ["approvalId", "cwd", "reason"].iter().any(|key| {
                     params
                         .get(*key)
@@ -2729,9 +2818,9 @@ fn normalize_child_provider_request(
                         if let Some(list) = files.get(field).filter(|value| !value.is_null()) {
                             let list = list.as_array().ok_or("details_incomplete")?;
                             if list.len() > 64
-                                || list.iter().any(|path| {
-                                    path.as_str().is_none_or(|path| path.len() > 1024)
-                                })
+                                || list
+                                    .iter()
+                                    .any(|path| path.as_str().is_none_or(|path| path.len() > 1024))
                             {
                                 return Err("details_incomplete");
                             }
@@ -3286,28 +3375,19 @@ fn request_with_timeout(
 ) -> Result<ServerResponse, TransportError> {
     let id = next_id.fetch_add(1, Ordering::SeqCst);
     let (sender, receiver) = mpsc::channel();
-    waiters
-        .lock()
-        .recover_poison()
-        .insert(id, sender);
+    waiters.lock().recover_poison().insert(id, sender);
     if let Err(error) = write_value(
         writer,
         json!({ "id": id, "method": method, "params": params }),
     ) {
-        waiters
-            .lock()
-            .recover_poison()
-            .remove(&id);
+        waiters.lock().recover_poison().remove(&id);
         return Err(error);
     }
     let result = receiver.recv_timeout(timeout);
     // Un fournisseur muet ne doit pas accumuler un waiter à chaque contrôle.
     // La réponse tardive reste ignorée, jamais réattribuée au contrôle suivant.
     if result.is_err() {
-        waiters
-            .lock()
-            .recover_poison()
-            .remove(&id);
+        waiters.lock().recover_poison().remove(&id);
     }
     result
         .map_err(|_| TransportError::DeliveryFailed(format!("échéance Codex sur {method}")))?
@@ -3569,10 +3649,7 @@ fn spawn_reader(lines: SourceLines, context: ReaderContext) -> thread::JoinHandl
             };
             if let Some(id) = value.get("id").and_then(Value::as_u64)
                 && (value.get("result").is_some() || value.get("error").is_some())
-                && let Some(waiter) = waiters
-                    .lock()
-                    .recover_poison()
-                    .remove(&id)
+                && let Some(waiter) = waiters.lock().recover_poison().remove(&id)
             {
                 // Le vrai résultat turn/start établit le tour avant de rendre
                 // le waiter : les callbacks qui le suivent ne gagnent pas une
@@ -3626,10 +3703,7 @@ fn spawn_reader(lines: SourceLines, context: ReaderContext) -> thread::JoinHandl
             }
             let method = value.get("method").and_then(Value::as_str);
             if interactive {
-                let selected = selected_thread
-                    .lock()
-                    .recover_poison()
-                    .clone();
+                let selected = selected_thread.lock().recover_poison().clone();
                 let incoming_thread = value
                     .pointer("/params/threadId")
                     .or_else(|| value.pointer("/params/thread/id"))
@@ -3679,7 +3753,7 @@ fn spawn_reader(lines: SourceLines, context: ReaderContext) -> thread::JoinHandl
                 );
                 continue;
             }
-            if (forward_child_requests || method==Some("item/tool/requestUserInput"))
+            if (forward_child_requests || method == Some("item/tool/requestUserInput"))
                 && value.get("id").is_some()
                 && method.is_some_and(|method| {
                     is_approval_request(method)
@@ -3746,8 +3820,7 @@ fn spawn_reader(lines: SourceLines, context: ReaderContext) -> thread::JoinHandl
                 } else {
                     match normalize_child_provider_request(&value, &provider_session) {
                         Ok((request, approval)) => {
-                            let mut pending =
-                                child_requests.lock().recover_poison();
+                            let mut pending = child_requests.lock().recover_poison();
                             if let Some(index) = pending.iter().position(|entry| {
                                 entry.request.provider_session == request.provider_session
                                     && entry.request.turn_id == request.turn_id
@@ -3883,16 +3956,15 @@ fn spawn_reader(lines: SourceLines, context: ReaderContext) -> thread::JoinHandl
                         // Le tour OBSERVÉ est indépendant de la réservation
                         // d'un RPC Bridget, y compris pendant sa finalisation.
                         state.external_turn = Some(turn_id.into());
-                        *active_detail.lock().recover_poison() =
-                            Some(CodexTurnDetail {
-                                thread_id: value
-                                    .pointer("/params/threadId")
-                                    .and_then(Value::as_str)
-                                    .unwrap_or_default()
-                                    .into(),
-                                turn_id: Some(turn_id.into()),
-                                ..CodexTurnDetail::default()
-                            });
+                        *active_detail.lock().recover_poison() = Some(CodexTurnDetail {
+                            thread_id: value
+                                .pointer("/params/threadId")
+                                .and_then(Value::as_str)
+                                .unwrap_or_default()
+                                .into(),
+                            turn_id: Some(turn_id.into()),
+                            ..CodexTurnDetail::default()
+                        });
                         push_source(
                             &observations,
                             raw.clone(),
@@ -3914,20 +3986,14 @@ fn spawn_reader(lines: SourceLines, context: ReaderContext) -> thread::JoinHandl
                 // (A) Retranscription : chaque delta → journal `update` avec
                 // le CONTENU exact. `forward_managed_events` ignore Update.
                 Some("thread/settings/updated") => {
-                    let selected = selected_thread
-                        .lock()
-                        .recover_poison()
-                        .clone();
+                    let selected = selected_thread.lock().recover_poison().clone();
                     if let Some(thread_id) = selected.as_deref()
                         && value.pointer("/params/threadId").and_then(Value::as_str)
                             == Some(thread_id)
-                            && let Some(settings) = value.pointer("/params/threadSettings") {
-                                observe_native_permissions(
-                                    &permission_observation,
-                                    thread_id,
-                                    settings,
-                                );
-                            }
+                        && let Some(settings) = value.pointer("/params/threadSettings")
+                    {
+                        observe_native_permissions(&permission_observation, thread_id, settings);
+                    }
                     if value.pointer("/params/threadId").and_then(Value::as_str)
                         == selected.as_deref()
                         && let Some(model) = value
@@ -4105,10 +4171,7 @@ fn spawn_reader(lines: SourceLines, context: ReaderContext) -> thread::JoinHandl
                         if let Some(turn_id) =
                             value.pointer("/params/turnId").and_then(Value::as_str)
                         {
-                            let mut observed = observations
-                                .0
-                                .lock()
-                                .recover_poison();
+                            let mut observed = observations.0.lock().recover_poison();
                             let entry = observed
                                 .response_by_turn
                                 .entry(turn_id.to_string())
@@ -4435,13 +4498,10 @@ fn spawn_reader(lines: SourceLines, context: ReaderContext) -> thread::JoinHandl
                         if forward_child_requests {
                             let thread_id =
                                 value.pointer("/params/threadId").and_then(Value::as_str);
-                            child_requests
-                                .lock()
-                                .recover_poison()
-                                .retain(|entry| {
-                                    entry.request.turn_id != turn_id
-                                        || Some(entry.thread_id.as_str()) != thread_id
-                                });
+                            child_requests.lock().recover_poison().retain(|entry| {
+                                entry.request.turn_id != turn_id
+                                    || Some(entry.thread_id.as_str()) != thread_id
+                            });
                         }
                         if interactive {
                             let mut state = queue.0.lock().recover_poison();
@@ -4601,12 +4661,8 @@ fn spawn_reader(lines: SourceLines, context: ReaderContext) -> thread::JoinHandl
             }
         }
         alive.store(false, Ordering::SeqCst);
-        child_requests
-            .lock()
-            .recover_poison()
-            .clear();
-        let pending =
-            std::mem::take(&mut *waiters.lock().recover_poison());
+        child_requests.lock().recover_poison().clear();
+        let pending = std::mem::take(&mut *waiters.lock().recover_poison());
         for (_, waiter) in pending {
             let _ = waiter.send(Err(termination.clone()));
         }
@@ -4618,9 +4674,7 @@ fn take_pending_request(
     pending_request: &PendingRequest,
     message_id: &str,
 ) -> Option<PendingProviderRequest> {
-    let mut pending = pending_request
-        .lock()
-        .recover_poison();
+    let mut pending = pending_request.lock().recover_poison();
     if pending
         .as_ref()
         .and_then(|request| request.message_id.as_deref())
@@ -4642,9 +4696,7 @@ fn record_provider_request(
     // La réception est linéarisée par ce verrou : dès qu'un lecteur l'a pris,
     // le worker terminal attendra que le fait soit mis en file avant de lire
     // la dernière requête pendante.
-    let mut pending = pending_request
-        .lock()
-        .recover_poison();
+    let mut pending = pending_request.lock().recover_poison();
     let message_id = if let Some(detail) = interactive_detail {
         detail
             .lock()
@@ -4701,8 +4753,12 @@ fn project_request_id(request_id: &Value) -> String {
 }
 // Project only an attested protocol code; keep unknown interactive stop reasons unchanged.
 fn codex_turn_stop_reason<'a>(value: &Value, status: &'a str) -> &'a str {
-    if status == "failed" && value.pointer("/params/turn/error/codexErrorInfo").and_then(Value::as_str)
-        == Some("serverOverloaded") {
+    if status == "failed"
+        && value
+            .pointer("/params/turn/error/codexErrorInfo")
+            .and_then(Value::as_str)
+            == Some("serverOverloaded")
+    {
         "terminal Codex: failed:cause=server_overloaded"
     } else if status == "failed" && codex_model_not_found217(value) {
         "terminal Codex: failed:cause=model_not_found"
@@ -4714,12 +4770,23 @@ fn codex_turn_stop_reason<'a>(value: &Value, status: &'a str) -> &'a str {
 // Le fournisseur peut envelopper un objet HTTP dans message. On ne publie
 // jamais ce texte : seule cette combinaison fermée devient une cause native.
 fn codex_model_not_found217(value: &Value) -> bool {
-    if value.pointer("/params/turn/error/codexErrorInfo").and_then(Value::as_str) != Some("other") {
+    if value
+        .pointer("/params/turn/error/codexErrorInfo")
+        .and_then(Value::as_str)
+        != Some("other")
+    {
         return false;
     }
-    let Some(message) = value.pointer("/params/turn/error/message").and_then(Value::as_str)
-        .filter(|message| message.len() <= 4096) else { return false; };
-    let Ok(error) = serde_json::from_str::<Value>(message) else { return false; };
+    let Some(message) = value
+        .pointer("/params/turn/error/message")
+        .and_then(Value::as_str)
+        .filter(|message| message.len() <= 4096)
+    else {
+        return false;
+    };
+    let Ok(error) = serde_json::from_str::<Value>(message) else {
+        return false;
+    };
     error.get("type").and_then(Value::as_str) == Some("error")
         && error.get("status").and_then(Value::as_u64) == Some(400)
         && error.pointer("/error/type").and_then(Value::as_str) == Some("invalid_request_error")
@@ -4732,10 +4799,14 @@ fn codex_turn_terminal(value: &Value, status: &str) -> ManagedTerminal {
         "interrupted" => ManagedTerminal::Cancelled,
         _ => {
             let reason = codex_turn_stop_reason(value, status);
-            ManagedTerminal::Failed { detail: if reason == status {
-                format!("terminal Codex: {status}")
-            } else { reason.to_string() } }
-        },
+            ManagedTerminal::Failed {
+                detail: if reason == status {
+                    format!("terminal Codex: {status}")
+                } else {
+                    reason.to_string()
+                },
+            }
+        }
     }
 }
 
@@ -4823,19 +4894,22 @@ mod mobile183_compaction_tests {
     use super::*;
     #[test]
     fn mobile183_compaction_is_structural_and_scoped_to_the_active_turn() {
-        let mut event=json!({"method":"item/started","params":{"threadId":"t","turnId":"r","item":{"id":"c","type":"contextCompaction"}}});
-        let start=compaction_payload(&event,"t","r").unwrap();
-        assert_eq!(start["status"],"running");assert_eq!(start["item_id"],"c");
+        let mut event = json!({"method":"item/started","params":{"threadId":"t","turnId":"r","item":{"id":"c","type":"contextCompaction"}}});
+        let start = compaction_payload(&event, "t", "r").unwrap();
+        assert_eq!(start["status"], "running");
+        assert_eq!(start["item_id"], "c");
         assert!(crate::act_kind::validate_journal_write("update", &start).is_ok());
-        assert!(compaction_payload(&event,"foreign","r").is_none());
-        assert!(compaction_payload(&event,"t","old").is_none());
-        event["method"]=json!("item/completed");
-        assert_eq!(compaction_payload(&event,"t","r").unwrap()["status"],"completed");
-        event["params"]["item"]["type"]=json!("agentMessage");
-        assert!(compaction_payload(&event,"t","r").is_none());
-        event["params"]["item"]["type"]=json!("contextCompaction");
-        event["params"]["item"]["id"]=json!("bad\nitem");
-        assert!(compaction_payload(&event,"t","r").is_none());
+        assert!(compaction_payload(&event, "foreign", "r").is_none());
+        assert!(compaction_payload(&event, "t", "old").is_none());
+        event["method"] = json!("item/completed");
+        assert_eq!(
+            compaction_payload(&event, "t", "r").unwrap()["status"],
+            "completed"
+        );
+        event["params"]["item"]["type"] = json!("agentMessage");
+        assert!(compaction_payload(&event, "t", "r").is_none());
+        event["params"]["item"]["type"] = json!("contextCompaction");
+        event["params"]["item"]["id"] = json!("bad\nitem");
+        assert!(compaction_payload(&event, "t", "r").is_none());
     }
-
 }

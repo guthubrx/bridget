@@ -4,47 +4,91 @@ use std::cell::{Cell, RefCell};
 
 /// Un relevé par lot, commandes fermées hors du dépôt. Aucun stdout/stderr
 /// retenu ; le résultat ne contient que l'outil et son état constaté.
-pub(crate) fn qualify_workload_tools(source:&crate::lifecycle::SourceEnvironment,
-    tools:&[bridget_transport::protocol::WorkloadTool],forbidden_roots:&[PathBuf],deadline:Instant)
-    ->Vec<bridget_transport::protocol::WorkloadToolObservation> {
-    use bridget_transport::protocol::{WorkloadTool as T,WorkloadToolState as S,WorkloadToolObservation};
-    tools.iter().map(|tool| {
-        let (name,args):(&str,&[&str])=match tool {
-            T::Git=>("git",&["--version"]),T::Cargo=>("cargo",&["--version"]),
-            T::Node=>("node",&["--version"]),T::Python=>("python3",&["--version"]),
-            T::Npm=>("npm",&["--version"]),T::Pnpm=>("pnpm",&["--version"]),
-            T::Make=>("make",&["--version"]),
-            T::Docker=>("docker",&["version","--format","{{.Server.Version}}"]),
-            T::DockerCompose=>("docker",&["compose","version"]),
-        };
-        let state=(|| {
-            if Instant::now()>=deadline {return S::Unknown;}
-            let Some(path)=source.get("PATH").and_then(|p|p.to_str()).into_iter()
-                .flat_map(|p|p.split(':')).map(Path::new).filter(|p|p.is_absolute())
-                .map(|p|p.join(name)).filter_map(|p|p.canonicalize().ok())
-                .filter(|p|!forbidden_roots.iter().any(|root|p.starts_with(root)))
-                .find(|p|p.metadata().is_ok_and(|m|m.is_file()&&m.mode()&0o111!=0))
-                else {return S::Absent;};
-            let mut child=match std::process::Command::new(path).args(args).current_dir("/")
-                .env_clear().envs(source)
-                // Les shims peuvent installer une version sur un simple --version.
-                // La qualification observe l'installation existante seulement.
-                .env("RUSTUP_AUTO_INSTALL","0").env("COREPACK_ENABLE_NETWORK","0")
-                .env("COREPACK_DEFAULT_TO_LATEST","0").env("COREPACK_ENV_FILE","0")
-                .stdin(std::process::Stdio::null())
-                .stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).spawn() {
-                Ok(child)=>child,Err(_)=>return S::Unusable,
+pub(crate) fn qualify_workload_tools(
+    source: &crate::lifecycle::SourceEnvironment,
+    tools: &[bridget_transport::protocol::WorkloadTool],
+    forbidden_roots: &[PathBuf],
+    deadline: Instant,
+) -> Vec<bridget_transport::protocol::WorkloadToolObservation> {
+    use bridget_transport::protocol::{
+        WorkloadTool as T, WorkloadToolObservation, WorkloadToolState as S,
+    };
+    tools
+        .iter()
+        .map(|tool| {
+            let (name, args): (&str, &[&str]) = match tool {
+                T::Git => ("git", &["--version"]),
+                T::Cargo => ("cargo", &["--version"]),
+                T::Node => ("node", &["--version"]),
+                T::Python => ("python3", &["--version"]),
+                T::Npm => ("npm", &["--version"]),
+                T::Pnpm => ("pnpm", &["--version"]),
+                T::Make => ("make", &["--version"]),
+                T::Docker => ("docker", &["version", "--format", "{{.Server.Version}}"]),
+                T::DockerCompose => ("docker", &["compose", "version"]),
             };
-            loop {
-                match child.try_wait() {
-                    Ok(Some(status))=>return if status.success(){S::Available}else{S::Unusable},
-                    Ok(None) if Instant::now()<deadline=>std::thread::sleep(Duration::from_millis(5)),
-                    _=>{let _=crate::workspace_git::stop_git(&mut child);return S::Unknown;}
+            let state = (|| {
+                if Instant::now() >= deadline {
+                    return S::Unknown;
                 }
-            }
-        })();
-        WorkloadToolObservation {tool:*tool,state}
-    }).collect()
+                let Some(path) = source
+                    .get("PATH")
+                    .and_then(|p| p.to_str())
+                    .into_iter()
+                    .flat_map(|p| p.split(':'))
+                    .map(Path::new)
+                    .filter(|p| p.is_absolute())
+                    .map(|p| p.join(name))
+                    .filter_map(|p| p.canonicalize().ok())
+                    .filter(|p| !forbidden_roots.iter().any(|root| p.starts_with(root)))
+                    .find(|p| {
+                        p.metadata()
+                            .is_ok_and(|m| m.is_file() && m.mode() & 0o111 != 0)
+                    })
+                else {
+                    return S::Absent;
+                };
+                let mut child = match std::process::Command::new(path)
+                    .args(args)
+                    .current_dir("/")
+                    .env_clear()
+                    .envs(source)
+                    // Les shims peuvent installer une version sur un simple --version.
+                    // La qualification observe l'installation existante seulement.
+                    .env("RUSTUP_AUTO_INSTALL", "0")
+                    .env("COREPACK_ENABLE_NETWORK", "0")
+                    .env("COREPACK_DEFAULT_TO_LATEST", "0")
+                    .env("COREPACK_ENV_FILE", "0")
+                    .stdin(std::process::Stdio::null())
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .spawn()
+                {
+                    Ok(child) => child,
+                    Err(_) => return S::Unusable,
+                };
+                loop {
+                    match child.try_wait() {
+                        Ok(Some(status)) => {
+                            return if status.success() {
+                                S::Available
+                            } else {
+                                S::Unusable
+                            };
+                        }
+                        Ok(None) if Instant::now() < deadline => {
+                            std::thread::sleep(Duration::from_millis(5))
+                        }
+                        _ => {
+                            let _ = crate::workspace_git::stop_git(&mut child);
+                            return S::Unknown;
+                        }
+                    }
+                }
+            })();
+            WorkloadToolObservation { tool: *tool, state }
+        })
+        .collect()
 }
 
 pub(super) struct WorkerReadView<'a> {
@@ -228,8 +272,11 @@ impl WorkerReadView<'_> {
     }
     /// Chemins seuls : les contrôles Git C19 sont exécutés par le helper
     /// possédé. Ne pas transformer une erreur Git en absence de dépôt.
-    pub(super) fn mapping_paths(&self,request:&WorkerPrepare,mapping:ProjectMapping)
-        ->Result<(ProjectMapping,PathBuf),WorkerRefusal> {
+    pub(super) fn mapping_paths(
+        &self,
+        request: &WorkerPrepare,
+        mapping: ProjectMapping,
+    ) -> Result<(ProjectMapping, PathBuf), WorkerRefusal> {
         let protected = self.protected();
         let root =
             crate::registry::validate_unprotected_local_path(&mapping.remote_root, &protected)
@@ -242,7 +289,7 @@ impl WorkerReadView<'_> {
         if !cwd.starts_with(&root) || !cwd.is_dir() {
             return Err(WorkerRefusal::PlacementMismatch);
         }
-        Ok((mapping,cwd))
+        Ok((mapping, cwd))
     }
     pub(super) fn mapping_paths_and_git(
         &self,
@@ -250,8 +297,8 @@ impl WorkerReadView<'_> {
         mapping: ProjectMapping,
         workload: Option<bridget_transport::protocol::AutoDelegateWorkload>,
     ) -> Result<(ProjectMapping, PathBuf), WorkerRefusal> {
-        let (mapping,cwd)=self.mapping_paths(request,mapping)?;
-        let root=mapping.remote_root.clone();
+        let (mapping, cwd) = self.mapping_paths(request, mapping)?;
+        let root = mapping.remote_root.clone();
         if let Some(workload) = workload {
             let git = Self::git_markers_present(&cwd)?;
             let worktree = matches!(
@@ -354,7 +401,10 @@ impl WorkerReadView<'_> {
                 && entry.engine == routing.engine
                 && entry.agent_type == request.agent_type
                 && entry.model == request.model
-                && request.service_tier.as_ref().is_none_or(|tier|entry.service_tiers.contains(tier))
+                && request
+                    .service_tier
+                    .as_ref()
+                    .is_none_or(|tier| entry.service_tiers.contains(tier))
                 && request
                     .effort
                     .as_ref()
@@ -416,24 +466,38 @@ impl WorkerReadView<'_> {
         trace: &ReadTrace,
         workspace_report: &mut Option<Result<crate::delegation::WorkspaceRecord, WorkerRefusal>>,
     ) -> Result<AgentRegistry, WorkerRefusal> {
-        self.recheck_at_with_view_report(prepared,before_release,repair,trace,workspace_report,None)
+        self.recheck_at_with_view_report(
+            prepared,
+            before_release,
+            repair,
+            trace,
+            workspace_report,
+            None,
+        )
     }
 
     /// Le rapport fourni est le résultat consommé d'un lecteur privé possédé
     /// par le runtime. Il ne remplace aucune autorité ni relecture de droits.
     pub(super) fn recheck_at_with_view_report(
-        &self,prepared:&PreparedRuntime,before_release:bool,
-        repair:Option<&crate::workspace_git::RepairAnchor>,trace:&ReadTrace,
-        workspace_report:&mut Option<Result<crate::delegation::WorkspaceRecord,WorkerRefusal>>,
-        view_report:Option<&crate::delegation::WorkspaceRecord>,
-    )->Result<AgentRegistry,WorkerRefusal> {
+        &self,
+        prepared: &PreparedRuntime,
+        before_release: bool,
+        repair: Option<&crate::workspace_git::RepairAnchor>,
+        trace: &ReadTrace,
+        workspace_report: &mut Option<Result<crate::delegation::WorkspaceRecord, WorkerRefusal>>,
+        view_report: Option<&crate::delegation::WorkspaceRecord>,
+    ) -> Result<AgentRegistry, WorkerRefusal> {
         *workspace_report = None;
         let mut operation = crate::native_permissions::PermissionReadOperation::default();
         trace.at("registry");
-        let registry = self.registry()?.pin_delegation_service_tier(
-            &prepared.request.agent_type,&prepared.request.model,
-            prepared.request.service_tier.as_deref())
-            .map_err(|_|WorkerRefusal::DefinitionChanged)?;
+        let registry = self
+            .registry()?
+            .pin_delegation_service_tier(
+                &prepared.request.agent_type,
+                &prepared.request.model,
+                prepared.request.service_tier.as_deref(),
+            )
+            .map_err(|_| WorkerRefusal::DefinitionChanged)?;
         if let Some(routing) = &prepared.routing {
             trace.at("routing");
             self.check_routing_connection(&registry, &prepared.request, routing)?;
@@ -444,119 +508,189 @@ impl WorkerReadView<'_> {
             &registry,
             prepared.routing.as_ref().map(|routing| routing.workload),
         )?;
-        let is_view=matches!(prepared.request.workspace,
-            Some(bridget_transport::protocol::WorkspaceRequest::CommitView {}));
-        if is_view || matches!(
-            &prepared.request.workspace,
-            Some(bridget_transport::protocol::WorkspaceRequest::Worktree { .. })
-        ) {
+        let is_view = matches!(
+            prepared.request.workspace,
+            Some(bridget_transport::protocol::WorkspaceRequest::CommitView {})
+        );
+        if is_view
+            || matches!(
+                &prepared.request.workspace,
+                Some(bridget_transport::protocol::WorkspaceRequest::Worktree { .. })
+            )
+        {
             trace.at("workspace_receipt");
             let receipt = proof198::read_workspace_receipt(
-                &self.config.state_root.join("store"), self.identity, &prepared.command)
-                .map_err(refuse)?
-                .ok_or(WorkerRefusal::UnknownExecution)?;
+                &self.config.state_root.join("store"),
+                self.identity,
+                &prepared.command,
+            )
+            .map_err(refuse)?
+            .ok_or(WorkerRefusal::UnknownExecution)?;
             let expected_digest = if receipt.fenced_previous.is_some() {
                 fenced_prepare_digest(&prepared.command, &prepared.request)
             } else {
                 json_digest(&(&prepared.command, &prepared.request))
-            }.map_err(refuse)?;
+            }
+            .map_err(refuse)?;
             if receipt.worker != *self.identity
                 || receipt.command != prepared.command
                 || receipt.prepare_digest != expected_digest
             {
                 return Err(WorkerRefusal::CommandMismatch);
             }
-            let mut view_anchor=None;
+            let mut view_anchor = None;
             if is_view {
                 if repair.is_some()
-                    || prepared.prepared.effective_posture!=SpawnPosture::Discovery {
+                    || prepared.prepared.effective_posture != SpawnPosture::Discovery
+                {
                     return Err(WorkerRefusal::PlacementMismatch);
                 }
-                let anchor=view_anchor_receipt_at(&self.config.state_root.join("store"),self.identity,
-                    &prepared.command,Some(&prepared.request)).map_err(refuse)?;
-                let view=anchor.commit_view.as_ref().ok_or(WorkerRefusal::CommandMismatch)?;
-                if view.closed {return Err(WorkerRefusal::InvalidEnvelope);}
-                if !view.source_stopped || view.source_marker.is_none()
-                    || view.materialization.as_ref().is_some_and(|operation|!operation.stopped) {
+                let anchor = view_anchor_receipt_at(
+                    &self.config.state_root.join("store"),
+                    self.identity,
+                    &prepared.command,
+                    Some(&prepared.request),
+                )
+                .map_err(refuse)?;
+                let view = anchor
+                    .commit_view
+                    .as_ref()
+                    .ok_or(WorkerRefusal::CommandMismatch)?;
+                if view.closed {
+                    return Err(WorkerRefusal::InvalidEnvelope);
+                }
+                if !view.source_stopped
+                    || view.source_marker.is_none()
+                    || view
+                        .materialization
+                        .as_ref()
+                        .is_some_and(|operation| !operation.stopped)
+                {
                     return Err(WorkerRefusal::UnknownExecution);
                 }
-                view_anchor=Some(anchor);
+                view_anchor = Some(anchor);
             }
             trace.at("workspace_report");
             let original = match (receipt.record, receipt.fenced_previous) {
                 (Some(record), None) => record,
                 (None, Some(_)) => original_workspace_at(
-                    &self.config.state_root.join("store"), self.identity,
+                    &self.config.state_root.join("store"),
+                    self.identity,
                     &prepared.command,
-                ).map_err(refuse_fenced_workspace)?,
+                )
+                .map_err(refuse_fenced_workspace)?,
                 _ => return Err(WorkerRefusal::CommandMismatch),
             };
             // Sous réparation185, le prepared porte légitimement le nouveau chemin ;
             // report_repaired_workspace valide déjà l'ancre contre l'original.
-            if !prepared.prepared.workspace.as_ref().is_some_and(|value|
-                repair.is_some() || same_workspace_anchor(&original, value)) {
+            if !prepared
+                .prepared
+                .workspace
+                .as_ref()
+                .is_some_and(|value| repair.is_some() || same_workspace_anchor(&original, value))
+            {
                 return Err(WorkerRefusal::CommandMismatch);
             }
-            let mut view_intent=None;
+            let mut view_intent = None;
             if is_view {
-                let reference=original.commit_view.as_ref().ok_or(WorkerRefusal::CommandMismatch)?;
-                let root=self.config.state_root.join("store").join("view-manifests")
-                    .canonicalize().map_err(|_|WorkerRefusal::PlacementMismatch)?;
-                if !matches!(original.strategy,crate::delegation::WorkspaceStrategy::CommitView)
-                    || reference.binding.worker!=*self.identity
-                    || reference.binding.command!=view_anchor.as_ref().unwrap().command
-                    || reference.binding.prepare_digest!=view_anchor.as_ref().unwrap().prepare_digest
-                    || Path::new(&reference.proof_root)!=root
-                    || Path::new(&original.toplevel)!=cwd
-                    || prepared.request.base_commit.as_deref()!=Some(original.base_commit.as_str()) {
+                let reference = original
+                    .commit_view
+                    .as_ref()
+                    .ok_or(WorkerRefusal::CommandMismatch)?;
+                let root = self
+                    .config
+                    .state_root
+                    .join("store")
+                    .join("view-manifests")
+                    .canonicalize()
+                    .map_err(|_| WorkerRefusal::PlacementMismatch)?;
+                if !matches!(
+                    original.strategy,
+                    crate::delegation::WorkspaceStrategy::CommitView
+                ) || reference.binding.worker != *self.identity
+                    || reference.binding.command != view_anchor.as_ref().unwrap().command
+                    || reference.binding.prepare_digest
+                        != view_anchor.as_ref().unwrap().prepare_digest
+                    || Path::new(&reference.proof_root) != root
+                    || Path::new(&original.toplevel) != cwd
+                    || prepared.request.base_commit.as_deref()
+                        != Some(original.base_commit.as_str())
+                {
                     return Err(WorkerRefusal::CommandMismatch);
                 }
-                let proofs=crate::workspace_git::ViewProofs::open(&root)
-                    .map_err(|_|WorkerRefusal::PlacementMismatch)?;
-                let intent=proofs.load(&reference.binding.key()
-                    .map_err(|_|WorkerRefusal::CommandMismatch)?)
-                    .map_err(|_|WorkerRefusal::PlacementMismatch)?;
-                if intent.proof_digest().map_err(|_|WorkerRefusal::PlacementMismatch)?!=reference.intent_digest {
+                let proofs = crate::workspace_git::ViewProofs::open(&root)
+                    .map_err(|_| WorkerRefusal::PlacementMismatch)?;
+                let intent = proofs
+                    .load(
+                        &reference
+                            .binding
+                            .key()
+                            .map_err(|_| WorkerRefusal::CommandMismatch)?,
+                    )
+                    .map_err(|_| WorkerRefusal::PlacementMismatch)?;
+                if intent
+                    .proof_digest()
+                    .map_err(|_| WorkerRefusal::PlacementMismatch)?
+                    != reference.intent_digest
+                {
                     return Err(WorkerRefusal::CommandMismatch);
                 }
-                view_intent=Some(intent);
-            } else if !matches!(original.strategy,crate::delegation::WorkspaceStrategy::Worktree)
-                || original.commit_view.is_some() {
+                view_intent = Some(intent);
+            } else if !matches!(
+                original.strategy,
+                crate::delegation::WorkspaceStrategy::Worktree
+            ) || original.commit_view.is_some()
+            {
                 return Err(WorkerRefusal::CommandMismatch);
             }
-            let report=if let Some(report)=view_report {
-                if !is_view || repair.is_some() || !same_workspace_anchor(&original,
-                    &serde_json::to_value(report).map_err(|_|WorkerRefusal::PlacementMismatch)?) {
+            let report = if let Some(report) = view_report {
+                if !is_view
+                    || repair.is_some()
+                    || !same_workspace_anchor(
+                        &original,
+                        &serde_json::to_value(report)
+                            .map_err(|_| WorkerRefusal::PlacementMismatch)?,
+                    )
+                {
                     return Err(WorkerRefusal::CommandMismatch);
                 }
                 Ok(report.clone())
-            } else if let Some(anchor)=repair {
-                crate::workspace_git::report_repaired_workspace(&original,anchor)
-                    .map_err(|_|WorkerRefusal::PlacementMismatch)
+            } else if let Some(anchor) = repair {
+                crate::workspace_git::report_repaired_workspace(&original, anchor)
+                    .map_err(|_| WorkerRefusal::PlacementMismatch)
             } else {
-                crate::workspace_git::report(&original).map_err(|_|WorkerRefusal::PlacementMismatch)
+                crate::workspace_git::report(&original)
+                    .map_err(|_| WorkerRefusal::PlacementMismatch)
             };
             // Some(Err) garde aussi la tentative refusée : aucun second rapport
             // n'est lancé à l'intérieur de ce même contrôle après un échec Git.
             *workspace_report = Some(report.clone());
             let report = report?;
             let record = if repair.is_some() { &report } else { &original };
-            if before_release && if is_view {report.dirty!=Some(false)} else {
-                report.head_commit.as_ref()!=Some(&record.base_commit)
-                    || report.head_on_branch!=Some(true)
-            } {
+            if before_release
+                && if is_view {
+                    report.dirty != Some(false)
+                } else {
+                    report.head_commit.as_ref() != Some(&record.base_commit)
+                        || report.head_on_branch != Some(true)
+                }
+            {
                 return Err(WorkerRefusal::PlacementMismatch);
             }
             trace.at("workspace_mapping");
-            if let Some(intent)=view_intent {
-                let (root,next)=intent.execution_paths(&mapping.remote_root)
-                    .map_err(|_|WorkerRefusal::PlacementMismatch)?;
-                let protected=self.protected();
-                mapping.remote_root=crate::registry::validate_unprotected_local_path(&root,&protected)
-                    .map_err(|_|WorkerRefusal::PlacementMismatch)?;
-                cwd=crate::registry::validate_unprotected_local_path(&next,&protected)
-                    .map_err(|_|WorkerRefusal::PlacementMismatch)?;
-                if !cwd.starts_with(&mapping.remote_root){return Err(WorkerRefusal::PlacementMismatch);}
+            if let Some(intent) = view_intent {
+                let (root, next) = intent
+                    .execution_paths(&mapping.remote_root)
+                    .map_err(|_| WorkerRefusal::PlacementMismatch)?;
+                let protected = self.protected();
+                mapping.remote_root =
+                    crate::registry::validate_unprotected_local_path(&root, &protected)
+                        .map_err(|_| WorkerRefusal::PlacementMismatch)?;
+                cwd = crate::registry::validate_unprotected_local_path(&next, &protected)
+                    .map_err(|_| WorkerRefusal::PlacementMismatch)?;
+                if !cwd.starts_with(&mapping.remote_root) {
+                    return Err(WorkerRefusal::PlacementMismatch);
+                }
             } else {
                 cwd = self.remap_prepared_worktree(&mut mapping, &cwd, record)?;
             }
@@ -1201,20 +1335,34 @@ impl WorkerReadView<'_> {
         diagnostics: Option<(&ProbePermissionDiagnostics<'_>, &str)>,
         provider_accounts_negotiated: bool,
     ) -> Result<CandidateReadiness, WorkerRefusal> {
-        if registry.get(&request.agent_type).map_err(|_| WorkerRefusal::DefinitionChanged)?
-            .capabilities.account_profiles
-            && !provider_accounts_negotiated {
+        if registry
+            .get(&request.agent_type)
+            .map_err(|_| WorkerRefusal::DefinitionChanged)?
+            .capabilities
+            .account_profiles
+            && !provider_accounts_negotiated
+        {
             return Err(WorkerRefusal::CapabilityRequired);
         }
-        if matches!(request.workspace,Some(bridget_transport::protocol::WorkspaceRequest::CommitView {}))
-            && (!crate::workspace_git::COMMIT_VIEW_LAUNCH_ENABLED || request.posture!=Some(SpawnPosture::Discovery)) {
+        if matches!(
+            request.workspace,
+            Some(bridget_transport::protocol::WorkspaceRequest::CommitView {})
+        ) && (!crate::workspace_git::COMMIT_VIEW_LAUNCH_ENABLED
+            || request.posture != Some(SpawnPosture::Discovery))
+        {
             return Err(WorkerRefusal::CapabilityRequired);
         }
-        self.readiness_at(registry,request,mapping,cwd,operation,diagnostics)
+        self.readiness_at(registry, request, mapping, cwd, operation, diagnostics)
     }
-    pub(super) fn readiness_at(&self,registry:&AgentRegistry,request:&WorkerPrepare,mapping:&ProjectMapping,
-        cwd:&Path,operation:&mut crate::native_permissions::PermissionReadOperation,
-        diagnostics:Option<(&ProbePermissionDiagnostics<'_>,&str)>)->Result<CandidateReadiness,WorkerRefusal> {
+    pub(super) fn readiness_at(
+        &self,
+        registry: &AgentRegistry,
+        request: &WorkerPrepare,
+        mapping: &ProjectMapping,
+        cwd: &Path,
+        operation: &mut crate::native_permissions::PermissionReadOperation,
+        diagnostics: Option<(&ProbePermissionDiagnostics<'_>, &str)>,
+    ) -> Result<CandidateReadiness, WorkerRefusal> {
         let pinned = registry
             .clone()
             .pin_delegation_model(
@@ -1222,36 +1370,61 @@ impl WorkerReadView<'_> {
                 &request.model,
                 request.effort.as_deref(),
             )
-            .and_then(|registry|registry.pin_delegation_service_tier(
-                &request.agent_type,&request.model,request.service_tier.as_deref()))
+            .and_then(|registry| {
+                registry.pin_delegation_service_tier(
+                    &request.agent_type,
+                    &request.model,
+                    request.service_tier.as_deref(),
+                )
+            })
             .map_err(|_| WorkerRefusal::DefinitionChanged)?;
         crate::lifecycle::launch_preflight(&pinned, &request.agent_type, self.source)
             .map_err(|_| WorkerRefusal::DefinitionChanged)?;
-        let projection_definition = pinned.get(&request.agent_type)
+        let projection_definition = pinned
+            .get(&request.agent_type)
             .map_err(|_| WorkerRefusal::DefinitionChanged)?;
-        let (projection, projection_guard) = crate::native_permissions::observe_projection171(||
-            crate::native_permissions::project_remote_permissions_in_operation(
-                &request.parent,
-                projection_definition,
-                mapping,
-                cwd,
-                self.source,
-                request.posture,
-                &self.protected(), operation,
-                matches!(request.workspace,Some(bridget_transport::protocol::WorkspaceRequest::CommitView {})),
-                request.origin_host == self.identity.machine_id,
-            ));
-        let (mut policy, effective_posture) = projection.map_err(|code|
-            map_probe_projection_failure171(&code, diagnostics, projection_guard, &request.parent.provider_policy,
-                |note| eprintln!("bridget_probe_permission_refusal {note}")))?;
+        let (projection, projection_guard) =
+            crate::native_permissions::observe_projection171(|| {
+                crate::native_permissions::project_remote_permissions_in_operation(
+                    &request.parent,
+                    projection_definition,
+                    mapping,
+                    cwd,
+                    self.source,
+                    request.posture,
+                    &self.protected(),
+                    operation,
+                    matches!(
+                        request.workspace,
+                        Some(bridget_transport::protocol::WorkspaceRequest::CommitView {})
+                    ),
+                    request.origin_host == self.identity.machine_id,
+                )
+            });
+        let (mut policy, effective_posture) = projection.map_err(|code| {
+            map_probe_projection_failure171(
+                &code,
+                diagnostics,
+                projection_guard,
+                &request.parent.provider_policy,
+                |note| eprintln!("bridget_probe_permission_refusal {note}"),
+            )
+        })?;
         let scoped = pinned
             .for_inherited_delegation_in_operation(
                 &request.agent_type,
                 &request.model,
                 request.effort.as_deref(),
-                &policy, operation,
+                &policy,
+                operation,
             )
-            .map_err(|code| observe_probe_permission_failure(&code, diagnostics, ProbePermissionSite::ScopedConstructor))?;
+            .map_err(|code| {
+                observe_probe_permission_failure(
+                    &code,
+                    diagnostics,
+                    ProbePermissionSite::ScopedConstructor,
+                )
+            })?;
         let definition = scoped
             .get(&request.agent_type)
             .map_err(|_| WorkerRefusal::DefinitionChanged)?;
@@ -1259,8 +1432,16 @@ impl WorkerReadView<'_> {
         // de droits. La capture reste une lecture de configuration locale.
         if definition.protocol == "claude_stream_json" {
             crate::native_permissions::refresh_remote_permissions_context_in_operation(
-                &mut policy, definition, cwd, self.source, mapping, operation,
-            ).map_err(|code| observe_probe_permission_failure(&code, diagnostics, ProbePermissionSite::Refresh))?;
+                &mut policy,
+                definition,
+                cwd,
+                self.source,
+                mapping,
+                operation,
+            )
+            .map_err(|code| {
+                observe_probe_permission_failure(&code, diagnostics, ProbePermissionSite::Refresh)
+            })?;
         }
         crate::native_permissions::recheck_remote_child_permissions_in_operation(
             &policy,
@@ -1269,9 +1450,12 @@ impl WorkerReadView<'_> {
             self.source,
             &self.protected(),
             Some(mapping),
-            Some(&request.parent), operation,
+            Some(&request.parent),
+            operation,
         )
-        .map_err(|code| observe_probe_permission_failure(&code, diagnostics, ProbePermissionSite::Recheck))?;
+        .map_err(|code| {
+            observe_probe_permission_failure(&code, diagnostics, ProbePermissionSite::Recheck)
+        })?;
         let definition = scoped
             .resolved_definition(&request.agent_type)
             .map_err(|_| WorkerRefusal::DefinitionChanged)?;
@@ -1281,24 +1465,44 @@ impl WorkerReadView<'_> {
             effective_posture,
         })
     }
-    pub(super) fn checkout_root(&self, mapping: &ProjectMapping, cwd: &Path) -> Result<PathBuf, WorkerRefusal> {
+    pub(super) fn checkout_root(
+        &self,
+        mapping: &ProjectMapping,
+        cwd: &Path,
+    ) -> Result<PathBuf, WorkerRefusal> {
         let git_path = |dir: &Path, flag: &str| -> Result<PathBuf, WorkerRefusal> {
-            let output = crate::workspace_git::run_git(dir, &["rev-parse", flag], crate::workspace_git::READ_TIMEOUT)
-                .map_err(|_| WorkerRefusal::PlacementMismatch)?;
-            if !output.success() || output.truncated { return Err(WorkerRefusal::PlacementMismatch); }
+            let output = crate::workspace_git::run_git(
+                dir,
+                &["rev-parse", flag],
+                crate::workspace_git::READ_TIMEOUT,
+            )
+            .map_err(|_| WorkerRefusal::PlacementMismatch)?;
+            if !output.success() || output.truncated {
+                return Err(WorkerRefusal::PlacementMismatch);
+            }
             let path = Path::new(output.stdout.trim_end_matches(['\r', '\n']));
-            let absolute = if path.is_absolute() { path.to_path_buf() } else { dir.join(path) };
+            let absolute = if path.is_absolute() {
+                path.to_path_buf()
+            } else {
+                dir.join(path)
+            };
             fs::canonicalize(absolute).map_err(|_| WorkerRefusal::PlacementMismatch)
         };
         let root = git_path(cwd, "--show-toplevel")?;
         if (!root.starts_with(&mapping.remote_root) && !mapping.remote_root.starts_with(&root))
             || !cwd.starts_with(&root)
-            || git_path(&root, "--git-common-dir")? != git_path(&mapping.remote_root, "--git-common-dir")? {
+            || git_path(&root, "--git-common-dir")?
+                != git_path(&mapping.remote_root, "--git-common-dir")?
+        {
             return Err(WorkerRefusal::PlacementMismatch);
         }
         // Une correspondance limitee a un sous-dossier ne donne pas le droit
         // de rafraichir le checkout entier : garder sa borne historique.
-        let authorized = if root.starts_with(&mapping.remote_root) { &root } else { &mapping.remote_root };
+        let authorized = if root.starts_with(&mapping.remote_root) {
+            &root
+        } else {
+            &mapping.remote_root
+        };
         crate::registry::validate_unprotected_local_path(authorized, &self.protected())
             .map_err(|_| WorkerRefusal::PlacementMismatch)
     }
@@ -1307,25 +1511,36 @@ impl WorkerReadView<'_> {
         request: &WorkerPrepare,
         mapping: &ProjectMapping,
         cwd: &Path,
-        shared:impl FnOnce(&Path,&str)->Result<(),CandidateProbeRefusal>,
+        shared: impl FnOnce(&Path, &str) -> Result<(), CandidateProbeRefusal>,
     ) -> Result<(), CandidateProbeRefusal> {
-        if matches!(request.workspace,Some(bridget_transport::protocol::WorkspaceRequest::CommitView{})) {
-            if request.posture!=Some(SpawnPosture::Discovery) {return Err(CandidateProbeRefusal::InvalidRequest);}
-            let base=request.base_commit.as_deref().ok_or(CandidateProbeRefusal::WorkspaceBaseUnavailable)?;
+        if matches!(
+            request.workspace,
+            Some(bridget_transport::protocol::WorkspaceRequest::CommitView {})
+        ) {
+            if request.posture != Some(SpawnPosture::Discovery) {
+                return Err(CandidateProbeRefusal::InvalidRequest);
+            }
+            let base = request
+                .base_commit
+                .as_deref()
+                .ok_or(CandidateProbeRefusal::WorkspaceBaseUnavailable)?;
             // Lire A ne qualifie ni ne rafraîchit HEAD B. Le miroir local est
             // lu selon le contrat existant, sans fetch pendant la sonde.
-            return match crate::workspace_git::remote_source_commit(cwd,Some(base)) {
-                Ok(actual) if actual==base=>Ok(()),
+            return match crate::workspace_git::remote_source_commit(cwd, Some(base)) {
+                Ok(actual) if actual == base => Ok(()),
                 Err(crate::workspace_git::WorkspacePreflightError::Refused(error))
-                    if error=="workspace_base_unavailable: référence de base inconnue"=>
-                        Err(CandidateProbeRefusal::WorkspaceBaseUnavailable),
-                _=>Err(CandidateProbeRefusal::WorkspaceUnavailable),
+                    if error == "workspace_base_unavailable: référence de base inconnue" =>
+                {
+                    Err(CandidateProbeRefusal::WorkspaceBaseUnavailable)
+                }
+                _ => Err(CandidateProbeRefusal::WorkspaceUnavailable),
             };
         }
         if let Some(bridget_transport::protocol::WorkspaceRequest::Worktree { base_ref, branch }) =
             &request.workspace
         {
-            let root = self.checkout_root(mapping, cwd)
+            let root = self
+                .checkout_root(mapping, cwd)
                 .map_err(|_| CandidateProbeRefusal::MappingUnavailable)?;
             let preflight = crate::workspace_git::preflight_remote(
                 &root,
@@ -1343,7 +1558,8 @@ impl WorkerReadView<'_> {
             return Ok(());
         }
         if let Some(base) = request.base_commit.as_deref() {
-            let root = self.checkout_root(mapping, cwd)
+            let root = self
+                .checkout_root(mapping, cwd)
                 .map_err(|_| CandidateProbeRefusal::MappingUnavailable)?;
             shared(&root, base)?;
         }
@@ -1351,39 +1567,59 @@ impl WorkerReadView<'_> {
     }
 }
 
-
 /// Lecture isolée : aucun store écrivain, token Prepared, Child ou runtime.
 /// L'occupation est une photographie prudente ; Prepare relit toujours le
 /// registre, les droits et les gardes vivantes avant toute mutation.
 pub(super) struct ProbeReadContext {
-    pub(super) config:WorkerRuntimeConfig,
-    pub(super) identity:WorkerIdentity,
-    pub(super) credential:IdentityCredential,
-    pub(super) source:crate::lifecycle::SourceEnvironment,
-    pub(super) prepared:Vec<PathBuf>,
-    pub(super) command_roots:RefCell<Option<Result<Vec<PathBuf>,CandidateProbeRefusal>>>,
-    pub(super) provider_accounts_negotiated:bool,
-    pub(super) host_resources:crate::host_resources::HostResourceCollector,
+    pub(super) config: WorkerRuntimeConfig,
+    pub(super) identity: WorkerIdentity,
+    pub(super) credential: IdentityCredential,
+    pub(super) source: crate::lifecycle::SourceEnvironment,
+    pub(super) prepared: Vec<PathBuf>,
+    pub(super) command_roots: RefCell<Option<Result<Vec<PathBuf>, CandidateProbeRefusal>>>,
+    pub(super) provider_accounts_negotiated: bool,
+    pub(super) host_resources: crate::host_resources::HostResourceCollector,
 }
 impl ProbeReadContext {
-    fn read_view(&self)->WorkerReadView<'_> {
-        WorkerReadView{config:&self.config,identity:&self.identity,credential:&self.credential,source:&self.source,quiet:false}
+    fn read_view(&self) -> WorkerReadView<'_> {
+        WorkerReadView {
+            config: &self.config,
+            identity: &self.identity,
+            credential: &self.credential,
+            source: &self.source,
+            quiet: false,
+        }
     }
-    fn compilation_capacity(&self,registry:&AgentRegistry)->Option<u8> {
-        registry.routing_policy()?.machine_policies.get(&self.identity.machine_id)?.compilation_capacity
+    fn compilation_capacity(&self, registry: &AgentRegistry) -> Option<u8> {
+        registry
+            .routing_policy()?
+            .machine_policies
+            .get(&self.identity.machine_id)?
+            .compilation_capacity
     }
-    pub(super) fn active_workspace_roots(&self)->Result<Vec<PathBuf>,CandidateProbeRefusal> {
-        let mut cache=self.command_roots.borrow_mut();
-        let commands=cache.get_or_insert_with(||self.read_view().active_command_roots()).as_ref().map_err(|r|*r)?;
-        let mut paths=self.prepared.clone();paths.extend(commands.iter().cloned());Ok(paths)
+    pub(super) fn active_workspace_roots(&self) -> Result<Vec<PathBuf>, CandidateProbeRefusal> {
+        let mut cache = self.command_roots.borrow_mut();
+        let commands = cache
+            .get_or_insert_with(|| self.read_view().active_command_roots())
+            .as_ref()
+            .map_err(|r| *r)?;
+        let mut paths = self.prepared.clone();
+        paths.extend(commands.iter().cloned());
+        Ok(paths)
     }
-    pub(super) fn probe_workspace_preconditions(&self,request:&WorkerPrepare,mapping:&ProjectMapping,cwd:&Path)
-        ->Result<(),CandidateProbeRefusal> {
-        self.read_view().probe_workspace_preconditions(request,mapping,cwd,|root,base| {
-            if crate::workspace_git::shared_refresh_needed(root,base)? {
-                shared_paths_available(root,&self.active_workspace_roots()?)?;
-            }Ok(())
-        })
+    pub(super) fn probe_workspace_preconditions(
+        &self,
+        request: &WorkerPrepare,
+        mapping: &ProjectMapping,
+        cwd: &Path,
+    ) -> Result<(), CandidateProbeRefusal> {
+        self.read_view()
+            .probe_workspace_preconditions(request, mapping, cwd, |root, base| {
+                if crate::workspace_git::shared_refresh_needed(root, base)? {
+                    shared_paths_available(root, &self.active_workspace_roots()?)?;
+                }
+                Ok(())
+            })
     }
     fn candidate_prepare(
         &self,
@@ -1391,7 +1627,8 @@ impl ProbeReadContext {
         candidate: &CandidateProbeCandidate,
         mapping_revision: u64,
     ) -> WorkerPrepare {
-        WorkerPrepare { service_tier: None,
+        WorkerPrepare {
+            service_tier: None,
             machine_id: self.identity.machine_id.clone(),
             project_id: candidate.project_id.clone(),
             provisioning_revision: self.identity.provisioning_revision,
@@ -1438,7 +1675,7 @@ impl ProbeReadContext {
                 }
             };
         let mut request = self.candidate_prepare(probe, candidate, mapping_revision);
-        request.service_tier=service_tier.map(str::to_owned);
+        request.service_tier = service_tier.map(str::to_owned);
         if request.validate().is_err() {
             return CandidateProbeVerdict::Ineligible {
                 candidate_id: candidate.candidate_id.clone(),
@@ -1458,7 +1695,8 @@ impl ProbeReadContext {
         };
         let read_git_facts = || {
             let (mapping, cwd) = self
-                .read_view().mapping_paths_and_git(&request, mapping, workload)
+                .read_view()
+                .mapping_paths_and_git(&request, mapping, workload)
                 .map_err(|_| CandidateProbeRefusal::MappingUnavailable)?;
             self.probe_workspace_preconditions(&request, &mapping, &cwd)?;
             Ok((mapping, cwd))
@@ -1502,17 +1740,33 @@ impl ProbeReadContext {
                 };
             }
         };
-        let (checked_readiness,program_failure)=crate::provider_program_compat::capture(||self.read_view().inspect_candidate(registry, &request, &mapping, &cwd, operation, diagnostics, self.provider_accounts_negotiated));
+        let (checked_readiness, program_failure) = crate::provider_program_compat::capture(|| {
+            self.read_view().inspect_candidate(
+                registry,
+                &request,
+                &mapping,
+                &cwd,
+                operation,
+                diagnostics,
+                self.provider_accounts_negotiated,
+            )
+        });
         let readiness = match checked_readiness {
             Ok(readiness) => readiness,
             Err(WorkerRefusal::DefinitionChanged) => {
                 return CandidateProbeVerdict::Ineligible {
                     candidate_id: candidate.candidate_id.clone(),
                     reason: match program_failure {
-                        Some(crate::provider_program_compat::UpgradeRefusal::Pending)=>CandidateProbeRefusal::ProgramUpgradeCheckPending,
-                        Some(crate::provider_program_compat::UpgradeRefusal::Incompatible)=>CandidateProbeRefusal::ProgramProtocolIncompatible,
-                        Some(crate::provider_program_compat::UpgradeRefusal::Unavailable)=>CandidateProbeRefusal::ProgramCheckUnavailable,
-                        None=>CandidateProbeRefusal::DefinitionUnavailable,
+                        Some(crate::provider_program_compat::UpgradeRefusal::Pending) => {
+                            CandidateProbeRefusal::ProgramUpgradeCheckPending
+                        }
+                        Some(crate::provider_program_compat::UpgradeRefusal::Incompatible) => {
+                            CandidateProbeRefusal::ProgramProtocolIncompatible
+                        }
+                        Some(crate::provider_program_compat::UpgradeRefusal::Unavailable) => {
+                            CandidateProbeRefusal::ProgramCheckUnavailable
+                        }
+                        None => CandidateProbeRefusal::DefinitionUnavailable,
                     },
                 };
             }
@@ -1529,7 +1783,9 @@ impl ProbeReadContext {
                 };
             }
         };
-        if command_write.is_some_and(|writes| !crate::native_permissions::permits_command_execution(&readiness.child_policy,writes)) {
+        if command_write.is_some_and(|writes| {
+            !crate::native_permissions::permits_command_execution(&readiness.child_policy, writes)
+        }) {
             return CandidateProbeVerdict::Ineligible {
                 candidate_id: candidate.candidate_id.clone(),
                 reason: CandidateProbeRefusal::CommandExecutionUnavailable,
@@ -1556,8 +1812,8 @@ impl ProbeReadContext {
     pub(super) fn candidate_probe(
         &self,
         probe: &CandidateProbe,
-        disconnected:&AtomicBool,
-        deadline:Instant,
+        disconnected: &AtomicBool,
+        deadline: Instant,
     ) -> Result<CandidateProbeResult, WorkerRefusal> {
         probe.validate_shape()?;
         if probe.worker != self.identity {
@@ -1568,27 +1824,52 @@ impl ProbeReadContext {
         let mut verdicts: Vec<CandidateProbeVerdict> = probe
             .candidates
             .iter()
-            .map(|candidate| if disconnected.load(Ordering::Acquire)||Instant::now()>=deadline {
-                CandidateProbeVerdict::Ineligible{candidate_id:candidate.candidate_id.clone(),reason:CandidateProbeRefusal::ResourceLimit}
-            } else {match &registry {
-                Ok(registry) => self.probe_one_candidate_for(probe, candidate, registry, None, None, None, None, &mut operation, None),
-                Err(_) => CandidateProbeVerdict::Ineligible {
-                    candidate_id: candidate.candidate_id.clone(),
-                    reason: CandidateProbeRefusal::CapabilityUnavailable,
-                },
-            }})
+            .map(|candidate| {
+                if disconnected.load(Ordering::Acquire) || Instant::now() >= deadline {
+                    CandidateProbeVerdict::Ineligible {
+                        candidate_id: candidate.candidate_id.clone(),
+                        reason: CandidateProbeRefusal::ResourceLimit,
+                    }
+                } else {
+                    match &registry {
+                        Ok(registry) => self.probe_one_candidate_for(
+                            probe,
+                            candidate,
+                            registry,
+                            None,
+                            None,
+                            None,
+                            None,
+                            &mut operation,
+                            None,
+                        ),
+                        Err(_) => CandidateProbeVerdict::Ineligible {
+                            candidate_id: candidate.candidate_id.clone(),
+                            reason: CandidateProbeRefusal::CapabilityUnavailable,
+                        },
+                    }
+                }
+            })
             .collect();
         if operation.finish().is_err() {
             for verdict in &mut verdicts {
                 if let CandidateProbeVerdict::Eligible { candidate_id, .. } = verdict {
-                    *verdict = CandidateProbeVerdict::Ineligible { candidate_id: candidate_id.clone(), reason: CandidateProbeRefusal::PermissionsChanged };
+                    *verdict = CandidateProbeVerdict::Ineligible {
+                        candidate_id: candidate_id.clone(),
+                        reason: CandidateProbeRefusal::PermissionsChanged,
+                    };
                 }
             }
         }
-        if Instant::now()>=deadline {
-            for verdict in &mut verdicts {if let CandidateProbeVerdict::Eligible{candidate_id,..}=verdict {
-                *verdict=CandidateProbeVerdict::Ineligible{candidate_id:candidate_id.clone(),reason:CandidateProbeRefusal::ResourceLimit};
-            }}
+        if Instant::now() >= deadline {
+            for verdict in &mut verdicts {
+                if let CandidateProbeVerdict::Eligible { candidate_id, .. } = verdict {
+                    *verdict = CandidateProbeVerdict::Ineligible {
+                        candidate_id: candidate_id.clone(),
+                        reason: CandidateProbeRefusal::ResourceLimit,
+                    };
+                }
+            }
         }
         Ok(CandidateProbeResult {
             version: WORKER_CANDIDATE_PROBE_VERSION,
@@ -1604,11 +1885,11 @@ impl ProbeReadContext {
     pub(super) fn candidate_probe_v2(
         &mut self,
         probe: &CandidateProbeV2,
-        disconnected:&AtomicBool,
-        deadline:Instant,
+        disconnected: &AtomicBool,
+        deadline: Instant,
     ) -> Result<CandidateProbeV2Result, WorkerRefusal> {
         probe.validate_shape()?;
-        let started=Instant::now();
+        let started = Instant::now();
         if probe.worker != self.identity {
             return Err(WorkerRefusal::StaleConnection);
         }
@@ -1640,26 +1921,44 @@ impl ProbeReadContext {
                 )
             })
             .collect::<std::collections::HashMap<_, _>>();
-        let forbidden_roots=registry.machines().get(&self.identity.machine_id).into_iter()
-            .flat_map(|machine|machine.mappings.values()).map(|mapping|mapping.remote_root.clone()).collect::<Vec<_>>();
-        let tool_observations=qualify_workload_tools(&self.source,&probe.required_tools,&forbidden_roots,
-            deadline.min(Instant::now()+Duration::from_secs(3)));
-        let tools_available=tool_observations.iter().all(|fact|
-            fact.state==bridget_transport::protocol::WorkloadToolState::Available);
+        let forbidden_roots = registry
+            .machines()
+            .get(&self.identity.machine_id)
+            .into_iter()
+            .flat_map(|machine| machine.mappings.values())
+            .map(|mapping| mapping.remote_root.clone())
+            .collect::<Vec<_>>();
+        let tool_observations = qualify_workload_tools(
+            &self.source,
+            &probe.required_tools,
+            &forbidden_roots,
+            deadline.min(Instant::now() + Duration::from_secs(3)),
+        );
+        let tools_available = tool_observations
+            .iter()
+            .all(|fact| fact.state == bridget_transport::protocol::WorkloadToolState::Available);
         let mut git_facts = ProbeGitFacts::new();
         let mut operation = crate::native_permissions::PermissionReadOperation::default();
-        let diagnostics = ProbePermissionDiagnostics::new(&probe.correlation_id, &probe.admission_id);
-        let mut timings=Vec::with_capacity(probe.candidates.len());
+        let diagnostics =
+            ProbePermissionDiagnostics::new(&probe.correlation_id, &probe.admission_id);
+        let mut timings = Vec::with_capacity(probe.candidates.len());
         let mut verdicts: Vec<CandidateProbeV2Verdict> = probe
             .candidates
             .iter()
             .map(|candidate| {
-                if disconnected.load(Ordering::Acquire)||Instant::now()>=deadline {
-                    return CandidateProbeV2Verdict::Ineligible {candidate_id:candidate.candidate_id.clone(),reason:CandidateProbeRefusal::ResourceLimit};
+                if disconnected.load(Ordering::Acquire) || Instant::now() >= deadline {
+                    return CandidateProbeV2Verdict::Ineligible {
+                        candidate_id: candidate.candidate_id.clone(),
+                        reason: CandidateProbeRefusal::ResourceLimit,
+                    };
                 }
-                if !tools_available {return CandidateProbeV2Verdict::Ineligible {
-                    candidate_id:candidate.candidate_id.clone(),reason:CandidateProbeRefusal::WorkloadToolUnavailable};}
-                let candidate_started=Instant::now();
+                if !tools_available {
+                    return CandidateProbeV2Verdict::Ineligible {
+                        candidate_id: candidate.candidate_id.clone(),
+                        reason: CandidateProbeRefusal::WorkloadToolUnavailable,
+                    };
+                }
+                let candidate_started = Instant::now();
                 let registered = enabled
                     && index
                         .get(&(
@@ -1671,7 +1970,10 @@ impl ProbeReadContext {
                         ))
                         .is_some_and(|entry| {
                             entry.enabled
-                                && candidate.service_tier.as_ref().is_none_or(|tier|entry.service_tiers.contains(tier))
+                                && candidate
+                                    .service_tier
+                                    .as_ref()
+                                    .is_none_or(|tier| entry.service_tiers.contains(tier))
                                 && candidate
                                     .effort
                                     .as_ref()
@@ -1711,14 +2013,15 @@ impl ProbeReadContext {
                     parent: probe.parent.clone(),
                     candidates: vec![legacy],
                 };
-                let verdict=match self.probe_one_candidate_for(
+                let verdict = match self.probe_one_candidate_for(
                     &legacy_probe,
                     &legacy_probe.candidates[0],
                     &registry,
                     Some(candidate.workload),
                     (!probe.required_tools.is_empty()).then_some(probe.requires_workspace_write),
                     candidate.service_tier.as_deref(),
-                    Some(&mut git_facts), &mut operation,
+                    Some(&mut git_facts),
+                    &mut operation,
                     Some((&diagnostics, candidate.candidate_id.as_str())),
                 ) {
                     CandidateProbeVerdict::Eligible {
@@ -1741,31 +2044,50 @@ impl ProbeReadContext {
                         }
                     }
                 };
-                timings.push((candidate.candidate_id.clone(),candidate_started.elapsed().as_millis() as u64));
+                timings.push((
+                    candidate.candidate_id.clone(),
+                    candidate_started.elapsed().as_millis() as u64,
+                ));
                 verdict
             })
             .collect();
         if let Err(code) = operation.finish() {
             for verdict in &mut verdicts {
                 if let CandidateProbeV2Verdict::Eligible { candidate_id, .. } = verdict {
-                    observe_probe_permission_failure(&code, Some((&diagnostics, candidate_id)), ProbePermissionSite::BatchFinish);
-                    *verdict = CandidateProbeV2Verdict::Ineligible { candidate_id: candidate_id.clone(), reason: CandidateProbeRefusal::PermissionsChanged };
+                    observe_probe_permission_failure(
+                        &code,
+                        Some((&diagnostics, candidate_id)),
+                        ProbePermissionSite::BatchFinish,
+                    );
+                    *verdict = CandidateProbeV2Verdict::Ineligible {
+                        candidate_id: candidate_id.clone(),
+                        reason: CandidateProbeRefusal::PermissionsChanged,
+                    };
                 }
             }
         }
         // Les contrôles Git peuvent durer : observer la charge à la remise,
         // pour ne pas rendre périmé un échantillon pris avant leur lecture.
         let resources = self.host_resources.collect(worker_now(), capacity);
-        eprintln!("bridget_worker_probe172 {}",serde_json::json!({
+        eprintln!(
+            "bridget_worker_probe172 {}",
+            serde_json::json!({
             "correlation_id":probe.correlation_id,"admission_id":probe.admission_id,
             "candidates":probe.candidates.len(),"elapsed_ms":started.elapsed().as_millis() as u64,
-            "candidate_elapsed_ms":timings}));
-        if Instant::now()>=deadline {
-            for verdict in &mut verdicts {if let CandidateProbeV2Verdict::Eligible{candidate_id,..}=verdict {
-                *verdict=CandidateProbeV2Verdict::Ineligible{candidate_id:candidate_id.clone(),reason:CandidateProbeRefusal::ResourceLimit};
-            }}
+            "candidate_elapsed_ms":timings})
+        );
+        if Instant::now() >= deadline {
+            for verdict in &mut verdicts {
+                if let CandidateProbeV2Verdict::Eligible { candidate_id, .. } = verdict {
+                    *verdict = CandidateProbeV2Verdict::Ineligible {
+                        candidate_id: candidate_id.clone(),
+                        reason: CandidateProbeRefusal::ResourceLimit,
+                    };
+                }
+            }
         }
-        Ok(CandidateProbeV2Result { tool_observations,
+        Ok(CandidateProbeV2Result {
+            tool_observations,
             version: WORKER_CANDIDATE_PROBE_V2_VERSION,
             correlation_id: probe.correlation_id.clone(),
             connection_epoch: probe.connection_epoch.clone(),
@@ -1776,73 +2098,135 @@ impl ProbeReadContext {
             verdicts,
         })
     }
-
 }
 
-pub(super) fn read_worker_command(root:&Path,worker:&WorkerIdentity,identity:&WorkerCommandIdentity)
-    ->Result<Option<WorkerCommandReceipt>,WorkerStoreError> {
-        identity.validate()?;
-        let mut result: Option<WorkerCommandReceipt> =
-            read_optional(&root.join("commands").join(format!("{}.json",marker_key(identity))), MAX_METADATA_BYTES)?;
-        if let Some(receipt) = result.as_mut()
-            && receipt.worker == *worker && receipt.identity == *identity {
-                proof198::overlay_fence(root, worker, receipt)?;
-            }
-        if let Some(receipt) = &result {
-            if receipt.worker != *worker
-                || receipt.version != STORE_VERSION
-                || receipt.identity != *identity
-            {
-                return Err(WorkerStoreError::Conflict);
-            }
-            receipt.placement.validate()?;
-            let expected_fence = receipt.pre_start_fence.as_ref().map(|_| {
-                proof198::fence_digest(worker, identity,
-                    &receipt.placement, receipt.deadline_at)
-            }).transpose()?;
-            if !receipt.placement.matches_worker(worker)
-                || !valid_digest(&receipt.command_digest)
-                || receipt.created_at < 0
-                || (receipt.pre_start_fence.is_none() && receipt.deadline_at <= receipt.created_at)
-                || receipt.pre_start_fence.as_ref().is_some_and(|digest|
-                    !valid_digest(digest) || Some(digest) != expected_fence.as_ref()
+pub(super) fn read_worker_command(
+    root: &Path,
+    worker: &WorkerIdentity,
+    identity: &WorkerCommandIdentity,
+) -> Result<Option<WorkerCommandReceipt>, WorkerStoreError> {
+    identity.validate()?;
+    let mut result: Option<WorkerCommandReceipt> = read_optional(
+        &root
+            .join("commands")
+            .join(format!("{}.json", marker_key(identity))),
+        MAX_METADATA_BYTES,
+    )?;
+    if let Some(receipt) = result.as_mut()
+        && receipt.worker == *worker
+        && receipt.identity == *identity
+    {
+        proof198::overlay_fence(root, worker, receipt)?;
+    }
+    if let Some(receipt) = &result {
+        if receipt.worker != *worker
+            || receipt.version != STORE_VERSION
+            || receipt.identity != *identity
+        {
+            return Err(WorkerStoreError::Conflict);
+        }
+        receipt.placement.validate()?;
+        let expected_fence = receipt
+            .pre_start_fence
+            .as_ref()
+            .map(|_| {
+                proof198::fence_digest(worker, identity, &receipt.placement, receipt.deadline_at)
+            })
+            .transpose()?;
+        if !receipt.placement.matches_worker(worker)
+            || !valid_digest(&receipt.command_digest)
+            || receipt.created_at < 0
+            || (receipt.pre_start_fence.is_none() && receipt.deadline_at <= receipt.created_at)
+            || receipt.pre_start_fence.as_ref().is_some_and(|digest| {
+                !valid_digest(digest)
+                    || Some(digest) != expected_fence.as_ref()
                     || *digest != receipt.command_digest
                     || receipt.phase != WorkerCommandPhase::Refused
-                    || receipt.marker.is_some() || receipt.permit.is_some()
-                    || receipt.child_id.is_some() || receipt.preparation.is_some()
-                    || receipt.routing.is_some() || receipt.release_epoch.is_some()
-                    || receipt.native_ready || receipt.startup_failed
-                    || receipt.startup_failure.is_some() || receipt.terminal_exit_code.is_some())
-            {
-                return Err(WorkerStoreError::Quarantined);
-            }
+                    || receipt.marker.is_some()
+                    || receipt.permit.is_some()
+                    || receipt.child_id.is_some()
+                    || receipt.preparation.is_some()
+                    || receipt.routing.is_some()
+                    || receipt.release_epoch.is_some()
+                    || receipt.native_ready
+                    || receipt.startup_failed
+                    || receipt.startup_failure.is_some()
+                    || receipt.terminal_exit_code.is_some()
+            })
+        {
+            return Err(WorkerStoreError::Quarantined);
         }
-        Ok(result)
+    }
+    Ok(result)
 }
 
 /// La même décision pour Prepare vivant et pour sonde. Aucun chemin ne sort.
-pub(super) fn shared_paths_available(root:&Path,paths:&[PathBuf])->Result<(),CandidateProbeRefusal> {
-    if paths.iter().any(|cwd|cwd.starts_with(root)||root.starts_with(cwd)) {Err(CandidateProbeRefusal::WorkspaceBusy)} else {Ok(())}
+pub(super) fn shared_paths_available(
+    root: &Path,
+    paths: &[PathBuf],
+) -> Result<(), CandidateProbeRefusal> {
+    if paths
+        .iter()
+        .any(|cwd| cwd.starts_with(root) || root.starts_with(cwd))
+    {
+        Err(CandidateProbeRefusal::WorkspaceBusy)
+    } else {
+        Ok(())
+    }
 }
 impl WorkerReadView<'_> {
-    pub(super) fn active_command_roots(&self)->Result<Vec<PathBuf>,CandidateProbeRefusal> {
-        let read=||->Result<Vec<PathBuf>,WorkerStoreError> {
-            let root=self.config.state_root.join("store");
-            for directory in [&root,&root.join("commands"),&root.join("slots"),&root.join("workspaces")] {check_private(directory,true)?;}
-            let enrollment=self.config.state_root.join(format!(".worker-{}.enrolled",digest_bytes(root.as_os_str().as_encoded_bytes())));
-            let enrolled:Enrollment=read_optional(&enrollment,MAX_METADATA_BYTES)?.ok_or(WorkerStoreError::Quarantined)?;
-            if enrolled.version!=STORE_VERSION || enrolled.worker!=*self.identity || enrolled.quarantined {return Err(WorkerStoreError::Quarantined);}
-            let mut paths=Vec::new();
-            for (count,entry) in fs::read_dir(root.join("commands"))?.enumerate() {
-                if count>=MAX_WORKER_STORE_ENTRIES {return Err(WorkerStoreError::Quota);}
-                let path=entry?.path();if path.extension().is_none_or(|e|e!="json"){continue;}
-                let header:WorkerCommandReceipt=read_optional(&path,MAX_METADATA_BYTES)?.ok_or(WorkerStoreError::Quarantined)?;
-                if path!=root.join("commands").join(format!("{}.json",marker_key(&header.identity))) {return Err(WorkerStoreError::Quarantined);}
-                let command=read_worker_command(&root,self.identity,&header.identity)?.ok_or(WorkerStoreError::Quarantined)?;
-                if !matches!(command.phase,WorkerCommandPhase::Terminal|WorkerCommandPhase::Refused) {paths.push(PathBuf::from(command.placement.execution_cwd));}
+    pub(super) fn active_command_roots(&self) -> Result<Vec<PathBuf>, CandidateProbeRefusal> {
+        let read = || -> Result<Vec<PathBuf>, WorkerStoreError> {
+            let root = self.config.state_root.join("store");
+            for directory in [
+                &root,
+                &root.join("commands"),
+                &root.join("slots"),
+                &root.join("workspaces"),
+            ] {
+                check_private(directory, true)?;
+            }
+            let enrollment = self.config.state_root.join(format!(
+                ".worker-{}.enrolled",
+                digest_bytes(root.as_os_str().as_encoded_bytes())
+            ));
+            let enrolled: Enrollment = read_optional(&enrollment, MAX_METADATA_BYTES)?
+                .ok_or(WorkerStoreError::Quarantined)?;
+            if enrolled.version != STORE_VERSION
+                || enrolled.worker != *self.identity
+                || enrolled.quarantined
+            {
+                return Err(WorkerStoreError::Quarantined);
+            }
+            let mut paths = Vec::new();
+            for (count, entry) in fs::read_dir(root.join("commands"))?.enumerate() {
+                if count >= MAX_WORKER_STORE_ENTRIES {
+                    return Err(WorkerStoreError::Quota);
+                }
+                let path = entry?.path();
+                if path.extension().is_none_or(|e| e != "json") {
+                    continue;
+                }
+                let header: WorkerCommandReceipt = read_optional(&path, MAX_METADATA_BYTES)?
+                    .ok_or(WorkerStoreError::Quarantined)?;
+                if path
+                    != root
+                        .join("commands")
+                        .join(format!("{}.json", marker_key(&header.identity)))
+                {
+                    return Err(WorkerStoreError::Quarantined);
+                }
+                let command = read_worker_command(&root, self.identity, &header.identity)?
+                    .ok_or(WorkerStoreError::Quarantined)?;
+                if !matches!(
+                    command.phase,
+                    WorkerCommandPhase::Terminal | WorkerCommandPhase::Refused
+                ) {
+                    paths.push(PathBuf::from(command.placement.execution_cwd));
+                }
             }
             Ok(paths)
         };
-        read().map_err(|_|CandidateProbeRefusal::WorkspaceUnavailable)
+        read().map_err(|_| CandidateProbeRefusal::WorkspaceUnavailable)
     }
 }

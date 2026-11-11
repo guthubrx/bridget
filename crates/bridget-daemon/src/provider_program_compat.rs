@@ -146,7 +146,9 @@ fn proof_path(source: &SourceEnvironment, program: &str) -> Result<PathBuf, &'st
     Ok(root(source)?.join(format!("{:x}.json", Sha256::digest(program.as_bytes()))))
 }
 fn private(m: &fs::Metadata) -> bool {
-    m.uid() == bridget_transport::fsutil::effective_uid() && m.mode() & 0o077 == 0 && !m.file_type().is_symlink()
+    m.uid() == bridget_transport::fsutil::effective_uid()
+        && m.mode() & 0o077 == 0
+        && !m.file_type().is_symlink()
 }
 /// Au-delà de ce délai, un contrôle de compatibilité qui échoue à chaque
 /// essai n'est plus présenté comme en attente.
@@ -154,7 +156,10 @@ const CHECK_FAILURE_GRACE_SECS: i64 = 600;
 const CHECK_FAILURE_EXCERPT_BYTES: usize = 512;
 
 fn failure_path(source: &SourceEnvironment, program: &str) -> Result<PathBuf, &'static str> {
-    Ok(root(source)?.join(format!("{:x}.failed.json", Sha256::digest(program.as_bytes()))))
+    Ok(root(source)?.join(format!(
+        "{:x}.failed.json",
+        Sha256::digest(program.as_bytes())
+    )))
 }
 
 fn now_secs() -> i64 {
@@ -168,7 +173,13 @@ fn now_secs() -> i64 {
 pub(crate) fn failure_excerpt(raw: &[u8]) -> String {
     raw.iter()
         .take(CHECK_FAILURE_EXCERPT_BYTES)
-        .map(|b| if b.is_ascii_graphic() || *b == b' ' { *b as char } else { ' ' })
+        .map(|b| {
+            if b.is_ascii_graphic() || *b == b' ' {
+                *b as char
+            } else {
+                ' '
+            }
+        })
         .collect::<String>()
         .split_whitespace()
         .collect::<Vec<_>>()
@@ -177,7 +188,11 @@ pub(crate) fn failure_excerpt(raw: &[u8]) -> String {
 
 fn read_failure(source: &SourceEnvironment, program: &str) -> Option<Value> {
     let path = failure_path(source, program).ok()?;
-    let f = OpenOptions::new().read(true).custom_flags(libc::O_NOFOLLOW).open(path).ok()?;
+    let f = OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(path)
+        .ok()?;
     let m = f.metadata().ok()?;
     if !m.is_file() || !private(&m) || m.len() > 16 * 1024 {
         return None;
@@ -224,7 +239,9 @@ pub(crate) fn record_check_failure(
         .unwrap_or(now);
     let value = json!({"version":1,"program":program,"digest":digest,"cause":cause,
         "first_failed_at":first,"last_failed_at":now,"stderr":excerpt});
-    let Ok(target) = failure_path(source, program) else { return };
+    let Ok(target) = failure_path(source, program) else {
+        return;
+    };
     let temp = root.join(format!(".{}.failed.tmp", uuid::Uuid::new_v4()));
     let written = OpenOptions::new()
         .write(true)
@@ -232,7 +249,10 @@ pub(crate) fn record_check_failure(
         .mode(0o600)
         .custom_flags(libc::O_NOFOLLOW)
         .open(&temp)
-        .and_then(|mut f| f.write_all(value.to_string().as_bytes()).and_then(|_| f.sync_all()));
+        .and_then(|mut f| {
+            f.write_all(value.to_string().as_bytes())
+                .and_then(|_| f.sync_all())
+        });
     if written.is_err() || fs::rename(&temp, &target).is_err() {
         let _ = fs::remove_file(&temp);
     }
@@ -448,11 +468,11 @@ impl CheckedContract {
             .and_then(|s| s.split_whitespace().next())
             .and_then(|s| s.strip_prefix("codex_cli_rs/"))
             && v.len() <= 64
-                && v.split('.').count() == 3
-                && v.bytes().all(|b| b.is_ascii_digit() || b == b'.')
-            {
-                self.binary_version = v.into();
-            }
+            && v.split('.').count() == 3
+            && v.bytes().all(|b| b.is_ascii_digit() || b == b'.')
+        {
+            self.binary_version = v.into();
+        }
         self.observed_at = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
@@ -600,9 +620,10 @@ fn accepts(root: &Value, s: &Value, v: &Value, depth: u8) -> bool {
         }
     }
     if let Some(values) = s.get("enum").and_then(Value::as_array)
-        && !values.contains(v) {
-            return false;
-        }
+        && !values.contains(v)
+    {
+        return false;
+    }
     if s.get("const").is_some_and(|x| x != v) {
         return false;
     }
@@ -653,9 +674,10 @@ fn accepts(root: &Value, s: &Value, v: &Value, depth: u8) -> bool {
                     return false;
                 }
             } else if let Some(additional) = s.get("additionalProperties")
-                && !accepts(root, additional, v, depth + 1) {
-                    return false;
-                }
+                && !accepts(root, additional, v, depth + 1)
+            {
+                return false;
+            }
         }
     }
     if let Some(a) = v.as_array() {
@@ -669,9 +691,10 @@ fn accepts(root: &Value, s: &Value, v: &Value, depth: u8) -> bool {
             return false;
         }
         if let Some(i) = s.get("items")
-            && a.iter().any(|v| !accepts(root, i, v, depth + 1)) {
-                return false;
-            }
+            && a.iter().any(|v| !accepts(root, i, v, depth + 1))
+        {
+            return false;
+        }
     }
     if let Some(text) = v.as_str() {
         let n = text.chars().count();
@@ -694,15 +717,16 @@ fn accepts(root: &Value, s: &Value, v: &Value, depth: u8) -> bool {
         }
     }
     if let Some(n) = v.as_f64()
-        && (s.get("minimum")
+        && (s
+            .get("minimum")
             .and_then(Value::as_f64)
             .is_some_and(|m| n < m)
             || s.get("maximum")
                 .and_then(Value::as_f64)
                 .is_some_and(|m| n > m))
-        {
-            return false;
-        }
+    {
+        return false;
+    }
     true
 }
 

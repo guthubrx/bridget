@@ -4,7 +4,6 @@
 //! 012 reste l'unique autorité pour réserver, comparer et rejouer une clé ;
 //! `fleet.rs` ne fait aucun lookup idempotent parallèle.
 
-use bridget_transport::poison::RecoverPoison;
 use crate::desired_state::{
     ContainerAgentExecution, DesiredAgentLink, DesiredEquipier, DesiredFleet,
     DesiredLifecycleState, DesiredStateError, DesiredStateStore,
@@ -17,6 +16,7 @@ use crate::idempotency::{
     HistoricalManagedSpawn, IdempotencyError, IdempotencyKey, IdempotencyStore, OperationKind,
     SpawnCommand, SpawnCommandIssue, SpawnCommandState, SpawnReservation,
 };
+use bridget_transport::poison::RecoverPoison;
 
 /// Vue de propriété calculée depuis le lien durable et ses index. Elle ne
 /// porte aucun coût et n'induit aucune transition de mission.
@@ -449,10 +449,7 @@ impl FleetSupervisor {
         &self,
         command_id: &str,
     ) -> Option<ResolvedAgentDefinition> {
-        let inner = self
-            .inner
-            .lock()
-            .recover_poison();
+        let inner = self.inner.lock().recover_poison();
         inner
             .active_by_command
             .get(command_id)
@@ -466,21 +463,14 @@ impl FleetSupervisor {
     }
 
     pub fn supervisor_scope(&self) -> String {
-        self.inner
-            .lock()
-            .recover_poison()
-            .supervisor_scope
-            .clone()
+        self.inner.lock().recover_poison().supervisor_scope.clone()
     }
 
     /// Retourne uniquement le binding de projet de l'agent actuellement
     /// supervisé. Cette lecture mémoire est l'attestation qui lie une
     /// publication à son projet : aucun wrapper ne peut l'indiquer lui-même.
     pub(crate) fn project_for_agent(&self, agent_name: &str) -> Option<ProjectReference> {
-        let inner = self
-            .inner
-            .lock()
-            .recover_poison();
+        let inner = self.inner.lock().recover_poison();
         let command_id = inner.active_by_name.get(agent_name)?;
         inner.active_by_command.get(command_id)?.project.clone()
     }
@@ -489,10 +479,7 @@ impl FleetSupervisor {
     /// phase Recovering : une clé connue doit conserver son chemin de rejeu,
     /// tandis qu'une clé neuve est refusée sans créer d'état opérationnel.
     pub fn knows_command(&self, command_id: &str) -> bool {
-        let inner = self
-            .inner
-            .lock()
-            .recover_poison();
+        let inner = self.inner.lock().recover_poison();
         inner.active_by_command.contains_key(command_id) || inner.completed.contains_key(command_id)
     }
 
@@ -501,20 +488,13 @@ impl FleetSupervisor {
     }
 
     pub fn active_count(&self) -> usize {
-        self.inner
-            .lock()
-            .recover_poison()
-            .active_by_command
-            .len()
+        self.inner.lock().recover_poison().active_by_command.len()
     }
 
     /// Générations persistantes locales et réservations distantes à réconcilier.
     /// Une issue de lancement Connected ne prouve pas la fin du processus distant.
     pub fn recovery_candidates(&self) -> Vec<RecoveryCandidate> {
-        let inner = self
-            .inner
-            .lock()
-            .recover_poison();
+        let inner = self.inner.lock().recover_poison();
         let mut candidates = inner
             .active_by_command
             .values()
@@ -701,10 +681,7 @@ impl FleetSupervisor {
         &self,
         child_instance_id: &str,
     ) -> Result<Option<AgentLink>, FleetError> {
-        let inner = self
-            .inner
-            .lock()
-            .recover_poison();
+        let inner = self.inner.lock().recover_poison();
         inner
             .idempotency
             .agent_link_for_child(child_instance_id)
@@ -718,10 +695,7 @@ impl FleetSupervisor {
         input: DelegatedRuntimeEventInput,
     ) -> Result<DelegatedRuntimeEventRecord, FleetError> {
         let event = {
-            let mut inner = self
-                .inner
-                .lock()
-                .recover_poison();
+            let mut inner = self.inner.lock().recover_poison();
             inner.idempotency.record_delegated_runtime_event(input)?
         };
         self.agent_link_changed.notify_all();
@@ -733,10 +707,7 @@ impl FleetSupervisor {
         &self,
         parent_instance_id: &str,
     ) -> Result<Vec<DelegatedRuntimeEventRecord>, FleetError> {
-        let inner = self
-            .inner
-            .lock()
-            .recover_poison();
+        let inner = self.inner.lock().recover_poison();
         inner
             .idempotency
             .delegated_runtime_events_for_parent(parent_instance_id)
@@ -749,10 +720,7 @@ impl FleetSupervisor {
         event_id: &str,
         parent_instance_id: &str,
     ) -> Result<bool, FleetError> {
-        let mut inner = self
-            .inner
-            .lock()
-            .recover_poison();
+        let mut inner = self.inner.lock().recover_poison();
         inner
             .idempotency
             .acknowledge_delegated_runtime_event(event_id, parent_instance_id)
@@ -763,10 +731,7 @@ impl FleetSupervisor {
         &self,
         child_instance_id: &str,
     ) -> Result<Option<AgentLinkSummary>, FleetError> {
-        let inner = self
-            .inner
-            .lock()
-            .recover_poison();
+        let inner = self.inner.lock().recover_poison();
         let Some(link) = inner.idempotency.agent_link_for_child(child_instance_id)? else {
             return Ok(None);
         };
@@ -784,10 +749,7 @@ impl FleetSupervisor {
         &self,
         parent_instance_id: &str,
     ) -> Result<Vec<AgentLink>, FleetError> {
-        let inner = self
-            .inner
-            .lock()
-            .recover_poison();
+        let inner = self.inner.lock().recover_poison();
         inner
             .idempotency
             .open_agent_links_for_parent(parent_instance_id)
@@ -801,10 +763,7 @@ impl FleetSupervisor {
         after_cursor: Option<u64>,
         timeout: Duration,
     ) -> Result<AgentLinkEventBatch, FleetError> {
-        let inner = self
-            .inner
-            .lock()
-            .recover_poison();
+        let inner = self.inner.lock().recover_poison();
         let events = inner
             .idempotency
             .agent_link_events_after(parent_instance_id, after_cursor)?;
@@ -838,10 +797,7 @@ impl FleetSupervisor {
         parent_instance_id: &str,
         now: i64,
     ) -> Result<usize, FleetError> {
-        let mut inner = self
-            .inner
-            .lock()
-            .recover_poison();
+        let mut inner = self.inner.lock().recover_poison();
         let changed = inner
             .idempotency
             .orphan_agent_links_for_parent(parent_instance_id, now)?;
@@ -858,10 +814,7 @@ impl FleetSupervisor {
         new_parent_instance_id: &str,
         now: i64,
     ) -> Result<AgentLink, FleetError> {
-        let mut inner = self
-            .inner
-            .lock()
-            .recover_poison();
+        let mut inner = self.inner.lock().recover_poison();
         let current = inner
             .idempotency
             .agent_link_by_id(link_id)?
@@ -947,10 +900,7 @@ impl FleetSupervisor {
     ) -> Result<SpawnSubmission, FleetError> {
         validate_order(order, accept_legacy_durable_name)?;
         let canonical = canonical_order(order)?;
-        let mut inner = self
-            .inner
-            .lock()
-            .recover_poison();
+        let mut inner = self.inner.lock().recover_poison();
         let generation = inner.next_generation;
         let name = resolve_name(order, generation, &inner.active_by_name);
         let candidate_instance_id = uuid::Uuid::new_v4().to_string();
@@ -1126,10 +1076,7 @@ impl FleetSupervisor {
         now: i64,
         definition: &ResolvedAgentDefinition,
     ) -> Result<(), FleetError> {
-        let mut inner = self
-            .inner
-            .lock()
-            .recover_poison();
+        let mut inner = self.inner.lock().recover_poison();
         let active = active_for_lease(&inner, lease)?.clone();
         if active
             .remote_placement
@@ -1192,10 +1139,7 @@ impl FleetSupervisor {
         if instance_id.is_empty() {
             return Err(FleetError::InvalidOrder("instance_id vide"));
         }
-        let mut inner = self
-            .inner
-            .lock()
-            .recover_poison();
+        let mut inner = self.inner.lock().recover_poison();
         let active = active_for_lease(&inner, lease)?.clone();
         if instance_id != active.instance_id {
             return Err(FleetError::StaleGeneration);
@@ -1307,10 +1251,7 @@ impl FleetSupervisor {
     /// conserve son issue de spawn mais passe durablement à `stopped` afin
     /// qu'aucun redémarrage ne puisse la ressusciter.
     pub fn invalidate_for_stop(&self, lease: &SpawnLease) -> Result<(), FleetError> {
-        let mut inner = self
-            .inner
-            .lock()
-            .recover_poison();
+        let mut inner = self.inner.lock().recover_poison();
         if let Some(active) = inner.active_by_command.get(&lease.command_id).cloned() {
             active_for_lease(&inner, lease)?;
             close_agent_link(&mut inner, &active, unix_now())?;
@@ -1449,10 +1390,7 @@ impl FleetSupervisor {
         lease: &SpawnLease,
         issue: SpawnCommandIssue,
     ) -> Result<SpawnCommandIssue, FleetError> {
-        let mut inner = self
-            .inner
-            .lock()
-            .recover_poison();
+        let mut inner = self.inner.lock().recover_poison();
         let active = active_for_lease(&inner, lease)?.clone();
         if active.remote_placement.is_some() && active.state == SpawnCommandState::Connected {
             return Err(FleetError::InvalidTransition {
@@ -1480,10 +1418,7 @@ impl FleetSupervisor {
     /// Expire le tour uniquement si l'échéance absolue est atteinte. Le
     /// `Register` ultérieur échoue ensuite comme génération obsolète.
     pub fn expire(&self, command_id: &str, generation: u64, now: i64) -> Result<bool, FleetError> {
-        let mut inner = self
-            .inner
-            .lock()
-            .recover_poison();
+        let mut inner = self.inner.lock().recover_poison();
         let Some(active) = inner.active_by_command.get(command_id).cloned() else {
             return Ok(false);
         };
@@ -1505,10 +1440,7 @@ impl FleetSupervisor {
         waiter: &SpawnWaiter,
         timeout: Duration,
     ) -> Result<Option<SpawnCommandIssue>, FleetError> {
-        let mut inner = self
-            .inner
-            .lock()
-            .recover_poison();
+        let mut inner = self.inner.lock().recover_poison();
         if let Some(issue) = inner.completed.get(&waiter.command_id) {
             return Ok(Some(issue.clone()));
         }

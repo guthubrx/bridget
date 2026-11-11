@@ -182,9 +182,9 @@ fn prepare_change(
         } else {
             vec!["auth", "login"]
         };
-        let mut login_environment=json!({(variable):profile});
-        if source.engine=="claude" {
-            login_environment["ANTHROPIC_CONFIG_DIR"]=json!(profile.join("anthropic"));
+        let mut login_environment = json!({(variable):profile});
+        if source.engine == "claude" {
+            login_environment["ANTHROPIC_CONFIG_DIR"] = json!(profile.join("anthropic"));
         }
         return Ok(Change {
             next,
@@ -446,11 +446,15 @@ fn apply(
         .count();
     let backup = backups.join(format!("{expected}.json"));
     if backup.symlink_metadata().is_ok() {
-        let saved=crate::registry::read_private_registry(&backup)
-            .map_err(|_|"account_backup_unavailable")?;
-        if saved!=original { return Err("account_backup_unavailable"); }
+        let saved = crate::registry::read_private_registry(&backup)
+            .map_err(|_| "account_backup_unavailable")?;
+        if saved != original {
+            return Err("account_backup_unavailable");
+        }
     } else {
-        if count >= MAX_BACKUPS { return Err("account_backup_capacity"); }
+        if count >= MAX_BACKUPS {
+            return Err("account_backup_capacity");
+        }
         write_new(&backup, original.as_bytes())?;
     }
     File::open(&backups)
@@ -465,7 +469,7 @@ fn apply(
         }
         private_dir(root)?;
         private_dir(profile)?;
-        if change.view["engine"]=="claude" {
+        if change.view["engine"] == "claude" {
             private_dir(&profile.join("anthropic"))?;
         }
         File::open(profile)

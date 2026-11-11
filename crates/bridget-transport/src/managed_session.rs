@@ -292,9 +292,10 @@ pub trait ManagedSession: Transport {
         &mut self,
         _budget: std::time::Duration,
     ) -> Result<ManagedProviderIdentity, TransportError> {
-        Err(TransportError::DeliveryFailed("workspace_repair_unsupported".into()))
+        Err(TransportError::DeliveryFailed(
+            "workspace_repair_unsupported".into(),
+        ))
     }
-
 
     /// O(1) par défaut : aucun ancien pilote n'accorde une demande différée.
     fn answer_provider_request(
@@ -311,8 +312,10 @@ pub trait ManagedSession: Transport {
         None
     }
     /// Lecture de la session existante, sans création de fil ni inférence.
-    fn runtime_catalogue(&mut self)->crate::protocol::RuntimeCatalogueOutcome {
-        crate::protocol::RuntimeCatalogueOutcome::Refused{reason:crate::protocol::RuntimeSelectionRefusal::Unsupported}
+    fn runtime_catalogue(&mut self) -> crate::protocol::RuntimeCatalogueOutcome {
+        crate::protocol::RuntimeCatalogueOutcome::Refused {
+            reason: crate::protocol::RuntimeSelectionRefusal::Unsupported,
+        }
     }
     /// Choix explicite de session, sans tour caché. Le défaut refuse : aucun
     /// adaptateur ne simule une commande de modèle par un prompt.

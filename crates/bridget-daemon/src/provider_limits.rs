@@ -1,6 +1,6 @@
 //! Mémoire157 volatile par profil, avec faits de compte liés à leur instance.
 use bridget_transport::protocol::{RateLimitFact, RateLimitSource};
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 // Sans retour attesté, réévaluation possible après cinq minutes. Ce délai
@@ -55,48 +55,81 @@ impl ProviderLimits {
         let mut limits = Self::default();
         let result = (|| -> rusqlite::Result<()> {
             db.execute_batch("CREATE TABLE IF NOT EXISTS provider_refusals244 (scope TEXT NOT NULL, window TEXT NOT NULL, fact TEXT NOT NULL, expires_at INTEGER NOT NULL, PRIMARY KEY(scope,window))")?;
-            db.execute("DELETE FROM provider_refusals244 WHERE expires_at <= ?1", [now])?;
-            let mut stmt = db.prepare("SELECT scope, fact FROM provider_refusals244 WHERE expires_at > ?1")?;
-            let rows = stmt.query_map([now], |r| Ok((r.get::<_, String>(0)?,r.get::<_, String>(1)?)))?;
+            db.execute(
+                "DELETE FROM provider_refusals244 WHERE expires_at <= ?1",
+                [now],
+            )?;
+            let mut stmt =
+                db.prepare("SELECT scope, fact FROM provider_refusals244 WHERE expires_at > ?1")?;
+            let rows = stmt.query_map([now], |r| {
+                Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+            })?;
             for row in rows {
                 let (scope, body) = row?;
-                if scope.len() != 64 || body.len() > 4096 { continue; }
+                if scope.len() != 64 || body.len() > 4096 {
+                    continue;
+                }
                 if let Ok(seen) = serde_json::from_str::<Seen>(&body)
                     && Self::shared_claude_window244(&seen.fact.window)
                     && seen.source == RateLimitSource::ClaudeStreamJson
-                    && seen.fact.status == "rejected" && seen.observed_at > 0 && seen.observed_at <= now
-                    && Self::refusal_until244(&seen) > now {
-                    limits.account_refusals244.entry(scope).or_default().insert(seen.fact.window.clone(),seen);
+                    && seen.fact.status == "rejected"
+                    && seen.observed_at > 0
+                    && seen.observed_at <= now
+                    && Self::refusal_until244(&seen) > now
+                {
+                    limits
+                        .account_refusals244
+                        .entry(scope)
+                        .or_default()
+                        .insert(seen.fact.window.clone(), seen);
                 }
             }
             Ok(())
         })();
-        if result.is_err() { log::warn!("cache des refus fournisseur indisponible ; disponibilité inconnue"); }
+        if result.is_err() {
+            log::warn!("cache des refus fournisseur indisponible ; disponibilité inconnue");
+        }
         limits
     }
 
     /// Changement de clé de cache uniquement : mêmes faits et mêmes dates.
     /// Le déplacement atomique empêche de ressusciter un ancien refus après
     /// une réponse positive reçue ensuite sous la clé canonique.
-    pub(crate) fn migrate_account_scope245(&mut self, db:&rusqlite::Connection, old:&str, new:&str)->rusqlite::Result<()> {
-        if old==new {return Ok(());}
-        let Some(previous)=self.account_refusals244.get(old).cloned() else {return Ok(());};
-        self.account_aliases245.insert(old.into(),new.into());
-        let mut merged=self.account_refusals244.get(new).cloned().unwrap_or_default();
-        for (window,seen) in previous {
-            if merged.get(&window).is_none_or(|current|current.observed_at < seen.observed_at) {
-                merged.insert(window,seen);
+    pub(crate) fn migrate_account_scope245(
+        &mut self,
+        db: &rusqlite::Connection,
+        old: &str,
+        new: &str,
+    ) -> rusqlite::Result<()> {
+        if old == new {
+            return Ok(());
+        }
+        let Some(previous) = self.account_refusals244.get(old).cloned() else {
+            return Ok(());
+        };
+        self.account_aliases245.insert(old.into(), new.into());
+        let mut merged = self
+            .account_refusals244
+            .get(new)
+            .cloned()
+            .unwrap_or_default();
+        for (window, seen) in previous {
+            if merged
+                .get(&window)
+                .is_none_or(|current| current.observed_at < seen.observed_at)
+            {
+                merged.insert(window, seen);
             }
         }
         // La mémoire garde le fait même si le cache disque est indisponible.
-        self.account_refusals244.insert(new.into(),merged.clone());
-        let tx=db.unchecked_transaction()?;
-        for (window,seen) in merged {
-            let body=serde_json::to_string(&seen).expect("fait de quota sérialisable");
+        self.account_refusals244.insert(new.into(), merged.clone());
+        let tx = db.unchecked_transaction()?;
+        for (window, seen) in merged {
+            let body = serde_json::to_string(&seen).expect("fait de quota sérialisable");
             tx.execute("INSERT INTO provider_refusals244(scope,window,fact,expires_at) VALUES(?1,?2,?3,?4) ON CONFLICT(scope,window) DO UPDATE SET fact=excluded.fact,expires_at=excluded.expires_at",
                 rusqlite::params![new,window,body,Self::refusal_until244(&seen)])?;
         }
-        tx.execute("DELETE FROM provider_refusals244 WHERE scope=?1",[old])?;
+        tx.execute("DELETE FROM provider_refusals244 WHERE scope=?1", [old])?;
         tx.commit()?;
         self.account_refusals244.remove(old);
         Ok(())
@@ -107,51 +140,100 @@ impl ProviderLimits {
         matches!(window, "unknown" | "five_hour" | "seven_day")
     }
     fn refusal_until244(seen: &Seen) -> i64 {
-        seen.fact.resets_at.unwrap_or_else(|| seen.observed_at.saturating_add(CLAUDE_UNKNOWN_REFUSAL_RETRY_SECS))
+        seen.fact.resets_at.unwrap_or_else(|| {
+            seen.observed_at
+                .saturating_add(CLAUDE_UNKNOWN_REFUSAL_RETRY_SECS)
+        })
     }
-    pub(crate) fn record_account244(&mut self, db: &rusqlite::Connection, scope: &str,
-        fact: &RateLimitFact, source: RateLimitSource, now: i64) {
-        if source != RateLimitSource::ClaudeStreamJson || !Self::shared_claude_window244(&fact.window) { return; }
+    pub(crate) fn record_account244(
+        &mut self,
+        db: &rusqlite::Connection,
+        scope: &str,
+        fact: &RateLimitFact,
+        source: RateLimitSource,
+        now: i64,
+    ) {
+        if source != RateLimitSource::ClaudeStreamJson
+            || !Self::shared_claude_window244(&fact.window)
+        {
+            return;
+        }
         let windows = self.account_refusals244.entry(scope.into()).or_default();
         if fact.status == "rejected" && fact.resets_at.is_none_or(|at| at > now) {
-            let seen = Seen { fact: fact.clone(), source, observed_at: now };
+            let seen = Seen {
+                fact: fact.clone(),
+                source,
+                observed_at: now,
+            };
             if let Ok(body) = serde_json::to_string(&seen)
                 && db.execute("INSERT INTO provider_refusals244(scope,window,fact,expires_at) VALUES(?1,?2,?3,?4) ON CONFLICT(scope,window) DO UPDATE SET fact=excluded.fact, expires_at=excluded.expires_at",
                     rusqlite::params![scope, fact.window, body, Self::refusal_until244(&seen)]).is_err() {
                     log::warn!("refus fournisseur conservé en mémoire ; cache durable indisponible");
                 }
-            windows.insert(fact.window.clone(),seen);
+            windows.insert(fact.window.clone(), seen);
         } else if fact.status == "allowed" || fact.status == "available" {
-            let aliases:Vec<_>=self.account_aliases245.iter().filter(|(_,canonical)|canonical.as_str()==scope).map(|(old,_)|old.clone()).collect();
-            let cleared=(||->rusqlite::Result<()> {
-                let tx=db.unchecked_transaction()?;
+            let aliases: Vec<_> = self
+                .account_aliases245
+                .iter()
+                .filter(|(_, canonical)| canonical.as_str() == scope)
+                .map(|(old, _)| old.clone())
+                .collect();
+            let cleared = (|| -> rusqlite::Result<()> {
+                let tx = db.unchecked_transaction()?;
                 for key in std::iter::once(scope).chain(aliases.iter().map(String::as_str)) {
-                    tx.execute("DELETE FROM provider_refusals244 WHERE scope=?1 AND window=?2",rusqlite::params![key,fact.window])?;
+                    tx.execute(
+                        "DELETE FROM provider_refusals244 WHERE scope=?1 AND window=?2",
+                        rusqlite::params![key, fact.window],
+                    )?;
                 }
                 tx.commit()
             })();
             if cleared.is_ok() {
                 windows.remove(&fact.window);
                 for alias in aliases {
-                    if let Some(old)=self.account_refusals244.get_mut(&alias) {old.remove(&fact.window);}
+                    if let Some(old) = self.account_refusals244.get_mut(&alias) {
+                        old.remove(&fact.window);
+                    }
                 }
             } else {
-                log::warn!("réponse fournisseur positive observée ; effacement durable du refus indisponible");
+                log::warn!(
+                    "réponse fournisseur positive observée ; effacement durable du refus indisponible"
+                );
             }
         }
-        if let Some(windows)=self.account_refusals244.get_mut(scope) {
-            windows.retain(|_,seen| Self::refusal_until244(seen) > now);
+        if let Some(windows) = self.account_refusals244.get_mut(scope) {
+            windows.retain(|_, seen| Self::refusal_until244(seen) > now);
         }
-        let _ = db.execute("DELETE FROM provider_refusals244 WHERE expires_at<=?1",[now]);
+        let _ = db.execute(
+            "DELETE FROM provider_refusals244 WHERE expires_at<=?1",
+            [now],
+        );
     }
 
-    pub(crate) fn account_quota244(&self, quota: Option<Quota>, scope: Option<&str>, now: i64) -> Option<Quota> {
-        let seen = scope.and_then(|scope| self.account_refusals244.get(scope))
-            .into_iter().flat_map(|windows| windows.values())
-            .filter(|seen|seen.observed_at <= now && Self::refusal_until244(seen) > now).max_by_key(|seen|seen.observed_at);
-        let Some(seen) = seen else { return quota; };
-        let mut quota = quota.unwrap_or(Quota { windows: Vec::new(), exhausted:false,
-            launch_blocked:false, credits:None,limit_reached:false,resets_at:None,observed_at:seen.observed_at });
+    pub(crate) fn account_quota244(
+        &self,
+        quota: Option<Quota>,
+        scope: Option<&str>,
+        now: i64,
+    ) -> Option<Quota> {
+        let seen = scope
+            .and_then(|scope| self.account_refusals244.get(scope))
+            .into_iter()
+            .flat_map(|windows| windows.values())
+            .filter(|seen| seen.observed_at <= now && Self::refusal_until244(seen) > now)
+            .max_by_key(|seen| seen.observed_at);
+        let Some(seen) = seen else {
+            return quota;
+        };
+        let mut quota = quota.unwrap_or(Quota {
+            windows: Vec::new(),
+            exhausted: false,
+            launch_blocked: false,
+            credits: None,
+            limit_reached: false,
+            resets_at: None,
+            observed_at: seen.observed_at,
+        });
         quota.launch_blocked = true;
         quota.limit_reached = true;
         quota.observed_at = quota.observed_at.max(seen.observed_at);

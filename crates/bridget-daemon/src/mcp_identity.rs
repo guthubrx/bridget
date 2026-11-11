@@ -36,7 +36,9 @@ impl IdentityError {
             Self::IdentityNotFound => "identity_not_found",
             Self::NamespaceConfiguration => "namespace_configuration_invalid",
             Self::DelegatedMcpOnly => "delegated_mcp_only",
-            Self::T3SessionUnavailable | Self::T3SessionUnavailableAt(_) => "t3_session_unavailable",
+            Self::T3SessionUnavailable | Self::T3SessionUnavailableAt(_) => {
+                "t3_session_unavailable"
+            }
         }
     }
 

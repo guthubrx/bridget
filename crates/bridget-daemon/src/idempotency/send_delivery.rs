@@ -13,25 +13,46 @@ impl IdempotencyStore {
     /// Dépôt251 : reçu et corps dans UN COMMIT, sans saga de remise.
     /// O(B + log N). Une collision ledger échoue, jamais INSERT OR REPLACE.
     pub(crate) fn store_information(
-        &mut self, key: &IdempotencyKey, message: &bridget_core::BridgetMessage, now: i64,
+        &mut self,
+        key: &IdempotencyKey,
+        message: &bridget_core::BridgetMessage,
+        now: i64,
     ) -> Result<(), IdempotencyError> {
         if key.operation_kind != OperationKind::Send
             || message.id != key.idempotency_key
             || message.intent != Some(bridget_core::MessageIntent::StoreOnly)
-            || message.reply || message.in_reply_to.is_some() || message.reply_timeout.is_some()
-        { return Err(IdempotencyError::DispatchUnavailable); }
-        let tx = self.conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        if tx.query_row("SELECT EXISTS(SELECT 1 FROM ledger WHERE id=?1 AND target=?2)",
-            params![message.id,message.to],|row|row.get::<_,bool>(0))? {
+            || message.reply
+            || message.in_reply_to.is_some()
+            || message.reply_timeout.is_some()
+        {
+            return Err(IdempotencyError::DispatchUnavailable);
+        }
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        if tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM ledger WHERE id=?1 AND target=?2)",
+            params![message.id, message.to],
+            |row| row.get::<_, bool>(0),
+        )? {
             return Err(IdempotencyError::InformationCollision);
         }
         if tx.execute("UPDATE idempotency_records SET state='terminal', public_result_kind='accepted'
             WHERE issuer_scope=?1 AND operation_kind='send' AND idempotency_key=?2 AND state='prepared'",
             params![key.issuer_scope,key.idempotency_key])? != 1
         { return Err(IdempotencyError::DispatchUnavailable); }
-        tx.execute("INSERT INTO ledger(id,ts,sender,target,body,conversation_key)
-            VALUES(?1,?2,?3,?4,?5,?6)", params![message.id,now,message.from,
-            message.to,message.body,format!("{}|{}",message.from,message.to)])?;
+        tx.execute(
+            "INSERT INTO ledger(id,ts,sender,target,body,conversation_key)
+            VALUES(?1,?2,?3,?4,?5,?6)",
+            params![
+                message.id,
+                now,
+                message.from,
+                message.to,
+                message.body,
+                format!("{}|{}", message.from, message.to)
+            ],
+        )?;
         tx.commit()?;
         Ok(())
     }
@@ -1061,7 +1082,11 @@ impl IdempotencyStore {
     ///
     /// O(log N+K log K+B), K remises de cette instance, B enveloppes ; index156
     /// recipient/phase puis tri delivery_id, reclassement groupé.
-    pub(crate) fn unknown_delivery_receipts(&self, instance: &str, now: i64) -> Result<Vec<(String,u64)>,IdempotencyError> {
+    pub(crate) fn unknown_delivery_receipts(
+        &self,
+        instance: &str,
+        now: i64,
+    ) -> Result<Vec<(String, u64)>, IdempotencyError> {
         Ok(self.conn.prepare("SELECT delivery_id,delivery_generation FROM send_deliveries
             WHERE recipient_instance_id=?1 AND phase='indeterminate' AND expires_at>?2 ORDER BY queue_rank")?
             .query_map(params![instance,now],|r|Ok((r.get(0)?,r.get(1)?)))?

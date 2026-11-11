@@ -291,7 +291,9 @@ fn spec101_real_daemon_journal_share_collision_and_restart() {
         });
         peer.barrier();
     }
-    source.send(WrapperToDaemon::JournalReady { receipt_probe: false });
+    source.send(WrapperToDaemon::JournalReady {
+        receipt_probe: false,
+    });
     source.barrier();
     let types = owner.events(Request::Types {});
     assert_eq!(types["events"][0]["available"], true);
@@ -397,7 +399,10 @@ fn spec101_real_daemon_journal_share_collision_and_restart() {
         "journal_only"
     );
     // CLI ferme sa vue : absorber son Unsubscribe avant la barrière suivante.
-    source.send(WrapperToDaemon::ObservationCapabilities { events: vec![], runtime_catalogue: false });
+    source.send(WrapperToDaemon::ObservationCapabilities {
+        events: vec![],
+        runtime_catalogue: false,
+    });
     loop {
         if matches!(source.read(), DaemonToWrapper::Unsubscribe { .. }) {
             break;

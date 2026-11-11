@@ -138,7 +138,8 @@ fn who_agents_et_status_refusent_un_inventaire_non_atteste_sans_sortie_trompeuse
                 let mut stream = accept();
                 let mut reader = BufReader::new(stream.try_clone().unwrap());
                 reader.read_line(&mut line).unwrap();
-                let WrapperToDaemon::Register { agent_id, .. } = decode(line.trim()).unwrap() else {
+                let WrapperToDaemon::Register { agent_id, .. } = decode(line.trim()).unwrap()
+                else {
                     panic!("sonde d'inventaire attendue")
                 };
                 if scoped {

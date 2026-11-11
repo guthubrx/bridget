@@ -101,13 +101,22 @@ fn mcp_binaire_huit_register_coexistants_neuvieme_busy_sans_neuvieme_socket() {
             line.clear();
             reader.read_line(&mut line).unwrap();
             let next = decode::<WrapperToDaemon>(line.trim_end()).unwrap();
-            if matches!(&next, WrapperToDaemon::NativeDelegation {
-                request: bridget_transport::protocol::NativeDelegationRequest::CallerScope {},
-            }) {
+            if matches!(
+                &next,
+                WrapperToDaemon::NativeDelegation {
+                    request: bridget_transport::protocol::NativeDelegationRequest::CallerScope {},
+                }
+            ) {
                 scope_reads += 1;
-                writeln!(writer, "{}", encode(&DaemonToWrapper::NativeDelegationResult {
-                    result: json!({"version":1,"caller_read_only":false}),
-                }).unwrap()).unwrap();
+                writeln!(
+                    writer,
+                    "{}",
+                    encode(&DaemonToWrapper::NativeDelegationResult {
+                        result: json!({"version":1,"caller_read_only":false}),
+                    })
+                    .unwrap()
+                )
+                .unwrap();
                 writer.flush().unwrap();
                 // Cette lecture ne retient aucun des huit échanges métier.
                 continue;

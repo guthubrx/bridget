@@ -14,13 +14,13 @@
 //! Aucun modèle. Chaque PID arrêté par le test est un PID de fixture, vérifié
 //! par sa ligne de commande, arrêté un à un par SIGTERM.
 
-use bridget_transport::poison::RecoverPoison;
 use bridget_core::BridgetMessage;
 use bridget_daemon::managed_process::{
     ManagedIdentity, ManagedLaunch, ManagedMarkerStore, RunningManagedChild,
     spawn_managed_bootstrap_with_stderr,
 };
 use bridget_daemon::registry::AgentRegistry;
+use bridget_transport::poison::RecoverPoison;
 use bridget_transport::protocol::{decode, encode};
 use bridget_transport::{DaemonToWrapper, WrapperToDaemon};
 use std::collections::BTreeMap;

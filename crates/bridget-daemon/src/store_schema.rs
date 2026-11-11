@@ -79,8 +79,12 @@ fn tracking230_migration_precontrole_accepte_7_et_8_refuse_9() {
     );
     conn.execute("UPDATE idempotency_schema_migrations SET version=8", [])
         .unwrap();
-    assert!(validate(&conn).is_ok(),"le lecteur du sommeil doit comprendre v8");
-    conn.execute("UPDATE idempotency_schema_migrations SET version=9", []).unwrap();
+    assert!(
+        validate(&conn).is_ok(),
+        "le lecteur du sommeil doit comprendre v8"
+    );
+    conn.execute("UPDATE idempotency_schema_migrations SET version=9", [])
+        .unwrap();
     let before = conn.total_changes();
     assert!(
         matches!(

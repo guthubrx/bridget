@@ -1,12 +1,12 @@
 //! Harnais commun 012/089 : enfants réels isolés, watchdog, sockets et MCP.
 //! Déplacé sans modifier les barrières ni les oracles de la matrice historique.
 
-use bridget_transport::poison::RecoverPoison;
 use bridget_core::BridgetMessage;
 use bridget_daemon::registry::AgentRegistry;
 use bridget_daemon::store::Store;
 #[cfg(feature = "test-support")]
 use bridget_daemon::test_sync::DIRECTORY_ENV;
+use bridget_transport::poison::RecoverPoison;
 use bridget_transport::protocol::{
     CLIENT_CONTRACT_VERSION, ClientCapability, ConnectionRole, IdempotencyIssue,
     IdentityCredential, decode, encode,
@@ -60,11 +60,7 @@ fn created_roots() -> &'static Mutex<Vec<PathBuf>> {
 /// rendu leurs processus. Les tests qui effacent déjà leur racine sont sans
 /// effet ici. Un fichier encore tenu par un enfant survivant peut rester.
 extern "C" fn remove_created_roots() {
-    let roots = std::mem::take(
-        &mut *created_roots()
-            .lock()
-            .recover_poison(),
-    );
+    let roots = std::mem::take(&mut *created_roots().lock().recover_poison());
     for root in roots {
         let _ = fs::remove_dir_all(root);
     }
@@ -500,10 +496,7 @@ pub fn test_root(_label: &str) -> PathBuf {
     WATCHDOG.call_once(|| {
         thread::spawn(|| {
             thread::sleep(GLOBAL_TIMEOUT);
-            let pids = children()
-                .lock()
-                .recover_poison()
-                .clone();
+            let pids = children().lock().recover_poison().clone();
             for pid in pids {
                 if is_owned_running_process(pid) {
                     // SAFETY: kill ne déréférence aucun pointeur ; ses arguments sont des entiers.
@@ -527,10 +520,7 @@ pub fn test_root(_label: &str) -> PathBuf {
     ROOTS_CLEANUP.call_once(|| unsafe {
         libc::atexit(remove_created_roots);
     });
-    created_roots()
-        .lock()
-        .recover_poison()
-        .push(root.clone());
+    created_roots().lock().recover_poison().push(root.clone());
     root
 }
 

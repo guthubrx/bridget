@@ -3,24 +3,24 @@
 //! Définit les messages JSON qui circulent sur la socket locale.
 
 pub mod acp;
-pub mod agent_tracking;
 pub mod act_kind;
+pub mod agent_tracking;
 pub mod claude_provider_session;
 pub mod claude_stream_json;
 pub mod codex_app_server;
 mod codex_socket;
 pub mod fsutil;
-pub mod poison;
 pub mod greffe_authorization;
 pub mod greffe_policy_refresh;
 pub mod journal;
 pub mod jsonl;
 pub mod managed_session;
+pub mod poison;
 pub mod protocol;
-pub mod specialists;
 pub mod provider_catalogue;
 pub mod pty;
 pub mod refusals;
+pub mod specialists;
 pub mod tmux;
 pub mod transport;
 
@@ -48,4 +48,4 @@ pub use protocol::{
 };
 pub use pty::PtyTransport;
 pub use tmux::TmuxTransport;
-pub use transport::{Transport, TransportError, RetainedStart};
+pub use transport::{RetainedStart, Transport, TransportError};

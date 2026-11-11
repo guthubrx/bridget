@@ -40,11 +40,19 @@ impl Scope {
     /// Conserver son administration complète après ajout des spécialistes,
     /// sans promouvoir un appareil partiel ou un seul droit DevicesManage.
     fn legacy_global_administrator(&self) -> bool {
-        const LEGACY: [Operation; 7] = [Operation::Read, Operation::Message,
-            Operation::TaskRead, Operation::TaskContinue, Operation::TaskCancel,
-            Operation::TaskRespond, Operation::DevicesManage];
-        self.all_machines && self.all_projects
-            && self.machines.is_empty() && self.projects.is_empty()
+        const LEGACY: [Operation; 7] = [
+            Operation::Read,
+            Operation::Message,
+            Operation::TaskRead,
+            Operation::TaskContinue,
+            Operation::TaskCancel,
+            Operation::TaskRespond,
+            Operation::DevicesManage,
+        ];
+        self.all_machines
+            && self.all_projects
+            && self.machines.is_empty()
+            && self.projects.is_empty()
             && self.operations.len() == LEGACY.len()
             && LEGACY.iter().all(|op| self.operations.contains(op))
     }
@@ -110,7 +118,10 @@ impl Device {
     /// Les contrôles d'expiration/révocation appartiennent aux frontières appelantes.
     pub(crate) fn permits_specialists_management(&self) -> bool {
         self.scope.all_machines
-            && (self.scope.operations.contains(&Operation::SpecialistsManage)
+            && (self
+                .scope
+                .operations
+                .contains(&Operation::SpecialistsManage)
                 || ((1..SPECIALISTS_MANAGEMENT_INTRODUCED_AT).contains(&self.created_at)
                     && self.scope.legacy_global_administrator()))
     }
@@ -512,15 +523,17 @@ impl Store {
     pub fn renewal_subject(&self, key: &str, now: i64) -> Result<Device, StoreError> {
         match self.authenticate(key, now) {
             Ok(device) => return Ok(device),
-            Err(StoreError::AuthorizationRequired) => {},
+            Err(StoreError::AuthorizationRequired) => {}
             Err(error) => return Err(error),
         }
-        if !valid_key(key) || now < 0 { return Err(StoreError::AuthorizationRequired); }
+        if !valid_key(key) || now < 0 {
+            return Err(StoreError::AuthorizationRequired);
+        }
         let device=self.conn.query_row(
             "SELECT d.device_id,d.label,d.scope,d.created_at,d.expires_at,d.revoked_at FROM mobile_rotations r JOIN mobile_devices d ON d.device_id=r.device_id AND d.key_hash=r.to_hash WHERE r.from_hash=?1 AND r.replay_until>?2",
             params![hash_key(key),now],row_device
         ).optional().map_err(storage)?.ok_or(StoreError::AuthorizationRequired)?;
-        active(device,now)
+        active(device, now)
     }
 
     /// O(D), D<=256 ; aucun hash de clé n'est projeté.

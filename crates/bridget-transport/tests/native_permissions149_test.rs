@@ -413,10 +413,7 @@ fn native149_contexte_lancement_compose_digests_sources_et_overrides() {
             Ok(()),
         ),
         (json!({"permissions":{"allow":["Bash(ls:*)"]}}), Ok(())),
-        (
-            json!({"autre":1}),
-            Err("permission_source_unavailable"),
-        ),
+        (json!({"autre":1}), Err("permission_source_unavailable")),
         (
             json!({"permissions":{"defaultMode":"superMode"}}),
             Err("permission_source_unavailable"),
@@ -832,7 +829,6 @@ fn native171_revision_hook_detecte_chmod_et_alias_parent() {
     fs::remove_dir_all(root).unwrap();
 }
 
-
 fn native171_source_manifest(root: &str) -> serde_json::Value {
     json!({"project_root":root,"settings_sources":"provider_default","settings_overrides":null,"rows":[
         {"kind":"hook","path":format!("{root}/guard.sh"),"revision":SHA,"selector":"project:guard.sh",
@@ -843,28 +839,38 @@ fn native171_source_manifest(root: &str) -> serde_json::Value {
 }
 #[test]
 fn native171_equivalence_pairs_account_for_every_present_and_absent_source() {
-    let a=native171_source_manifest("/origin");
-    let b=native171_source_manifest("/target");
-    let pairs=bridget_transport::protocol::permission_source_equivalence_pairs(&a,&b).unwrap();
-    assert_eq!(pairs.as_array().unwrap().len(),3);
-    assert_eq!(pairs[0],json!({"origin":0,"target":0,"disposition":"equal"}));
-    let mut extra=b.clone();
+    let a = native171_source_manifest("/origin");
+    let b = native171_source_manifest("/target");
+    let pairs = bridget_transport::protocol::permission_source_equivalence_pairs(&a, &b).unwrap();
+    assert_eq!(pairs.as_array().unwrap().len(), 3);
+    assert_eq!(
+        pairs[0],
+        json!({"origin":0,"target":0,"disposition":"equal"})
+    );
+    let mut extra = b.clone();
     extra["rows"].as_array_mut().unwrap().push(json!({"kind":"local","path":"/target/extra.json","revision":SHA,
         "selector":"project:extra.json","content_revision":SHA,"mode":420,"owner":"profile","dependencies":[]}));
-    assert!(bridget_transport::protocol::permission_source_equivalence_pairs(&a,&extra).is_err());
+    assert!(bridget_transport::protocol::permission_source_equivalence_pairs(&a, &extra).is_err());
 }
 #[test]
 fn native171_equivalence_mode_content_dependency_and_opaque_fields_close_the_route() {
-    let a=native171_source_manifest("/origin");
-    let b=native171_source_manifest("/target");
-    for field in ["mode","content_revision","dependencies","owner"] {
-        let mut changed=b.clone();
-        changed["rows"][0][field]=match field {
-            "mode"=>json!(448),"content_revision"=>json!(format!("sha256:{}","b".repeat(64))),
-            "owner"=>json!("system"),_=>json!([{"path":"/bin/sh","revision":SHA,"mode":493,"owner":"system"}])
+    let a = native171_source_manifest("/origin");
+    let b = native171_source_manifest("/target");
+    for field in ["mode", "content_revision", "dependencies", "owner"] {
+        let mut changed = b.clone();
+        changed["rows"][0][field] = match field {
+            "mode" => json!(448),
+            "content_revision" => json!(format!("sha256:{}", "b".repeat(64))),
+            "owner" => json!("system"),
+            _ => json!([{"path":"/bin/sh","revision":SHA,"mode":493,"owner":"system"}]),
         };
-        assert!(bridget_transport::protocol::permission_source_equivalence_pairs(&a,&changed).is_err());
+        assert!(
+            bridget_transport::protocol::permission_source_equivalence_pairs(&a, &changed).is_err()
+        );
     }
-    let mut unknown=b;unknown["rows"][0]["opaque"]=json!(true);
-    assert!(bridget_transport::protocol::permission_source_equivalence_pairs(&a,&unknown).is_err());
+    let mut unknown = b;
+    unknown["rows"][0]["opaque"] = json!(true);
+    assert!(
+        bridget_transport::protocol::permission_source_equivalence_pairs(&a, &unknown).is_err()
+    );
 }

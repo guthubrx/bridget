@@ -1,7 +1,7 @@
 //! Dernier refus observé par le maître. Cache volatil, jamais autorité de remise.
-use bridget_transport::poison::RecoverPoison;
 use super::DaemonState;
 use crate::delegation::Task;
+use bridget_transport::poison::RecoverPoison;
 use bridget_transport::protocol::{WorkerCommandPhase, WorkerRefusal};
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -80,7 +80,9 @@ fn closed_code(code: &str) -> String {
     if code.len() > 128 {
         return "unclassified".into();
     }
-    if super::origin_proof::rejected_reason(code).is_some() { return code.into(); }
+    if super::origin_proof::rejected_reason(code).is_some() {
+        return code.into();
+    }
     if matches!(
         code,
         "workspace_repair_pending"

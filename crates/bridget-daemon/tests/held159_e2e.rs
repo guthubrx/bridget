@@ -268,9 +268,9 @@ impl Fixture {
         if let Some(agent) = &self.native_agent
             && let Ok(marker) =
                 ManagedMarkerStore::at_directory(self.state.join("managed")).load(agent)
-            {
-                self.native = Some(marker);
-            }
+        {
+            self.native = Some(marker);
+        }
         if let Some(marker) = self.native.take() {
             let provider = evidence152(self)
                 .into_iter()
@@ -413,29 +413,29 @@ impl Drop for Fixture {
             return;
         }
         if let Some(marker) = &self.native
-            && process_birth(marker.pgid).ok() == Some(marker.birth) {
-                let observed = Command::new("/bin/ps")
-                    .args(["-ww", "-p", &marker.pgid.to_string(), "-o", "command="])
-                    .output()
-                    .unwrap();
-                let command = String::from_utf8_lossy(&observed.stdout);
-                if process_birth(marker.pgid).ok() == Some(marker.birth) {
-                    assert!(
-                        command.contains(env!("CARGO_BIN_EXE_bridget"))
-                            && !command.to_lowercase().contains("firefox")
-                    );
-                    // PID leader attesté seulement, jamais signal à un groupe.
-                    // SAFETY: kill ne déréférence aucun pointeur ; ses arguments sont des entiers.
-                    assert_eq!(unsafe { libc::kill(marker.pgid as i32, libc::SIGTERM) }, 0);
-                }
-                thread::sleep(Duration::from_secs(3));
-                let deadline = Instant::now() + Duration::from_secs(10);
-                while process_birth(marker.pgid).ok() == Some(marker.birth)
-                    && Instant::now() < deadline
-                {
-                    thread::sleep(Duration::from_millis(10));
-                }
+            && process_birth(marker.pgid).ok() == Some(marker.birth)
+        {
+            let observed = Command::new("/bin/ps")
+                .args(["-ww", "-p", &marker.pgid.to_string(), "-o", "command="])
+                .output()
+                .unwrap();
+            let command = String::from_utf8_lossy(&observed.stdout);
+            if process_birth(marker.pgid).ok() == Some(marker.birth) {
+                assert!(
+                    command.contains(env!("CARGO_BIN_EXE_bridget"))
+                        && !command.to_lowercase().contains("firefox")
+                );
+                // PID leader attesté seulement, jamais signal à un groupe.
+                // SAFETY: kill ne déréférence aucun pointeur ; ses arguments sont des entiers.
+                assert_eq!(unsafe { libc::kill(marker.pgid as i32, libc::SIGTERM) }, 0);
             }
+            thread::sleep(Duration::from_secs(3));
+            let deadline = Instant::now() + Duration::from_secs(10);
+            while process_birth(marker.pgid).ok() == Some(marker.birth) && Instant::now() < deadline
+            {
+                thread::sleep(Duration::from_millis(10));
+            }
+        }
         drop(self.daemon.take());
         if !thread::panicking() {
             fs::remove_dir_all(&self.root).unwrap();
@@ -1022,9 +1022,11 @@ fn held159_daemon_arrete_apres_retention_conserve_la_remise() {
             "SELECT phase,delivery_id,delivery_generation,message_bytes,queue_rank FROM send_deliveries WHERE issuer_scope=?1 AND idempotency_key=?2",
             rusqlite::params![support::SCOPE,id],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?))).optional().unwrap();
         if let Some(row) = row
-            && row.0 == "held" && row.4 > 0 {
-                break row;
-            }
+            && row.0 == "held"
+            && row.4 > 0
+        {
+            break row;
+        }
         assert!(
             Instant::now() < until,
             "message ordinaire attesté non retenu"
@@ -1070,13 +1072,19 @@ fn held159_daemon_arrete_apres_retention_conserve_la_remise() {
 
 // Point21 T007 couvert ici seulement : FIFO observée après COMMIT, jamais ouverte après TERM.
 #[test]
-#[cfg_attr(not(target_os = "linux"), ignore = "recette 159 : --features test-support et BRIDGET_T010_DAEMON_TEST_BINARY (binaire libtest) ; voir specs/159-edition-file/quickstart.md")]
+#[cfg_attr(
+    not(target_os = "linux"),
+    ignore = "recette 159 : --features test-support et BRIDGET_T010_DAEMON_TEST_BINARY (binaire libtest) ; voir specs/159-edition-file/quickstart.md"
+)]
 #[cfg_attr(target_os = "linux", ignore = "watch_marker exige kqueue Darwin/BSD")]
 fn held159_release_panne_entre_transaction_et_push_relivree_par_la_reprise() {
     held_crash_after_release159("after_held_release_commit");
 }
 #[test]
-#[cfg_attr(not(target_os = "linux"), ignore = "recette 159 : --features test-support et BRIDGET_T010_DAEMON_TEST_BINARY (binaire libtest) ; voir specs/159-edition-file/quickstart.md")]
+#[cfg_attr(
+    not(target_os = "linux"),
+    ignore = "recette 159 : --features test-support et BRIDGET_T010_DAEMON_TEST_BINARY (binaire libtest) ; voir specs/159-edition-file/quickstart.md"
+)]
 #[cfg_attr(target_os = "linux", ignore = "watch_marker exige kqueue Darwin/BSD")]
 fn held159_daemon_arrete_apres_push_reprise_dans_l_ordre() {
     // R17 : ce banc bloque Seen avant injection. Il ne promet pas exactly-once après tout push.
@@ -1084,7 +1092,10 @@ fn held159_daemon_arrete_apres_push_reprise_dans_l_ordre() {
 }
 
 #[test]
-#[cfg_attr(not(target_os = "linux"), ignore = "recette 159 : --features test-support et BRIDGET_T010_DAEMON_TEST_BINARY (binaire libtest) ; voir specs/159-edition-file/quickstart.md")]
+#[cfg_attr(
+    not(target_os = "linux"),
+    ignore = "recette 159 : --features test-support et BRIDGET_T010_DAEMON_TEST_BINARY (binaire libtest) ; voir specs/159-edition-file/quickstart.md"
+)]
 #[cfg_attr(target_os = "linux", ignore = "watch_marker exige kqueue Darwin/BSD")]
 fn held159_daemon_arrete_apres_accuse_ne_reinjecte_pas() {
     held_crash_after_release159("after_delivery_acked");
@@ -1809,7 +1820,10 @@ fn held159_porteur_arrete_avec_message_en_cours_preserve_ordre() {
 // T010 : vraie interruption du porteur après Seen durable et avant toute injection.
 // La reconstruction physique reprend l'identité exacte, jamais une nouvelle mission.
 #[test]
-#[cfg_attr(not(target_os = "linux"), ignore = "recette 159 : --features test-support et BRIDGET_T010_DAEMON_TEST_BINARY (binaire libtest) ; voir specs/159-edition-file/quickstart.md")]
+#[cfg_attr(
+    not(target_os = "linux"),
+    ignore = "recette 159 : --features test-support et BRIDGET_T010_DAEMON_TEST_BINARY (binaire libtest) ; voir specs/159-edition-file/quickstart.md"
+)]
 #[cfg_attr(target_os = "linux", ignore = "watch_marker exige kqueue Darwin/BSD")]
 fn held159_porteur_arrete_apres_seen_reprise_meme_instance_indeterminee() {
     use bridget_daemon::managed_process::{

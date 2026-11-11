@@ -2,8 +2,8 @@
 use crate::cli_table::table_println as println;
 pub(crate) mod client;
 pub(crate) mod http;
-pub(crate) mod store;
 pub(crate) mod notifications;
+pub(crate) mod store;
 
 use bridget_transport::protocol::{
     CLIENT_CONTRACT_VERSION, ClientCapability, ConnectionRole, IdentityCredential,
@@ -125,8 +125,8 @@ pub(crate) fn administer(root: &Path, request: AdminRequest, now: i64) -> AdminR
         }
         if let AdminRequest::ConfigureNotifications { account } = &request {
             Config::load(root)?.ok_or("mobile_not_configured")?;
-            notifications::configure(root,account.expose_for_attestation().as_bytes())?;
-            return Ok(AdminResult::NotificationsConfigured {configured:true});
+            notifications::configure(root, account.expose_for_attestation().as_bytes())?;
+            return Ok(AdminResult::NotificationsConfigured { configured: true });
         }
         let config = Config::load(root)?;
         if matches!(&request, AdminRequest::Status) {
@@ -214,15 +214,27 @@ fn parse_admin(args: &[String]) -> Result<AdminRequest, &'static str> {
                 listen_addr: "127.0.0.1:9467".into(),
             })
         }
-        Some("configure-notifications") if args.len()==3 && args[1]=="--service-account-file" => {
-            let path=PathBuf::from(&args[2]);
-            if !path.is_absolute(){return Err("service_account_file_must_be_absolute");}
-            crate::environment::validate_state_file(&path,false).map_err(|_|"notification_configuration_unavailable")?;
-            let mut bytes=Vec::new();
-            std::fs::File::open(path).and_then(|f|f.take(32*1024+1).read_to_end(&mut bytes)).map_err(|_|"notification_configuration_unavailable")?;
-            if bytes.len()>32*1024{return Err("notification_configuration_unavailable");}
-            let account=String::from_utf8(bytes).map_err(|_|"notification_configuration_unavailable")?;
-            Ok(AdminRequest::ConfigureNotifications {account:IdentityCredential::new(account)})
+        Some("configure-notifications")
+            if args.len() == 3 && args[1] == "--service-account-file" =>
+        {
+            let path = PathBuf::from(&args[2]);
+            if !path.is_absolute() {
+                return Err("service_account_file_must_be_absolute");
+            }
+            crate::environment::validate_state_file(&path, false)
+                .map_err(|_| "notification_configuration_unavailable")?;
+            let mut bytes = Vec::new();
+            std::fs::File::open(path)
+                .and_then(|f| f.take(32 * 1024 + 1).read_to_end(&mut bytes))
+                .map_err(|_| "notification_configuration_unavailable")?;
+            if bytes.len() > 32 * 1024 {
+                return Err("notification_configuration_unavailable");
+            }
+            let account =
+                String::from_utf8(bytes).map_err(|_| "notification_configuration_unavailable")?;
+            Ok(AdminRequest::ConfigureNotifications {
+                account: IdentityCredential::new(account),
+            })
         }
         Some("pair") if args.len() == 2 && args[1] == "--all" => Ok(AdminRequest::Pair {
             scope: json!({"all_machines":true,"machines":[],"all_projects":true,"projects":[],
@@ -271,7 +283,8 @@ pub(crate) fn run(args: &[String]) {
             return http::serve(&ns.root, &ns.socket);
         }
         let request = parse_admin(args)?;
-        if !(matches!(request, AdminRequest::Status) || std::io::stdin().is_terminal() && std::io::stdout().is_terminal())
+        if !(matches!(request, AdminRequest::Status)
+            || std::io::stdin().is_terminal() && std::io::stdout().is_terminal())
         {
             return Err("human_terminal_required");
         }

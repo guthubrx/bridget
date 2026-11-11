@@ -5,12 +5,12 @@
 //! l'ancienne lease → préparation du MÊME worktree → nouvelle lease → Start/Release.
 //! Un plan interrompu reprend à sa phase ; une commande existante est observée,
 //! jamais relancée. Aucun nouveau décideur, profil, droit ou tâche n'est créé.
-use bridget_transport::poison::RecoverPoison;
 use super::super::origin_proof;
 use super::*;
 use crate::delegation::{
     MAX_START_RECOVERIES, StartAttemptRecord, StartRecovery, StartRecoveryPhase,
 };
+use bridget_transport::poison::RecoverPoison;
 use bridget_transport::protocol::{
     ProviderPermissions, WORKER_INSPECTION_TOKEN, WorkerCapability, WorkerCommandIdentity,
     WorkerFencedRouting, WorkerIdentity, WorkerPrepare, WorkerRefusal, WorkerRequestOperation,
@@ -51,10 +51,7 @@ impl Claim {
 
 impl Drop for Claim {
     fn drop(&mut self) {
-        CLAIMS
-            .lock()
-            .recover_poison()
-            .remove(&self.0);
+        CLAIMS.lock().recover_poison().remove(&self.0);
     }
 }
 
@@ -348,24 +345,53 @@ fn frozen_start_routing(
         observed.definition_digest == placement.definition_digest
     } else {
         AgentRegistry::from_resolved(agent_type, &task.definition)
-            .and_then(|registry| registry.pin_delegation_model(agent_type, model, candidate.default_effort.as_deref()))
+            .and_then(|registry| {
+                registry.pin_delegation_model(
+                    agent_type,
+                    model,
+                    candidate.default_effort.as_deref(),
+                )
+            })
             .and_then(|registry| registry.resolved_definition(agent_type))
             .is_ok_and(|initial| initial.digest == observed.definition_digest)
     };
-    if let Some(code) = routing_change_error("start_recovery", &[
-        ("machine", machine_id.as_deref() != Some(candidate.machine_id.as_str())
-            || decision.machine_id != candidate.machine_id),
-        ("profile", *agent_type != candidate.agent_type
-            || decision.candidate_id != receipt.candidate_id.as_deref().unwrap_or_default()
-            || decision.connection_id != candidate.connection_id || decision.engine != candidate.engine),
-        ("model", *model != candidate.model || decision.model != candidate.model
-            || task.service_tier!=auto.service_tier),
-        ("effort", *effort != decision.effort),
-        ("canonical", *cwd != auto.cwd),
-        ("base", auto.expected_base_commit != placement.base_commit),
-        ("definition", task.definition.digest != placement.definition_digest || !initial_definition_matches),
-        ("permissions", observed.permission_digest != placement.permission_digest),
-    ]) { return Err(code); }
+    if let Some(code) = routing_change_error(
+        "start_recovery",
+        &[
+            (
+                "machine",
+                machine_id.as_deref() != Some(candidate.machine_id.as_str())
+                    || decision.machine_id != candidate.machine_id,
+            ),
+            (
+                "profile",
+                *agent_type != candidate.agent_type
+                    || decision.candidate_id != receipt.candidate_id.as_deref().unwrap_or_default()
+                    || decision.connection_id != candidate.connection_id
+                    || decision.engine != candidate.engine,
+            ),
+            (
+                "model",
+                *model != candidate.model
+                    || decision.model != candidate.model
+                    || task.service_tier != auto.service_tier,
+            ),
+            ("effort", *effort != decision.effort),
+            ("canonical", *cwd != auto.cwd),
+            ("base", auto.expected_base_commit != placement.base_commit),
+            (
+                "definition",
+                task.definition.digest != placement.definition_digest
+                    || !initial_definition_matches,
+            ),
+            (
+                "permissions",
+                observed.permission_digest != placement.permission_digest,
+            ),
+        ],
+    ) {
+        return Err(code);
+    }
     Ok(Some(WorkerFencedRouting {
         workload: auto.workload,
         connection_id: candidate.connection_id.clone(),
@@ -411,9 +437,14 @@ fn gather(
         .remote_placement
         .as_ref()
         .ok_or("remote_placement_missing")?;
-    let parent = parent_fact(&st, &owner, &instance, Some(request_id),
-        task.admitted_parent()?.or(attested))?
-        .ok_or("permission_attestation_unavailable")?;
+    let parent = parent_fact(
+        &st,
+        &owner,
+        &instance,
+        Some(request_id),
+        task.admitted_parent()?.or(attested),
+    )?
+    .ok_or("permission_attestation_unavailable")?;
     let snapshot = task
         .permission_snapshot
         .as_ref()
@@ -655,7 +686,8 @@ fn rebuild_prepare(
     } else {
         offset.to_string_lossy().into_owned()
     };
-    Ok(WorkerPrepare { service_tier: task.service_tier.clone(),
+    Ok(WorkerPrepare {
+        service_tier: task.service_tier.clone(),
         machine_id: machine.clone(),
         project_id: project_id.clone(),
         provisioning_revision: provision.provisioning_revision,
@@ -695,10 +727,11 @@ fn prepare_same_worktree(
         let st = state.lock().recover_poison();
         let prepare = rebuild_prepare(&st, &task, &ctx.owner, &ctx.parent)?;
         let workspace = match (&prepare.workspace, &task.workspace) {
-            (Some(WorkspaceRequest::Worktree { .. }|WorkspaceRequest::CommitView {}), Some(record)) => {
-                Some(serde_json::to_value(record).map_err(|_| "remote_workspace_invalid")?)
-            }
-            (Some(WorkspaceRequest::Worktree { .. }|WorkspaceRequest::CommitView {}), None) => {
+            (
+                Some(WorkspaceRequest::Worktree { .. } | WorkspaceRequest::CommitView {}),
+                Some(record),
+            ) => Some(serde_json::to_value(record).map_err(|_| "remote_workspace_invalid")?),
+            (Some(WorkspaceRequest::Worktree { .. } | WorkspaceRequest::CommitView {}), None) => {
                 return Err("remote_workspace_missing".into());
             }
             _ => None,
@@ -921,20 +954,27 @@ pub(super) fn resume(
     };
     // Preuve native fraîche hors mutex ; relue après chaque retour d'E/S.
     let attest = |ctx: &Context| -> Result<(), String> {
-        let task = state.lock().recover_poison().delegation_store
-            .get(task_id)?.ok_or("task_unavailable")?;
+        let task = state
+            .lock()
+            .recover_poison()
+            .delegation_store
+            .get(task_id)?
+            .ok_or("task_unavailable")?;
         let admitted = task.admitted_parent()?.is_some();
-        if !admitted { match (thread, permission_proof) {
-            (Some(expected), Some(proof)) => {
-                let fresh = origin_proof::reattest(conn, proof, state)
-                    .map_err(origin_proof::attestation_failure)?;
-                if fresh.thread_id != expected || fresh.permissions.as_ref() != Some(&ctx.parent) {
-                    return Err("permission_changed".into());
+        if !admitted {
+            match (thread, permission_proof) {
+                (Some(expected), Some(proof)) => {
+                    let fresh = origin_proof::reattest(conn, proof, state)
+                        .map_err(origin_proof::attestation_failure)?;
+                    if fresh.thread_id != expected
+                        || fresh.permissions.as_ref() != Some(&ctx.parent)
+                    {
+                        return Err("permission_changed".into());
+                    }
                 }
+                (None, None) => {}
+                _ => return Err("permission_attestation_unavailable".into()),
             }
-            (None, None) => {}
-            _ => return Err("permission_attestation_unavailable".into()),
-        }
         }
         remote_parent_proof(state, &ctx.owner, &ctx.parent, admitted.then_some(&task)).map(|_| ())
     };

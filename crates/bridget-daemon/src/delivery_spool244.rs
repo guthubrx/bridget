@@ -44,24 +44,47 @@ pub(crate) struct DeliverySpool {
 /// Garder la première enveloppe ; une nouvelle autorisation de remise en cours
 /// de tour ne peut que restreindre celle déjà conservée, jamais l'élargir.
 pub(crate) fn reconcile_delivery_replay(
-    prior: &DaemonToWrapper, incoming: &DaemonToWrapper,
-) -> Result<DaemonToWrapper,String> {
-    let mut comparable=prior.clone();
-    let (DaemonToWrapper::DeliverIdempotent {message:old,mid_turn_ok:old_mid,..},
-         DaemonToWrapper::DeliverIdempotent {message:new,mid_turn_ok:new_mid,..})=(&mut comparable,incoming)
-        else {return Err("spool_idempotent_delivery_required".into());};
-    old.deadline_at=new.deadline_at;
-    old.from_display_name=new.from_display_name.clone();
-    old.thread_display_title=new.thread_display_title.clone();
+    prior: &DaemonToWrapper,
+    incoming: &DaemonToWrapper,
+) -> Result<DaemonToWrapper, String> {
+    let mut comparable = prior.clone();
+    let (
+        DaemonToWrapper::DeliverIdempotent {
+            message: old,
+            mid_turn_ok: old_mid,
+            ..
+        },
+        DaemonToWrapper::DeliverIdempotent {
+            message: new,
+            mid_turn_ok: new_mid,
+            ..
+        },
+    ) = (&mut comparable, incoming)
+    else {
+        return Err("spool_idempotent_delivery_required".into());
+    };
+    old.deadline_at = new.deadline_at;
+    old.from_display_name = new.from_display_name.clone();
+    old.thread_display_title = new.thread_display_title.clone();
     *old_mid = *new_mid;
-    if serde_json::to_vec(&comparable).map_err(|e|e.to_string())?
-        !=serde_json::to_vec(incoming).map_err(|e|e.to_string())? {
+    if serde_json::to_vec(&comparable).map_err(|e| e.to_string())?
+        != serde_json::to_vec(incoming).map_err(|e| e.to_string())?
+    {
         return Err("spool_envelope_changed".into());
     }
-    let mut frozen=prior.clone();
-    if let (DaemonToWrapper::DeliverIdempotent {mid_turn_ok:old,..},
-        DaemonToWrapper::DeliverIdempotent {mid_turn_ok:new,..})=(&mut frozen,incoming)
-        && old!=new {*old=Some(false);}
+    let mut frozen = prior.clone();
+    if let (
+        DaemonToWrapper::DeliverIdempotent {
+            mid_turn_ok: old, ..
+        },
+        DaemonToWrapper::DeliverIdempotent {
+            mid_turn_ok: new, ..
+        },
+    ) = (&mut frozen, incoming)
+        && old != new
+    {
+        *old = Some(false);
+    }
     Ok(frozen)
 }
 
@@ -124,13 +147,17 @@ impl DeliverySpool {
             // La date de tour et les libellés sont recalculés par le maître
             // au raccordement. Garder la première trame : aucun report de
             // délai, gain d'autorité ou second dépôt n'est permis ici.
-            let prior: DaemonToWrapper = serde_json::from_slice(&previous)
-                .map_err(|_| "spool_frame_corrupt".to_string())?;
-            let frozen=reconcile_delivery_replay(&prior,frame)?;
-            let retained=serde_json::to_vec(&frozen).map_err(|e|e.to_string())?;
-            if retained!=previous {
-                self.conn.execute("UPDATE inbox244 SET frame=?1 WHERE delivery_id=?2",
-                    params![retained,delivery_id]).map_err(|e|e.to_string())?;
+            let prior: DaemonToWrapper =
+                serde_json::from_slice(&previous).map_err(|_| "spool_frame_corrupt".to_string())?;
+            let frozen = reconcile_delivery_replay(&prior, frame)?;
+            let retained = serde_json::to_vec(&frozen).map_err(|e| e.to_string())?;
+            if retained != previous {
+                self.conn
+                    .execute(
+                        "UPDATE inbox244 SET frame=?1 WHERE delivery_id=?2",
+                        params![retained, delivery_id],
+                    )
+                    .map_err(|e| e.to_string())?;
             }
             return Ok(());
         }
@@ -201,45 +228,67 @@ mod tests {
     }
     #[test]
     fn spec253_replay_metadata_never_increases_mid_turn_authority() {
-        let root=std::env::temp_dir().join(format!("spool253-{}",uuid::Uuid::new_v4()));
-        let path=root.join("queue.sqlite");
-        let mut original=frame("a");
-        if let DaemonToWrapper::DeliverIdempotent {mid_turn_ok,..}=&mut original {*mid_turn_ok=Some(true);}
-        let spool=DeliverySpool::open(&path,"instance").unwrap();spool.defer(&original).unwrap();
-        let mut replay=original.clone();
-        if let DaemonToWrapper::DeliverIdempotent {message,mid_turn_ok,..}=&mut replay {
-            message.deadline_at=Some(999);*mid_turn_ok=Some(false);
+        let root = std::env::temp_dir().join(format!("spool253-{}", uuid::Uuid::new_v4()));
+        let path = root.join("queue.sqlite");
+        let mut original = frame("a");
+        if let DaemonToWrapper::DeliverIdempotent { mid_turn_ok, .. } = &mut original {
+            *mid_turn_ok = Some(true);
         }
-        spool.defer(&replay).unwrap();spool.defer(&original).unwrap();drop(spool);
-        let mut spool=DeliverySpool::open(&path,"instance").unwrap();
-        assert!(matches!(spool.next().unwrap().unwrap(),DaemonToWrapper::DeliverIdempotent {mid_turn_ok:Some(false),message,..} if message.deadline_at.is_none()));
-        let mut forged=original.clone();
-        if let DaemonToWrapper::DeliverIdempotent {message,..}=&mut forged {message.body="different".into();}
-        assert!(reconcile_delivery_replay(&original,&forged).is_err());
-        drop(spool);std::fs::remove_dir_all(root).unwrap();
+        let spool = DeliverySpool::open(&path, "instance").unwrap();
+        spool.defer(&original).unwrap();
+        let mut replay = original.clone();
+        if let DaemonToWrapper::DeliverIdempotent {
+            message,
+            mid_turn_ok,
+            ..
+        } = &mut replay
+        {
+            message.deadline_at = Some(999);
+            *mid_turn_ok = Some(false);
+        }
+        spool.defer(&replay).unwrap();
+        spool.defer(&original).unwrap();
+        drop(spool);
+        let mut spool = DeliverySpool::open(&path, "instance").unwrap();
+        assert!(
+            matches!(spool.next().unwrap().unwrap(),DaemonToWrapper::DeliverIdempotent {mid_turn_ok:Some(false),message,..} if message.deadline_at.is_none())
+        );
+        let mut forged = original.clone();
+        if let DaemonToWrapper::DeliverIdempotent { message, .. } = &mut forged {
+            message.body = "different".into();
+        }
+        assert!(reconcile_delivery_replay(&original, &forged).is_err());
+        drop(spool);
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
     fn spec248_spool_reconnexion_garde_premiere_trame_et_refuse_contenu_change() {
-        let root = std::env::temp_dir().join(format!("spool248-{}",uuid::Uuid::new_v4()));
-        let path=root.join("queue.sqlite");
-        let original=frame("d");
-        let spool=DeliverySpool::open(&path,"instance").unwrap();
+        let root = std::env::temp_dir().join(format!("spool248-{}", uuid::Uuid::new_v4()));
+        let path = root.join("queue.sqlite");
+        let original = frame("d");
+        let spool = DeliverySpool::open(&path, "instance").unwrap();
         spool.defer(&original).unwrap();
-        let mut replay=frame("d");
-        if let DaemonToWrapper::DeliverIdempotent{message,..}=&mut replay {
-            message.deadline_at=Some(999);
-            message.from_display_name=Some("Nouveau libellé".into());
-            message.thread_display_title=Some("Titre".into());
+        let mut replay = frame("d");
+        if let DaemonToWrapper::DeliverIdempotent { message, .. } = &mut replay {
+            message.deadline_at = Some(999);
+            message.from_display_name = Some("Nouveau libellé".into());
+            message.thread_display_title = Some("Titre".into());
         }
         spool.defer(&replay).unwrap();
-        if let DaemonToWrapper::DeliverIdempotent{message,..}=&mut replay {message.body="autre contenu".into();}
-        assert_eq!(spool.defer(&replay).unwrap_err(),"spool_envelope_changed");
+        if let DaemonToWrapper::DeliverIdempotent { message, .. } = &mut replay {
+            message.body = "autre contenu".into();
+        }
+        assert_eq!(spool.defer(&replay).unwrap_err(), "spool_envelope_changed");
         drop(spool);
-        let mut spool=DeliverySpool::open(&path,"instance").unwrap();
-        assert_eq!(serde_json::to_value(spool.next().unwrap().unwrap()).unwrap(),serde_json::to_value(original).unwrap());
+        let mut spool = DeliverySpool::open(&path, "instance").unwrap();
+        assert_eq!(
+            serde_json::to_value(spool.next().unwrap().unwrap()).unwrap(),
+            serde_json::to_value(original).unwrap()
+        );
         assert!(spool.next().unwrap().is_none());
-        drop(spool);std::fs::remove_dir_all(root).unwrap();
+        drop(spool);
+        std::fs::remove_dir_all(root).unwrap();
     }
     #[test]
     fn spec244_debordement_durable_ordre_doublon_et_identite() {

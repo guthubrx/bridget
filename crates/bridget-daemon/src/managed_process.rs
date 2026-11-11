@@ -129,7 +129,9 @@ pub(crate) mod remote_drain {
                     ));
                     continue;
                 }
-                Err(error) if matches!(error.raw_os_error(), Some(libc::ENOENT | libc::ESRCH)) => continue,
+                Err(error) if matches!(error.raw_os_error(), Some(libc::ENOENT | libc::ESRCH)) => {
+                    continue;
+                }
                 Err(error) => {
                     failure = Some(error);
                     continue;
@@ -343,7 +345,9 @@ pub struct RunningManagedChild {
 /// ce n'est pas une panne du canal, et le refus doit rester « EOF avant ready ».
 fn set_status_timeout(stream: &UnixStream, timeout: Duration) -> io::Result<()> {
     match stream.set_read_timeout(Some(timeout)) {
-        Err(error) if cfg!(target_os = "macos") && error.raw_os_error() == Some(libc::EINVAL) => Ok(()),
+        Err(error) if cfg!(target_os = "macos") && error.raw_os_error() == Some(libc::EINVAL) => {
+            Ok(())
+        }
         result => result,
     }
 }
@@ -1076,9 +1080,12 @@ fn process_snapshot(pid: u32) -> io::Result<(u64, bool)> {
     }
     // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
     let info = unsafe { info.assume_init() };
-    Ok((info.pbi_start_tvsec.saturating_mul(1_000_000)
-        .saturating_add(info.pbi_start_tvusec),
-        info.pbi_status != libc::SZOMB && info.pbi_status != libc::SIDL))
+    Ok((
+        info.pbi_start_tvsec
+            .saturating_mul(1_000_000)
+            .saturating_add(info.pbi_start_tvusec),
+        info.pbi_status != libc::SZOMB && info.pbi_status != libc::SIDL,
+    ))
 }
 
 #[cfg(target_os = "linux")]
@@ -1089,26 +1096,34 @@ fn process_snapshot(pid: u32) -> io::Result<(u64, bool)> {
         .map(|(_, tail)| tail)
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "stat de processus invalide"))?;
     // Le suffixe commence au champ 3 ; starttime est le champ 22.
-    let state=after_name.split_whitespace().next()
-        .ok_or_else(||io::Error::new(io::ErrorKind::InvalidData,"état absent"))?;
-    let birth=after_name.split_whitespace().nth(19)
+    let state = after_name
+        .split_whitespace()
+        .next()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "état absent"))?;
+    let birth = after_name
+        .split_whitespace()
+        .nth(19)
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "starttime absent"))?
         .parse::<u64>()
         .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "starttime invalide"))?;
-    Ok((birth,!matches!(state,"Z"|"X"|"x")))
+    Ok((birth, !matches!(state, "Z" | "X" | "x")))
 }
 
-pub fn process_birth(pid:u32)->io::Result<u64> {
-    process_snapshot(pid).map(|(birth,_)|birth)
+pub fn process_birth(pid: u32) -> io::Result<u64> {
+    process_snapshot(pid).map(|(birth, _)| birth)
 }
 
 /// Lecture OS seulement. Pas de signal, de wait ou de changement de statut.
-pub fn process_matches_live(pid:u32,birth:u64)->io::Result<bool> {
+pub fn process_matches_live(pid: u32, birth: u64) -> io::Result<bool> {
     match process_snapshot(pid) {
-        Ok((actual,live))=>Ok(actual==birth && live),
-        Err(error) if error.kind()==io::ErrorKind::NotFound
-            || matches!(error.raw_os_error(),Some(libc::ESRCH))=>Ok(false),
-        Err(error)=>Err(error),
+        Ok((actual, live)) => Ok(actual == birth && live),
+        Err(error)
+            if error.kind() == io::ErrorKind::NotFound
+                || matches!(error.raw_os_error(), Some(libc::ESRCH)) =>
+        {
+            Ok(false)
+        }
+        Err(error) => Err(error),
     }
 }
 

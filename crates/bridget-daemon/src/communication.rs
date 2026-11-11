@@ -230,22 +230,40 @@ mod coordination247_tests {
     use super::*;
     #[test]
     fn spec247_motif_manquant_explique_la_cle_close_sans_casser_le_code() {
-        let from=CommunicationProject{host:"mac".into(),root:"/a".into()};
-        let to=CommunicationProject{host:"sys".into(),root:"/b".into()};
-        let error=project_scope(Some(&from),Some(&to),"dest",None).unwrap_err();
+        let from = CommunicationProject {
+            host: "mac".into(),
+            root: "/a".into(),
+        };
+        let to = CommunicationProject {
+            host: "sys".into(),
+            root: "/b".into(),
+        };
+        let error = project_scope(Some(&from), Some(&to), "dest", None).unwrap_err();
         assert!(error.starts_with("cross_project_reason_required :"));
         assert!(error.contains("nouvelle demande") && error.contains("même enveloppe"));
-        assert!(project_scope(Some(&from),Some(&to),"dest",Some("coordination autorisée")).is_ok());
+        assert!(
+            project_scope(
+                Some(&from),
+                Some(&to),
+                "dest",
+                Some("coordination autorisée")
+            )
+            .is_ok()
+        );
     }
 }
 
 #[cfg(test)]
 #[test]
 fn spec251_canon_information_distinct_sans_changer_ancien() {
-    let mut message=bridget_core::BridgetMessage::new("a","b","avis");
-    let old=canonical_send("scope","id",&message,123);
-    message.intent=Some(bridget_core::MessageIntent::StoreOnly);
-    assert_ne!(old,canonical_send("scope","id",&message,123));
-    let wire=serde_json::to_value(&message).unwrap();assert_eq!(wire["intent"],"store_only");
-    assert_eq!(serde_json::from_value::<bridget_core::BridgetMessage>(wire).unwrap(),message);
+    let mut message = bridget_core::BridgetMessage::new("a", "b", "avis");
+    let old = canonical_send("scope", "id", &message, 123);
+    message.intent = Some(bridget_core::MessageIntent::StoreOnly);
+    assert_ne!(old, canonical_send("scope", "id", &message, 123));
+    let wire = serde_json::to_value(&message).unwrap();
+    assert_eq!(wire["intent"], "store_only");
+    assert_eq!(
+        serde_json::from_value::<bridget_core::BridgetMessage>(wire).unwrap(),
+        message
+    );
 }

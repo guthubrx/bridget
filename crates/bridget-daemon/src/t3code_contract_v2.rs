@@ -135,7 +135,9 @@ pub(crate) fn parse_detail(text: &str, thread_id: &str) -> Result<ThreadDetail, 
             let local = string(row, "visibility")? == "local";
             let source = string(row, "sourceThreadId")?;
             if local || source == thread_id {
-                let item = row.get("item").ok_or_else(|| invalid("visibleTurnItems.item"))?;
+                let item = row
+                    .get("item")
+                    .ok_or_else(|| invalid("visibleTurnItems.item"))?;
                 if source != thread_id || string(item, "threadId")? != thread_id {
                     return Err(invalid("visibleTurnItems.threadId"));
                 }
@@ -144,11 +146,15 @@ pub(crate) fn parse_detail(text: &str, thread_id: &str) -> Result<ThreadDetail, 
         }
     }
     items.extend(array(projection, "turnItems")?);
-    if items.len() > 100_000 { return Err(invalid("turnItems limit")); }
+    if items.len() > 100_000 {
+        return Err(invalid("turnItems limit"));
+    }
     if compact {
         let mut ids = std::collections::HashSet::new();
         for item in &items {
-            if !ids.insert(string(item, "id")?) { return Err(invalid("turnItems duplicate")); }
+            if !ids.insert(string(item, "id")?) {
+                return Err(invalid("turnItems duplicate"));
+            }
         }
     }
     let runs = array(projection, "runs")?;
@@ -241,22 +247,42 @@ pub(crate) fn parse_detail(text: &str, thread_id: &str) -> Result<ThreadDetail, 
         let run_id = nullable_string(item, "runId")?.map(str::to_owned);
         if kind == "compaction"
             && matches!(status, "running" | "completed" | "failed" | "cancelled")
-            && root_message(item, run_id.as_deref().and_then(|id| by_run.get(id).copied()), &nodes)?
+            && root_message(
+                item,
+                run_id.as_deref().and_then(|id| by_run.get(id).copied()),
+                &nodes,
+            )?
         {
             let id = string(item, "id")?;
-            if id.len() > 256 || id.chars().any(char::is_control) { return Err(invalid("compaction.id")); }
+            if id.len() > 256 || id.chars().any(char::is_control) {
+                return Err(invalid("compaction.id"));
+            }
             activities.push(Activity {
                 id: format!("v2-compaction:{id}:{status}"), kind: "context.compaction".into(), turn_id: run_id.clone(),
                 payload: json!({"kind":"tool","tool_type":"context_compaction","tool_id":format!("compaction:{}:{id}",run_id.as_deref().unwrap_or("")),
                     "text":"Compactage du contexte","status":status,"turn_id":run_id,"item_id":id}),
             });
         }
-        if matches!(kind, "command_execution" | "dynamic_tool" | "mcp_tool_call" | "web_search" | "file_search" | "image_view")
-            && matches!(status, "pending" | "running" | "completed" | "failed" | "cancelled")
-            && root_message(item, run_id.as_deref().and_then(|id| by_run.get(id).copied()), &nodes)?
-        {
+        if matches!(
+            kind,
+            "command_execution"
+                | "dynamic_tool"
+                | "mcp_tool_call"
+                | "web_search"
+                | "file_search"
+                | "image_view"
+        ) && matches!(
+            status,
+            "pending" | "running" | "completed" | "failed" | "cancelled"
+        ) && root_message(
+            item,
+            run_id.as_deref().and_then(|id| by_run.get(id).copied()),
+            &nodes,
+        )? {
             activities.push(Activity {
-                id: format!("v2-tool:{}:{status}", string(item, "id")?), kind: "tool.progress".into(), turn_id: run_id.clone(),
+                id: format!("v2-tool:{}:{status}", string(item, "id")?),
+                kind: "tool.progress".into(),
+                turn_id: run_id.clone(),
                 payload: tool_fields(item)?,
             });
         }
@@ -284,18 +310,37 @@ pub(crate) fn parse_detail(text: &str, thread_id: &str) -> Result<ThreadDetail, 
         }
     }
     let requests = array(projection, "runtimeRequests")?;
-    for item in items.iter().filter(|i|i["type"]=="user_input_request") {
-        if string(item,"threadId")? != thread_id {return Err(invalid("user input thread"));}
-        let run = nullable_string(item,"runId")?;
-        if !root_message(item,run.and_then(|id|by_run.get(id).copied()),&nodes)? {continue;}
-        let id = string(item,"requestId")?;
-        let Some(request) = requests.iter().find(|v|v["id"]==id && v["kind"]=="user_input") else {continue;};
-        if request["nodeId"] != item["nodeId"] {return Err(invalid("user input node"));}
+    for item in items.iter().filter(|i| i["type"] == "user_input_request") {
+        if string(item, "threadId")? != thread_id {
+            return Err(invalid("user input thread"));
+        }
+        let run = nullable_string(item, "runId")?;
+        if !root_message(item, run.and_then(|id| by_run.get(id).copied()), &nodes)? {
+            continue;
+        }
+        let id = string(item, "requestId")?;
+        let Some(request) = requests
+            .iter()
+            .find(|v| v["id"] == id && v["kind"] == "user_input")
+        else {
+            continue;
+        };
+        if request["nodeId"] != item["nodeId"] {
+            return Err(invalid("user input node"));
+        }
         let questions = item["questions"].clone();
         // Gardes natives, sans reformuler le texte ou les options du fournisseur.
-        crate::user_input::validate_questions(&questions).map_err(|_|invalid("user input questions"))?;
-        if id.len()>4096 || serde_json::to_vec(request).map_or(true,|b|b.len()>16*1024) {return Err(invalid("user input limit"));}
-        activities.push(Activity{id:format!("v2-user-input:{id}"),kind:"user_input.request".into(),turn_id:run.map(str::to_owned),payload:json!({"request":request,"questions":questions})});
+        crate::user_input::validate_questions(&questions)
+            .map_err(|_| invalid("user input questions"))?;
+        if id.len() > 4096 || serde_json::to_vec(request).map_or(true, |b| b.len() > 16 * 1024) {
+            return Err(invalid("user input limit"));
+        }
+        activities.push(Activity {
+            id: format!("v2-user-input:{id}"),
+            kind: "user_input.request".into(),
+            turn_id: run.map(str::to_owned),
+            payload: json!({"request":request,"questions":questions}),
+        });
     }
     Ok(ThreadDetail {
         messages,
@@ -306,37 +351,85 @@ pub(crate) fn parse_detail(text: &str, thread_id: &str) -> Result<ThreadDetail, 
 }
 
 /// Même détail autorisé que la source ; charge bornée sous le fragment journal de 16 Kio.
-pub(super) fn tool_fields(item: &Value) -> Result<Value,ContractError> {
-    for field in ["id","type","status"] {
-        let value=item[field].as_str().ok_or_else(||invalid("tool metadata"))?;
-        if value.len()>256 || value.chars().any(char::is_control) {return Err(invalid("tool metadata limit"));}
-    }
-    if item["nodeId"].as_str().is_some_and(|s|s.len()>256 || s.chars().any(char::is_control)) {
-        return Err(invalid("tool node limit"));
-    }
-    let mut fields=json!({"itemType":item["type"],"status":item["status"],"tool_id":item["id"],
-        "source_node_id":item["nodeId"],"tool":item["toolName"].as_str().filter(|s|s.len()<=120 && !s.chars().any(char::is_control)),
-        "output_omitted":item["outputOmitted"].as_bool().unwrap_or(false)});
-    let mut truncated=false;
-    for (source,target,limit) in [("input","input",4096),("output","output",8192),("pattern","input",4096),("patterns","input",4096),("results","output",8192)] {
-        if let Some(value)=item.get(source).filter(|v| !v.is_null()) {
-            let text=value.as_str().map(str::to_owned).unwrap_or_else(||value.to_string());
-            let mut end=text.len().min(limit);while !text.is_char_boundary(end) {end-=1;}
-            truncated|=end<text.len();fields[target]=json!(&text[..end]);
+pub(super) fn tool_fields(item: &Value) -> Result<Value, ContractError> {
+    for field in ["id", "type", "status"] {
+        let value = item[field]
+            .as_str()
+            .ok_or_else(|| invalid("tool metadata"))?;
+        if value.len() > 256 || value.chars().any(char::is_control) {
+            return Err(invalid("tool metadata limit"));
         }
     }
-    if let Some(exit)=item["exitCode"].as_i64() {fields["exit_code"]=json!(exit);}
-    while fields.to_string().len()>10*1024 {
-        let field=if fields["output"].as_str().unwrap_or("").len()>=fields["input"].as_str().unwrap_or("").len() {"output"} else {"input"};
-        let text=fields[field].as_str().unwrap_or("");if text.is_empty() {return Err(invalid("tool detail limit"));}let mut end=text.len()/2;
-        while !text.is_char_boundary(end) {end-=1;}let prefix=text[..end].to_owned();fields[field]=json!(prefix);truncated=true;
+    if item["nodeId"]
+        .as_str()
+        .is_some_and(|s| s.len() > 256 || s.chars().any(char::is_control))
+    {
+        return Err(invalid("tool node limit"));
     }
-    fields["details_truncated"]=json!(truncated);Ok(fields)
+    let mut fields = json!({"itemType":item["type"],"status":item["status"],"tool_id":item["id"],
+        "source_node_id":item["nodeId"],"tool":item["toolName"].as_str().filter(|s|s.len()<=120 && !s.chars().any(char::is_control)),
+        "output_omitted":item["outputOmitted"].as_bool().unwrap_or(false)});
+    let mut truncated = false;
+    for (source, target, limit) in [
+        ("input", "input", 4096),
+        ("output", "output", 8192),
+        ("pattern", "input", 4096),
+        ("patterns", "input", 4096),
+        ("results", "output", 8192),
+    ] {
+        if let Some(value) = item.get(source).filter(|v| !v.is_null()) {
+            let text = value
+                .as_str()
+                .map(str::to_owned)
+                .unwrap_or_else(|| value.to_string());
+            let mut end = text.len().min(limit);
+            while !text.is_char_boundary(end) {
+                end -= 1;
+            }
+            truncated |= end < text.len();
+            fields[target] = json!(&text[..end]);
+        }
+    }
+    if let Some(exit) = item["exitCode"].as_i64() {
+        fields["exit_code"] = json!(exit);
+    }
+    while fields.to_string().len() > 10 * 1024 {
+        let field = if fields["output"].as_str().unwrap_or("").len()
+            >= fields["input"].as_str().unwrap_or("").len()
+        {
+            "output"
+        } else {
+            "input"
+        };
+        let text = fields[field].as_str().unwrap_or("");
+        if text.is_empty() {
+            return Err(invalid("tool detail limit"));
+        }
+        let mut end = text.len() / 2;
+        while !text.is_char_boundary(end) {
+            end -= 1;
+        }
+        let prefix = text[..end].to_owned();
+        fields[field] = json!(prefix);
+        truncated = true;
+    }
+    fields["details_truncated"] = json!(truncated);
+    Ok(fields)
 }
 
-pub(super) fn tool_detail(value: Value, thread: &str, id: &str, run: &str, node: &Value) -> Result<Value,ContractError> {
-    let item=&value["item"];
-    if item["id"]!=id || item["threadId"]!=thread || item["runId"]!=run || &item["nodeId"]!=node {
+pub(super) fn tool_detail(
+    value: Value,
+    thread: &str,
+    id: &str,
+    run: &str,
+    node: &Value,
+) -> Result<Value, ContractError> {
+    let item = &value["item"];
+    if item["id"] != id
+        || item["threadId"] != thread
+        || item["runId"] != run
+        || &item["nodeId"] != node
+    {
         return Err(invalid("tool detail binding"));
     }
     tool_fields(item)
@@ -431,9 +524,18 @@ impl Write for RpcSocket {
 
 fn rpc_read_error(error: tungstenite::Error) -> ContractError {
     let code = match error {
-        tungstenite::Error::Io(error) if matches!(error.kind(), io::ErrorKind::TimedOut | io::ErrorKind::WouldBlock) => "rpc_response_timeout",
+        tungstenite::Error::Io(error)
+            if matches!(
+                error.kind(),
+                io::ErrorKind::TimedOut | io::ErrorKind::WouldBlock
+            ) =>
+        {
+            "rpc_response_timeout"
+        }
         tungstenite::Error::Capacity(_) => "rpc_response_limit",
-        tungstenite::Error::ConnectionClosed | tungstenite::Error::AlreadyClosed => "rpc_connection_closed",
+        tungstenite::Error::ConnectionClosed | tungstenite::Error::AlreadyClosed => {
+            "rpc_connection_closed"
+        }
         _ => "rpc_response_interrupted",
     };
     // Après envoi, ces causes ne prouvent pas l'absence d'effet.
@@ -443,7 +545,13 @@ fn rpc_read_error(error: tungstenite::Error) -> ContractError {
 fn rpc_budget(tag: &str, payload: &Value) -> Duration {
     // Une remise peut relire un fil volumineux avant son commit. Le délai
     // historique de 10 s interrompait cette lecture réelle (13,5 s observées).
-    Duration::from_secs(if tag == "orchestration.dispatchCommand" && payload["type"] == "message.dispatch" { 60 } else { 10 })
+    Duration::from_secs(
+        if tag == "orchestration.dispatchCommand" && payload["type"] == "message.dispatch" {
+            60
+        } else {
+            10
+        },
+    )
 }
 
 /// RPC unary natif, taille/durée bornées ; aucun retry ou repli après envoi.
@@ -453,27 +561,53 @@ pub(crate) fn rpc(
     tag: &str,
     payload: &Value,
 ) -> Result<Value, ContractError> {
-    rpc_internal(base_url,token,tag,payload,false)
+    rpc_internal(base_url, token, tag, payload, false)
 }
 
-pub(crate) fn rpc_agent_tracking(base_url:&str,token:&str,payload:&Value)->Result<Value,ContractError> {
-    if !matches!(payload["type"].as_str(),Some("thread.settle"|"thread.unsettle")) || payload["commandId"].as_str().is_none() {
+pub(crate) fn rpc_agent_tracking(
+    base_url: &str,
+    token: &str,
+    payload: &Value,
+) -> Result<Value, ContractError> {
+    if !matches!(
+        payload["type"].as_str(),
+        Some("thread.settle" | "thread.unsettle")
+    ) || payload["commandId"].as_str().is_none()
+    {
         return Err(invalid("agent_tracking command"));
     }
-    rpc_internal(base_url,token,"orchestration.dispatchCommand",payload,true)
+    rpc_internal(
+        base_url,
+        token,
+        "orchestration.dispatchCommand",
+        payload,
+        true,
+    )
 }
 
 /// Seul un reçu de refus PRÉCÉDEMMENT gravé prouve l'absence d'effet.
 /// La forme est corrélée exactement ; aucun texte libre n'autorise un nouvel ID.
-fn tracking_rejection(exit:&Value,command:&Value)->bool {
-    let Some(reasons)=exit["cause"].as_array().filter(|a|a.len()==1) else{return false};
-    let reason=&reasons[0];let error=&reason["error"];
-    exit["_tag"]=="Failure" && reason["_tag"]=="Fail" && error["_tag"]=="OrchestrationV2DispatchCommandError"
-        && error["commandId"]==command["commandId"] && error["commandType"]==command["type"]
-        && error["cause"]["name"]=="OrchestratorCommandPreviouslyRejectedError"
+fn tracking_rejection(exit: &Value, command: &Value) -> bool {
+    let Some(reasons) = exit["cause"].as_array().filter(|a| a.len() == 1) else {
+        return false;
+    };
+    let reason = &reasons[0];
+    let error = &reason["error"];
+    exit["_tag"] == "Failure"
+        && reason["_tag"] == "Fail"
+        && error["_tag"] == "OrchestrationV2DispatchCommandError"
+        && error["commandId"] == command["commandId"]
+        && error["commandType"] == command["type"]
+        && error["cause"]["name"] == "OrchestratorCommandPreviouslyRejectedError"
 }
 
-fn rpc_internal(base_url:&str,token:&str,tag:&str,payload:&Value,tracking:bool)->Result<Value,ContractError> {
+fn rpc_internal(
+    base_url: &str,
+    token: &str,
+    tag: &str,
+    payload: &Value,
+    tracking: bool,
+) -> Result<Value, ContractError> {
     let address: SocketAddr = base_url
         .strip_prefix("http://")
         .ok_or_else(|| invalid("RPC origin"))?
@@ -519,9 +653,7 @@ fn rpc_internal(base_url:&str,token:&str,tag:&str,payload:&Value,tracking:bool)-
         .map_err(|_| ContractError::Transport("envoi RPC T3 incertain".into()))?;
     // Le serveur peut grouper plusieurs réponses dans une trame JSON.
     loop {
-        let frame = socket
-            .read()
-            .map_err(rpc_read_error)?;
+        let frame = socket.read().map_err(rpc_read_error)?;
         match frame {
             tungstenite::Message::Text(text) => {
                 let value: Value = serde_json::from_str(&text).map_err(|_| invalid("RPC JSON"))?;
@@ -538,8 +670,13 @@ fn rpc_internal(base_url:&str,token:&str,tag:&str,payload:&Value,tracking:bool)-
                                 .get("value")
                                 .cloned()
                                 .ok_or_else(|| invalid("RPC value"))
-                        } else if tracking && tracking_rejection(&reply["exit"],payload) {
-                            Err(ContractError::CommandRejected{command_id:payload["commandId"].as_str().ok_or_else(||invalid("tracking commandId"))?.into()})
+                        } else if tracking && tracking_rejection(&reply["exit"], payload) {
+                            Err(ContractError::CommandRejected {
+                                command_id: payload["commandId"]
+                                    .as_str()
+                                    .ok_or_else(|| invalid("tracking commandId"))?
+                                    .into(),
+                            })
                         } else {
                             Err(ContractError::Transport(
                                 "RPC T3 terminé sans succès confirmé".into(),
@@ -570,16 +707,46 @@ mod timeout226_tests {
     #[test]
     fn spec226_rpc_budget_is_reserved_for_message_delivery() {
         use super::*;
-        assert_eq!(rpc_budget("orchestration.dispatchCommand", &json!({"type":"message.dispatch"})), Duration::from_secs(60));
-        for tag in ["server.getConfig", "orchestration.getTurnItem", "orchestration.dispatchCommand"] {
-            assert_eq!(rpc_budget(tag, &json!({"type":"runtime-request.respond"})), Duration::from_secs(10));
+        assert_eq!(
+            rpc_budget(
+                "orchestration.dispatchCommand",
+                &json!({"type":"message.dispatch"})
+            ),
+            Duration::from_secs(60)
+        );
+        for tag in [
+            "server.getConfig",
+            "orchestration.getTurnItem",
+            "orchestration.dispatchCommand",
+        ] {
+            assert_eq!(
+                rpc_budget(tag, &json!({"type":"runtime-request.respond"})),
+                Duration::from_secs(10)
+            );
         }
     }
     #[test]
     fn spec226_rpc_failure_keeps_closed_cause_without_private_text() {
         use super::*;
-        assert_eq!(rpc_read_error(tungstenite::Error::Io(io::Error::new(io::ErrorKind::TimedOut,"PRIVATE"))),ContractError::Transport("rpc_response_timeout".into()));
-        assert_eq!(rpc_read_error(tungstenite::Error::ConnectionClosed),ContractError::Transport("rpc_connection_closed".into()));
-        assert_eq!(rpc_read_error(tungstenite::Error::Capacity(tungstenite::error::CapacityError::MessageTooLong {size:5,max_size:4})),ContractError::Transport("rpc_response_limit".into()));
+        assert_eq!(
+            rpc_read_error(tungstenite::Error::Io(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "PRIVATE"
+            ))),
+            ContractError::Transport("rpc_response_timeout".into())
+        );
+        assert_eq!(
+            rpc_read_error(tungstenite::Error::ConnectionClosed),
+            ContractError::Transport("rpc_connection_closed".into())
+        );
+        assert_eq!(
+            rpc_read_error(tungstenite::Error::Capacity(
+                tungstenite::error::CapacityError::MessageTooLong {
+                    size: 5,
+                    max_size: 4
+                }
+            )),
+            ContractError::Transport("rpc_response_limit".into())
+        );
     }
 }

@@ -31,23 +31,43 @@ for line in sys.stdin:
     print(json.dumps(response), flush=True)
 "#;
     let options = CodexAppServerOptions {
-        command: "/usr/bin/python3".into(), args: vec!["-u".into(), "-c".into(), script.into()],
-        queue_capacity: 8, notify_timeout_secs: 60, model: None, permissions: "deny".into(),
-        child_requests: false, provider_observation: None,
-        thread_bootstrap: CodexThreadBootstrap::Start, dynamic_tool_handler: None,
+        command: "/usr/bin/python3".into(),
+        args: vec!["-u".into(), "-c".into(), script.into()],
+        queue_capacity: 8,
+        notify_timeout_secs: 60,
+        model: None,
+        permissions: "deny".into(),
+        child_requests: false,
+        provider_observation: None,
+        thread_bootstrap: CodexThreadBootstrap::Start,
+        dynamic_tool_handler: None,
     };
-    let transport = CodexAppServerTransport::spawn_with_environment(options, &[
-        ("QUOTA_TRACE".into(), root.join("methods").to_string_lossy().into_owned()),
-        ("QUOTA_FAIL".into(), if fail_refresh {"1"} else {"0"}.into()),
-    ], false).unwrap();
+    let transport = CodexAppServerTransport::spawn_with_environment(
+        options,
+        &[
+            (
+                "QUOTA_TRACE".into(),
+                root.join("methods").to_string_lossy().into_owned(),
+            ),
+            (
+                "QUOTA_FAIL".into(),
+                if fail_refresh { "1" } else { "0" }.into(),
+            ),
+        ],
+        false,
+    )
+    .unwrap();
     (transport, root)
 }
 
 fn quota(events: &[ManagedEvent]) -> Vec<u8> {
-    events.iter().filter_map(|event| match &event.kind {
-        ManagedEventKind::RateLimitObserved {used_percent, ..} => *used_percent,
-        _ => None,
-    }).collect()
+    events
+        .iter()
+        .filter_map(|event| match &event.kind {
+            ManagedEventKind::RateLimitObserved { used_percent, .. } => *used_percent,
+            _ => None,
+        })
+        .collect()
 }
 
 fn due(transport: &CodexAppServerTransport) {
@@ -70,7 +90,13 @@ fn spec261_idle_quota_reads_reset_on_same_process_without_turn() {
     assert_eq!(transport.process_id(), pid);
     transport.stop();
     let methods = std::fs::read_to_string(root.join("methods")).unwrap();
-    assert_eq!(methods.lines().filter(|m| *m == "account/rateLimits/read").count(), 3);
+    assert_eq!(
+        methods
+            .lines()
+            .filter(|m| *m == "account/rateLimits/read")
+            .count(),
+        3
+    );
     assert_eq!(methods.lines().filter(|m| *m == "thread/start").count(), 1);
     assert!(!methods.contains("turn/start"));
     std::fs::remove_dir_all(root).unwrap();
@@ -85,7 +111,13 @@ fn spec261_failed_refresh_never_invents_available_quota_or_retries_immediately()
     assert!(quota(&transport.drain_events()).is_empty());
     transport.stop();
     let methods = std::fs::read_to_string(root.join("methods")).unwrap();
-    assert_eq!(methods.lines().filter(|m| *m == "account/rateLimits/read").count(), 2);
+    assert_eq!(
+        methods
+            .lines()
+            .filter(|m| *m == "account/rateLimits/read")
+            .count(),
+        2
+    );
     assert!(!methods.contains("turn/start"));
     std::fs::remove_dir_all(root).unwrap();
 }

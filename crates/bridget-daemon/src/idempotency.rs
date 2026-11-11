@@ -409,10 +409,15 @@ pub enum IdempotencyError {
     InvalidIssuerScope,
     InvalidIdempotencyKey,
     CanonicalTooLarge,
-    CliWakeRateLimited { retry_after_secs: u64 },
+    CliWakeRateLimited {
+        retry_after_secs: u64,
+    },
     InvalidIssuedAt,
     InvalidHorizon,
-    InvalidTransition { from: RecordState, to: RecordState },
+    InvalidTransition {
+        from: RecordState,
+        to: RecordState,
+    },
     InvalidDelivery,
     /// Collision constatée sur (id, destinataire), distincte d’une panne SQL.
     InformationCollision,
@@ -444,7 +449,10 @@ impl std::fmt::Display for IdempotencyError {
                 write!(formatter, "transition interdite: {from:?} vers {to:?}")
             }
             Self::InvalidDelivery => write!(formatter, "remise idempotente invalide"),
-            Self::InformationCollision => write!(formatter, "identifiant d’information déjà présent pour ce destinataire"),
+            Self::InformationCollision => write!(
+                formatter,
+                "identifiant d’information déjà présent pour ce destinataire"
+            ),
             Self::HeldQueueFull => write!(formatter, "file retenue pleine"),
             Self::InvalidSpawnCommand => write!(formatter, "commande spawn invalide"),
             Self::InvalidAgentLink => write!(formatter, "lien agent invalide"),
@@ -953,9 +961,8 @@ impl IdempotencyStore {
                        AND r.idempotency_key = d.idempotency_key
                  )",
                 )?;
-                
-                stmt
-                    .query_map([], |row| row.get(0))?
+
+                stmt.query_map([], |row| row.get(0))?
                     .collect::<Result<Vec<_>, _>>()?
             };
             if !schema_orphans.is_empty() {
@@ -986,9 +993,8 @@ impl IdempotencyStore {
                                  OR json_extract(message_bytes,'$.to') = ''
                             ELSE 1 END",
                 )?;
-                
-                stmt
-                    .query_map([], |row| row.get(0))?
+
+                stmt.query_map([], |row| row.get(0))?
                     .collect::<Result<Vec<_>, _>>()?
             };
             if !unreadable.is_empty() {
@@ -1206,7 +1212,10 @@ impl IdempotencyStore {
         self.conn.query_row("SELECT EXISTS(SELECT 1 FROM send_deliveries WHERE delivery_id=?1 AND operation_kind='send' AND issuer_scope IN (?2,?3,?4))",params![delivery_id,crate::wake_schedules::CLI_WAKE_SCOPE,crate::wake_schedules::SCHEDULED_WAKE_SCOPE,crate::wake_schedules::MISSED_SUMMARY_SCOPE],|r|r.get(0)).map_err(Into::into)
     }
 
-    pub(crate) fn original_issued_at(&self,key:&IdempotencyKey)->Result<Option<i64>,IdempotencyError> {
+    pub(crate) fn original_issued_at(
+        &self,
+        key: &IdempotencyKey,
+    ) -> Result<Option<i64>, IdempotencyError> {
         self.conn.query_row("SELECT issued_at FROM idempotency_records WHERE issuer_scope=?1 AND operation_kind=?2 AND idempotency_key=?3",
             params![key.issuer_scope,key.operation_kind.as_str(),key.idempotency_key],|r|r.get(0)).optional().map_err(Into::into)
     }

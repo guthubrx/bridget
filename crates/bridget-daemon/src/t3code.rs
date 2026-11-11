@@ -6,7 +6,7 @@
 //! les messages par le protocole natif V1/V2 et renvoie à l'expéditeur la
 //! réponse du tour attesté. Tout l'état est sous `<BRIDGET_HOME>/t3code`.
 
-#[path="t3code_agent_tracking230.rs"]
+#[path = "t3code_agent_tracking230.rs"]
 mod agent_tracking230;
 use bridget_transport::poison::RecoverPoison;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
@@ -25,16 +25,17 @@ use bridget_transport::journal::{
 use bridget_transport::protocol::{
     CommunicationProjectSource, DaemonToWrapper, PresenceMode, RequestInfo, WrapperToDaemon, decode,
 };
-use serde_json::{Value,json};
 use log::{error, info, warn};
 use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
 
 use crate::t3code_contract::{
     self as contract, Client, ContractError, ServerRuntime, T3Cli, ThreadDetail, ThreadSummary,
 };
 use crate::wrapper::{
-    AttachRelayControl, AttachRelayWorker, BatchedDelivery, IdempotentDeliveryTracker, connect_and_register_at, ConnectAndRegisterAtArgs,
-    deliver_batch_to_interactive, send_wrapper_message,
+    AttachRelayControl, AttachRelayWorker, BatchedDelivery, ConnectAndRegisterAtArgs,
+    IdempotentDeliveryTracker, connect_and_register_at, deliver_batch_to_interactive,
+    send_wrapper_message,
 };
 
 const PROTOCOL: &str = "t3code";
@@ -896,15 +897,23 @@ impl Session {
     ) -> Result<T, ContractError> {
         let (generation, runtime, client) = {
             let inner = self.lock();
-            (inner.generation, inner.runtime.clone(), inner.client.clone())
+            (
+                inner.generation,
+                inner.runtime.clone(),
+                inner.client.clone(),
+            )
         };
         let birth = crate::managed_process::process_birth(runtime.pid)
             .map_err(|_| ContractError::Transport("rpc_runtime_identity_unavailable".into()))?;
-        let unchanged = || self.lock().runtime == runtime
-            && crate::managed_process::process_birth(runtime.pid).ok() == Some(birth);
+        let unchanged = || {
+            self.lock().runtime == runtime
+                && crate::managed_process::process_birth(runtime.pid).ok() == Some(birth)
+        };
         let first = call(&client);
         if !unchanged() {
-            return Err(ContractError::Transport("rpc_runtime_changed_effect_unknown".into()));
+            return Err(ContractError::Transport(
+                "rpc_runtime_changed_effect_unknown".into(),
+            ));
         }
         if !matches!(first, Err(ContractError::Unauthorized)) {
             return first;
@@ -915,13 +924,17 @@ impl Session {
         let (generation, client) = {
             let inner = self.lock();
             if inner.runtime != runtime {
-                return Err(ContractError::Transport("rpc_runtime_changed_effect_unknown".into()));
+                return Err(ContractError::Transport(
+                    "rpc_runtime_changed_effect_unknown".into(),
+                ));
             }
             (inner.generation, inner.client.clone())
         };
         let retried = call(&client);
         if !unchanged() {
-            return Err(ContractError::Transport("rpc_runtime_changed_effect_unknown".into()));
+            return Err(ContractError::Transport(
+                "rpc_runtime_changed_effect_unknown".into(),
+            ));
         }
         if matches!(retried, Err(ContractError::Unauthorized)) {
             let mut inner = self.lock();
@@ -1179,10 +1192,12 @@ fn retain_links_after_timeout(
     now: Instant,
 ) -> bool {
     matches!(detail, "http_timeout" | "rpc_response_timeout")
-        && last_success.zip(observed).is_some_and(|((at, runtime, birth), current)| {
-            now.saturating_duration_since(at) < SNAPSHOT_TIMEOUT_GRACE
-                && current == (runtime, birth)
-        })
+        && last_success
+            .zip(observed)
+            .is_some_and(|((at, runtime, birth), current)| {
+                now.saturating_duration_since(at) < SNAPSHOT_TIMEOUT_GRACE
+                    && current == (runtime, birth)
+            })
 }
 
 fn runtime_incarnation(base: &Path) -> Option<(ServerRuntime, u64)> {
@@ -1223,11 +1238,11 @@ fn serve(paths: &Paths) -> Result<(), String> {
         .ok()
         .zip(contract::read_runtime(&t3_base).ok());
     let mut last_snapshot_success = None;
-    let mut tracking_issue=None;
+    let mut tracking_issue = None;
     loop {
         let expected_runtime = session.lock().runtime.clone();
-        let snapshot_incarnation = runtime_incarnation(&t3_base)
-            .filter(|(runtime, _)| *runtime == expected_runtime);
+        let snapshot_incarnation =
+            runtime_incarnation(&t3_base).filter(|(runtime, _)| *runtime == expected_runtime);
         let snapshot_started = Instant::now();
         let snapshot = match session.call(|client| client.snapshot()) {
             Ok(snapshot) => snapshot,
@@ -1263,8 +1278,17 @@ fn serve(paths: &Paths) -> Result<(), String> {
                     for link in links.values() {
                         let _ = link.events.send(LinkEvent::SnapshotTimeout);
                     }
-                    warn!("lecture T3 expirée ({detail}) ; liens conservés, observations suspendues");
-                    publish_status(paths, "degraded", &format!("{detail} : lecture expirée ; liens conservés au plus 90 s depuis la dernière lecture réussie, opérations soumises à une preuve fraîche"), links.len());
+                    warn!(
+                        "lecture T3 expirée ({detail}) ; liens conservés, observations suspendues"
+                    );
+                    publish_status(
+                        paths,
+                        "degraded",
+                        &format!(
+                            "{detail} : lecture expirée ; liens conservés au plus 90 s depuis la dernière lecture réussie, opérations soumises à une preuve fraîche"
+                        ),
+                        links.len(),
+                    );
                     thread::sleep(poll);
                     continue;
                 }
@@ -1297,12 +1321,14 @@ fn serve(paths: &Paths) -> Result<(), String> {
             .filter(|incarnation| runtime_incarnation(&t3_base).as_ref() == Some(incarnation))
             .map(|(runtime, birth)| (snapshot_started, runtime, birth));
         let counts = relation_counts(&snapshot.threads);
-        match agent_tracking230::sync(paths,&session,&snapshot) {
-            Err(error)=>{
-                if tracking_issue.as_ref()!=Some(&error) {warn!("synchronisation des agents dormants en attente : {error}");}
-                tracking_issue=Some(error);
-            },
-            Ok(())=>tracking_issue=None,
+        match agent_tracking230::sync(paths, &session, &snapshot) {
+            Err(error) => {
+                if tracking_issue.as_ref() != Some(&error) {
+                    warn!("synchronisation des agents dormants en attente : {error}");
+                }
+                tracking_issue = Some(error);
+            }
+            Ok(()) => tracking_issue = None,
         }
         if last_relation_counts != Some(counts) {
             info!(
@@ -1607,23 +1633,23 @@ impl Link {
         // La localisation n'est retenue par le daemon que si tmux l'atteste ;
         // le titre du fil reste visible par `bridget t3 status`.
         let (reader, writer, name) = connect_and_register_at(ConnectAndRegisterAtArgs {
-socket: &paths.socket,
-agent_type: &agent_type,
-agent_id: Some(&agent_id),
-host: &crate::wrapper::host_name(),
-protocol: PROTOCOL,
-channel: None,
-mode: PresenceMode::Cli,
-location: None,
-os: &crate::wrapper::operating_system(),
-instance_id: &instance_id,
-domain: domain.as_deref(),
-turn_in_progress: summary
+            socket: &paths.socket,
+            agent_type: &agent_type,
+            agent_id: Some(&agent_id),
+            host: &crate::wrapper::host_name(),
+            protocol: PROTOCOL,
+            channel: None,
+            mode: PresenceMode::Cli,
+            location: None,
+            os: &crate::wrapper::operating_system(),
+            instance_id: &instance_id,
+            domain: domain.as_deref(),
+            turn_in_progress: summary
                 .session
                 .as_ref()
                 .is_some_and(|session| session.active_turn_id.is_some()),
-turn_attest: true,
-})?;
+            turn_attest: true,
+        })?;
         info!(
             "fil « {} » exposé comme « {name} » ({agent_type}, {agent_id})",
             summary.title
@@ -1721,11 +1747,7 @@ turn_attest: true,
         if self.inbound_deliveries.load(Ordering::SeqCst) != 0 {
             return None;
         }
-        let value = self
-            .drained_key
-            .lock()
-            .recover_poison()
-            .clone();
+        let value = self.drained_key.lock().recover_poison().clone();
         if self.inbound_deliveries.load(Ordering::SeqCst) != 0 {
             None
         } else {
@@ -1808,19 +1830,32 @@ fn spawn_reader(
                                 // dans la file de LinkWorker.
                                 if let Some(relay) = &journal_control {
                                     match &frame {
-                                        DaemonToWrapper::Subscribe {subscription_id,window,..} => {
-                                            if let Err(reason)=relay.subscribe(subscription_id.clone(),window.clone()) {
+                                        DaemonToWrapper::Subscribe {
+                                            subscription_id,
+                                            window,
+                                            ..
+                                        } => {
+                                            if let Err(reason) = relay
+                                                .subscribe(subscription_id.clone(), window.clone())
+                                            {
                                                 // Le lecteur ne prend jamais le verrou d'écriture.
-                                                if events.send(LinkEvent::JournalRejected {
-                                                    subscription_id:subscription_id.clone(),reason,
-                                                }).is_err() {break;}
+                                                if events
+                                                    .send(LinkEvent::JournalRejected {
+                                                        subscription_id: subscription_id.clone(),
+                                                        reason,
+                                                    })
+                                                    .is_err()
+                                                {
+                                                    break;
+                                                }
                                             }
                                             continue;
                                         }
-                                        DaemonToWrapper::Unsubscribe {subscription_id} => {
-                                            relay.unsubscribe(subscription_id.clone());continue;
+                                        DaemonToWrapper::Unsubscribe { subscription_id } => {
+                                            relay.unsubscribe(subscription_id.clone());
+                                            continue;
                                         }
-                                        _=>{}
+                                        _ => {}
                                     }
                                 }
                                 let delivery = matches!(
@@ -1832,9 +1867,7 @@ fn spawn_reader(
                                     DaemonToWrapper::Deliver { .. }
                                     | DaemonToWrapper::DeliverIdempotent { .. } => {
                                         inbound_deliveries.fetch_add(1, Ordering::SeqCst);
-                                        *drained_key
-                                            .lock()
-                                            .recover_poison() = None;
+                                        *drained_key.lock().recover_poison() = None;
                                     }
                                     DaemonToWrapper::CancelDelivery { id, .. } => {
                                         cancelled
@@ -1867,13 +1900,16 @@ fn spawn_reader(
         .map_err(|error| error.to_string())
 }
 
-fn t3_user_input_answers(answers:&Value)->Option<Value> {
-    let mut out=serde_json::Map::new();
-    for (id,a) in answers.as_object()? {
-        let mut values=a["selected"].as_array()?.clone();
-        if let Some(text)=a["text"].as_str().filter(|t|!t.is_empty()){values.push(json!(text));}
-        out.insert(id.clone(),Value::Array(values));
-    }Some(Value::Object(out))
+fn t3_user_input_answers(answers: &Value) -> Option<Value> {
+    let mut out = serde_json::Map::new();
+    for (id, a) in answers.as_object()? {
+        let mut values = a["selected"].as_array()?.clone();
+        if let Some(text) = a["text"].as_str().filter(|t| !t.is_empty()) {
+            values.push(json!(text));
+        }
+        out.insert(id.clone(), Value::Array(values));
+    }
+    Some(Value::Object(out))
 }
 
 struct LinkWorker {
@@ -1989,7 +2025,12 @@ impl LinkWorker {
             .map_err(|e| format!("journal du fil : {e}"))?,
         );
         let writer = Arc::new(Mutex::new(Some(writer)));
-        send_wrapper_message(&writer, WrapperToDaemon::JournalReady { receipt_probe: true });
+        send_wrapper_message(
+            &writer,
+            WrapperToDaemon::JournalReady {
+                receipt_probe: true,
+            },
+        );
         // Nom humain = titre du fil, pour que `who` et `send --to` parlent
         // la langue de t3code ; un refus (doublon) garde le nom attribué.
         let title = display_title(&summary.title);
@@ -2002,7 +2043,9 @@ impl LinkWorker {
         );
         let state_path = paths.thread_state(&summary.id);
         let overflow = crate::delivery_spool244::DeliverySpool::open(
-            &state_path.with_extension(format!("inbox-{instance_id}.sqlite")), &instance_id)?;
+            &state_path.with_extension(format!("inbox-{instance_id}.sqlite")),
+            &instance_id,
+        )?;
         let state = paths.load_thread_state(&summary.id);
         let mut worker = Self {
             thread_id: summary.id.clone(),
@@ -2117,9 +2160,15 @@ impl LinkWorker {
             LinkEvent::Tick(summary) => {
                 self.report_project_context(&summary);
                 send_wrapper_message(&self.writer, WrapperToDaemon::Heartbeat);
-                send_wrapper_message(&self.writer, WrapperToDaemon::TurnState {
-                    in_progress: summary.session.as_ref().is_some_and(|s| s.active_turn_id.is_some()),
-                });
+                send_wrapper_message(
+                    &self.writer,
+                    WrapperToDaemon::TurnState {
+                        in_progress: summary
+                            .session
+                            .as_ref()
+                            .is_some_and(|s| s.active_turn_id.is_some()),
+                    },
+                );
                 let title = display_title(&summary.title);
                 let retry = self
                     .title_refused_at
@@ -2162,10 +2211,17 @@ impl LinkWorker {
                     self.report_discard(frame.as_ref(), Discard::LinkClosing);
                 }
             }
-            LinkEvent::JournalRejected {subscription_id,reason} => {
-                send_wrapper_message(&self.writer,WrapperToDaemon::AttachRejected {
-                    subscription_id:Some(subscription_id),reason,
-                });
+            LinkEvent::JournalRejected {
+                subscription_id,
+                reason,
+            } => {
+                send_wrapper_message(
+                    &self.writer,
+                    WrapperToDaemon::AttachRejected {
+                        subscription_id: Some(subscription_id),
+                        reason,
+                    },
+                );
             }
             LinkEvent::SnapshotTimeout => {
                 // Seulement pendant la grâce : aucun tour ni droit attesté.
@@ -2192,10 +2248,7 @@ impl LinkWorker {
     }
 
     fn publish_drain_state(&self, available: bool) {
-        let mut published = self
-            .drained_key
-            .lock()
-            .recover_poison();
+        let mut published = self.drained_key.lock().recover_poison();
         let drained = available
             && !self.last_key.is_empty()
             && self.awaiting_snapshot_change.is_none()
@@ -2222,77 +2275,193 @@ impl LinkWorker {
     }
 
     fn refresh_user_inputs(&mut self, detail: &ThreadDetail) {
-        use bridget_transport::protocol::{ChildProviderRequest,ChildProviderRequestId,ChildRequestKind,ChildRequestDecision,ChildRequestClosedState};
-        for activity in detail.activities.iter().filter(|a|a.kind=="user_input.request") {
-            let source=&activity.payload["request"]; let Some(source_id)=source["id"].as_str() else{continue;};
-            let existing=self.user_inputs.iter().find(|(_,r)|r["callback"]["provider_request_id"]==source_id).map(|(id,row)|(id.clone(),row.clone()));
-            if source["status"]=="pending" && matches!(source["responseCapability"]["type"].as_str(),Some("live"|"message")) {
-                let questions=&activity.payload["questions"];
-                if let Some((id,row))=&existing
-                    && row["callback"]["details"]["questions"]!=*questions {
-                        send_wrapper_message(&self.writer,WrapperToDaemon::ChildRequestClosed{request_id:id.clone(),state:ChildRequestClosedState::ClosedBeforeApply});self.user_inputs.remove(id);
-                    }
-                let request=ChildProviderRequest{version:1,provider_session:self.thread_id.clone(),turn_id:activity.turn_id.clone().unwrap_or_else(||self.thread_id.clone()),provider_request_id:ChildProviderRequestId::String(source_id.into()),kind:ChildRequestKind::UserInput,
-                    details:json!({"method":"t3.runtime-request.respond","questions":questions,"secret":false}),offered:vec![ChildRequestDecision::Accept],question_ids:questions.as_array().into_iter().flatten().filter_map(|q|q["id"].as_str().map(str::to_owned)).collect(),truncated:false};
-                send_wrapper_message(&self.writer,WrapperToDaemon::ChildRequest{request});
-            } else if let Some((id,row))=existing {
-                let expected=t3_user_input_answers(&row["answers"]);
-                let applied=row["state"]=="submitted" && source["status"]=="resolved" && expected.as_ref()==Some(&source["answers"]);
-                send_wrapper_message(&self.writer,WrapperToDaemon::ChildRequestClosed{request_id:id.clone(),state:if applied{ChildRequestClosedState::AlreadyApplied}else{ChildRequestClosedState::ClosedBeforeApply}});
+        use bridget_transport::protocol::{
+            ChildProviderRequest, ChildProviderRequestId, ChildRequestClosedState,
+            ChildRequestDecision, ChildRequestKind,
+        };
+        for activity in detail
+            .activities
+            .iter()
+            .filter(|a| a.kind == "user_input.request")
+        {
+            let source = &activity.payload["request"];
+            let Some(source_id) = source["id"].as_str() else {
+                continue;
+            };
+            let existing = self
+                .user_inputs
+                .iter()
+                .find(|(_, r)| r["callback"]["provider_request_id"] == source_id)
+                .map(|(id, row)| (id.clone(), row.clone()));
+            if source["status"] == "pending"
+                && matches!(
+                    source["responseCapability"]["type"].as_str(),
+                    Some("live" | "message")
+                )
+            {
+                let questions = &activity.payload["questions"];
+                if let Some((id, row)) = &existing
+                    && row["callback"]["details"]["questions"] != *questions
+                {
+                    send_wrapper_message(
+                        &self.writer,
+                        WrapperToDaemon::ChildRequestClosed {
+                            request_id: id.clone(),
+                            state: ChildRequestClosedState::ClosedBeforeApply,
+                        },
+                    );
+                    self.user_inputs.remove(id);
+                }
+                let request = ChildProviderRequest {
+                    version: 1,
+                    provider_session: self.thread_id.clone(),
+                    turn_id: activity
+                        .turn_id
+                        .clone()
+                        .unwrap_or_else(|| self.thread_id.clone()),
+                    provider_request_id: ChildProviderRequestId::String(source_id.into()),
+                    kind: ChildRequestKind::UserInput,
+                    details: json!({"method":"t3.runtime-request.respond","questions":questions,"secret":false}),
+                    offered: vec![ChildRequestDecision::Accept],
+                    question_ids: questions
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .filter_map(|q| q["id"].as_str().map(str::to_owned))
+                        .collect(),
+                    truncated: false,
+                };
+                send_wrapper_message(&self.writer, WrapperToDaemon::ChildRequest { request });
+            } else if let Some((id, row)) = existing {
+                let expected = t3_user_input_answers(&row["answers"]);
+                let applied = row["state"] == "submitted"
+                    && source["status"] == "resolved"
+                    && expected.as_ref() == Some(&source["answers"]);
+                send_wrapper_message(
+                    &self.writer,
+                    WrapperToDaemon::ChildRequestClosed {
+                        request_id: id.clone(),
+                        state: if applied {
+                            ChildRequestClosedState::AlreadyApplied
+                        } else {
+                            ChildRequestClosedState::ClosedBeforeApply
+                        },
+                    },
+                );
                 self.user_inputs.remove(&id);
             }
         }
     }
     fn answer_user_input(&mut self, answer: bridget_transport::protocol::ChildRequestAnswer) {
-        use bridget_transport::protocol::{ChildProviderRequestId,ChildRequestDecision};
-        if answer.provider_session != self.thread_id || answer.decision != ChildRequestDecision::Accept {return;}
-        let ChildProviderRequestId::String(source_id)=&answer.provider_request_id else{return;};
-        let Some(row)=self.user_inputs.get_mut(&answer.request_id) else{return;};
-        if row["callback"]["provider_request_id"]!=*source_id || row["callback"]["turn_id"]!=answer.turn_id {return;}
+        use bridget_transport::protocol::{ChildProviderRequestId, ChildRequestDecision};
+        if answer.provider_session != self.thread_id
+            || answer.decision != ChildRequestDecision::Accept
+        {
+            return;
+        }
+        let ChildProviderRequestId::String(source_id) = &answer.provider_request_id else {
+            return;
+        };
+        let Some(row) = self.user_inputs.get_mut(&answer.request_id) else {
+            return;
+        };
+        if row["callback"]["provider_request_id"] != *source_id
+            || row["callback"]["turn_id"] != answer.turn_id
+        {
+            return;
+        }
         // La commande durable appartient à Bridget. Une erreur réseau reprend le même commandId.
-        if uuid::Uuid::parse_str(&answer.outcome).is_err() {return;}
-        let Some(answers)=answer.answer.as_ref() else{return;};
-        let expected_questions=row["callback"]["details"]["questions"].clone();
-        row["state"]=json!("submitted");
+        if uuid::Uuid::parse_str(&answer.outcome).is_err() {
+            return;
+        }
+        let Some(answers) = answer.answer.as_ref() else {
+            return;
+        };
+        let expected_questions = row["callback"]["details"]["questions"].clone();
+        row["state"] = json!("submitted");
         // Canon commun utilisé pour comparer la résolution relue depuis T3.
-        let mut canonical=serde_json::Map::new();
-        for (id,values) in answers.as_object().into_iter().flatten() {canonical.insert(id.clone(),json!({"selected":values,"text":""}));}
-        row["answers"]=Value::Object(canonical);
-        let detail=match self.session.call(|c|c.thread_detail(&self.thread_id,DETAIL_PAGE)) {Ok(v)=>v,Err(_)=>return,};
-        let pending=detail.activities.iter().any(|a|a.kind=="user_input.request" && a.payload["request"]["id"]==*source_id && a.payload["request"]["status"]=="pending" && a.payload["questions"]==expected_questions && matches!(a.payload["request"]["responseCapability"]["type"].as_str(),Some("live"|"message")));
-        if pending {let _=self.session.call(|c|c.answer_user_input(&self.thread_id,source_id,&answer.outcome,answers));}
+        let mut canonical = serde_json::Map::new();
+        for (id, values) in answers.as_object().into_iter().flatten() {
+            canonical.insert(id.clone(), json!({"selected":values,"text":""}));
+        }
+        row["answers"] = Value::Object(canonical);
+        let detail = match self
+            .session
+            .call(|c| c.thread_detail(&self.thread_id, DETAIL_PAGE))
+        {
+            Ok(v) => v,
+            Err(_) => return,
+        };
+        let pending = detail.activities.iter().any(|a| {
+            a.kind == "user_input.request"
+                && a.payload["request"]["id"] == *source_id
+                && a.payload["request"]["status"] == "pending"
+                && a.payload["questions"] == expected_questions
+                && matches!(
+                    a.payload["request"]["responseCapability"]["type"].as_str(),
+                    Some("live" | "message")
+                )
+        });
+        if pending {
+            let _ = self.session.call(|c| {
+                c.answer_user_input(&self.thread_id, source_id, &answer.outcome, answers)
+            });
+        }
         self.refresh_user_inputs(&detail);
         self.last_key.clear();
     }
 
     fn handle_frame(&mut self, frame: DaemonToWrapper) {
         match frame {
-            DaemonToWrapper::DeliveryReceiptQuery { delivery_id,recipient_instance_id,delivery_generation } => {
-                if let Some(report)=self.tracker.as_ref().and_then(|tracker|
-                    tracker.receipt_report(delivery_id,&recipient_instance_id,delivery_generation,unix_now() as i64)) {
-                    send_wrapper_message(&self.writer,report);
+            DaemonToWrapper::DeliveryReceiptQuery {
+                delivery_id,
+                recipient_instance_id,
+                delivery_generation,
+            } => {
+                if let Some(report) = self.tracker.as_ref().and_then(|tracker| {
+                    tracker.receipt_report(
+                        delivery_id,
+                        &recipient_instance_id,
+                        delivery_generation,
+                        unix_now() as i64,
+                    )
+                }) {
+                    send_wrapper_message(&self.writer, report);
                 }
             }
             // Verdict de l'annonce propriétaire, pas une livraison ni une
             // réponse de mission. Aucun texte n'est injecté dans le fil.
             DaemonToWrapper::ProjectContextResult { .. } => {}
             DaemonToWrapper::UserInputResult { result } => {
-                let item=&result["item"];
-                if item["origin"]=="t3" && item["callback"]["provider_session"]==self.thread_id
-                    && let Some(id)=item["request_id"].as_str() {
-                        if matches!(item["state"].as_str(),Some("pending"|"submitted"|"unknown")) && (self.user_inputs.contains_key(id) || self.user_inputs.len()<32) {if !(item["state"]=="pending" && self.user_inputs.get(id).is_some_and(|r|r["state"]=="submitted")) {self.user_inputs.insert(id.into(),item.clone());}}
-                        else {self.user_inputs.remove(id);}
+                let item = &result["item"];
+                if item["origin"] == "t3"
+                    && item["callback"]["provider_session"] == self.thread_id
+                    && let Some(id) = item["request_id"].as_str()
+                {
+                    if matches!(
+                        item["state"].as_str(),
+                        Some("pending" | "submitted" | "unknown")
+                    ) && (self.user_inputs.contains_key(id) || self.user_inputs.len() < 32)
+                    {
+                        if !(item["state"] == "pending"
+                            && self
+                                .user_inputs
+                                .get(id)
+                                .is_some_and(|r| r["state"] == "submitted"))
+                        {
+                            self.user_inputs.insert(id.into(), item.clone());
+                        }
+                    } else {
+                        self.user_inputs.remove(id);
                     }
+                }
             }
             DaemonToWrapper::ChildRequestAnswer { answer } => self.answer_user_input(answer),
 
             delivery @ (DaemonToWrapper::Deliver { .. }
             | DaemonToWrapper::DeliverIdempotent { .. }) => {
                 self.enqueue_delivery(delivery);
-                *self
-                    .drained_key
-                    .lock()
-                    .recover_poison() = None;
+                *self.drained_key.lock().recover_poison() = None;
                 let _ = self.inbound_deliveries.fetch_update(
                     Ordering::SeqCst,
                     Ordering::SeqCst,
@@ -2302,14 +2471,23 @@ impl LinkWorker {
             }
             DaemonToWrapper::CancelDelivery { id, reason, .. } => {
                 if let Err(error) = self.overflow.cancel(&id) {
-                    error!("annulation en file durable impossible : {error} ; aucune nouvelle injection");
-                    self.daemon_alive.store(false,Ordering::SeqCst);
+                    error!(
+                        "annulation en file durable impossible : {error} ; aucune nouvelle injection"
+                    );
+                    self.daemon_alive.store(false, Ordering::SeqCst);
                 }
                 self.cancelled
                     .lock()
                     .recover_poison()
                     .insert(id.clone(), Instant::now());
-                self.discard_by_id(&id, if reason=="échéance de la demande dépassée" {Discard::Expired("de demande")} else {Discard::RequestClosed("annulée")});
+                self.discard_by_id(
+                    &id,
+                    if reason == "échéance de la demande dépassée" {
+                        Discard::Expired("de demande")
+                    } else {
+                        Discard::RequestClosed("annulée")
+                    },
+                );
                 info!("demande {id} retirée avant démarrage : {reason}");
             }
             DaemonToWrapper::Ack { id, .. } => {
@@ -2446,7 +2624,9 @@ impl LinkWorker {
             }
             if self.queue.len() >= QUEUE_BOUND || self.overflow.has_pending() {
                 if let Err(error) = self.overflow.defer(&delivery) {
-                    error!("file durable indisponible : {error} ; copie maître conservée, reprise au raccordement");
+                    error!(
+                        "file durable indisponible : {error} ; copie maître conservée, reprise au raccordement"
+                    );
                     self.daemon_alive.store(false, Ordering::SeqCst);
                 }
                 return;
@@ -2455,24 +2635,33 @@ impl LinkWorker {
         if self.queue.len() >= QUEUE_BOUND {
             // Une trame historique n'a pas de copie durable. Elle ne peut
             // évincer une remise idempotente conservée pour le destinataire.
-            if matches!(self.queue.front(),Some((DaemonToWrapper::DeliverIdempotent{..},_))) {
+            if matches!(
+                self.queue.front(),
+                Some((DaemonToWrapper::DeliverIdempotent { .. }, _))
+            ) {
                 self.report_discard(&delivery, Discard::Saturated);
                 return;
             }
-            if let Some((oldest,_))=self.queue.pop_front() { self.report_discard(&oldest,Discard::Saturated); }
+            if let Some((oldest, _)) = self.queue.pop_front() {
+                self.report_discard(&oldest, Discard::Saturated);
+            }
         }
         self.queue.push_back((delivery, Instant::now()));
     }
 
     fn refill_deliveries(&mut self) {
-        if !self.queue.is_empty() { return; }
+        if !self.queue.is_empty() {
+            return;
+        }
         while self.queue.len() < QUEUE_BOUND {
             match self.overflow.next() {
-                Ok(Some(frame)) => self.queue.push_back((frame,Instant::now())),
+                Ok(Some(frame)) => self.queue.push_back((frame, Instant::now())),
                 Ok(None) => break,
                 Err(error) => {
-                    error!("relecture de file impossible : {error} ; aucune injection, copie maître conservée");
-                    self.daemon_alive.store(false,Ordering::SeqCst);
+                    error!(
+                        "relecture de file impossible : {error} ; aucune injection, copie maître conservée"
+                    );
+                    self.daemon_alive.store(false, Ordering::SeqCst);
                     break;
                 }
             }
@@ -2545,7 +2734,10 @@ impl LinkWorker {
         if matches!(why, Discard::LinkClosing)
             && matches!(frame, DaemonToWrapper::DeliverIdempotent { .. })
         {
-            info!("remise {} conservée au maître pendant la coupure", message.id);
+            info!(
+                "remise {} conservée au maître pendant la coupure",
+                message.id
+            );
             return;
         }
         let reason = match why {
@@ -2611,13 +2803,7 @@ impl LinkWorker {
     /// O(n), n<=64 : un guidage explicite peut dépasser une tête bloquée.
     fn next_delivery_index(&mut self, summary: &ThreadSummary) -> Option<usize> {
         let provider = thread_provider(summary);
-        let v2 = self
-            .session
-            .inner
-            .lock()
-            .recover_poison()
-            .client
-            .uses_v2();
+        let v2 = self.session.inner.lock().recover_poison().client.uses_v2();
         if !v2 || !explicit_steering_supported(provider.as_deref()) {
             for (frame, _) in &mut self.queue {
                 let message = match frame {
@@ -2626,7 +2812,10 @@ impl LinkWorker {
                     _ => unreachable!(),
                 };
                 if message.intent == Some(bridget_core::MessageIntent::SteerCurrent)
-                    && message.references.iter().any(|reference| reference == "steer-or-queue")
+                    && message
+                        .references
+                        .iter()
+                        .any(|reference| reference == "steer-or-queue")
                 {
                     message.intent = None;
                 }
@@ -3112,18 +3301,31 @@ impl LinkWorker {
             .map(String::as_str)
             .collect();
         // Un détail omis relu au plus une fois par passage ; aucun accès depuis Android à la source.
-        let mut fetched=false;
+        let mut fetched = false;
         if self.state.tool_progress_seeded {
             detail.activities.retain_mut(|activity| {
-                if activity.kind!="tool.progress" || activity.payload["output_omitted"]!=true
-                    || seen_activities.contains(activity.id.as_str()) {return true;}
-                if fetched {return false;} fetched=true;
-                let id=activity.payload["tool_id"].as_str().unwrap_or("").to_owned();
-                let node=activity.payload["source_node_id"].clone();
-                if let Some(run)=activity.turn_id.as_deref() {
-                    match self.session.call(|client|client.tool_detail(&self.thread_id,&id,run,&node)) {
-                        Ok(fields)=>activity.payload=fields,
-                        Err(_)=>activity.payload["details_unavailable"]=serde_json::json!(true),
+                if activity.kind != "tool.progress"
+                    || activity.payload["output_omitted"] != true
+                    || seen_activities.contains(activity.id.as_str())
+                {
+                    return true;
+                }
+                if fetched {
+                    return false;
+                }
+                fetched = true;
+                let id = activity.payload["tool_id"]
+                    .as_str()
+                    .unwrap_or("")
+                    .to_owned();
+                let node = activity.payload["source_node_id"].clone();
+                if let Some(run) = activity.turn_id.as_deref() {
+                    match self
+                        .session
+                        .call(|client| client.tool_detail(&self.thread_id, &id, run, &node))
+                    {
+                        Ok(fields) => activity.payload = fields,
+                        Err(_) => activity.payload["details_unavailable"] = serde_json::json!(true),
                     }
                 }
                 true
@@ -3232,7 +3434,10 @@ impl LinkWorker {
         self.observation_events = events.clone();
         send_wrapper_message(
             &self.writer,
-            WrapperToDaemon::ObservationCapabilities { events, runtime_catalogue: false },
+            WrapperToDaemon::ObservationCapabilities {
+                events,
+                runtime_catalogue: false,
+            },
         );
     }
 
@@ -3253,8 +3458,13 @@ impl LinkWorker {
         }
         if !self.state.tool_progress_seeded {
             if self.state.seeded {
-                self.state.seen_activities.extend(detail.activities.iter()
-                    .filter(|activity| activity.kind == "tool.progress").map(|activity| activity.id.clone()));
+                self.state.seen_activities.extend(
+                    detail
+                        .activities
+                        .iter()
+                        .filter(|activity| activity.kind == "tool.progress")
+                        .map(|activity| activity.id.clone()),
+                );
             }
             self.state.tool_progress_seeded = true;
         }
@@ -3975,7 +4185,10 @@ pub(crate) fn batch_envelope(messages: &[bridget_core::BridgetMessage]) -> Strin
                 message.body
             ));
         }
-        if messages.iter().any(bridget_core::envelope::is_human_instruction) {
+        if messages
+            .iter()
+            .any(bridget_core::envelope::is_human_instruction)
+        {
             rendered.push('\n');
             rendered.push_str(bridget_core::envelope::HUMAN_REPLY_NOTICE);
             rendered.push_str(" Les résultats destinés aux autres agents se transmettent à ces agents par Bridget.");
@@ -4335,16 +4548,33 @@ fn activity_payloads(
     }
     let payload = &activity.payload;
     if activity.kind == "context.compaction" {
-        let valid = payload["kind"] == "tool" && payload["tool_type"] == "context_compaction"
-            && matches!(payload["status"].as_str(), Some("running" | "completed" | "failed" | "cancelled"))
-            && payload["turn_id"].as_str().is_some_and(|turn| Some(turn) == activity.turn_id.as_deref())
-            && payload["item_id"].as_str().is_some_and(|id| !id.is_empty() && id.len()<=256 && !id.chars().any(char::is_control));
+        let valid = payload["kind"] == "tool"
+            && payload["tool_type"] == "context_compaction"
+            && matches!(
+                payload["status"].as_str(),
+                Some("running" | "completed" | "failed" | "cancelled")
+            )
+            && payload["turn_id"]
+                .as_str()
+                .is_some_and(|turn| Some(turn) == activity.turn_id.as_deref())
+            && payload["item_id"].as_str().is_some_and(|id| {
+                !id.is_empty() && id.len() <= 256 && !id.chars().any(char::is_control)
+            });
         return if valid { vec![payload.clone()] } else { vec![] };
     }
     if activity.kind == "tool.progress" {
-        let mut event=serde_json::json!({"kind":"tool","tool_id":payload["tool_id"],"text":payload["tool"].as_str().unwrap_or_else(||payload["itemType"].as_str().unwrap_or("tool")),"tool_type":payload["itemType"],"status":payload["status"],"tool":payload["tool"]});
-        for field in ["input","output","exit_code","output_omitted","details_truncated","details_unavailable"] {
-            if let Some(value)=payload.get(field) {event[field]=value.clone();}
+        let mut event = serde_json::json!({"kind":"tool","tool_id":payload["tool_id"],"text":payload["tool"].as_str().unwrap_or_else(||payload["itemType"].as_str().unwrap_or("tool")),"tool_type":payload["itemType"],"status":payload["status"],"tool":payload["tool"]});
+        for field in [
+            "input",
+            "output",
+            "exit_code",
+            "output_omitted",
+            "details_truncated",
+            "details_unavailable",
+        ] {
+            if let Some(value) = payload.get(field) {
+                event[field] = value.clone();
+            }
         }
         return vec![event];
     }
@@ -4614,12 +4844,16 @@ mod mobile183_compaction_projection_tests {
     use super::*;
     #[test]
     fn mobile183_compaction_projection_preserves_only_correlated_structural_facts() {
-        let mut activity=contract::Activity {id:"comp".into(),kind:"context.compaction".into(),turn_id:Some("r".into()),
-            payload:json!({"kind":"tool","tool_type":"context_compaction","status":"running","turn_id":"r","item_id":"i"})};
-        let facts=activity_payloads(&activity,"codex",Path::new("/tmp"));
-        assert_eq!(facts.len(),1);
-        assert!(bridget_transport::act_kind::validate_journal_write("update",&facts[0]).is_ok());
-        activity.payload["turn_id"]=json!("foreign");
-        assert!(activity_payloads(&activity,"codex",Path::new("/tmp")).is_empty());
+        let mut activity = contract::Activity {
+            id: "comp".into(),
+            kind: "context.compaction".into(),
+            turn_id: Some("r".into()),
+            payload: json!({"kind":"tool","tool_type":"context_compaction","status":"running","turn_id":"r","item_id":"i"}),
+        };
+        let facts = activity_payloads(&activity, "codex", Path::new("/tmp"));
+        assert_eq!(facts.len(), 1);
+        assert!(bridget_transport::act_kind::validate_journal_write("update", &facts[0]).is_ok());
+        activity.payload["turn_id"] = json!("foreign");
+        assert!(activity_payloads(&activity, "codex", Path::new("/tmp")).is_empty());
     }
 }

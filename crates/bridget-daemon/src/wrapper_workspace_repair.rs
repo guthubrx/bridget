@@ -1,6 +1,6 @@
 //! Le wrapper reste propriétaire de son fournisseur pendant la réparation185.
-use bridget_transport::poison::RecoverPoison;
 use super::*;
+use bridget_transport::poison::RecoverPoison;
 use bridget_transport::protocol::WorkspaceRepairStatusV1;
 
 struct RetainedRepairSession {
@@ -27,10 +27,7 @@ impl ManagedSession for RetainedRepairSession {
         self.descriptor.clone()
     }
     fn process_id(&self) -> u32 {
-        self.owner
-            .lock()
-            .recover_poison()
-            .process_id()
+        self.owner.lock().recover_poison().process_id()
     }
     fn activate_journal(
         &self,
@@ -234,14 +231,14 @@ pub(super) fn apply(
                 if let Ok(error) = error.downcast::<bridget_transport::TransportError>()
                     && let bridget_transport::TransportError::StartUnconfirmed { owner, .. } =
                         *error
-                    {
-                        let descriptor = transport.descriptor();
-                        *transport = Box::new(RetainedRepairSession {
-                            owner: Mutex::new(owner),
-                            descriptor,
-                            connection_id: "workspace-repair-unconfirmed".into(),
-                        });
-                    }
+                {
+                    let descriptor = transport.descriptor();
+                    *transport = Box::new(RetainedRepairSession {
+                        owner: Mutex::new(owner),
+                        descriptor,
+                        connection_id: "workspace-repair-unconfirmed".into(),
+                    });
+                }
                 return Err(code);
             }
         };
@@ -301,13 +298,14 @@ pub(super) fn apply(
     let mut pending_receipt = None;
     if let Some(context) =
         remote.filter(|v| v.command.task_id == task_id && v.command.instance_id == instance)
-        && !persist_pending(context, &status) {
-            pending_receipt = Some(status.clone());
-            if status.phase == "refused" {
-                status.phase = "prepared".into();
-            }
-            status.code = Some("workspace_repair_receipt_unconfirmed".into());
+        && !persist_pending(context, &status)
+    {
+        pending_receipt = Some(status.clone());
+        if status.phase == "refused" {
+            status.phase = "prepared".into();
         }
+        status.code = Some("workspace_repair_receipt_unconfirmed".into());
+    }
     ApplyOutcome {
         status,
         pending_receipt,

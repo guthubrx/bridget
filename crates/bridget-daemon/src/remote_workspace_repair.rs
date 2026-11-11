@@ -144,12 +144,13 @@ impl WorkerRuntime {
             .ok_or(WorkerRefusal::UnknownExecution)?;
         // Le canon, le marqueur, la génération et la phase restent intacts.
         if let Some(previous) = receipt.workspace_repair.take()
-            && previous.request.request_id != status.request.request_id {
-                if previous.phase != "refused" || receipt.workspace_repair_history.len() >= 7 {
-                    return Err(WorkerRefusal::InvalidEnvelope);
-                }
-                receipt.workspace_repair_history.push(previous);
+            && previous.request.request_id != status.request.request_id
+        {
+            if previous.phase != "refused" || receipt.workspace_repair_history.len() >= 7 {
+                return Err(WorkerRefusal::InvalidEnvelope);
             }
+            receipt.workspace_repair_history.push(previous);
+        }
         receipt.workspace_repair = Some(status.clone());
         receipt.updated_at = worker_now();
         if serde_json::to_vec(&receipt).map_err(unavailable)?.len() > MAX_METADATA_BYTES {
@@ -215,13 +216,13 @@ impl WorkerRuntime {
             .filter(|v| v.phase == "prepared")
             && let Some(observed) =
                 wrapper_result(&self.store.root, command, &previous.request).map_err(unavailable)?
-                && observed.phase == "refused"
-                    && observed.prepared == previous.prepared
-                    && observed.proof == previous.proof
-                {
-                    self.save_repair_status(command, observed)?;
-                    receipt = self.store.command(command).map_err(refuse)?;
-                }
+            && observed.phase == "refused"
+            && observed.prepared == previous.prepared
+            && observed.proof == previous.proof
+        {
+            self.save_repair_status(command, observed)?;
+            receipt = self.store.command(command).map_err(refuse)?;
+        }
         let refused = |code: &str| WorkerResponseOperation::WorkspaceRepair {
             status: WorkspaceRepairStatusV1 {
                 request: request.clone(),
@@ -350,10 +351,14 @@ impl WorkerRuntime {
             };
             // Reconstituer l'ancienne définition admise avant de vérifier la
             // nouvelle projection. Ni modèle ni effort ne viennent du caller.
-            let registry = self.registry()?.pin_delegation_service_tier(
-                &retained.request.agent_type,&retained.request.model,
-                retained.request.service_tier.as_deref())
-                .map_err(|_|WorkerRefusal::DefinitionChanged)?;
+            let registry = self
+                .registry()?
+                .pin_delegation_service_tier(
+                    &retained.request.agent_type,
+                    &retained.request.model,
+                    retained.request.service_tier.as_deref(),
+                )
+                .map_err(|_| WorkerRefusal::DefinitionChanged)?;
             let original_scoped = registry
                 .for_inherited_delegation(
                     &retained.request.agent_type,
@@ -446,9 +451,14 @@ impl WorkerRuntime {
             Ok(value) => value,
             Err(code) => return Ok(refused(&code)),
         };
-        let registry = self.registry()?.pin_delegation_service_tier(
-            &prepare.agent_type,&prepare.model,prepare.service_tier.as_deref())
-            .map_err(|_|WorkerRefusal::DefinitionChanged)?;
+        let registry = self
+            .registry()?
+            .pin_delegation_service_tier(
+                &prepare.agent_type,
+                &prepare.model,
+                prepare.service_tier.as_deref(),
+            )
+            .map_err(|_| WorkerRefusal::DefinitionChanged)?;
         if let Some(routing) = &receipt.routing {
             self.check_routing_connection(&registry, &prepare, routing)?;
         }

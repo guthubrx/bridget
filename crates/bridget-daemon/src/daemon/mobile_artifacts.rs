@@ -1,5 +1,4 @@
 //! Adaptation humaine des artefacts natifs : aucun chemin reçu ni identité d'agent empruntée.
-use bridget_transport::poison::RecoverPoison;
 use super::*;
 use crate::{
     artifact_store::{ArtifactStore, ArtifactStoreError},
@@ -9,6 +8,7 @@ use crate::{
     },
     mobile::store::{Device, Operation, Store},
 };
+use bridget_transport::poison::RecoverPoison;
 use bridget_transport::protocol::{MobileFileUpload, MobileOperation, MobileOperationRequest};
 use serde_json::{Value, json};
 use std::path::Path;
@@ -83,7 +83,12 @@ fn valid_file_name(name: &str) -> bool {
 fn allowed_media(media: &str) -> bool {
     matches!(
         media,
-        "application/pdf" | "text/plain" | "text/html" | "text/markdown" | "image/png" | "image/jpeg"
+        "application/pdf"
+            | "text/plain"
+            | "text/html"
+            | "text/markdown"
+            | "image/png"
+            | "image/jpeg"
     )
 }
 fn valid_bytes(media: &str, bytes: &[u8]) -> bool {
@@ -93,10 +98,12 @@ fn valid_bytes(media: &str, bytes: &[u8]) -> bool {
             "application/pdf" => bytes.starts_with(b"%PDF-"),
             "image/png" => bytes.starts_with(b"\x89PNG\r\n\x1a\n"),
             "image/jpeg" => bytes.starts_with(&[0xff, 0xd8, 0xff]),
-            "text/plain" | "text/html" | "text/markdown" => std::str::from_utf8(bytes).is_ok_and(|s| {
-                !s.chars()
-                    .any(|c| c.is_control() && !matches!(c, '\n' | '\r' | '\t'))
-            }),
+            "text/plain" | "text/html" | "text/markdown" => {
+                std::str::from_utf8(bytes).is_ok_and(|s| {
+                    !s.chars()
+                        .any(|c| c.is_control() && !matches!(c, '\n' | '\r' | '\t'))
+                })
+            }
             _ => false,
         }
 }
@@ -121,7 +128,10 @@ fn metadata(
             d.item.artifact_ref == artifact && d.item.conversation_reference == binding.conversation
         })
         .ok_or("not_found")?;
-    if !matches!(detail.item.kind, ArtifactKind::Image | ArtifactKind::File | ArtifactKind::Html) {
+    if !matches!(
+        detail.item.kind,
+        ArtifactKind::Image | ArtifactKind::File | ArtifactKind::Html
+    ) {
         return Err("file_type_unavailable");
     }
     let payload = &detail.publication.payload;
@@ -133,7 +143,11 @@ fn metadata(
         .version_blob(&binding.project, version, digest)
         .map_err(|_| "storage_unavailable")?
         .ok_or("not_found")?;
-    let media = if blob.media_type == "text/html; charset=utf-8" { "text/html" } else { blob.media_type.as_str() };
+    let media = if blob.media_type == "text/html; charset=utf-8" {
+        "text/html"
+    } else {
+        blob.media_type.as_str()
+    };
     if !allowed_media(media) {
         return Err("file_type_unavailable");
     }
@@ -163,11 +177,7 @@ pub(super) fn handle(
             if !device.scope.operations.contains(&Operation::Message) {
                 return fail("forbidden_scope");
             }
-            let db = state
-                .lock()
-                .recover_poison()
-                .db_path
-                .clone();
+            let db = state.lock().recover_poison().db_path.clone();
             let value = ArtifactStore::open(&db)
                 .and_then(|s| s.publication_by_key(&upload_key(&device.device_id, command_id)));
             if let Err(code) = current_device(root, request) {

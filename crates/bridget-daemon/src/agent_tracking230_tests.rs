@@ -498,14 +498,38 @@ fn tracking230_snapshot_anterieur_au_commit_client_est_ignore() {
 
 #[test]
 fn tracking230_desactivation_sync_reconcilie_uniquement_la_commande_deja_partie() {
-    let f=Fixture::new(); let c=f.store.connection(); bind(c,&agent(),THREAD).unwrap();
-    f.set(true,None);
-    let command=f.observe("1",Some("active"),None)["pending"][0].clone();
-    f.set(false,Some(false));
-    let retry=f.observe("2",None,None)["pending"][0].clone();
-    assert_eq!(retry["client_command_id"],command["client_command_id"],"seul le reçu incertain est rapproché");
-    assert_eq!(view(c,AGENT).unwrap().unwrap().synchronization_status,"awaiting_confirmation");
-    let result=sync(c,"test-host",&[observation("3",Some("settled"),true,1000)],&[report(&command,AgentTrackingSyncOutcome::Applied{sequence:10})],104).unwrap();
-    assert!(result["pending"].as_array().unwrap().is_empty(),"pas de nouvelle commande après désactivation");
-    let view=view(c,AGENT).unwrap().unwrap(); assert!(!view.dormant); assert!(!view.synchronize); assert_eq!(view.synchronization_status,"local_only");
+    let f = Fixture::new();
+    let c = f.store.connection();
+    bind(c, &agent(), THREAD).unwrap();
+    f.set(true, None);
+    let command = f.observe("1", Some("active"), None)["pending"][0].clone();
+    f.set(false, Some(false));
+    let retry = f.observe("2", None, None)["pending"][0].clone();
+    assert_eq!(
+        retry["client_command_id"], command["client_command_id"],
+        "seul le reçu incertain est rapproché"
+    );
+    assert_eq!(
+        view(c, AGENT).unwrap().unwrap().synchronization_status,
+        "awaiting_confirmation"
+    );
+    let result = sync(
+        c,
+        "test-host",
+        &[observation("3", Some("settled"), true, 1000)],
+        &[report(
+            &command,
+            AgentTrackingSyncOutcome::Applied { sequence: 10 },
+        )],
+        104,
+    )
+    .unwrap();
+    assert!(
+        result["pending"].as_array().unwrap().is_empty(),
+        "pas de nouvelle commande après désactivation"
+    );
+    let view = view(c, AGENT).unwrap().unwrap();
+    assert!(!view.dormant);
+    assert!(!view.synchronize);
+    assert_eq!(view.synchronization_status, "local_only");
 }

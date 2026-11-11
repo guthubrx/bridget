@@ -33,12 +33,15 @@ const ANSWER: &str = "fixture-glm5.3-answer-148";
 // Ses watchdogs et nettoyages SIGKILL ne sont pas utilisés par cette recette.
 fn fixture_binary201(command: &str) -> bool {
     command.contains(env!("CARGO_BIN_EXE_bridget"))
-        || ["BRIDGET_TEST_OLD_BINARY", "BRIDGET_TEST_NEW_BINARY"].iter().any(|key| {
-            std::env::var(key).ok().is_some_and(|path| {
-                Path::new(&path).is_absolute() && Path::new(&path).is_file()
-                    && command.contains(&path)
+        || ["BRIDGET_TEST_OLD_BINARY", "BRIDGET_TEST_NEW_BINARY"]
+            .iter()
+            .any(|key| {
+                std::env::var(key).ok().is_some_and(|path| {
+                    Path::new(&path).is_absolute()
+                        && Path::new(&path).is_file()
+                        && command.contains(&path)
+                })
             })
-        })
 }
 struct OwnedChild(Child);
 impl OwnedChild {
@@ -120,10 +123,7 @@ impl OwnedChild {
                 .and_then(|value| value.parse::<u32>().ok()),
             Some(std::process::id())
         );
-        assert!(
-            fixture_binary201(&command)
-                && !command.to_lowercase().contains("firefox")
-        );
+        assert!(fixture_binary201(&command) && !command.to_lowercase().contains("firefox"));
         // SAFETY: kill ne déréférence aucun pointeur ; ses arguments sont des entiers.
         assert_eq!(unsafe { libc::kill(self.0.id() as i32, libc::SIGTERM) }, 0);
         self.wait(Duration::from_secs(10));
@@ -1285,9 +1285,10 @@ for line in sys.stdin:
                 [id], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
             ).optional().unwrap();
             if let Some(row) = row
-                && (case != "human" || row.3.is_some()) {
-                    break row;
-                }
+                && (case != "human" || row.3.is_some())
+            {
+                break row;
+            }
             let status = f.request(
                 &mut parent,
                 NativeDelegationRequest::Status { task_id: id.into() },

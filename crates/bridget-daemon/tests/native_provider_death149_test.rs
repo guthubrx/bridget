@@ -11,8 +11,8 @@
 //! - Témoin : agent persistant ordinaire, fournisseur tué, relancé (2 démarrages).
 //! - Natif : même scénario, aucune relance (1 démarrage), wrapper terminé.
 
-use bridget_transport::poison::RecoverPoison;
 use bridget_daemon::managed_process::{ManagedMarkerStore, group_exists};
+use bridget_transport::poison::RecoverPoison;
 use bridget_transport::protocol::{decode, encode};
 use bridget_transport::{DaemonToWrapper, StopOutcome, WrapperToDaemon};
 use std::fs;

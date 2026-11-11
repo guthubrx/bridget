@@ -1,5 +1,5 @@
 use super::*;
-use std::os::unix::fs::{PermissionsExt,MetadataExt};
+use std::os::unix::fs::{MetadataExt, PermissionsExt};
 
 // Même recette que wrapper::prompt_tests : PATH privé dans un fils de test,
 // aucune mutation de l'environnement commun de la suite.
@@ -705,35 +705,83 @@ fn worktree171_branch_mirror_import_isolation_and_refusals() {
         let root = repo.parent().unwrap();
         let mirror = root.join("mirror.git");
         let target = root.join("target");
-        fixture_git(repo, &["clone", "--bare", "--quiet", repo.to_str().unwrap(), mirror.to_str().unwrap()]);
-        fixture_git(repo, &["clone", "--quiet", mirror.to_str().unwrap(), target.to_str().unwrap()]);
+        fixture_git(
+            repo,
+            &[
+                "clone",
+                "--bare",
+                "--quiet",
+                repo.to_str().unwrap(),
+                mirror.to_str().unwrap(),
+            ],
+        );
+        fixture_git(
+            repo,
+            &[
+                "clone",
+                "--quiet",
+                mirror.to_str().unwrap(),
+                target.to_str().unwrap(),
+            ],
+        );
         fixture_git(repo, &["checkout", "-qb", "feature171"]);
         fs::write(repo.join("sub/tracked"), "feature171\n").unwrap();
         fixture_git(repo, &["commit", "-qam", "feature"]);
         let feature = resolve_source_commit(repo, None).unwrap();
-        fixture_git(repo, &["push", "--quiet", mirror.to_str().unwrap(), "feature171"]);
+        fixture_git(
+            repo,
+            &["push", "--quiet", mirror.to_str().unwrap(), "feature171"],
+        );
         fixture_git(repo, &["checkout", "--detach", "--quiet", &base]);
         fixture_git(repo, &["config", "extensions.worktreeConfig", "true"]);
         let source_config = fs::read(repo.join(".git/config")).unwrap();
-        assert_eq!(resolve_source_commit(repo, Some("feature171")).unwrap(), feature);
+        assert_eq!(
+            resolve_source_commit(repo, Some("feature171")).unwrap(),
+            feature
+        );
         assert_eq!(resolve_source_commit(repo, None).unwrap(), base);
-        assert_eq!(preflight_classified(repo, Some(&feature), None).unwrap().base_commit, feature);
+        assert_eq!(
+            preflight_classified(repo, Some(&feature), None)
+                .unwrap()
+                .base_commit,
+            feature
+        );
         let before_config = fs::read(target.join(".git/config")).unwrap();
         let before_index = fs::read(target.join(".git/index")).unwrap();
         assert!(resolve_source_commit(&target, Some(&feature)).is_err());
         let plan = preflight_remote(&target, Some(&feature), None).unwrap();
         assert_eq!(plan.base_commit, feature);
-        assert!(resolve_source_commit(&target, Some(&feature)).is_err(), "Probe ne récupère rien");
+        assert!(
+            resolve_source_commit(&target, Some(&feature)).is_err(),
+            "Probe ne récupère rien"
+        );
         import_remote_commit(&target, &feature).unwrap();
         assert!(!target.join(".git/FETCH_HEAD").exists());
         let first = create(&plan, &uuid::Uuid::new_v4().to_string()).unwrap();
-        let second = create(&preflight_remote(&target, Some(&feature), None).unwrap(), &uuid::Uuid::new_v4().to_string()).unwrap();
+        let second = create(
+            &preflight_remote(&target, Some(&feature), None).unwrap(),
+            &uuid::Uuid::new_v4().to_string(),
+        )
+        .unwrap();
         assert_ne!(first.path, second.path);
         assert_eq!(report(&first).unwrap().head_commit, Some(feature.clone()));
-        assert_eq!(fs::read_to_string(Path::new(&first.path).join("sub/tracked")).unwrap(), "feature171\n");
-        fs::write(Path::new(&first.path).join("sub/tracked"), "isolated edit\n").unwrap();
-        assert_eq!(fs::read_to_string(Path::new(&second.path).join("sub/tracked")).unwrap(), "feature171\n");
-        assert_eq!(fs::read_to_string(target.join("sub/tracked")).unwrap(), "initial\n");
+        assert_eq!(
+            fs::read_to_string(Path::new(&first.path).join("sub/tracked")).unwrap(),
+            "feature171\n"
+        );
+        fs::write(
+            Path::new(&first.path).join("sub/tracked"),
+            "isolated edit\n",
+        )
+        .unwrap();
+        assert_eq!(
+            fs::read_to_string(Path::new(&second.path).join("sub/tracked")).unwrap(),
+            "feature171\n"
+        );
+        assert_eq!(
+            fs::read_to_string(target.join("sub/tracked")).unwrap(),
+            "initial\n"
+        );
         assert_eq!(resolve_source_commit(&target, None).unwrap(), base);
         assert_eq!(fs::read(target.join(".git/index")).unwrap(), before_index);
         assert_eq!(fs::read(target.join(".git/config")).unwrap(), before_config);
@@ -741,7 +789,11 @@ fn worktree171_branch_mirror_import_isolation_and_refusals() {
         assert!(preflight_remote(&target, Some(&"a".repeat(40)), None).is_err());
         assert!(import_remote_commit(&target, "--upload-pack=bad").is_err());
         fixture_git(&target, &["config", "filter.bad.clean", "false"]);
-        assert!(preflight_remote(&target, Some(&feature), None).unwrap_err().starts_with("workspace_repo_unsupported:"));
+        assert!(
+            preflight_remote(&target, Some(&feature), None)
+                .unwrap_err()
+                .starts_with("workspace_repo_unsupported:")
+        );
     });
 }
 
@@ -758,12 +810,18 @@ fn worktree171_per_worktree_config_creation_reporting_and_guards() {
         let workspace = create(&plan, &uuid::Uuid::new_v4().to_string()).unwrap();
         let child = Path::new(&workspace.path);
         assert_eq!(resolve_source_commit(child, None).unwrap(), head);
-        assert_eq!(fs::read_to_string(child.join("sub/tracked")).unwrap(), "initial\n");
+        assert_eq!(
+            fs::read_to_string(child.join("sub/tracked")).unwrap(),
+            "initial\n"
+        );
         fs::write(child.join("sub/tracked"), "child only\n").unwrap();
         let observed = report(&workspace).unwrap();
         assert_eq!(observed.head_commit, Some(head.clone()));
         assert_eq!(observed.dirty, Some(true));
-        assert_eq!(fs::read_to_string(repo.join("sub/tracked")).unwrap(), "initial\n");
+        assert_eq!(
+            fs::read_to_string(repo.join("sub/tracked")).unwrap(),
+            "initial\n"
+        );
         assert_eq!(resolve_source_commit(repo, None).unwrap(), head);
         assert_eq!(fs::read(repo.join(".git/config")).unwrap(), config);
         assert_eq!(fs::read(repo.join(".git/config.worktree")).unwrap(), local);
@@ -771,14 +829,34 @@ fn worktree171_per_worktree_config_creation_reporting_and_guards() {
         // Both common and worktree-local executable settings remain refused.
         for scope in ["--local", "--worktree"] {
             fixture_git(repo, &["config", scope, "filter.bad.clean", "false"]);
-            assert!(matches!(preflight_classified(repo, None, None), Err(WorkspacePreflightError::Refused(e)) if e.starts_with("workspace_repo_unsupported:")));
-            assert!(create(&plan, &uuid::Uuid::new_v4().to_string()).unwrap_err().starts_with("workspace_repo_unsupported:"));
+            assert!(
+                matches!(preflight_classified(repo, None, None), Err(WorkspacePreflightError::Refused(e)) if e.starts_with("workspace_repo_unsupported:"))
+            );
+            assert!(
+                create(&plan, &uuid::Uuid::new_v4().to_string())
+                    .unwrap_err()
+                    .starts_with("workspace_repo_unsupported:")
+            );
             fixture_git(repo, &["config", scope, "--unset", "filter.bad.clean"]);
         }
-        fixture_git(child, &["config", "--worktree", "filter.bad.clean", "false"]);
+        fixture_git(
+            child,
+            &["config", "--worktree", "filter.bad.clean", "false"],
+        );
         assert!(report(&workspace).is_err());
-        fixture_git(child, &["config", "--worktree", "--unset", "filter.bad.clean"]);
-        fixture_git(repo, &["config", "--worktree", "include.path", "/nonexistent-bridget-config"]);
+        fixture_git(
+            child,
+            &["config", "--worktree", "--unset", "filter.bad.clean"],
+        );
+        fixture_git(
+            repo,
+            &[
+                "config",
+                "--worktree",
+                "include.path",
+                "/nonexistent-bridget-config",
+            ],
+        );
         assert!(executable_configuration(repo).unwrap());
         assert!(preflight_classified(repo, None, None).is_err());
         fixture_git(repo, &["config", "--worktree", "--unset", "include.path"]);
@@ -790,9 +868,18 @@ fn worktree171_per_worktree_config_creation_reporting_and_guards() {
 fn worktree171_failed_extraction_releases_only_its_unused_branch() {
     with_repo(|repo| {
         let branch_exists = |name: &str| {
-            run_git(repo, &["show-ref", "--verify", "--quiet", &format!("refs/heads/{name}")], READ_TIMEOUT)
-                .unwrap()
-                .success()
+            run_git(
+                repo,
+                &[
+                    "show-ref",
+                    "--verify",
+                    "--quiet",
+                    &format!("refs/heads/{name}"),
+                ],
+                READ_TIMEOUT,
+            )
+            .unwrap()
+            .success()
         };
         // Dossier .worktrees en lecture seule : Git crée la branche, puis
         // échoue à l'extraction, comme après l'arrêt d'un délai dépassé.
@@ -809,7 +896,11 @@ fn worktree171_failed_extraction_releases_only_its_unused_branch() {
         let replay = preflight_classified(repo, None, Some("failed-extraction")).unwrap();
         let workspace = create(&replay, &uuid::Uuid::new_v4().to_string()).unwrap();
         // Branche utilisée par un worktree, ou déplacée : jamais retirée.
-        assert!(!release_unused_branch(repo, "failed-extraction", &plan.base_commit));
+        assert!(!release_unused_branch(
+            repo,
+            "failed-extraction",
+            &plan.base_commit
+        ));
         assert!(branch_exists("failed-extraction"));
         fixture_git(repo, &["branch", "moved", &plan.base_commit]);
         fs::write(Path::new(&workspace.path).join("sub/tracked"), "moved\n").unwrap();
@@ -822,33 +913,69 @@ fn worktree171_failed_extraction_releases_only_its_unused_branch() {
 
 #[test]
 fn worktree172_disk_full_keeps_a_distinct_reason() {
-    isolated("disk-full", "workspace_git::tests::worktree172_disk_full_keeps_a_distinct_reason", |fixture| {
-        with_repo(|repo| {
-            let plan = preflight_classified(repo, None, Some("disk-full172")).unwrap();
-            let task = uuid::Uuid::new_v4().to_string();
-            let error = create(&plan, &task).unwrap_err();
-            assert!(error.starts_with("workspace_disk_full:"), "{error}");
-            assert_eq!(fs::read_to_string(fixture.join("branch-created")).unwrap(), "disk-full172");
-            assert!(error.contains("branche retirée : true"), "{error}");
-            assert!(!repo.join(".worktrees").join(&task[..8]).exists());
-            assert!(!run_git(repo, &["show-ref", "--verify", "--quiet", "refs/heads/disk-full172"], READ_TIMEOUT).unwrap().success());
-        });
-    });
+    isolated(
+        "disk-full",
+        "workspace_git::tests::worktree172_disk_full_keeps_a_distinct_reason",
+        |fixture| {
+            with_repo(|repo| {
+                let plan = preflight_classified(repo, None, Some("disk-full172")).unwrap();
+                let task = uuid::Uuid::new_v4().to_string();
+                let error = create(&plan, &task).unwrap_err();
+                assert!(error.starts_with("workspace_disk_full:"), "{error}");
+                assert_eq!(
+                    fs::read_to_string(fixture.join("branch-created")).unwrap(),
+                    "disk-full172"
+                );
+                assert!(error.contains("branche retirée : true"), "{error}");
+                assert!(!repo.join(".worktrees").join(&task[..8]).exists());
+                assert!(
+                    !run_git(
+                        repo,
+                        &["show-ref", "--verify", "--quiet", "refs/heads/disk-full172"],
+                        READ_TIMEOUT
+                    )
+                    .unwrap()
+                    .success()
+                );
+            });
+        },
+    );
 }
 
 #[test]
 fn worktree172_failure_classification_uses_only_git_diagnostics() {
     for (stderr, expected) in [
-        ("fatal: unable to write: No space left on device", "workspace_disk_full"),
-        ("error: unable to create: Disk quota exceeded", "workspace_disk_full"),
-        ("fatal: cannot mkdir: Permission denied", "workspace_access_denied"),
+        (
+            "fatal: unable to write: No space left on device",
+            "workspace_disk_full",
+        ),
+        (
+            "error: unable to create: Disk quota exceeded",
+            "workspace_disk_full",
+        ),
+        (
+            "fatal: cannot mkdir: Permission denied",
+            "workspace_access_denied",
+        ),
         ("error: Read-only file system", "workspace_access_denied"),
         ("No space left on device", "workspace_create_failed"),
-        ("remote: fatal: No space left on device", "workspace_create_failed"),
-        ("warning: example No space left on device", "workspace_create_failed"),
+        (
+            "remote: fatal: No space left on device",
+            "workspace_create_failed",
+        ),
+        (
+            "warning: example No space left on device",
+            "workspace_create_failed",
+        ),
         ("fatal: unknown checkout failure", "workspace_create_failed"),
-        ("fatal: bad path 'No space left on device'", "workspace_create_failed"),
-        ("error: cannot read file 'Permission denied'", "workspace_create_failed"),
+        (
+            "fatal: bad path 'No space left on device'",
+            "workspace_create_failed",
+        ),
+        (
+            "error: cannot read file 'Permission denied'",
+            "workspace_create_failed",
+        ),
     ] {
         assert_eq!(worktree_failure_code(stderr), expected);
     }
@@ -856,31 +983,52 @@ fn worktree172_failure_classification_uses_only_git_diagnostics() {
 
 #[test]
 fn worktree172_fetch_disk_full_is_classified_without_moving_checkout() {
-    isolated("fetch-full", "workspace_git::tests::worktree172_fetch_disk_full_is_classified_without_moving_checkout", |_| {
-        with_repo(|repo| {
-            let base = resolve_source_commit(repo, None).unwrap();
-            let target = repo.parent().unwrap().join("target");
-            fixture_git(repo, &["clone", "--quiet", repo.to_str().unwrap(), target.to_str().unwrap()]);
-            fs::write(repo.join("sub/tracked"), "new commit\n").unwrap();
-            fixture_git(repo, &["commit", "-qam", "new"]);
-            let commit = resolve_source_commit(repo, None).unwrap();
-            let error = import_remote_commit(&target, &commit).unwrap_err();
-            assert!(error.starts_with("workspace_disk_full:"), "{error}");
-            assert_eq!(resolve_source_commit(&target, None).unwrap(), base);
-            assert!(!target.join(".git/FETCH_HEAD").exists());
-        });
-    });
+    isolated(
+        "fetch-full",
+        "workspace_git::tests::worktree172_fetch_disk_full_is_classified_without_moving_checkout",
+        |_| {
+            with_repo(|repo| {
+                let base = resolve_source_commit(repo, None).unwrap();
+                let target = repo.parent().unwrap().join("target");
+                fixture_git(
+                    repo,
+                    &[
+                        "clone",
+                        "--quiet",
+                        repo.to_str().unwrap(),
+                        target.to_str().unwrap(),
+                    ],
+                );
+                fs::write(repo.join("sub/tracked"), "new commit\n").unwrap();
+                fixture_git(repo, &["commit", "-qam", "new"]);
+                let commit = resolve_source_commit(repo, None).unwrap();
+                let error = import_remote_commit(&target, &commit).unwrap_err();
+                assert!(error.starts_with("workspace_disk_full:"), "{error}");
+                assert_eq!(resolve_source_commit(&target, None).unwrap(), base);
+                assert!(!target.join(".git/FETCH_HEAD").exists());
+            });
+        },
+    );
 }
 
 #[test]
 fn worktree172_stdout_flood_does_not_hide_stderr_reason() {
-    isolated("large-out-no-space", "workspace_git::tests::worktree172_stdout_flood_does_not_hide_stderr_reason", |fixture| {
-        let output = run_git(&fixture.join("repo"), &["status", "--porcelain=v1", "--untracked-files=normal"], READ_TIMEOUT).unwrap();
-        assert!(output.truncated);
-        assert_eq!(output.stdout.len(), MAX_OUTPUT);
-        assert!(output.stderr.len() <= MAX_OUTPUT);
-        assert_eq!(worktree_failure_code(&output.stderr), "workspace_disk_full");
-    });
+    isolated(
+        "large-out-no-space",
+        "workspace_git::tests::worktree172_stdout_flood_does_not_hide_stderr_reason",
+        |fixture| {
+            let output = run_git(
+                &fixture.join("repo"),
+                &["status", "--porcelain=v1", "--untracked-files=normal"],
+                READ_TIMEOUT,
+            )
+            .unwrap();
+            assert!(output.truncated);
+            assert_eq!(output.stdout.len(), MAX_OUTPUT);
+            assert!(output.stderr.len() <= MAX_OUTPUT);
+            assert_eq!(worktree_failure_code(&output.stderr), "workspace_disk_full");
+        },
+    );
 }
 
 #[test]
@@ -888,12 +1036,42 @@ fn spec241_more_than_128_retained_and_nested_worktrees_do_not_block_preflight() 
     with_repo(|repo| {
         for n in 0..127 {
             let path = repo.join(format!(".worktrees/{n}"));
-            fixture_git(repo, &["worktree", "add", "--detach", path.to_str().unwrap(), "HEAD"]);
+            fixture_git(
+                repo,
+                &[
+                    "worktree",
+                    "add",
+                    "--detach",
+                    path.to_str().unwrap(),
+                    "HEAD",
+                ],
+            );
         }
-        assert_eq!(preflight_remote(repo, None, None).unwrap().listed_paths.len(), 127);
+        assert_eq!(
+            preflight_remote(repo, None, None)
+                .unwrap()
+                .listed_paths
+                .len(),
+            127
+        );
         let nested = repo.join(".worktrees/0/.worktrees/nested");
-        fixture_git(repo, &["worktree", "add", "--detach", nested.to_str().unwrap(), "HEAD"]);
-        assert_eq!(preflight_remote(repo, None, Some("new-mission")).unwrap().listed_paths.len(),128);
+        fixture_git(
+            repo,
+            &[
+                "worktree",
+                "add",
+                "--detach",
+                nested.to_str().unwrap(),
+                "HEAD",
+            ],
+        );
+        assert_eq!(
+            preflight_remote(repo, None, Some("new-mission"))
+                .unwrap()
+                .listed_paths
+                .len(),
+            128
+        );
         assert!(!repo.join(".git/refs/heads/new-mission").exists());
     });
 }
@@ -931,187 +1109,291 @@ fn spec174_base_ref_absente_sans_depot_ou_git_technique_sont_separees() {
     });
 }
 
-
-fn moved185(repo:&Path)->(WorkspaceRecord,PathBuf,String,Vec<u8>) {
-    let record=create(&preflight(repo,None,None).unwrap(),&uuid::Uuid::new_v4().to_string()).unwrap();
-    let path=Path::new(&record.path);
-    fs::write(path.join("sub/tracked"),"commit conservé\n").unwrap();
-    fixture_git(path,&["add","sub/tracked"]);
-    fixture_git(path,&["commit","-qm","suite conservée"]);
-    fs::write(path.join("sub/tracked"),"index conservé\n").unwrap();
-    fixture_git(path,&["add","sub/tracked"]);
-    fs::write(path.join("untracked"),"fichier non suivi conservé\n").unwrap();
-    fs::write(path.join(".gitignore"),".worktrees/\nignored\n").unwrap();
-    fs::write(path.join("ignored"),"fichier ignoré conservé\n").unwrap();
-    let head=report(&record).unwrap().head_commit.unwrap();
-    let git_file=fs::read_to_string(path.join(".git")).unwrap();
-    let git_dir=PathBuf::from(git_file.trim().strip_prefix("gitdir: ").unwrap());
-    let index=fs::read(git_dir.join("index")).unwrap();
-    let target=repo.parent().unwrap().join("disk185");
+fn moved185(repo: &Path) -> (WorkspaceRecord, PathBuf, String, Vec<u8>) {
+    let record = create(
+        &preflight(repo, None, None).unwrap(),
+        &uuid::Uuid::new_v4().to_string(),
+    )
+    .unwrap();
+    let path = Path::new(&record.path);
+    fs::write(path.join("sub/tracked"), "commit conservé\n").unwrap();
+    fixture_git(path, &["add", "sub/tracked"]);
+    fixture_git(path, &["commit", "-qm", "suite conservée"]);
+    fs::write(path.join("sub/tracked"), "index conservé\n").unwrap();
+    fixture_git(path, &["add", "sub/tracked"]);
+    fs::write(path.join("untracked"), "fichier non suivi conservé\n").unwrap();
+    fs::write(path.join(".gitignore"), ".worktrees/\nignored\n").unwrap();
+    fs::write(path.join("ignored"), "fichier ignoré conservé\n").unwrap();
+    let head = report(&record).unwrap().head_commit.unwrap();
+    let git_file = fs::read_to_string(path.join(".git")).unwrap();
+    let git_dir = PathBuf::from(git_file.trim().strip_prefix("gitdir: ").unwrap());
+    let index = fs::read(git_dir.join("index")).unwrap();
+    let target = repo.parent().unwrap().join("disk185");
     fs::create_dir(&target).unwrap();
-    fn copy(from:&Path,to:&Path) {
+    fn copy(from: &Path, to: &Path) {
         for entry in fs::read_dir(from).unwrap() {
-            let entry=entry.unwrap();let destination=to.join(entry.file_name());
+            let entry = entry.unwrap();
+            let destination = to.join(entry.file_name());
             if entry.file_type().unwrap().is_dir() {
-                fs::create_dir(&destination).unwrap();copy(&entry.path(),&destination);
-            } else {fs::copy(entry.path(),destination).unwrap();}
+                fs::create_dir(&destination).unwrap();
+                copy(&entry.path(), &destination);
+            } else {
+                fs::copy(entry.path(), destination).unwrap();
+            }
         }
     }
-    copy(path,&target);
+    copy(path, &target);
     // Le dossier vivant a disparu : un nouveau dossier a un inode différent,
     // comme après copie inter-volumes. La fixture ne touche aucun travail réel.
     fs::remove_dir_all(path).unwrap();
-    std::os::unix::fs::symlink(&target,path).unwrap();
-    (record,target,head,index)
+    std::os::unix::fs::symlink(&target, path).unwrap();
+    (record, target, head, index)
 }
 
 #[test]
 fn spec185_repair_moved_worktree_preserves_commits_index_and_all_existing_files() {
-    with_repo(|repo|{
-        let (record,target,head,index)=moved185(repo);
-        assert!(report(&record).is_err(),"le contrôle ordinaire reste fermé au symlink");
-        let (anchor,before)=inspect_repair(&record,&target,&head).unwrap();
-        assert_ne!(fs::metadata(repo).unwrap().ino(),anchor.path_inode);
-        let after=apply_repair_git(&record,&anchor).unwrap();
-        assert_eq!(after.head_commit,before.head_commit);
-        assert_eq!(after.base_commit,record.base_commit);
-        assert_eq!(after.commit_count,Some(1));
-        assert_eq!(fs::read(anchor.git_dir.join("index")).unwrap(),index);
-        assert_eq!(fs::read_to_string(target.join("sub/tracked")).unwrap(),"index conservé\n");
-        assert_eq!(fs::read_to_string(target.join("untracked")).unwrap(),"fichier non suivi conservé\n");
-        assert_eq!(fs::read_to_string(target.join("ignored")).unwrap(),"fichier ignoré conservé\n");
-        assert!(report(&after).is_err(),"aucune relaxation de l'ancrage ordinaire hors du parent");
-        assert_eq!(apply_repair_git(&record,&anchor).unwrap().head_commit,Some(head));
-        assert_eq!(record.path,anchor.original_path.to_string_lossy());
+    with_repo(|repo| {
+        let (record, target, head, index) = moved185(repo);
+        assert!(
+            report(&record).is_err(),
+            "le contrôle ordinaire reste fermé au symlink"
+        );
+        let (anchor, before) = inspect_repair(&record, &target, &head).unwrap();
+        assert_ne!(fs::metadata(repo).unwrap().ino(), anchor.path_inode);
+        let after = apply_repair_git(&record, &anchor).unwrap();
+        assert_eq!(after.head_commit, before.head_commit);
+        assert_eq!(after.base_commit, record.base_commit);
+        assert_eq!(after.commit_count, Some(1));
+        assert_eq!(fs::read(anchor.git_dir.join("index")).unwrap(), index);
+        assert_eq!(
+            fs::read_to_string(target.join("sub/tracked")).unwrap(),
+            "index conservé\n"
+        );
+        assert_eq!(
+            fs::read_to_string(target.join("untracked")).unwrap(),
+            "fichier non suivi conservé\n"
+        );
+        assert_eq!(
+            fs::read_to_string(target.join("ignored")).unwrap(),
+            "fichier ignoré conservé\n"
+        );
+        assert!(
+            report(&after).is_err(),
+            "aucune relaxation de l'ancrage ordinaire hors du parent"
+        );
+        assert_eq!(
+            apply_repair_git(&record, &anchor).unwrap().head_commit,
+            Some(head)
+        );
+        assert_eq!(record.path, anchor.original_path.to_string_lossy());
     });
 }
 
 #[test]
 fn spec185_repair_refuses_wrong_head_or_foreign_git_anchor_before_mutation() {
-    with_repo(|repo|{
-        let (record,target,head,_)=moved185(repo);
-        let git_file=fs::read_to_string(target.join(".git")).unwrap();
-        assert!(inspect_repair(&record,&target,&"1".repeat(40)).is_err());
-        assert_eq!(fs::read_to_string(target.join(".git")).unwrap(),git_file);
-        fs::write(target.join(".git"),"gitdir: /foreign/repository/worktrees/other\n").unwrap();
-        assert!(inspect_repair(&record,&target,&head).is_err());
+    with_repo(|repo| {
+        let (record, target, head, _) = moved185(repo);
+        let git_file = fs::read_to_string(target.join(".git")).unwrap();
+        assert!(inspect_repair(&record, &target, &"1".repeat(40)).is_err());
+        assert_eq!(fs::read_to_string(target.join(".git")).unwrap(), git_file);
+        fs::write(
+            target.join(".git"),
+            "gitdir: /foreign/repository/worktrees/other\n",
+        )
+        .unwrap();
+        assert!(inspect_repair(&record, &target, &head).is_err());
     });
 }
 
 #[test]
 fn spec185_repair_refuses_destination_alias_and_inode_substitution() {
-    with_repo(|repo|{
-        let (record,target,head,_)=moved185(repo);
-        let alias=target.with_file_name("alias185");
-        std::os::unix::fs::symlink(&target,&alias).unwrap();
-        assert!(inspect_repair(&record,&alias,&head).is_err());
-        let (anchor,_)=inspect_repair(&record,&target,&head).unwrap();
-        fs::rename(&target,target.with_file_name("preserved185")).unwrap();
+    with_repo(|repo| {
+        let (record, target, head, _) = moved185(repo);
+        let alias = target.with_file_name("alias185");
+        std::os::unix::fs::symlink(&target, &alias).unwrap();
+        assert!(inspect_repair(&record, &alias, &head).is_err());
+        let (anchor, _) = inspect_repair(&record, &target, &head).unwrap();
+        fs::rename(&target, target.with_file_name("preserved185")).unwrap();
         fs::create_dir(&target).unwrap();
-        assert!(report_repair(&record,&anchor,false).is_err());
-        assert!(apply_repair_git(&record,&anchor).is_err());
+        assert!(report_repair(&record, &anchor, false).is_err());
+        assert!(apply_repair_git(&record, &anchor).is_err());
     });
 }
 
 #[test]
 fn spec185_repair_fifo_is_refused_without_blocking_worker() {
-    with_repo(|repo|{
-        let (record,target,head,_)=moved185(repo);
+    with_repo(|repo| {
+        let (record, target, head, _) = moved185(repo);
         fs::remove_file(target.join(".git")).unwrap();
-        let fifo=std::ffi::CString::new(target.join(".git").as_os_str().as_encoded_bytes()).unwrap();
+        let fifo =
+            std::ffi::CString::new(target.join(".git").as_os_str().as_encoded_bytes()).unwrap();
         // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
-        assert_eq!(unsafe {libc::mkfifo(fifo.as_ptr(),0o600)},0);
-        let started=Instant::now();
-        assert!(inspect_repair(&record,&target,&head).is_err());
-        assert!(started.elapsed()<Duration::from_millis(500));
+        assert_eq!(unsafe { libc::mkfifo(fifo.as_ptr(), 0o600) }, 0);
+        let started = Instant::now();
+        assert!(inspect_repair(&record, &target, &head).is_err());
+        assert!(started.elapsed() < Duration::from_millis(500));
     });
 }
 
-fn compact207_fixture(repo:&Path) {
+fn compact207_fixture(repo: &Path) {
     fs::create_dir_all(repo.join("data")).unwrap();
-    fs::write(repo.join("data/large.json"),vec![b'x';200_000]).unwrap();
-    fs::write(repo.join("large.js"),vec![b' ';200_000]).unwrap();
-    fs::write(repo.join("weird [x]* #!.txt"),"tracked").unwrap();
-    std::os::unix::fs::symlink("sub/tracked",repo.join("linked")).unwrap();
-    fixture_git(repo,&["add","."]);fixture_git(repo,&["commit","-qm","compact fixture"]);
-    fixture_git(repo,&["config","extensions.worktreeConfig","true"]);
-    fixture_git(repo,&["config","bridget.worktreeProfile","compact-v1"]);
+    fs::write(repo.join("data/large.json"), vec![b'x'; 200_000]).unwrap();
+    fs::write(repo.join("large.js"), vec![b' '; 200_000]).unwrap();
+    fs::write(repo.join("weird [x]* #!.txt"), "tracked").unwrap();
+    std::os::unix::fs::symlink("sub/tracked", repo.join("linked")).unwrap();
+    fixture_git(repo, &["add", "."]);
+    fixture_git(repo, &["commit", "-qm", "compact fixture"]);
+    fixture_git(repo, &["config", "extensions.worktreeConfig", "true"]);
+    fixture_git(repo, &["config", "bridget.worktreeProfile", "compact-v1"]);
 }
 #[test]
 fn spec207_compact_preserves_parent_reports_edits_and_materializes_privately() {
     with_repo(|repo| {
         compact207_fixture(repo);
-        let common=fs::read(repo.join(".git/config")).unwrap();
-        let parent_index=fs::read(repo.join(".git/index")).unwrap();
-        let plan=preflight(repo,None,None).unwrap();
-        let ws=create(&plan,&uuid::Uuid::new_v4().to_string()).unwrap();
-        let child=Path::new(&ws.path);
+        let common = fs::read(repo.join(".git/config")).unwrap();
+        let parent_index = fs::read(repo.join(".git/index")).unwrap();
+        let plan = preflight(repo, None, None).unwrap();
+        let ws = create(&plan, &uuid::Uuid::new_v4().to_string()).unwrap();
+        let child = Path::new(&ws.path);
         assert!(!child.join("data/large.json").exists());
         assert!(child.join("large.js").is_file());
         assert!(child.join("weird [x]* #!.txt").is_file());
         assert!(child.join("linked").is_symlink());
-        assert_eq!(report(&ws).unwrap().dirty,Some(false));
-        assert!(compact_notice(child).unwrap().contains("git checkout-index"));
-        fs::write(child.join("sub/tracked"),"private edit").unwrap();
-        assert_eq!(report(&ws).unwrap().dirty,Some(true));
-        assert_eq!(fs::read(repo.join("sub/tracked")).unwrap(),b"initial\n");
-        fixture_git(child,&["restore","--","sub/tracked"]);
-        fixture_git(child,&["switch","-c","another-compact"]);
-        assert!(!child.join("data/large.json").exists(),"ordinary switch respects sparse profile");
-        fixture_git(child,&["checkout-index","--ignore-skip-worktree-bits","--","data/large.json"]);
-        fs::write(child.join("data/large.json"),"private large edit").unwrap();
-        assert_eq!(report(&ws).unwrap().dirty,Some(true));
-        assert_eq!(fs::metadata(repo.join("data/large.json")).unwrap().len(),200_000);
-        assert_eq!(fs::read(repo.join(".git/config")).unwrap(),common);
-        assert_eq!(fs::read(repo.join(".git/index")).unwrap(),parent_index);
+        assert_eq!(report(&ws).unwrap().dirty, Some(false));
+        assert!(
+            compact_notice(child)
+                .unwrap()
+                .contains("git checkout-index")
+        );
+        fs::write(child.join("sub/tracked"), "private edit").unwrap();
+        assert_eq!(report(&ws).unwrap().dirty, Some(true));
+        assert_eq!(fs::read(repo.join("sub/tracked")).unwrap(), b"initial\n");
+        fixture_git(child, &["restore", "--", "sub/tracked"]);
+        fixture_git(child, &["switch", "-c", "another-compact"]);
+        assert!(
+            !child.join("data/large.json").exists(),
+            "ordinary switch respects sparse profile"
+        );
+        fixture_git(
+            child,
+            &[
+                "checkout-index",
+                "--ignore-skip-worktree-bits",
+                "--",
+                "data/large.json",
+            ],
+        );
+        fs::write(child.join("data/large.json"), "private large edit").unwrap();
+        assert_eq!(report(&ws).unwrap().dirty, Some(true));
+        assert_eq!(
+            fs::metadata(repo.join("data/large.json")).unwrap().len(),
+            200_000
+        );
+        assert_eq!(fs::read(repo.join(".git/config")).unwrap(), common);
+        assert_eq!(fs::read(repo.join(".git/index")).unwrap(), parent_index);
     });
 }
 #[test]
 fn spec221_compact_materialization_without_force_keeps_local_edits() {
     with_repo(|repo| {
         compact207_fixture(repo);
-        let parent_head=resolve_source_commit(repo,None).unwrap();
-        let parent_index=fs::read(repo.join(".git/index")).unwrap();
-        let ws=create(&preflight(repo,None,None).unwrap(),&uuid::Uuid::new_v4().to_string()).unwrap();
-        let child=Path::new(&ws.path);
-        let relative="data/large.json";
-        let target=child.join(relative);
+        let parent_head = resolve_source_commit(repo, None).unwrap();
+        let parent_index = fs::read(repo.join(".git/index")).unwrap();
+        let ws = create(
+            &preflight(repo, None, None).unwrap(),
+            &uuid::Uuid::new_v4().to_string(),
+        )
+        .unwrap();
+        let child = Path::new(&ws.path);
+        let relative = "data/large.json";
+        let target = child.join(relative);
         assert!(!target.exists());
-        fixture_git(child,&["checkout-index","--ignore-skip-worktree-bits","--",relative]);
-        assert_eq!(fs::metadata(&target).unwrap().len(),200_000);
-        assert_eq!(report(&ws).unwrap().dirty,Some(false));
-        fs::write(&target,"local edit must survive").unwrap();
-        let inode=fs::metadata(&target).unwrap().ino();
-        let status=std::process::Command::new("git").arg("-C").arg(child)
-            .args(["checkout-index","--ignore-skip-worktree-bits","--",relative])
-            .output().unwrap().status;
-        assert!(!status.success(),"un fichier présent ne doit pas être remplacé");
-        assert_eq!(fs::read(&target).unwrap(),b"local edit must survive");
-        assert_eq!(fs::metadata(&target).unwrap().ino(),inode);
-        let native_status=std::process::Command::new("git").arg("-C").arg(child)
-            .args(["status","--porcelain=v1","--",relative]).output().unwrap();
+        fixture_git(
+            child,
+            &[
+                "checkout-index",
+                "--ignore-skip-worktree-bits",
+                "--",
+                relative,
+            ],
+        );
+        assert_eq!(fs::metadata(&target).unwrap().len(), 200_000);
+        assert_eq!(report(&ws).unwrap().dirty, Some(false));
+        fs::write(&target, "local edit must survive").unwrap();
+        let inode = fs::metadata(&target).unwrap().ino();
+        let status = std::process::Command::new("git")
+            .arg("-C")
+            .arg(child)
+            .args([
+                "checkout-index",
+                "--ignore-skip-worktree-bits",
+                "--",
+                relative,
+            ])
+            .output()
+            .unwrap()
+            .status;
+        assert!(
+            !status.success(),
+            "un fichier présent ne doit pas être remplacé"
+        );
+        assert_eq!(fs::read(&target).unwrap(), b"local edit must survive");
+        assert_eq!(fs::metadata(&target).unwrap().ino(), inode);
+        let native_status = std::process::Command::new("git")
+            .arg("-C")
+            .arg(child)
+            .args(["status", "--porcelain=v1", "--", relative])
+            .output()
+            .unwrap();
         assert!(native_status.status.success());
-        assert!(!native_status.stdout.is_empty(),"Git natif doit voir la modification avant le rapport Bridget");
-        assert_eq!(report(&ws).unwrap().dirty,Some(true));
+        assert!(
+            !native_status.stdout.is_empty(),
+            "Git natif doit voir la modification avant le rapport Bridget"
+        );
+        assert_eq!(report(&ws).unwrap().dirty, Some(true));
         // Chaque objet est privé à cette fixture, jamais un fichier utilisateur.
         fs::remove_file(&target).unwrap();
-        std::os::unix::fs::symlink(repo.join(relative),&target).unwrap();
-        let source_bytes=fs::read(repo.join(relative)).unwrap();
-        assert!(!std::process::Command::new("git").arg("-C").arg(child)
-            .args(["checkout-index","--ignore-skip-worktree-bits","--",relative])
-            .output().unwrap().status.success());
+        std::os::unix::fs::symlink(repo.join(relative), &target).unwrap();
+        let source_bytes = fs::read(repo.join(relative)).unwrap();
+        assert!(
+            !std::process::Command::new("git")
+                .arg("-C")
+                .arg(child)
+                .args([
+                    "checkout-index",
+                    "--ignore-skip-worktree-bits",
+                    "--",
+                    relative
+                ])
+                .output()
+                .unwrap()
+                .status
+                .success()
+        );
         assert!(target.is_symlink());
-        assert_eq!(fs::read(repo.join(relative)).unwrap(),source_bytes);
+        assert_eq!(fs::read(repo.join(relative)).unwrap(), source_bytes);
         fs::remove_file(&target).unwrap();
         fs::create_dir(&target).unwrap();
-        fs::write(target.join("keep"),"directory content").unwrap();
-        assert!(!std::process::Command::new("git").arg("-C").arg(child)
-            .args(["checkout-index","--ignore-skip-worktree-bits","--",relative])
-            .output().unwrap().status.success());
-        assert_eq!(fs::read(target.join("keep")).unwrap(),b"directory content");
-        assert_eq!(resolve_source_commit(repo,None).unwrap(),parent_head);
-        assert_eq!(fs::read(repo.join(".git/index")).unwrap(),parent_index);
-        let notice=compact_notice(child).unwrap();
+        fs::write(target.join("keep"), "directory content").unwrap();
+        assert!(
+            !std::process::Command::new("git")
+                .arg("-C")
+                .arg(child)
+                .args([
+                    "checkout-index",
+                    "--ignore-skip-worktree-bits",
+                    "--",
+                    relative
+                ])
+                .output()
+                .unwrap()
+                .status
+                .success()
+        );
+        assert_eq!(fs::read(target.join("keep")).unwrap(), b"directory content");
+        assert_eq!(resolve_source_commit(repo, None).unwrap(), parent_head);
+        assert_eq!(fs::read(repo.join(".git/index")).unwrap(), parent_index);
+        let notice = compact_notice(child).unwrap();
         assert!(notice.contains("git checkout-index --ignore-skip-worktree-bits --"));
         assert!(!notice.contains("git restore"));
         assert!(notice.contains("jamais --force"));
@@ -1122,75 +1404,118 @@ fn spec221_compact_materialization_without_force_keeps_local_edits() {
 #[test]
 #[ignore = "mesure manuelle spec221 : cinq extractions privées de 96 Mio"]
 fn spec221_compact_allocated_bytes_are_measured_on_same_commit() {
-    fn footprint(path:&Path)->(u64,u64) {
-        let meta=fs::symlink_metadata(path).unwrap();
-        if meta.is_file() {return (meta.len(),meta.blocks()*512)}
-        if !meta.is_dir() {return (0,0)}
-        fs::read_dir(path).unwrap().map(|entry|entry.unwrap().path())
-            .filter(|p|p.file_name().unwrap()!=".git")
-            .map(|p|footprint(&p)).fold((0,0),|(a,b),(c,d)|(a+c,b+d))
+    fn footprint(path: &Path) -> (u64, u64) {
+        let meta = fs::symlink_metadata(path).unwrap();
+        if meta.is_file() {
+            return (meta.len(), meta.blocks() * 512);
+        }
+        if !meta.is_dir() {
+            return (0, 0);
+        }
+        fs::read_dir(path)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .filter(|p| p.file_name().unwrap() != ".git")
+            .map(|p| footprint(&p))
+            .fold((0, 0), |(a, b), (c, d)| (a + c, b + d))
     }
     with_repo(|repo| {
         compact207_fixture(repo);
-        let data=vec![b'x';32*1024*1024];
-        for n in 0..3 {fs::write(repo.join(format!("data/large{n}.json")),&data).unwrap()}
-        fixture_git(repo,&["add","--","data"]);
-        fixture_git(repo,&["commit","-qm","large fixture"]);
-        let base=resolve_source_commit(repo,None).unwrap();
-        let index=fs::read(repo.join(".git/index")).unwrap();
-        let mut samples=Vec::new();
+        let data = vec![b'x'; 32 * 1024 * 1024];
+        for n in 0..3 {
+            fs::write(repo.join(format!("data/large{n}.json")), &data).unwrap()
+        }
+        fixture_git(repo, &["add", "--", "data"]);
+        fixture_git(repo, &["commit", "-qm", "large fixture"]);
+        let base = resolve_source_commit(repo, None).unwrap();
+        let index = fs::read(repo.join(".git/index")).unwrap();
+        let mut samples = Vec::new();
         for run in 0..5 {
-            fixture_git(repo,&["config","--unset","bridget.worktreeProfile"]);
-            let started=Instant::now();
-            let full=create(&preflight(repo,Some(&base),None).unwrap(),&uuid::Uuid::new_v4().to_string()).unwrap();
-            let full_ms=started.elapsed().as_millis();
-            let (full_logical,full_bytes)=footprint(Path::new(&full.path));
-            fixture_git(repo,&["config","bridget.worktreeProfile","compact-v1"]);
-            let started=Instant::now();
-            let compact=create(&preflight(repo,Some(&base),None).unwrap(),&uuid::Uuid::new_v4().to_string()).unwrap();
-            let compact_ms=started.elapsed().as_millis();
-            let (compact_logical,compact_bytes)=footprint(Path::new(&compact.path));
-            assert_eq!(report(&full).unwrap().head_commit,Some(base.clone()));
-            assert_eq!(report(&compact).unwrap().head_commit,Some(base.clone()));
+            fixture_git(repo, &["config", "--unset", "bridget.worktreeProfile"]);
+            let started = Instant::now();
+            let full = create(
+                &preflight(repo, Some(&base), None).unwrap(),
+                &uuid::Uuid::new_v4().to_string(),
+            )
+            .unwrap();
+            let full_ms = started.elapsed().as_millis();
+            let (full_logical, full_bytes) = footprint(Path::new(&full.path));
+            fixture_git(repo, &["config", "bridget.worktreeProfile", "compact-v1"]);
+            let started = Instant::now();
+            let compact = create(
+                &preflight(repo, Some(&base), None).unwrap(),
+                &uuid::Uuid::new_v4().to_string(),
+            )
+            .unwrap();
+            let compact_ms = started.elapsed().as_millis();
+            let (compact_logical, compact_bytes) = footprint(Path::new(&compact.path));
+            assert_eq!(report(&full).unwrap().head_commit, Some(base.clone()));
+            assert_eq!(report(&compact).unwrap().head_commit, Some(base.clone()));
             assert!(!Path::new(&compact.path).join("data/large0.json").exists());
-            assert!(compact_logical<full_logical); // Les blocs physiques dépendent du système de fichiers.
+            assert!(compact_logical < full_logical); // Les blocs physiques dépendent du système de fichiers.
             samples.push(serde_json::json!({"run":run,"full_allocated":full_bytes,
                 "compact_allocated":compact_bytes,"full_logical":full_logical,
                 "compact_logical":compact_logical,"full_ms":full_ms,"compact_ms":compact_ms}));
-            fixture_git(repo,&["worktree","remove",&full.path]);
-            fixture_git(repo,&["worktree","remove",&compact.path]);
-            assert_eq!(fs::read(repo.join(".git/index")).unwrap(),index);
-            assert_eq!(resolve_source_commit(repo,None).unwrap(),base);
+            fixture_git(repo, &["worktree", "remove", &full.path]);
+            fixture_git(repo, &["worktree", "remove", &compact.path]);
+            assert_eq!(fs::read(repo.join(".git/index")).unwrap(), index);
+            assert_eq!(resolve_source_commit(repo, None).unwrap(), base);
         }
-        println!("bridget221_compact_measure={}",serde_json::json!(samples));
+        println!("bridget221_compact_measure={}", serde_json::json!(samples));
     });
 }
 #[test]
 fn spec207_compact_rejects_hidden_edits_and_changed_profile() {
     with_repo(|repo| {
         compact207_fixture(repo);
-        let ws=create(&preflight(repo,None,None).unwrap(),&uuid::Uuid::new_v4().to_string()).unwrap();
-        let child=Path::new(&ws.path);
-        fixture_git(child,&["update-index","--assume-unchanged","sub/tracked"]);
-        fs::write(child.join("sub/tracked"),"hidden").unwrap();
+        let ws = create(
+            &preflight(repo, None, None).unwrap(),
+            &uuid::Uuid::new_v4().to_string(),
+        )
+        .unwrap();
+        let child = Path::new(&ws.path);
+        fixture_git(
+            child,
+            &["update-index", "--assume-unchanged", "sub/tracked"],
+        );
+        fs::write(child.join("sub/tracked"), "hidden").unwrap();
         assert!(report(&ws).unwrap_err().contains("masquer"));
-        fixture_git(child,&["update-index","--no-assume-unchanged","sub/tracked"]);
-        fixture_git(child,&["restore","--","sub/tracked"]);
-        fixture_git(child,&["update-index","--skip-worktree","sub/tracked"]);
+        fixture_git(
+            child,
+            &["update-index", "--no-assume-unchanged", "sub/tracked"],
+        );
+        fixture_git(child, &["restore", "--", "sub/tracked"]);
+        fixture_git(child, &["update-index", "--skip-worktree", "sub/tracked"]);
         fs::remove_file(child.join("sub/tracked")).unwrap();
-        assert!(report(&ws).is_err(),"selected file cannot be hidden as an omission");
-        fixture_git(child,&["update-index","--no-skip-worktree","sub/tracked"]);
-        fixture_git(child,&["restore","--","sub/tracked"]);
-        let (dir,_)=report_anchor(&ws).unwrap();
-        let manifest=fs::read(dir.join("bridget-compact207.json")).unwrap();
+        assert!(
+            report(&ws).is_err(),
+            "selected file cannot be hidden as an omission"
+        );
+        fixture_git(
+            child,
+            &["update-index", "--no-skip-worktree", "sub/tracked"],
+        );
+        fixture_git(child, &["restore", "--", "sub/tracked"]);
+        let (dir, _) = report_anchor(&ws).unwrap();
+        let manifest = fs::read(dir.join("bridget-compact207.json")).unwrap();
         fs::remove_file(dir.join("bridget-compact207.json")).unwrap();
-        assert!(report(&ws).unwrap_err().contains("manifeste compact absent"));
-        fixture_git(child,&["update-index","--assume-unchanged","sub/tracked"]);
-        fs::write(child.join("sub/tracked"),"hidden without manifest").unwrap();
+        assert!(
+            report(&ws)
+                .unwrap_err()
+                .contains("manifeste compact absent")
+        );
+        fixture_git(
+            child,
+            &["update-index", "--assume-unchanged", "sub/tracked"],
+        );
+        fs::write(child.join("sub/tracked"), "hidden without manifest").unwrap();
         assert!(report(&ws).unwrap_err().contains("masquer"));
-        fixture_git(child,&["update-index","--no-assume-unchanged","sub/tracked"]);
-        fs::write(dir.join("bridget-compact207.json"),manifest).unwrap();
-        fs::write(dir.join("info/sparse-checkout"),"/*\n").unwrap();
+        fixture_git(
+            child,
+            &["update-index", "--no-assume-unchanged", "sub/tracked"],
+        );
+        fs::write(dir.join("bridget-compact207.json"), manifest).unwrap();
+        fs::write(dir.join("info/sparse-checkout"), "/*\n").unwrap();
         assert!(report(&ws).unwrap_err().contains("profil compact modifié"));
     });
 }
@@ -1198,16 +1523,31 @@ fn spec207_compact_rejects_hidden_edits_and_changed_profile() {
 fn spec207_compact_requires_explicit_valid_policy_before_creation() {
     with_repo(|repo| {
         compact207_fixture(repo);
-        fixture_git(repo,&["config","bridget.worktreeProfile","unknown"]);
-        let plan=preflight(repo,None,None).unwrap();
-        assert!(create(&plan,&uuid::Uuid::new_v4().to_string()).unwrap_err().contains("inconnu"));
-        fixture_git(repo,&["config","bridget.worktreeProfile","compact-v1"]);
-        let ws=create(&preflight(&repo.join("sub"),None,None).unwrap(),&uuid::Uuid::new_v4().to_string()).unwrap();
-        assert_eq!(fs::read(Path::new(&ws.path).join("sub/tracked")).unwrap(),b"initial\n");
+        fixture_git(repo, &["config", "bridget.worktreeProfile", "unknown"]);
+        let plan = preflight(repo, None, None).unwrap();
+        assert!(
+            create(&plan, &uuid::Uuid::new_v4().to_string())
+                .unwrap_err()
+                .contains("inconnu")
+        );
+        fixture_git(repo, &["config", "bridget.worktreeProfile", "compact-v1"]);
+        let ws = create(
+            &preflight(&repo.join("sub"), None, None).unwrap(),
+            &uuid::Uuid::new_v4().to_string(),
+        )
+        .unwrap();
+        assert_eq!(
+            fs::read(Path::new(&ws.path).join("sub/tracked")).unwrap(),
+            b"initial\n"
+        );
         assert!(Path::new(&ws.path).join("large.js").is_file());
-        assert_eq!(report(&ws).unwrap().dirty,Some(false));
-        fixture_git(repo,&["config","--unset","bridget.worktreeProfile"]);
-        let full=create(&preflight(repo,None,None).unwrap(),&uuid::Uuid::new_v4().to_string()).unwrap();
+        assert_eq!(report(&ws).unwrap().dirty, Some(false));
+        fixture_git(repo, &["config", "--unset", "bridget.worktreeProfile"]);
+        let full = create(
+            &preflight(repo, None, None).unwrap(),
+            &uuid::Uuid::new_v4().to_string(),
+        )
+        .unwrap();
         assert!(Path::new(&full.path).join("data/large.json").is_file());
     });
 }
@@ -1216,80 +1556,168 @@ fn spec207_compact_requires_explicit_valid_policy_before_creation() {
 #[test]
 #[ignore = "recette manuelle sur clone privé, sans mission ni fournisseur"]
 fn spec207_compact_measure_private_repository() {
-    let path=PathBuf::from(std::env::var("BRIDGET_207_PRIVATE_PROBE").expect("private probe path"));
-    let cache=std::env::var("HOME").unwrap()+"/.cache/bridget207/";
+    let path =
+        PathBuf::from(std::env::var("BRIDGET_207_PRIVATE_PROBE").expect("private probe path"));
+    let cache = std::env::var("HOME").unwrap() + "/.cache/bridget207/";
     assert!(path.to_string_lossy().starts_with(&cache));
-    assert_eq!(path.canonicalize().unwrap(),path);
-    let ws=create(&preflight(&path,None,None).unwrap(),&uuid::Uuid::new_v4().to_string()).unwrap();
-    assert_eq!(report(&ws).unwrap().dirty,Some(false));
-    let (dir,_)=report_anchor(&ws).unwrap();
-    let manifest:serde_json::Value=serde_json::from_slice(&fs::read(dir.join("bridget-compact207.json")).unwrap()).unwrap();
-    println!("BRIDGET207_PROBE={}",serde_json::json!({"workspace":ws,"selected_bytes":manifest["selected_bytes"],"total_bytes":manifest["total_bytes"]}));
+    assert_eq!(path.canonicalize().unwrap(), path);
+    let ws = create(
+        &preflight(&path, None, None).unwrap(),
+        &uuid::Uuid::new_v4().to_string(),
+    )
+    .unwrap();
+    assert_eq!(report(&ws).unwrap().dirty, Some(false));
+    let (dir, _) = report_anchor(&ws).unwrap();
+    let manifest: serde_json::Value =
+        serde_json::from_slice(&fs::read(dir.join("bridget-compact207.json")).unwrap()).unwrap();
+    println!(
+        "BRIDGET207_PROBE={}",
+        serde_json::json!({"workspace":ws,"selected_bytes":manifest["selected_bytes"],"total_bytes":manifest["total_bytes"]})
+    );
 }
-
 
 #[test]
 fn spec234_compact_inventory_can_exceed_short_git_deadline() {
-    isolated("compact-slow-tree", "workspace_git::tests::spec234_compact_inventory_can_exceed_short_git_deadline", |root| {
-        let preflight=WorkspacePreflight {
-            toplevel:root.join("repo"),cwd:root.join("repo"),offset:PathBuf::new(),
-            worktree_dir:root.join("repo/.worktrees"),branch:None,base_commit:"a".repeat(40),listed_paths:Vec::new(),
-        };
-        let started=Instant::now();
-        let plan=compact::plan(&preflight).expect("a valid inventory may exceed the short control deadline").unwrap();
-        let value=serde_json::to_value(plan).unwrap();
-        assert_eq!(value["selected"],serde_json::json!(["README.md"]));
-        assert!(started.elapsed()>=READ_TIMEOUT);
-        assert!(started.elapsed()<Duration::from_secs(14));
-    });
+    isolated(
+        "compact-slow-tree",
+        "workspace_git::tests::spec234_compact_inventory_can_exceed_short_git_deadline",
+        |root| {
+            let preflight = WorkspacePreflight {
+                toplevel: root.join("repo"),
+                cwd: root.join("repo"),
+                offset: PathBuf::new(),
+                worktree_dir: root.join("repo/.worktrees"),
+                branch: None,
+                base_commit: "a".repeat(40),
+                listed_paths: Vec::new(),
+            };
+            let started = Instant::now();
+            let plan = compact::plan(&preflight)
+                .expect("a valid inventory may exceed the short control deadline")
+                .unwrap();
+            let value = serde_json::to_value(plan).unwrap();
+            assert_eq!(value["selected"], serde_json::json!(["README.md"]));
+            assert!(started.elapsed() >= READ_TIMEOUT);
+            assert!(started.elapsed() < Duration::from_secs(14));
+        },
+    );
 }
-
 
 #[test]
 fn spec234_git_timeout_diagnostic_is_closed_and_keeps_operation() {
-    let fact=git_timeout_fact234(&["ls-tree","--full-tree","-r","-l","-z","PRIVATE-secret-commit"],
-        INVENTORY_TIMEOUT,Duration::from_secs(61),128,64,"PRIVATE-stop-error");
-    assert_eq!(fact["operation"],"tree_inventory");
-    assert_eq!(fact["budget_ms"],60000);
-    assert_eq!(fact["stdout_retained_bytes"],128);
-    assert_eq!(fact["stop"],"unconfirmed");
+    let fact = git_timeout_fact234(
+        &[
+            "ls-tree",
+            "--full-tree",
+            "-r",
+            "-l",
+            "-z",
+            "PRIVATE-secret-commit",
+        ],
+        INVENTORY_TIMEOUT,
+        Duration::from_secs(61),
+        128,
+        64,
+        "PRIVATE-stop-error",
+    );
+    assert_eq!(fact["operation"], "tree_inventory");
+    assert_eq!(fact["budget_ms"], 60000);
+    assert_eq!(fact["stdout_retained_bytes"], 128);
+    assert_eq!(fact["stop"], "unconfirmed");
     assert!(!fact.to_string().contains("PRIVATE"));
-    assert_eq!(git_timeout_fact234(&["PRIVATE/path"],READ_TIMEOUT,Duration::ZERO,0,0,"not_spawned")["operation"],"other_allowed_operation");
-    assert_eq!(READ_TIMEOUT,Duration::from_secs(10));
+    assert_eq!(
+        git_timeout_fact234(
+            &["PRIVATE/path"],
+            READ_TIMEOUT,
+            Duration::ZERO,
+            0,
+            0,
+            "not_spawned"
+        )["operation"],
+        "other_allowed_operation"
+    );
+    assert_eq!(READ_TIMEOUT, Duration::from_secs(10));
 }
-
 
 #[test]
 fn spec234_git_timeout_task_context_is_scoped_and_restored() {
-    let first=uuid::Uuid::new_v4();let second=uuid::Uuid::new_v4();
-    let fact=||git_timeout_fact234(&["--version"],READ_TIMEOUT,Duration::ZERO,0,0,"not_spawned");
+    let first = uuid::Uuid::new_v4();
+    let second = uuid::Uuid::new_v4();
+    let fact = || {
+        git_timeout_fact234(
+            &["--version"],
+            READ_TIMEOUT,
+            Duration::ZERO,
+            0,
+            0,
+            "not_spawned",
+        )
+    };
     assert!(fact()["task_id"].is_null());
     {
-        let _first=GitTask234::enter(first);
-        assert_eq!(fact()["task_id"],first.to_string());
-        {let _second=GitTask234::enter(second);assert_eq!(fact()["task_id"],second.to_string());}
-        assert_eq!(fact()["task_id"],first.to_string());
+        let _first = GitTask234::enter(first);
+        assert_eq!(fact()["task_id"], first.to_string());
+        {
+            let _second = GitTask234::enter(second);
+            assert_eq!(fact()["task_id"], second.to_string());
+        }
+        assert_eq!(fact()["task_id"], first.to_string());
     }
     assert!(fact()["task_id"].is_null());
 }
 
-
 #[test]
 #[ignore = "lecture administrative explicite, aucun worktree ni admission créé"]
 fn spec234_read_only_compact_plan_on_operator_repository() {
-    let root=PathBuf::from(std::env::var("BRIDGET_234_READ_ONLY_ROOT").expect("operator repository"));
-    assert!(root.is_absolute());assert_eq!(root.canonicalize().unwrap(),root);
-    let head=||run_git(&root,&["rev-parse","--verify","--end-of-options","HEAD^{commit}"],READ_TIMEOUT).unwrap().complete().unwrap();
-    let worktrees=||run_git(&root,&["worktree","list","--porcelain","-z"],READ_TIMEOUT).unwrap().stdout;
-    let before_head=head();let before_worktrees=worktrees();
-    let preflight=WorkspacePreflight {toplevel:root.clone(),cwd:root.clone(),offset:PathBuf::new(),
-        worktree_dir:root.join(".worktrees"),branch:None,base_commit:std::env::var("BRIDGET_234_READ_ONLY_BASE").unwrap_or_else(|_|before_head.clone()),listed_paths:Vec::new()};
-    let started=Instant::now();let plan=compact::plan(&preflight).unwrap().expect("opt-in compact profile");
-    let plan=serde_json::to_value(plan).unwrap();let elapsed_ms=started.elapsed().as_millis();
-    assert_eq!(head(),before_head);assert_eq!(worktrees(),before_worktrees);
-    println!("bridget234_read_only_plan={}",serde_json::json!({"base":plan["base"],"head":before_head,
+    let root =
+        PathBuf::from(std::env::var("BRIDGET_234_READ_ONLY_ROOT").expect("operator repository"));
+    assert!(root.is_absolute());
+    assert_eq!(root.canonicalize().unwrap(), root);
+    let head = || {
+        run_git(
+            &root,
+            &["rev-parse", "--verify", "--end-of-options", "HEAD^{commit}"],
+            READ_TIMEOUT,
+        )
+        .unwrap()
+        .complete()
+        .unwrap()
+    };
+    let worktrees = || {
+        run_git(
+            &root,
+            &["worktree", "list", "--porcelain", "-z"],
+            READ_TIMEOUT,
+        )
+        .unwrap()
+        .stdout
+    };
+    let before_head = head();
+    let before_worktrees = worktrees();
+    let preflight = WorkspacePreflight {
+        toplevel: root.clone(),
+        cwd: root.clone(),
+        offset: PathBuf::new(),
+        worktree_dir: root.join(".worktrees"),
+        branch: None,
+        base_commit: std::env::var("BRIDGET_234_READ_ONLY_BASE")
+            .unwrap_or_else(|_| before_head.clone()),
+        listed_paths: Vec::new(),
+    };
+    let started = Instant::now();
+    let plan = compact::plan(&preflight)
+        .unwrap()
+        .expect("opt-in compact profile");
+    let plan = serde_json::to_value(plan).unwrap();
+    let elapsed_ms = started.elapsed().as_millis();
+    assert_eq!(head(), before_head);
+    assert_eq!(worktrees(), before_worktrees);
+    println!(
+        "bridget234_read_only_plan={}",
+        serde_json::json!({"base":plan["base"],"head":before_head,
         "elapsed_ms":elapsed_ms,"selected_files":plan["selected"].as_array().unwrap().len(),
         "selected_bytes":plan["selected_bytes"],"total_bytes":plan["total_bytes"],
         "worktree_count":before_worktrees.split('\0').filter(|s|s.starts_with("worktree ")).count(),
-        "head_and_worktrees_unchanged":true}));
+        "head_and_worktrees_unchanged":true})
+    );
 }

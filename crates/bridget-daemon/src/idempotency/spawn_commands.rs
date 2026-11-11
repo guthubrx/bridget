@@ -9,7 +9,8 @@ use bridget_transport::ResolvedAgentDefinition;
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use std::path::PathBuf;
 
-const SPAWN_COMMAND_SELECT: &str = "SELECT sc.command_id,sc.name,sc.generation,sc.persistent,sc.state,
+const SPAWN_COMMAND_SELECT: &str =
+    "SELECT sc.command_id,sc.name,sc.generation,sc.persistent,sc.state,
     sc.instance_id,sc.deadline_at,sc.expires_at,sc.issue_kind,sc.issue_category,sc.issue_reason,
     sc.resolved_definition_json,ir.canonical_bytes
     FROM spawn_commands sc LEFT JOIN idempotency_records ir
@@ -327,14 +328,17 @@ impl IdempotencyStore {
         validate_issuer_scope(issuer_scope)?;
         let mut statement = self.conn.prepare(&format!(
             "{SPAWN_COMMAND_SELECT} WHERE sc.issuer_scope=?1 AND sc.operation_kind='spawn'
-             ORDER BY sc.generation,sc.command_id"))?;
+             ORDER BY sc.generation,sc.command_id"
+        ))?;
         let rows = statement.query_map(params![issuer_scope], spawn_command_from_row)?;
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
     }
 
     /// Lecture par clé primaire ; ne décode que la commande demandée.
     pub(crate) fn spawn_command(
-        &self, issuer_scope: &str, command_id: &str,
+        &self,
+        issuer_scope: &str,
+        command_id: &str,
     ) -> Result<Option<SpawnCommand>, IdempotencyError> {
         let key = IdempotencyKey::new(issuer_scope, OperationKind::Spawn, command_id)?;
         load_spawn_command_from(&self.conn, &key)
@@ -343,13 +347,20 @@ impl IdempotencyStore {
     /// Filtre SQL avant décodage : O(n) métadonnées, seulement k définitions lues.
     /// L'ordre historique reste celui de spawn_commands pour une même instance.
     pub(crate) fn spawn_commands_for_instance(
-        &self, issuer_scope: &str, name: &str, instance: &str,
+        &self,
+        issuer_scope: &str,
+        name: &str,
+        instance: &str,
     ) -> Result<Vec<SpawnCommand>, IdempotencyError> {
         validate_issuer_scope(issuer_scope)?;
         let mut statement = self.conn.prepare(&format!(
             "{SPAWN_COMMAND_SELECT} WHERE sc.issuer_scope=?1 AND sc.operation_kind='spawn'
-             AND sc.name=?2 AND sc.instance_id=?3 ORDER BY sc.generation,sc.command_id"))?;
-        let rows = statement.query_map(params![issuer_scope, name, instance], spawn_command_from_row)?;
+             AND sc.name=?2 AND sc.instance_id=?3 ORDER BY sc.generation,sc.command_id"
+        ))?;
+        let rows = statement.query_map(
+            params![issuer_scope, name, instance],
+            spawn_command_from_row,
+        )?;
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
     }
 
@@ -469,8 +480,10 @@ fn load_spawn_command_from(
     key: &IdempotencyKey,
 ) -> Result<Option<SpawnCommand>, IdempotencyError> {
     conn.query_row(
-        &format!("{SPAWN_COMMAND_SELECT} WHERE sc.issuer_scope=?1
-            AND sc.operation_kind='spawn' AND sc.command_id=?2"),
+        &format!(
+            "{SPAWN_COMMAND_SELECT} WHERE sc.issuer_scope=?1
+            AND sc.operation_kind='spawn' AND sc.command_id=?2"
+        ),
         params![key.issuer_scope, key.idempotency_key],
         spawn_command_from_row,
     )

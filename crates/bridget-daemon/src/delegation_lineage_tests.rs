@@ -65,11 +65,13 @@ pub(crate) fn task(
     state: &str,
     created_at: i64,
 ) -> Task {
-    Task { service_tier: None, admission_authority_version: None,
+    Task {
+        service_tier: None,
+        admission_authority_version: None,
         substitution: None,
         remote_placement: None,
         remote_prepared: false,
-        commit_view_prepare:None,
+        commit_view_prepare: None,
         start_recovery: None,
         workspace_repairs: Vec::new(),
         remote_result_slots: Vec::new(),
@@ -134,23 +136,57 @@ fn open_store(path: &std::path::Path) -> DelegationStore {
 
 #[test]
 fn spec258_recu_compose_survit_reouverture_et_refuse_canon_modifie() {
-    let directory=temp_dir("compose258");let path=directory.join("state.db");
-    let unknown=json!({"outcome":"outcome_unknown","request_id":"commande"});
+    let directory = temp_dir("compose258");
+    let path = directory.join("state.db");
+    let unknown = json!({"outcome":"outcome_unknown","request_id":"commande"});
     {
-        let store=open_store(&path);
-        assert_eq!(store.human_compose_reserve("racine","tache","commande","canon",&unknown).unwrap(),None);
-        assert_eq!(store.human_compose_reserve("racine","tache","commande","canon",&json!({})).unwrap(),Some(unknown.clone()));
+        let store = open_store(&path);
+        assert_eq!(
+            store
+                .human_compose_reserve("racine", "tache", "commande", "canon", &unknown)
+                .unwrap(),
+            None
+        );
+        assert_eq!(
+            store
+                .human_compose_reserve("racine", "tache", "commande", "canon", &json!({}))
+                .unwrap(),
+            Some(unknown.clone())
+        );
     }
-    let store=open_store(&path);
-    assert_eq!(store.human_compose_reserve("racine","tache","commande","canon",&json!({})).unwrap(),Some(unknown));
-    for (root,task,canon) in [("autre","tache","canon"),("racine","autre","canon"),("racine","tache","modifie")] {
-        assert!(matches!(store.human_compose_reserve(root,task,"commande",canon,&json!({})),Err(E::EnvelopeMismatch)));
+    let store = open_store(&path);
+    assert_eq!(
+        store
+            .human_compose_reserve("racine", "tache", "commande", "canon", &json!({}))
+            .unwrap(),
+        Some(unknown)
+    );
+    for (root, task, canon) in [
+        ("autre", "tache", "canon"),
+        ("racine", "autre", "canon"),
+        ("racine", "tache", "modifie"),
+    ] {
+        assert!(matches!(
+            store.human_compose_reserve(root, task, "commande", canon, &json!({})),
+            Err(E::EnvelopeMismatch)
+        ));
     }
-    let accepted=json!({"outcome":"accepted","request_id":"commande"});
-    store.human_compose_complete("racine","tache","commande","canon",&accepted).unwrap();
-    assert_eq!(store.human_compose_reserve("racine","tache","commande","canon",&json!({})).unwrap(),Some(accepted));
-    assert!(matches!(store.human_compose_complete("racine","tache","commande","modifie",&json!({})),Err(E::EnvelopeMismatch)));
-    drop(store);std::fs::remove_dir_all(directory).unwrap();
+    let accepted = json!({"outcome":"accepted","request_id":"commande"});
+    store
+        .human_compose_complete("racine", "tache", "commande", "canon", &accepted)
+        .unwrap();
+    assert_eq!(
+        store
+            .human_compose_reserve("racine", "tache", "commande", "canon", &json!({}))
+            .unwrap(),
+        Some(accepted)
+    );
+    assert!(matches!(
+        store.human_compose_complete("racine", "tache", "commande", "modifie", &json!({})),
+        Err(E::EnvelopeMismatch)
+    ));
+    drop(store);
+    std::fs::remove_dir_all(directory).unwrap();
 }
 
 /// Schéma 148 minimal : la table native_delegations seule, sans table de
@@ -2130,8 +2166,10 @@ fn native153_fondations_payloads149_150_et_predicats() {
         restored.result_sent = true;
         restored.idle_deadline_at = Some(100);
         assert!(restored.holds_slot() && restored.continuable_at(99));
-        assert!(restored.holds_slot() && !restored.continuable_at(100),
-            "expiration ne libère pas la garde ou les fichiers");
+        assert!(
+            restored.holds_slot() && !restored.continuable_at(100),
+            "expiration ne libère pas la garde ou les fichiers"
+        );
         restored.guard_released = true;
         assert!(restored.holds_slot() && !restored.continuation_guard_open());
         restored.cleanup_done = true;

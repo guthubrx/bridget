@@ -381,7 +381,11 @@ fn local_registry() -> Result<(AgentRegistry, std::path::PathBuf), String> {
     let registry = AgentRegistry::load_from_path_quiet(source.clone())?;
     Ok((registry, source))
 }
-pub(crate) fn machine_scope(registry: &AgentRegistry, source: &Path, host: &str) -> Result<String, String> {
+pub(crate) fn machine_scope(
+    registry: &AgentRegistry,
+    source: &Path,
+    host: &str,
+) -> Result<String, String> {
     let Some(policy) = registry.routing_policy() else {
         return Ok(host.into());
     };

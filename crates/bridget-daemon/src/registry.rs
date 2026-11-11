@@ -458,8 +458,12 @@ impl ProjectMapping {
     /// Une commande sur la machine cible utilise les racines déjà provisionnées
     /// comme origine. Cela ne crée ni nouvelle correspondance ni droit.
     pub(crate) fn for_origin(&self, machine: &str, origin: &str) -> Option<Self> {
-        if self.source_host == origin { return Some(self.clone()); }
-        if machine != origin { return None; }
+        if self.source_host == origin {
+            return Some(self.clone());
+        }
+        if machine != origin {
+            return None;
+        }
         let mut mapping = self.clone();
         mapping.source_host = origin.to_owned();
         mapping.source_root = mapping.remote_root.clone();
@@ -486,14 +490,21 @@ pub struct AdditionalDirectoryMapping171 {
 }
 
 pub(crate) fn validate_additional_mapping171(mapping: &ProjectMapping) -> Result<(), String> {
-    let Some(extra) = &mapping.additional_root else { return Ok(()); };
+    let Some(extra) = &mapping.additional_root else {
+        return Ok(());
+    };
     let overlaps = |a: &Path, b: &Path| a.starts_with(b) || b.starts_with(a);
-    if !mapping_root(&extra.source_root) || !mapping_root(&extra.remote_root)
+    if !mapping_root(&extra.source_root)
+        || !mapping_root(&extra.remote_root)
         || overlaps(&extra.source_root, &mapping.source_root)
         || overlaps(&extra.remote_root, &mapping.remote_root)
-        || extra.access != "inherit" || extra.source_mode > 0o777 || extra.remote_mode != 0o700
+        || extra.access != "inherit"
+        || extra.source_mode > 0o777
+        || extra.remote_mode != 0o700
         || extra.source_mode & 0o700 != 0o700
-    { return Err("project_mapping_invalid".into()); }
+    {
+        return Err("project_mapping_invalid".into());
+    }
     Ok(())
 }
 
@@ -597,7 +608,8 @@ fn effective_routing_filters(
     requested: &RoutingCandidateFilters,
     policy: &RoutingMachinePolicy,
 ) -> Result<RoutingCandidateFilters, String> {
-    Ok(RoutingCandidateFilters { service_tier: requested.service_tier.clone(),
+    Ok(RoutingCandidateFilters {
+        service_tier: requested.service_tier.clone(),
         engine: requested_or_fixed(
             &requested.engine,
             policy.automatic_axes.engine,
@@ -799,23 +811,42 @@ impl AgentRegistry {
     }
     fn routing_account_scope245(&self, connection_id: &str, legacy_models: bool) -> Option<String> {
         let policy = self.routing_policy()?;
-        let connection = policy.connections.iter().find(|c| c.enabled && c.connection_id == connection_id)?;
-        if connection.engine != "claude" { return None; }
+        let connection = policy
+            .connections
+            .iter()
+            .find(|c| c.enabled && c.connection_id == connection_id)?;
+        if connection.engine != "claude" {
+            return None;
+        }
         let mut definition = self.resolved_definition(&connection.agent_type).ok()?;
-        if definition.protocol != "claude_stream_json" { return None; }
+        if definition.protocol != "claude_stream_json" {
+            return None;
+        }
         let mut args = Vec::new();
         let mut iter = definition.args.iter();
         while let Some(arg) = iter.next() {
-            if arg == "--model" { iter.next()?; }
-            else if !arg.starts_with("--model=") { args.push(arg.clone()); }
+            if arg == "--model" {
+                iter.next()?;
+            } else if !arg.starts_with("--model=") {
+                args.push(arg.clone());
+            }
         }
         definition.args = args;
         definition.digest.clear();
         // Une liste de modèles ne choisit pas un compte de facturation.
-        if !legacy_models { definition.capabilities.models.clear(); }
-        let worker = self.machines.get(&connection.machine_id).map(|m|
-            (&m.worker_id, m.provisioning_revision, &m.credential_fingerprint));
-        let bytes = serde_json::to_vec(&(&connection.machine_id, definition, policy.revision, worker)).ok()?;
+        if !legacy_models {
+            definition.capabilities.models.clear();
+        }
+        let worker = self.machines.get(&connection.machine_id).map(|m| {
+            (
+                &m.worker_id,
+                m.provisioning_revision,
+                &m.credential_fingerprint,
+            )
+        });
+        let bytes =
+            serde_json::to_vec(&(&connection.machine_id, definition, policy.revision, worker))
+                .ok()?;
         Some(format!("{:x}", Sha256::digest(bytes)))
     }
 
@@ -951,8 +982,9 @@ impl AgentRegistry {
                             .iter()
                             .any(|effort| effort == value)
                     })
-                    && effective.service_tier.as_deref().is_none_or(|value|
-                        candidate.service_tiers.iter().any(|tier|tier==value))
+                    && effective.service_tier.as_deref().is_none_or(|value| {
+                        candidate.service_tiers.iter().any(|tier| tier == value)
+                    })
             })
             .map(|candidate| RoutingCandidateSelection {
                 candidate,
@@ -998,32 +1030,58 @@ impl AgentRegistry {
     /// O(M log P), M/P <=64. Résolution d'une admission neuve. Les tâches utilisent project_mapping,
     /// dont la clé et les révocations ne dépendent jamais de cette préférence.
     pub(crate) fn select_project_mapping(
-        &self, machine: &str, requested: Option<&str>, origin: &str, cwd: &Path,
+        &self,
+        machine: &str,
+        requested: Option<&str>,
+        origin: &str,
+        cwd: &Path,
     ) -> Result<(String, ProjectMapping), String> {
         let provision = self.machine(machine)?;
-        let resolve = |mapping: &ProjectMapping| mapping.for_origin(machine, origin)
-            .filter(|mapping| cwd.starts_with(&mapping.source_root));
+        let resolve = |mapping: &ProjectMapping| {
+            mapping
+                .for_origin(machine, origin)
+                .filter(|mapping| cwd.starts_with(&mapping.source_root))
+        };
         if let Some(id) = requested {
-            return resolve(provision.mappings.get(id).ok_or("project_mapping_unknown")?)
-                .map(|mapping| (id.to_owned(), mapping))
-                .ok_or_else(|| "project_mapping_mismatch".into());
+            return resolve(
+                provision
+                    .mappings
+                    .get(id)
+                    .ok_or("project_mapping_unknown")?,
+            )
+            .map(|mapping| (id.to_owned(), mapping))
+            .ok_or_else(|| "project_mapping_mismatch".into());
         }
-        let matches = provision.mappings.iter().filter_map(|(id,mapping)|
-            resolve(mapping).map(|mapping|(id.clone(),mapping))).collect::<Vec<_>>();
-        if matches.len()==1 {return Ok(matches.into_iter().next().unwrap());}
-        if matches.is_empty() {return Err("project_mapping_unknown".into());}
+        let matches = provision
+            .mappings
+            .iter()
+            .filter_map(|(id, mapping)| resolve(mapping).map(|mapping| (id.clone(), mapping)))
+            .collect::<Vec<_>>();
+        if matches.len() == 1 {
+            return Ok(matches.into_iter().next().unwrap());
+        }
+        if matches.is_empty() {
+            return Err("project_mapping_unknown".into());
+        }
         let mut preferred = std::collections::BTreeSet::new();
         if !self.project_preferences.is_null() {
             let invalid = || "project_mapping_preference_invalid".to_owned();
             let section = self.project_preferences.as_object().ok_or_else(invalid)?;
-            if section.len()!=2 || section.get("version").and_then(|v|v.as_u64())!=Some(1) {
+            if section.len() != 2 || section.get("version").and_then(|v| v.as_u64()) != Some(1) {
                 return Err(invalid());
             }
-            let machines = section.get("machines").and_then(|v|v.as_object()).ok_or_else(invalid)?;
-            if machines.len()>MAX_MACHINES {return Err(invalid());}
+            let machines = section
+                .get("machines")
+                .and_then(|v| v.as_object())
+                .ok_or_else(invalid)?;
+            if machines.len() > MAX_MACHINES {
+                return Err(invalid());
+            }
             if let Some(value) = machines.get(machine) {
                 let ids = value.as_array().ok_or_else(invalid)?;
-                if ids.len()>MAX_MACHINE_MAPPINGS {return Err(invalid());}
+                if ids.len() > MAX_MACHINE_MAPPINGS {
+                    return Err(invalid());
+                }
                 for value in ids {
                     let id = value.as_str().ok_or_else(invalid)?;
                     if !provision.mappings.contains_key(id) || !preferred.insert(id) {
@@ -1032,12 +1090,18 @@ impl AgentRegistry {
                 }
             }
         }
-        let choices = matches.iter().filter(|(id,_)|preferred.contains(id.as_str())).collect::<Vec<_>>();
-        if choices.len()==1 {
+        let choices = matches
+            .iter()
+            .filter(|(id, _)| preferred.contains(id.as_str()))
+            .collect::<Vec<_>>();
+        if choices.len() == 1 {
             let (id, selected) = choices[0];
-            if matches.iter().all(|(_,mapping)|mapping.source_host==selected.source_host
-                && mapping.source_root==selected.source_root && mapping.additional_root==selected.additional_root) {
-                return Ok((id.clone(),selected.clone()));
+            if matches.iter().all(|(_, mapping)| {
+                mapping.source_host == selected.source_host
+                    && mapping.source_root == selected.source_root
+                    && mapping.additional_root == selected.additional_root
+            }) {
+                return Ok((id.clone(), selected.clone()));
             }
         }
         Err("project_mapping_ambiguous".into())
@@ -1180,10 +1244,12 @@ impl AgentRegistry {
             capabilities: resolved.capabilities.clone(),
         };
         let expected = resolved_definition(&definition)?;
-        let digest_before_profile = definition.claude_config_dir.is_none() && definition.codex_home.is_none()
+        let digest_before_profile = definition.claude_config_dir.is_none()
+            && definition.codex_home.is_none()
             && expected.digest != resolved.digest
             && pre_profile_resolved_digest(&definition)? == resolved.digest;
-        let digest_before_capabilities = definition.claude_config_dir.is_none() && definition.codex_home.is_none()
+        let digest_before_capabilities = definition.claude_config_dir.is_none()
+            && definition.codex_home.is_none()
             && expected.digest != resolved.digest
             && legacy_resolved_digest(&definition)? == resolved.digest;
         if expected.digest != resolved.digest
@@ -1244,7 +1310,13 @@ impl AgentRegistry {
         policy: &serde_json::Value,
     ) -> Result<Self, String> {
         let mut operation = crate::native_permissions::PermissionReadOperation::default();
-        let result = self.for_inherited_delegation_in_operation(agent_type, model, effort, policy, &mut operation)?;
+        let result = self.for_inherited_delegation_in_operation(
+            agent_type,
+            model,
+            effort,
+            policy,
+            &mut operation,
+        )?;
         operation.finish()?;
         Ok(result)
     }
@@ -1269,7 +1341,10 @@ impl AgentRegistry {
         let mut definition = source.clone();
         definition.permissions = "deny".into();
         crate::native_permissions::apply_child_arguments_in_operation(
-            &definition.protocol, policy, &mut definition.args, operation,
+            &definition.protocol,
+            policy,
+            &mut definition.args,
+            operation,
         )?;
         Self {
             agents: BTreeMap::from([(agent_type.into(), definition)]),
@@ -1377,47 +1452,78 @@ impl AgentRegistry {
     /// par défaut. Cette règle est partagée par probe, Prepare et le lancement local.
     /// O(B+C), arguments B et niveaux déclarés C ; aucune lecture de compte.
     pub(crate) fn pin_delegation_service_tier(
-        mut self, agent_type: &str, model: &str, service_tier: Option<&str>,
+        mut self,
+        agent_type: &str,
+        model: &str,
+        service_tier: Option<&str>,
     ) -> Result<Self, String> {
-        let Some(tier)=service_tier else { return Ok(self); };
+        let Some(tier) = service_tier else {
+            return Ok(self);
+        };
         if !bridget_transport::provider_catalogue::catalogue_token(tier) {
             return Err("model_options_invalid".into());
         }
-        let definition=self.agents.get_mut(agent_type).ok_or("provider_unavailable")?;
-        if definition.protocol!="codex_app_server"
-            || definition.capabilities.models.get(model)
-                .is_none_or(|caps|!caps.service_tiers.iter().any(|value|value==tier)) {
+        let definition = self
+            .agents
+            .get_mut(agent_type)
+            .ok_or("provider_unavailable")?;
+        if definition.protocol != "codex_app_server"
+            || definition
+                .capabilities
+                .models
+                .get(model)
+                .is_none_or(|caps| !caps.service_tiers.iter().any(|value| value == tier))
+        {
             return Err("model_options_not_permitted".into());
         }
-        let encoded=format!("service_tier={}",serde_json::to_string(tier).map_err(|_|"model_options_invalid")?);
-        let mut matches=0usize;
-        let mut canonical=false;
-        let mut args=Vec::with_capacity(definition.args.len()+2);
-        let mut index=0;
-        while index<definition.args.len() {
-            let arg=&definition.args[index];
+        let encoded = format!(
+            "service_tier={}",
+            serde_json::to_string(tier).map_err(|_| "model_options_invalid")?
+        );
+        let mut matches = 0usize;
+        let mut canonical = false;
+        let mut args = Vec::with_capacity(definition.args.len() + 2);
+        let mut index = 0;
+        while index < definition.args.len() {
+            let arg = &definition.args[index];
             // Une fin d'options empêcherait de garantir l'injection. Refus fermé.
-            if arg=="--" { return Err("model_options_launcher_ambiguous".into()); }
-            let assignment=if matches!(arg.as_str(),"-c"|"--config") {
-                Some(definition.args.get(index+1).ok_or("model_options_launcher_ambiguous")?.as_str())
+            if arg == "--" {
+                return Err("model_options_launcher_ambiguous".into());
+            }
+            let assignment = if matches!(arg.as_str(), "-c" | "--config") {
+                Some(
+                    definition
+                        .args
+                        .get(index + 1)
+                        .ok_or("model_options_launcher_ambiguous")?
+                        .as_str(),
+                )
             } else {
-                arg.strip_prefix("--config=").or_else(||arg.strip_prefix("-c"))
+                arg.strip_prefix("--config=")
+                    .or_else(|| arg.strip_prefix("-c"))
             };
-            if assignment.and_then(|value|value.split_once('='))
-                .is_some_and(|(key,_)|key.trim().trim_matches('"')=="service_tier") {
-                matches+=1;
-                canonical|=arg=="-c" && assignment==Some(encoded.as_str());
-                index+=if matches!(arg.as_str(),"-c"|"--config"){2}else{1};
+            if assignment
+                .and_then(|value| value.split_once('='))
+                .is_some_and(|(key, _)| key.trim().trim_matches('"') == "service_tier")
+            {
+                matches += 1;
+                canonical |= arg == "-c" && assignment == Some(encoded.as_str());
+                index += if matches!(arg.as_str(), "-c" | "--config") {
+                    2
+                } else {
+                    1
+                };
                 continue;
             }
             args.push(arg.clone());
-            index+=1;
+            index += 1;
         }
-        if matches!=1 || !canonical {
-            args.extend(["-c".into(),encoded]);
-            definition.args=args;
+        if matches != 1 || !canonical {
+            args.extend(["-c".into(), encoded]);
+            definition.args = args;
         }
-        validate_launch_capabilities(agent_type,definition).map_err(|error|format!("{error:?}"))?;
+        validate_launch_capabilities(agent_type, definition)
+            .map_err(|error| format!("{error:?}"))?;
         Ok(self)
     }
 
@@ -1486,7 +1592,8 @@ fn legacy_capabilities_for(definition: &AgentDefinition) -> AdapterCapabilities 
     if let Some((model, effort)) = runtime_model_and_effort(&definition.args) {
         capabilities.models.insert(
             model,
-            ModelCapabilities { service_tiers: Vec::new(),
+            ModelCapabilities {
+                service_tiers: Vec::new(),
                 efforts: effort.into_iter().collect(),
             },
         );
@@ -1750,10 +1857,16 @@ pub(crate) fn read_private_registry(source: &Path) -> Result<String, String> {
     let link_metadata = std::fs::symlink_metadata(source)
         .map_err(|err| format!("impossible d'inspecter {}: {err}", source.display()))?;
     if link_metadata.file_type().is_symlink() {
-        return Err(format!("registre refusé {}: les liens symboliques sont interdits",source.display()));
+        return Err(format!(
+            "registre refusé {}: les liens symboliques sont interdits",
+            source.display()
+        ));
     }
     if !link_metadata.is_file() {
-        return Err(format!("registre refusé {}: fichier régulier requis",source.display()));
+        return Err(format!(
+            "registre refusé {}: fichier régulier requis",
+            source.display()
+        ));
     }
     let mut file = OpenOptions::new()
         .read(true)
@@ -1787,12 +1900,19 @@ pub(crate) fn read_private_registry(source: &Path) -> Result<String, String> {
             source.display()
         ));
     }
-    const MAX_REGISTRY_BYTES:u64=16*1024*1024;
-    if metadata.len()>MAX_REGISTRY_BYTES {return Err("registre trop volumineux".into());}
+    const MAX_REGISTRY_BYTES: u64 = 16 * 1024 * 1024;
+    if metadata.len() > MAX_REGISTRY_BYTES {
+        return Err("registre trop volumineux".into());
+    }
     let mut content = String::new();
-    std::io::Read::read_to_string(&mut std::io::Read::take(&mut file,MAX_REGISTRY_BYTES+1), &mut content)
-        .map_err(|err| format!("impossible de lire {}: {err}", source.display()))?;
-    if content.len() as u64>MAX_REGISTRY_BYTES {return Err("registre trop volumineux".into());}
+    std::io::Read::read_to_string(
+        &mut std::io::Read::take(&mut file, MAX_REGISTRY_BYTES + 1),
+        &mut content,
+    )
+    .map_err(|err| format!("impossible de lire {}: {err}", source.display()))?;
+    if content.len() as u64 > MAX_REGISTRY_BYTES {
+        return Err("registre trop volumineux".into());
+    }
     Ok(content)
 }
 
@@ -1959,7 +2079,9 @@ fn mapping_root(path: &Path) -> bool {
         })
 }
 
-pub(crate) fn validate_machines(machines: &BTreeMap<String, MachineProvision>) -> Result<(), String> {
+pub(crate) fn validate_machines(
+    machines: &BTreeMap<String, MachineProvision>,
+) -> Result<(), String> {
     if machines.len() > MAX_MACHINES {
         return Err("machine_registry_limit".into());
     }
@@ -1981,8 +2103,7 @@ pub(crate) fn validate_machines(machines: &BTreeMap<String, MachineProvision>) -
         {
             return Err("machine_provision_invalid".into());
         }
-        if machine.allowed_agent_types.len() > MAX_MACHINE_MAPPINGS
-        {
+        if machine.allowed_agent_types.len() > MAX_MACHINE_MAPPINGS {
             return Err("machine_mapping_limit".into());
         }
         let mut types = std::collections::BTreeSet::new();
@@ -2158,13 +2279,29 @@ fn validate_routing_policy(
         }
         let mut names = std::collections::BTreeSet::new();
         for model in models {
-            if model.service_tiers.len()>16
-                || model.service_tiers.iter().any(|tier|
-                    !bridget_transport::provider_catalogue::catalogue_token(tier))
-                || model.service_tiers.iter().collect::<std::collections::BTreeSet<_>>().len()!=model.service_tiers.len()
-                || (!model.service_tiers.is_empty() && (connection.engine!="codex"
-                    || definition.capabilities.models.get(&model.model).is_none_or(|caps|
-                        model.service_tiers.iter().any(|tier|!caps.service_tiers.contains(tier)))))
+            if model.service_tiers.len() > 16
+                || model
+                    .service_tiers
+                    .iter()
+                    .any(|tier| !bridget_transport::provider_catalogue::catalogue_token(tier))
+                || model
+                    .service_tiers
+                    .iter()
+                    .collect::<std::collections::BTreeSet<_>>()
+                    .len()
+                    != model.service_tiers.len()
+                || (!model.service_tiers.is_empty()
+                    && (connection.engine != "codex"
+                        || definition
+                            .capabilities
+                            .models
+                            .get(&model.model)
+                            .is_none_or(|caps| {
+                                model
+                                    .service_tiers
+                                    .iter()
+                                    .any(|tier| !caps.service_tiers.contains(tier))
+                            })))
             {
                 return Err("routing_model_options_invalid".into());
             }
@@ -2257,46 +2394,47 @@ fn validate_routing_policy(
         }
         if let Some(service) = &machine_policy.decision_service
             && service.enabled
-                && !service
-                    .service_id
-                    .as_deref()
-                    .is_some_and(|id| services.contains_key(id))
-            {
-                return Err("routing_decision_service_invalid".into());
-            }
+            && !service
+                .service_id
+                .as_deref()
+                .is_some_and(|id| services.contains_key(id))
+        {
+            return Err("routing_decision_service_invalid".into());
+        }
         if let Some(lightweight) = &machine_policy.lightweight_decision
-            && lightweight.enabled {
-                let valid_connection = lightweight.connection_id.as_deref().and_then(|id| {
-                    policy
-                        .connections
-                        .iter()
-                        .find(|entry| entry.connection_id == id)
-                });
-                let valid_model = valid_connection.and_then(|connection| {
-                    policy
-                        .model_catalog
-                        .get(&connection.connection_id)
-                        .and_then(|models| {
-                            models
-                                .iter()
-                                .find(|model| lightweight.model.as_deref() == Some(&model.model))
-                        })
-                });
-                if lightweight.engine.as_deref() != Some("claude")
-                    || valid_connection.is_none_or(|connection| {
-                        !connection.enabled
-                            || connection.machine_id != *machine_id
-                            || connection.engine != "claude"
+            && lightweight.enabled
+        {
+            let valid_connection = lightweight.connection_id.as_deref().and_then(|id| {
+                policy
+                    .connections
+                    .iter()
+                    .find(|entry| entry.connection_id == id)
+            });
+            let valid_model = valid_connection.and_then(|connection| {
+                policy
+                    .model_catalog
+                    .get(&connection.connection_id)
+                    .and_then(|models| {
+                        models
+                            .iter()
+                            .find(|model| lightweight.model.as_deref() == Some(&model.model))
                     })
-                    || valid_model.is_none_or(|model| {
-                        lightweight.effort.as_deref().is_some_and(|effort| {
-                            !model.supported_efforts.iter().any(|item| item == effort)
-                        })
+            });
+            if lightweight.engine.as_deref() != Some("claude")
+                || valid_connection.is_none_or(|connection| {
+                    !connection.enabled
+                        || connection.machine_id != *machine_id
+                        || connection.engine != "claude"
+                })
+                || valid_model.is_none_or(|model| {
+                    lightweight.effort.as_deref().is_some_and(|effort| {
+                        !model.supported_efforts.iter().any(|item| item == effort)
                     })
-                {
-                    return Err("routing_lightweight_decision_invalid".into());
-                }
+                })
+            {
+                return Err("routing_lightweight_decision_invalid".into());
             }
+        }
     }
 
     Ok(())
@@ -2402,21 +2540,34 @@ fn validate_registry(
         }
         if let Some(profile) = definition.codex_home.as_deref() {
             let path = Path::new(profile);
-            if definition.protocol != "codex_app_server" || !path.is_absolute()
-                || path.components().any(|part| matches!(part, std::path::Component::ParentDir))
-                || profile.chars().any(char::is_control) || definition.claude_config_dir.is_some() {
-                return Err(format!("registre invalide {}: codex_home exige Codex natif et un dossier absolu sans '..' pour '{name}'", source.display()));
+            if definition.protocol != "codex_app_server"
+                || !path.is_absolute()
+                || path
+                    .components()
+                    .any(|part| matches!(part, std::path::Component::ParentDir))
+                || profile.chars().any(char::is_control)
+                || definition.claude_config_dir.is_some()
+            {
+                return Err(format!(
+                    "registre invalide {}: codex_home exige Codex natif et un dossier absolu sans '..' pour '{name}'",
+                    source.display()
+                ));
             }
             if definition.pass_env.iter().any(|key| key == "CODEX_HOME") {
-                return Err(format!("registre invalide {}: CODEX_HOME ne peut pas être hérité avec codex_home pour '{name}'", source.display()));
+                return Err(format!(
+                    "registre invalide {}: CODEX_HOME ne peut pas être hérité avec codex_home pour '{name}'",
+                    source.display()
+                ));
             }
         }
         if definition.codex_home.is_some() && !definition.capabilities.account_profiles {
             return Err("provider_account_reader_guard_required".into());
         }
         if definition.capabilities.account_profiles
-            && !((definition.protocol=="codex_app_server" && definition.codex_home.is_some())
-                || (definition.protocol=="claude_stream_json" && definition.claude_config_dir.is_some())) {
+            && !((definition.protocol == "codex_app_server" && definition.codex_home.is_some())
+                || (definition.protocol == "claude_stream_json"
+                    && definition.claude_config_dir.is_some()))
+        {
             return Err("provider_account_profile_required".into());
         }
         if definition.pass_env.len() > MAX_PASS_ENV_ENTRIES {
@@ -2482,12 +2633,22 @@ fn validate_capabilities(
         }
     }
     for (model, model_capabilities) in &capabilities.models {
-        if model_capabilities.service_tiers.len()>16
-            || model_capabilities.service_tiers.iter().any(|tier|
-                !bridget_transport::provider_catalogue::catalogue_token(tier))
-            || model_capabilities.service_tiers.iter().collect::<std::collections::BTreeSet<_>>().len()!=model_capabilities.service_tiers.len()
+        if model_capabilities.service_tiers.len() > 16
+            || model_capabilities
+                .service_tiers
+                .iter()
+                .any(|tier| !bridget_transport::provider_catalogue::catalogue_token(tier))
+            || model_capabilities
+                .service_tiers
+                .iter()
+                .collect::<std::collections::BTreeSet<_>>()
+                .len()
+                != model_capabilities.service_tiers.len()
             || (!model_capabilities.service_tiers.is_empty()
-                && !capabilities.execution_paths.iter().any(|path|path=="codex_app_server"))
+                && !capabilities
+                    .execution_paths
+                    .iter()
+                    .any(|path| path == "codex_app_server"))
         {
             return Err("model_options_capabilities_invalid".into());
         }

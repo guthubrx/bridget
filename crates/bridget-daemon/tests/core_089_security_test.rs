@@ -287,10 +287,18 @@ fn mcp_reel_garde_outcome_unknown_apres_reponse_invalide_sans_fuite_du_canari() 
                                 capabilities,
                             }
                         }
-                        (true, 0, WrapperToDaemon::RegisterAuxiliary {
-                            agent_id, instance_id, credential: received,
-                        }) | (
-                            false, 1,
+                        (
+                            true,
+                            0,
+                            WrapperToDaemon::RegisterAuxiliary {
+                                agent_id,
+                                instance_id,
+                                credential: received,
+                            },
+                        )
+                        | (
+                            false,
+                            1,
                             WrapperToDaemon::RegisterAuxiliary {
                                 agent_id,
                                 instance_id,
@@ -305,9 +313,14 @@ fn mcp_reel_garde_outcome_unknown_apres_reponse_invalide_sans_fuite_du_canari() 
                                 credential: None,
                             }
                         }
-                        (true, 1, WrapperToDaemon::NativeDelegation {
-                            request: bridget_transport::protocol::NativeDelegationRequest::CallerScope {},
-                        }) => DaemonToWrapper::NativeDelegationResult {
+                        (
+                            true,
+                            1,
+                            WrapperToDaemon::NativeDelegation {
+                                request:
+                                    bridget_transport::protocol::NativeDelegationRequest::CallerScope {},
+                            },
+                        ) => DaemonToWrapper::NativeDelegationResult {
                             result: json!({"version":1,"caller_read_only":false}),
                         },
                         (false, 3, WrapperToDaemon::SendIdempotent { message_id, .. }) => {
@@ -323,7 +336,8 @@ fn mcp_reel_garde_outcome_unknown_apres_reponse_invalide_sans_fuite_du_canari() 
                             };
                             if matches!(fault, "mauvais-id" | "mauvaise-operation") {
                                 assert!(matches!(
-                                    serde_json::from_value::<DaemonToWrapper>(reply.clone()).unwrap(),
+                                    serde_json::from_value::<DaemonToWrapper>(reply.clone())
+                                        .unwrap(),
                                     DaemonToWrapper::IdempotencyResult { .. }
                                 ));
                             }

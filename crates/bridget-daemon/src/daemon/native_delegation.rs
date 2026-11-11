@@ -1,17 +1,16 @@
 //! Effets de la saga native, sous les mêmes gardes que la flotte et les remises.
-#[path = "native_quota_questions246.rs"]
-mod quota_questions246;
-#[path = "native_workspace_repair.rs"]
-pub(super) mod workspace_repair;
-#[path = "native_start_recovery.rs"]
-mod start_recovery;
-#[path = "native_permission_change.rs"]
-mod permission_change;
-#[path = "native_workspace_preparation210.rs"]
-mod workspace_preparation210;
 #[path = "native_admission_guidance211.rs"]
 mod admission_guidance211;
-use bridget_transport::poison::RecoverPoison;
+#[path = "native_permission_change.rs"]
+mod permission_change;
+#[path = "native_quota_questions246.rs"]
+mod quota_questions246;
+#[path = "native_start_recovery.rs"]
+mod start_recovery;
+#[path = "native_workspace_preparation210.rs"]
+mod workspace_preparation210;
+#[path = "native_workspace_repair.rs"]
+pub(super) mod workspace_repair;
 use super::*;
 use crate::decision_service::{
     CallerDeadline, DecisionBrief, DecisionCandidate, DecisionChoice, HealthStatus,
@@ -26,6 +25,7 @@ use crate::registry::{
     AdmissionPolicy, CandidateProfile, DecisionService, RoutingCandidate, RoutingCandidateFilters,
     RoutingPolicy,
 };
+use bridget_transport::poison::RecoverPoison;
 use bridget_transport::protocol::{
     AutoDelegateV1, AutoDelegateV2, LineageDecisionContinuityV4, LineageDecisionCreditsV4,
     LineageDecisionFactsV4, LineageDecisionQuotaV4, LineageDecisionResourcesV4,
@@ -71,8 +71,8 @@ struct AutoAdmissionSnapshot {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RoutingCandidateObservation {
-    #[serde(default,skip_serializing_if="Option::is_none")]
-    model_option_account:Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    model_option_account: Option<String>,
     definition_digest: String,
     permission_digest: String,
     mapping_revision: Option<u64>,
@@ -209,7 +209,8 @@ fn routing_admission_plan(
         .filter(|policy| policy.enabled)
         .cloned()
         .ok_or("routing_policy_unavailable")?;
-    let filters = RoutingCandidateFilters { service_tier: request.service_tier.clone(),
+    let filters = RoutingCandidateFilters {
+        service_tier: request.service_tier.clone(),
         engine: request.engine.clone(),
         model: request.model.clone(),
         machine_id: request.machine_id.clone(),
@@ -481,42 +482,85 @@ fn validate_routing_parent_source(
     use bridget_transport::protocol::*;
     let remote = {
         let st = state.lock().recover_poison();
-        let (owner, instance) = live_connection_identity(&st, conn).ok_or("identity_unavailable")?;
+        let (owner, instance) =
+            live_connection_identity(&st, conn).ok_or("identity_unavailable")?;
         let parent = parent_fact(&st, &owner, &instance, Some(&request.request_id), attested)?
             .ok_or("permission_attestation_unavailable")?;
-        st.delegation_store.for_child(&owner)?
+        st.delegation_store
+            .for_child(&owner)?
             .filter(|task| task.remote_placement.is_some())
             .map(|task| {
                 let worker = remote_worker_identity(task.remote_placement.as_ref().unwrap());
-                if !st.remote_workers.get(&worker.machine_id).is_some_and(|session|
-                    session.capabilities.contains(&WorkerCapability::ParentSourceProofV1)) {
+                if !st
+                    .remote_workers
+                    .get(&worker.machine_id)
+                    .is_some_and(|session| {
+                        session
+                            .capabilities
+                            .contains(&WorkerCapability::ParentSourceProofV1)
+                    })
+                {
                     return Err("remote_source_probe_unsupported".to_owned());
                 }
-                Ok((worker, remote_command_identity(&st, &task).map_err(|e| format!("{e:?}"))?, parent))
-            }).transpose()?
+                Ok((
+                    worker,
+                    remote_command_identity(&st, &task).map_err(|e| format!("{e:?}"))?,
+                    parent,
+                ))
+            })
+            .transpose()?
     };
     let Some((worker, command, parent)) = remote else {
-        let (owner,parent)={
-            let st=state.lock().recover_poison();
-            let (owner,instance)=live_connection_identity(&st,conn).ok_or("identity_unavailable")?;
-            let parent=parent_fact(&st,&owner,&instance,Some(&request.request_id),attested)?.ok_or("permission_attestation_unavailable")?;
-            (owner,parent)
+        let (owner, parent) = {
+            let st = state.lock().recover_poison();
+            let (owner, instance) =
+                live_connection_identity(&st, conn).ok_or("identity_unavailable")?;
+            let parent = parent_fact(&st, &owner, &instance, Some(&request.request_id), attested)?
+                .ok_or("permission_attestation_unavailable")?;
+            (owner, parent)
         };
-        if let Some((_,error))=super::origin_proof::sources(state,&owner,&parent,Some(routing_source_base(request)),None)? {
-            return error.map_or(Ok(()),Err);
+        if let Some((_, error)) = super::origin_proof::sources(
+            state,
+            &owner,
+            &parent,
+            Some(routing_source_base(request)),
+            None,
+        )? {
+            return error.map_or(Ok(()), Err);
         }
-        return crate::lifecycle::validate_parent_source_base(&parent,&routing_source_base(request));
+        return crate::lifecycle::validate_parent_source_base(
+            &parent,
+            &routing_source_base(request),
+        );
     };
-    let response = remote_worker_roundtrip(state, &worker, &command,
-        WorkerRequestOperation::ParentSourceProof { parent: parent.clone(), source: routing_source_base(request) },
-        Instant::now() + Duration::from_secs(30))
-        .map_err(|e| format!("remote_source_preflight:{e:?}"))?;
-    let WorkerResponseOperation::ParentSourceProof { permission_digest, source_error } = response else {
+    let response = remote_worker_roundtrip(
+        state,
+        &worker,
+        &command,
+        WorkerRequestOperation::ParentSourceProof {
+            parent: parent.clone(),
+            source: routing_source_base(request),
+        },
+        Instant::now() + Duration::from_secs(30),
+    )
+    .map_err(|e| format!("remote_source_preflight:{e:?}"))?;
+    let WorkerResponseOperation::ParentSourceProof {
+        permission_digest,
+        source_error,
+    } = response
+    else {
         return Err("remote_source_proof_invalid".into());
     };
-    let expected = format!("{:x}", sha2::Sha256::digest(serde_json::to_vec(&parent).map_err(|e| e.to_string())?));
-    if permission_digest != expected { return Err("remote_parent_proof_changed".into()); }
-    if let Some(code) = source_error { return Err(code); }
+    let expected = format!(
+        "{:x}",
+        sha2::Sha256::digest(serde_json::to_vec(&parent).map_err(|e| e.to_string())?)
+    );
+    if permission_digest != expected {
+        return Err("remote_parent_proof_changed".into());
+    }
+    if let Some(code) = source_error {
+        return Err(code);
+    }
     Ok(())
 }
 
@@ -593,26 +637,37 @@ fn record_routing_probe_refusal(
         RoutingProbeRefusalCode::Worker(code) => ("worker", serde_json::to_value(code)),
         RoutingProbeRefusalCode::Tool(fact) => {
             use bridget_transport::protocol::WorkloadToolState::*;
-            let kind=match fact.state {Absent=>"tool_absent",Unusable=>"tool_unusable",Unknown=>"tool_unknown",Available=>return false};
-            (kind,serde_json::to_value(fact.tool))
+            let kind = match fact.state {
+                Absent => "tool_absent",
+                Unusable => "tool_unusable",
+                Unknown => "tool_unknown",
+                Available => return false,
+            };
+            (kind, serde_json::to_value(fact.tool))
         }
     };
-    let Ok(code) = code else { return false; };
+    let Ok(code) = code else {
+        return false;
+    };
     let mut note = json!({"event":"routing_probe_refused","correlation_id":correlation_id,
-        "admission_id":admission_id,"candidate_id":candidate_id,"kind":kind,"code":code})
-        ;
-    if let Some(machine) = candidate_id.strip_prefix('c')
-        .and_then(|id| id.parse::<usize>().ok()).and_then(|n| n.checked_sub(1))
-        .and_then(|index| plan.candidates.get(index)).map(|candidate|candidate.machine_id.as_str())
-        .filter(|machine|probe_machine_name(machine))
+        "admission_id":admission_id,"candidate_id":candidate_id,"kind":kind,"code":code});
+    if let Some(machine) = candidate_id
+        .strip_prefix('c')
+        .and_then(|id| id.parse::<usize>().ok())
+        .and_then(|n| n.checked_sub(1))
+        .and_then(|index| plan.candidates.get(index))
+        .map(|candidate| candidate.machine_id.as_str())
+        .filter(|machine| probe_machine_name(machine))
     {
-        note["machine_id"]=json!(machine);
+        note["machine_id"] = json!(machine);
     }
-    if note.to_string().len()>MAX_ROUTING_PROBE_REFUSAL_NOTE_BYTES {
+    if note.to_string().len() > MAX_ROUTING_PROBE_REFUSAL_NOTE_BYTES {
         note.as_object_mut().expect("object").remove("machine_id");
     }
-    let note=note.to_string();
-    if note.len() > MAX_ROUTING_PROBE_REFUSAL_NOTE_BYTES { return false; }
+    let note = note.to_string();
+    if note.len() > MAX_ROUTING_PROBE_REFUSAL_NOTE_BYTES {
+        return false;
+    }
     eprintln!("bridget_probe_refusal {note}");
     plan.decision_notes.push(note);
     true
@@ -746,12 +801,17 @@ fn project_probe_constraints(result: &mut Value, reasons: &[Value]) {
     if !checks.is_empty() {
         result["detail"]["scope"] = json!("candidate_subset");
         result["detail"]["probe_checks"] = json!(checks);
-        if checks.len()==1 && checks[0]["underlying_cause"]!="unobserved" {
-            result["detail"]["cause"]=checks[0]["underlying_cause"].clone();
-            result["detail"]["verification"]=json!("Le préflight a relevé cet état de preuve pour l’image courante : absente, non concluante ou incompatible selon le code. Il ne prouve aucun défaut de compte ni de modèle.");
+        if checks.len() == 1 && checks[0]["underlying_cause"] != "unobserved" {
+            result["detail"]["cause"] = checks[0]["underlying_cause"].clone();
+            result["detail"]["verification"] = json!(
+                "Le préflight a relevé cet état de preuve pour l’image courante : absente, non concluante ou incompatible selon le code. Il ne prouve aucun défaut de compte ni de modèle."
+            );
         }
     }
-    if reasons.iter().any(|r| r["kind"] == "candidate" && r["code"] == "permissions_changed") {
+    if reasons
+        .iter()
+        .any(|r| r["kind"] == "candidate" && r["code"] == "permissions_changed")
+    {
         result["detail"]["permission_projection"] = json!({
             "cause":"unobserved",
             "message":"Les droits du parent n’ont pas pu être confirmés ou traduits pour au moins un candidat. Le code permissions_changed ne prouve pas à lui seul qu’un droit a changé.",
@@ -782,18 +842,31 @@ fn project_probe_constraints(result: &mut Value, reasons: &[Value]) {
         let mixed = checks.len() > 1;
         let human = first["human_action"].clone();
         let queue_only = first["kind"] == "candidate" && first["code"] == "resource_limit";
-        let action = if mixed { "Consultez chaque vérification dans detail.probe_checks." }
-            else { first["next_action"].as_str().unwrap_or("Vérifiez le motif reçu.") };
-        let message = format!("{action} Ce refus concerne les candidats cités de cette admission. Consultez son état dans detail.admission et les vérifications dans detail.probe_checks. Les autres travaux autorisés suivent leur propre état.");
+        let action = if mixed {
+            "Consultez chaque vérification dans detail.probe_checks."
+        } else {
+            first["next_action"]
+                .as_str()
+                .unwrap_or("Vérifiez le motif reçu.")
+        };
+        let message = format!(
+            "{action} Ce refus concerne les candidats cités de cette admission. Consultez son état dans detail.admission et les vérifications dans detail.probe_checks. Les autres travaux autorisés suivent leur propre état."
+        );
         result["message"] = json!(message);
         result["detail"]["message"] = json!(message);
-        result["detail"]["verification"] = json!("Les motifs reçus sont conservés dans detail.reasons. Leur sous-cause non conservée reste inconnue ; les vérifications à faire figurent dans detail.probe_checks.");
+        result["detail"]["verification"] = json!(
+            "Les motifs reçus sont conservés dans detail.reasons. Leur sous-cause non conservée reste inconnue ; les vérifications à faire figurent dans detail.probe_checks."
+        );
         if !mixed && !queue_only {
             result["detail"]["human_action"] = human;
         }
         if mixed {
-            result["detail"]["recovery"] = json!("Appliquez les vérifications de detail.probe_checks et corrigez tous les motifs concernés avant tout rejeu. Un drainage ne résout pas un dossier modifié, une garde ou un problème de droits. Conservez la même request_id et la même enveloppe. Consultez detail.admission : suivez toute tâche connue ; une admission pending ou d'issue inconnue interdit un remplacement. Un rejeu strict exige not_recorded, la correction de tous les motifs et la fin confirmée de tout appel concurrent. Un refus durable reste clos et suit son conseil propre avant toute nouvelle clé. Aucun changement de moteur, de machine, de compte ou de droits pour contourner ce refus.");
-            result["detail"]["human_action"] = json!("Si une vérification ou correction dépasse votre mandat, demandez à l'utilisateur la décision décrite pour ce motif dans detail.probe_checks. Conservez les travaux et reçus ; n'arrêtez pas autrui pour résoudre cette admission.");
+            result["detail"]["recovery"] = json!(
+                "Appliquez les vérifications de detail.probe_checks et corrigez tous les motifs concernés avant tout rejeu. Un drainage ne résout pas un dossier modifié, une garde ou un problème de droits. Conservez la même request_id et la même enveloppe. Consultez detail.admission : suivez toute tâche connue ; une admission pending ou d'issue inconnue interdit un remplacement. Un rejeu strict exige not_recorded, la correction de tous les motifs et la fin confirmée de tout appel concurrent. Un refus durable reste clos et suit son conseil propre avant toute nouvelle clé. Aucun changement de moteur, de machine, de compte ou de droits pour contourner ce refus."
+            );
+            result["detail"]["human_action"] = json!(
+                "Si une vérification ou correction dépasse votre mandat, demandez à l'utilisateur la décision décrite pour ce motif dans detail.probe_checks. Conservez les travaux et reçus ; n'arrêtez pas autrui pour résoudre cette admission."
+            );
         }
     }
 }
@@ -802,21 +875,43 @@ fn routing_probe_failure(plan: &RoutingAdmissionPlan) -> Value {
     use bridget_transport::protocol::{CandidateProbeRefusal, WorkerRefusal};
     let mut counts = BTreeMap::<(String, String), usize>::new();
     let mut targets = BTreeMap::<(String, String, String), usize>::new();
-    for note in plan.decision_notes.iter().take(MAX_ROUTING_PROBE_REFUSAL_NOTES) {
-        if note.len() > MAX_ROUTING_PROBE_REFUSAL_NOTE_BYTES { continue; }
-        let Ok(value) = serde_json::from_str::<Value>(note) else { continue; };
-        if value["event"] != "routing_probe_refused" { continue; }
+    for note in plan
+        .decision_notes
+        .iter()
+        .take(MAX_ROUTING_PROBE_REFUSAL_NOTES)
+    {
+        if note.len() > MAX_ROUTING_PROBE_REFUSAL_NOTE_BYTES {
+            continue;
+        }
+        let Ok(value) = serde_json::from_str::<Value>(note) else {
+            continue;
+        };
+        if value["event"] != "routing_probe_refused" {
+            continue;
+        }
         let kind = value["kind"].as_str().unwrap_or("");
         let valid = match kind {
-            "candidate" => serde_json::from_value::<CandidateProbeRefusal>(value["code"].clone()).is_ok(),
+            "candidate" => {
+                serde_json::from_value::<CandidateProbeRefusal>(value["code"].clone()).is_ok()
+            }
             "worker" => serde_json::from_value::<WorkerRefusal>(value["code"].clone()).is_ok(),
-            "tool_absent"|"tool_unusable"|"tool_unknown" => serde_json::from_value::<bridget_transport::protocol::WorkloadTool>(value["code"].clone()).is_ok(),
+            "tool_absent" | "tool_unusable" | "tool_unknown" => serde_json::from_value::<
+                bridget_transport::protocol::WorkloadTool,
+            >(value["code"].clone())
+            .is_ok(),
             _ => false,
         };
         if valid && let Some(code) = value["code"].as_str() {
-            *counts.entry((kind.to_owned(), code.to_owned())).or_default() += 1;
-            if let Some(machine)=value["machine_id"].as_str().filter(|machine|probe_machine_name(machine)) {
-                *targets.entry((machine.to_owned(),kind.to_owned(),code.to_owned())).or_default()+=1;
+            *counts
+                .entry((kind.to_owned(), code.to_owned()))
+                .or_default() += 1;
+            if let Some(machine) = value["machine_id"]
+                .as_str()
+                .filter(|machine| probe_machine_name(machine))
+            {
+                *targets
+                    .entry((machine.to_owned(), kind.to_owned(), code.to_owned()))
+                    .or_default() += 1;
             }
         }
     }
@@ -834,58 +929,102 @@ fn routing_probe_failure(plan: &RoutingAdmissionPlan) -> Value {
         result["detail"]["reasons"] = json!(reasons);
         let targets=targets.into_iter().map(|((machine,kind,code),candidates)|
             json!({"machine_id":machine,"kind":kind,"code":code,"candidates":candidates})).collect::<Vec<_>>();
-        if !targets.is_empty() { project_probe_targets(&mut result,&targets); }
+        if !targets.is_empty() {
+            project_probe_targets(&mut result, &targets);
+        }
     }
     result
 }
 
 fn probe_machine_name(machine: &str) -> bool {
-    !machine.is_empty() && machine.len()<=256
-        && machine.bytes().all(|b|b.is_ascii_alphanumeric()||matches!(b,b'.'|b'-'|b'_'))
+    !machine.is_empty()
+        && machine.len() <= 256
+        && machine
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-' | b'_'))
         && bridget_core::host_is_attested(machine)
 }
 
 fn valid_probe_targets(targets: &[Value], reasons: &[Value]) -> bool {
-    if targets.is_empty() || targets.len()>MAX_ROUTING_PROBE_REFUSAL_NOTES { return false; }
-    let mut previous=None;
-    let mut sums=BTreeMap::<(&str,&str),u64>::new();
+    if targets.is_empty() || targets.len() > MAX_ROUTING_PROBE_REFUSAL_NOTES {
+        return false;
+    }
+    let mut previous = None;
+    let mut sums = BTreeMap::<(&str, &str), u64>::new();
     for target in targets {
-        if target.as_object().is_none_or(|o| o.len() != 4) {return false;}
-        let (Some(machine),Some(kind),Some(code),Some(count))=(target["machine_id"].as_str(),
-            target["kind"].as_str(),target["code"].as_str(),target["candidates"].as_u64())
-            else {return false;};
-        if !probe_machine_name(machine) || !(1..=128).contains(&count) {return false;}
-        let key=(machine,kind,code);
-        if previous.is_some_and(|old|old>=key) {return false;} previous=Some(key);
-        let Some(total)=reasons.iter().find(|r|r["kind"]==kind&&r["code"]==code)
-            .and_then(|r|r["candidates"].as_u64()) else {return false;};
-        let sum=sums.entry((kind,code)).or_default();*sum+=count;
-        if *sum>total {return false;}
+        if target.as_object().is_none_or(|o| o.len() != 4) {
+            return false;
+        }
+        let (Some(machine), Some(kind), Some(code), Some(count)) = (
+            target["machine_id"].as_str(),
+            target["kind"].as_str(),
+            target["code"].as_str(),
+            target["candidates"].as_u64(),
+        ) else {
+            return false;
+        };
+        if !probe_machine_name(machine) || !(1..=128).contains(&count) {
+            return false;
+        }
+        let key = (machine, kind, code);
+        if previous.is_some_and(|old| old >= key) {
+            return false;
+        }
+        previous = Some(key);
+        let Some(total) = reasons
+            .iter()
+            .find(|r| r["kind"] == kind && r["code"] == code)
+            .and_then(|r| r["candidates"].as_u64())
+        else {
+            return false;
+        };
+        let sum = sums.entry((kind, code)).or_default();
+        *sum += count;
+        if *sum > total {
+            return false;
+        }
     }
     true
 }
 
 fn project_probe_targets(result: &mut Value, targets: &[Value]) {
-    result["detail"]["probe_targets"]=json!(targets);
-    result["detail"]["probe_stage"]=json!("candidate_probe");
-    result["detail"]["target_coverage"]=json!("reported_refusals_only");
-    result["detail"]["target_verification"]=json!("Machines des candidats refusés lors de cette sonde, sans choix final d'exécution. Les anciens motifs sans machine restent inconnus ; la sous-cause du contrôle n'est pas déduite de cette liste.");
-    let message=format!("{} Machines concernées : detail.probe_targets ; aucune machine finale choisie n'est attestée.",result["message"].as_str().unwrap_or(""));
-    result["message"]=json!(message);result["detail"]["message"]=result["message"].clone();
+    result["detail"]["probe_targets"] = json!(targets);
+    result["detail"]["probe_stage"] = json!("candidate_probe");
+    result["detail"]["target_coverage"] = json!("reported_refusals_only");
+    result["detail"]["target_verification"] = json!(
+        "Machines des candidats refusés lors de cette sonde, sans choix final d'exécution. Les anciens motifs sans machine restent inconnus ; la sous-cause du contrôle n'est pas déduite de cette liste."
+    );
+    let message = format!(
+        "{} Machines concernées : detail.probe_targets ; aucune machine finale choisie n'est attestée.",
+        result["message"].as_str().unwrap_or("")
+    );
+    result["message"] = json!(message);
+    result["detail"]["message"] = result["message"].clone();
 }
 
 // Les relectures du choix retournent une erreur String. Transporter seulement
 // les motifs fermés déjà observés ; aucun message libre ni nouvelle sonde.
 fn routing_probe_error(plan: &RoutingAdmissionPlan, code: String) -> String {
-    if code != "routing_candidate_unavailable" { return code; }
+    if code != "routing_candidate_unavailable" {
+        return code;
+    }
     let failure = routing_probe_failure(plan);
-    let Some(reasons) = failure["detail"]["reasons"].as_array() else { return code; };
-    let reasons = reasons.iter().map(|reason| json!({
-        "kind":reason["kind"], "code":reason["code"], "candidates":reason["candidates"]
-    })).collect::<Vec<_>>();
-    if let Some(targets)=failure["detail"]["probe_targets"].as_array() {
-        format!("{code}:{}",json!({"reasons":reasons,"targets":targets}))
-    } else { format!("{code}:{}", json!(reasons)) }
+    let Some(reasons) = failure["detail"]["reasons"].as_array() else {
+        return code;
+    };
+    let reasons = reasons
+        .iter()
+        .map(|reason| {
+            json!({
+                "kind":reason["kind"], "code":reason["code"], "candidates":reason["candidates"]
+            })
+        })
+        .collect::<Vec<_>>();
+    if let Some(targets) = failure["detail"]["probe_targets"].as_array() {
+        format!("{code}:{}", json!({"reasons":reasons,"targets":targets}))
+    } else {
+        format!("{code}:{}", json!(reasons))
+    }
 }
 
 /// O(M log P) sur les mappings et préférences bornés, une fois par machine et par sonde.
@@ -913,64 +1052,110 @@ fn prepare_routing_projects(
     let (registry, host, origin_host, owner, parent) = {
         let st = state.lock().recover_poison();
         recheck_attested_thread(&st, conn, thread)?;
-        let (owner, instance) = live_connection_identity(&st, conn).ok_or("identity_unavailable")?;
+        let (owner, instance) =
+            live_connection_identity(&st, conn).ok_or("identity_unavailable")?;
         let parent = parent_fact(&st, &owner, &instance, Some(&request.request_id), attested)?
             .ok_or("permission_attestation_unavailable")?;
         let source = Path::new(&request.cwd);
-        if !source.is_absolute() || source.components().any(|c| matches!(c, std::path::Component::ParentDir))
-            || crate::lifecycle::source_root(&parent,source).is_err() {
+        if !source.is_absolute()
+            || source
+                .components()
+                .any(|c| matches!(c, std::path::Component::ParentDir))
+            || crate::lifecycle::source_root(&parent, source).is_err()
+        {
             return Err("cwd_outside_parent_project".into());
         }
         let control = crate::referent_control::read(st.store.connection())
             .map_err(|_| "control_state_unavailable")?;
-        let halt = st.delegation_store.delegation_halt().map_err(|_| "control_state_unavailable")?;
+        let halt = st
+            .delegation_store
+            .delegation_halt()
+            .map_err(|_| "control_state_unavailable")?;
         if let crate::referent_control::Admission::Deferred { motif } =
-            crate::referent_control::admit_native_delegation(&control, &halt) {
-            return Err(if motif == "pause" { "referent_paused" } else { motif }.into());
+            crate::referent_control::admit_native_delegation(&control, &halt)
+        {
+            return Err(if motif == "pause" {
+                "referent_paused"
+            } else {
+                motif
+            }
+            .into());
         }
         // Un parent distant conserve son transport natif existant. Le maître ne
         // lit jamais un chemin local homonyme appartenant à une autre machine.
-        if st.delegation_store.for_child(&owner)?
-            .is_some_and(|task| task.remote_placement.is_some()) {
+        if st
+            .delegation_store
+            .for_child(&owner)?
+            .is_some_and(|task| task.remote_placement.is_some())
+        {
             return Ok(());
         }
         let registry = AgentRegistry::load_from_path(st.registry.source().to_path_buf())?;
-        let origin_host=super::origin_proof::host_for_owner(&st,&owner)?;
+        let origin_host = super::origin_proof::host_for_owner(&st, &owner)?;
         (registry, st.host.clone(), origin_host, owner, parent)
     };
-    let has_link = registry.source().parent().is_some_and(crate::project_preparation::has_link);
-    let foreign=origin_host!=host;
-    let is_view=matches!(request.workspace,Some(WorkspaceRequest::CommitView {}));
-    if !has_link && !foreign && !is_view { return Ok(()); }
+    let has_link = registry
+        .source()
+        .parent()
+        .is_some_and(crate::project_preparation::has_link);
+    let foreign = origin_host != host;
+    let is_view = matches!(request.workspace, Some(WorkspaceRequest::CommitView {}));
+    if !has_link && !foreign && !is_view {
+        return Ok(());
+    }
     let mut machines = std::collections::BTreeSet::new();
     for candidate in &plan.candidates {
-        if is_view || (foreign && candidate.machine_id==origin_host && request.expected_base_commit.is_none())
-            || (candidate.machine_id!=origin_host && (foreign || !routing_is_local(&candidate.machine_id, &host))) {
+        if is_view
+            || (foreign
+                && candidate.machine_id == origin_host
+                && request.expected_base_commit.is_none())
+            || (candidate.machine_id != origin_host
+                && (foreign || !routing_is_local(&candidate.machine_id, &host)))
+        {
             machines.insert(candidate.machine_id.clone());
         }
     }
-    if machines.is_empty() { return Ok(()); }
+    if machines.is_empty() {
+        return Ok(());
+    }
     // Contrôle réel du fait fournisseur avant toute copie. Pas de droit neuf.
-    if !foreign {crate::native_permissions::prove_parent_permissions(&parent, parent.revision)?;}
-    let deadline=Instant::now()+Duration::from_secs(595);
+    if !foreign {
+        crate::native_permissions::prove_parent_permissions(&parent, parent.revision)?;
+    }
+    let deadline = Instant::now() + Duration::from_secs(595);
     let mut refused = BTreeMap::new();
     for machine in machines {
-        if Instant::now()>=deadline {
-            refused.insert(machine,"project_preparation_timeout".to_owned());
+        if Instant::now() >= deadline {
+            refused.insert(machine, "project_preparation_timeout".to_owned());
             continue;
         }
         // Le choix ne réécrit jamais le canon original (project_id peut rester None).
         // Un ancien helper connaît cette clé explicite sans lire la préférence.
-        let project_id = match routing_project_mapping(&registry, &machine, request.project_id.as_deref(),
-            &origin_host, Path::new(&request.cwd)) {
-            Ok((id,_)) => Some(id),
+        let project_id = match routing_project_mapping(
+            &registry,
+            &machine,
+            request.project_id.as_deref(),
+            &origin_host,
+            Path::new(&request.cwd),
+        ) {
+            Ok((id, _)) => Some(id),
             Err(code) if code == "project_mapping_unknown" && request.project_id.is_none() => None,
-            Err(code) => {refused.insert(machine,code); continue;}
+            Err(code) => {
+                refused.insert(machine, code);
+                continue;
+            }
         };
         if foreign {
-            if let Err(code)=super::origin_proof::prepare_project(state,&owner,&parent,
-                routing_source_base(request),&machine,project_id.as_deref(),deadline) {
-                refused.insert(machine,code);
+            if let Err(code) = super::origin_proof::prepare_project(
+                state,
+                &owner,
+                &parent,
+                routing_source_base(request),
+                &machine,
+                project_id.as_deref(),
+                deadline,
+            ) {
+                refused.insert(machine, code);
             }
             continue;
         }
@@ -980,21 +1165,27 @@ fn prepare_routing_projects(
             "project_id":project_id,
             "objects_only":matches!(request.workspace,Some(WorkspaceRequest::CommitView {}))
         });
-        if let Err(code) = crate::project_preparation::prepare_until(&payload,deadline) {
+        if let Err(code) = crate::project_preparation::prepare_until(&payload, deadline) {
             refused.insert(machine, code);
         }
     }
-    plan.candidates.retain(|candidate| !refused.contains_key(&candidate.machine_id));
+    plan.candidates
+        .retain(|candidate| !refused.contains_key(&candidate.machine_id));
     if plan.candidates.is_empty() {
-        return Err(admission_guidance211::mapping_context_error("project_preparation",&refused));
+        return Err(admission_guidance211::mapping_context_error(
+            "project_preparation",
+            &refused,
+        ));
     }
     let mut st = state.lock().recover_poison();
     recheck_attested_thread(&st, conn, thread)?;
     let (owner, instance) = live_connection_identity(&st, conn).ok_or("identity_unavailable")?;
-    if super::origin_proof::host_for_owner(&st,&owner)? != origin_host {
+    if super::origin_proof::host_for_owner(&st, &owner)? != origin_host {
         return Err("origin_binding_unavailable".into());
     }
-    if parent_fact(&st, &owner, &instance, Some(&request.request_id), attested)?.as_ref() != Some(&parent) {
+    if parent_fact(&st, &owner, &instance, Some(&request.request_id), attested)?.as_ref()
+        != Some(&parent)
+    {
         return Err("permission_not_inherited".into());
     }
     st.registry = AgentRegistry::load_from_path(registry.source().to_path_buf())?;
@@ -1006,12 +1197,25 @@ fn workload_command_segments(command: &str) -> Vec<&str> {
     let (mut quote, mut escaped, mut start) = (None, false, 0);
     let mut parts = Vec::new();
     for (i, ch) in command.char_indices() {
-        if escaped { escaped = false; continue; }
-        if ch == '\\' && quote != Some('\'') { escaped = true; continue; }
-        if let Some(q) = quote { if ch == q { quote = None; } continue; }
-        if matches!(ch, '\'' | '"') { quote = Some(ch); }
-        else if matches!(ch, '&' | '|' | ';' | '\n') {
-            parts.push(&command[start..i]); start = i + ch.len_utf8();
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        if ch == '\\' && quote != Some('\'') {
+            escaped = true;
+            continue;
+        }
+        if let Some(q) = quote {
+            if ch == q {
+                quote = None;
+            }
+            continue;
+        }
+        if matches!(ch, '\'' | '"') {
+            quote = Some(ch);
+        } else if matches!(ch, '&' | '|' | ';' | '\n') {
+            parts.push(&command[start..i]);
+            start = i + ch.len_utf8();
         }
     }
     parts.push(&command[start..]);
@@ -1031,68 +1235,210 @@ fn workload_command_writes(name: &str, args: &[String]) -> bool {
                 match arg {
                     "-C" | "-c" | "--git-dir" | "--work-tree" | "--namespace" => i += 2,
                     "--no-pager" | "--paginate" | "--no-optional-locks" => i += 1,
-                    _ if ["--git-dir=", "--work-tree=", "--namespace="].iter().any(|p| arg.starts_with(p)) => i += 1,
+                    _ if ["--git-dir=", "--work-tree=", "--namespace="]
+                        .iter()
+                        .any(|p| arg.starts_with(p)) =>
+                    {
+                        i += 1
+                    }
                     _ => break,
                 }
             }
             let op = args.get(i).map(String::as_str).unwrap_or("");
             let next = args.get(i + 1).map(String::as_str).unwrap_or("");
-            if any(&["--output", "-o"]) || args.iter().any(|a| a.starts_with("--output=")) { return true; }
-            if matches!(op, "branch" | "tag") && any(&["-d", "-D", "--delete", "-m", "-M", "--move", "-c", "-C", "--copy", "-a", "--annotate", "-s", "--sign", "-f", "--force"]) { return true; }
-            !(read(&["status", "log", "diff", "show", "rev-parse", "ls-files", "ls-tree", "rev-list",
-                "describe", "grep", "for-each-ref", "version", "help", "--version", "-v"], op) || matches!((op, next), ("stash", "list" | "show") | ("worktree", "list")
-                    | ("remote", "-v" | "--verbose" | "get-url")) || matches!(op, "branch" | "tag") && any(&["--list", "-l", "--show-current"]))
+            if any(&["--output", "-o"]) || args.iter().any(|a| a.starts_with("--output=")) {
+                return true;
+            }
+            if matches!(op, "branch" | "tag")
+                && any(&[
+                    "-d",
+                    "-D",
+                    "--delete",
+                    "-m",
+                    "-M",
+                    "--move",
+                    "-c",
+                    "-C",
+                    "--copy",
+                    "-a",
+                    "--annotate",
+                    "-s",
+                    "--sign",
+                    "-f",
+                    "--force",
+                ])
+            {
+                return true;
+            }
+            !(read(
+                &[
+                    "status",
+                    "log",
+                    "diff",
+                    "show",
+                    "rev-parse",
+                    "ls-files",
+                    "ls-tree",
+                    "rev-list",
+                    "describe",
+                    "grep",
+                    "for-each-ref",
+                    "version",
+                    "help",
+                    "--version",
+                    "-v",
+                ],
+                op,
+            ) || matches!(
+                (op, next),
+                ("stash", "list" | "show")
+                    | ("worktree", "list")
+                    | ("remote", "-v" | "--verbose" | "get-url")
+            ) || matches!(op, "branch" | "tag") && any(&["--list", "-l", "--show-current"]))
         }
         "cargo" => {
-            let op = args.iter().find(|a| !a.starts_with('+')).map(String::as_str).unwrap_or("");
-            !(read(&["--version", "-V", "version", "help", "--help", "-h", "locate-project", "read-manifest"], op) || op == "fmt" && any(&["--check"]) || op == "metadata" && any(&["--locked", "--frozen"]))
+            let op = args
+                .iter()
+                .find(|a| !a.starts_with('+'))
+                .map(String::as_str)
+                .unwrap_or("");
+            !(read(
+                &[
+                    "--version",
+                    "-V",
+                    "version",
+                    "help",
+                    "--help",
+                    "-h",
+                    "locate-project",
+                    "read-manifest",
+                ],
+                op,
+            ) || op == "fmt" && any(&["--check"])
+                || op == "metadata" && any(&["--locked", "--frozen"]))
         }
-        "npm" | "pnpm" => !read(&["--version", "-v", "version", "help", "--help", "-h"], first)
-            || (first == "version" && args.len() > 1),
+        "npm" | "pnpm" => {
+            !read(
+                &["--version", "-v", "version", "help", "--help", "-h"],
+                first,
+            ) || (first == "version" && args.len() > 1)
+        }
         "make" => !any(&["-n", "--dry-run", "--just-print", "--recon"]),
         "docker" => {
-            let op = if first == "compose" { args.get(1).map(String::as_str).unwrap_or("") } else { first };
-            !read(&["--version", "-v", "version", "help", "--help", "ps", "info", "inspect", "logs", "images", "top"], op)
-                && (first != "compose" || op != "config" || any(&["--output", "-o"]) || args.iter().any(|a| a.starts_with("--output=")))
+            let op = if first == "compose" {
+                args.get(1).map(String::as_str).unwrap_or("")
+            } else {
+                first
+            };
+            !read(
+                &[
+                    "--version",
+                    "-v",
+                    "version",
+                    "help",
+                    "--help",
+                    "ps",
+                    "info",
+                    "inspect",
+                    "logs",
+                    "images",
+                    "top",
+                ],
+                op,
+            ) && (first != "compose"
+                || op != "config"
+                || any(&["--output", "-o"])
+                || args.iter().any(|a| a.starts_with("--output=")))
         }
         _ => false,
     }
 }
 
 /// Exigences tirées uniquement de commandes, jamais d'une mention du produit.
-fn identified_workload_requirements(task: &str) -> (Vec<bridget_transport::protocol::WorkloadTool>, bool) {
+fn identified_workload_requirements(
+    task: &str,
+) -> (Vec<bridget_transport::protocol::WorkloadTool>, bool) {
     use bridget_transport::protocol::WorkloadTool as T;
     let tool = |name: &str| match name {
-        "git" => Some(T::Git), "cargo" => Some(T::Cargo), "node" => Some(T::Node),
-        "python3" => Some(T::Python), "npm" => Some(T::Npm), "pnpm" => Some(T::Pnpm),
-        "make" => Some(T::Make), "docker" => Some(T::Docker), _ => None,
+        "git" => Some(T::Git),
+        "cargo" => Some(T::Cargo),
+        "node" => Some(T::Node),
+        "python3" => Some(T::Python),
+        "npm" => Some(T::Npm),
+        "pnpm" => Some(T::Pnpm),
+        "make" => Some(T::Make),
+        "docker" => Some(T::Docker),
+        _ => None,
     };
     let mut required = std::collections::BTreeSet::new();
     let mut writes = false;
     for line in task.lines() {
         let parts: Vec<_> = line.split('`').collect();
         // La prose contenant des backticks n'est pas une commande shell.
-        let commands: Vec<_> = if parts.len() == 1 { vec![(line.trim().trim_start_matches("$ "), "")] }
-            else { (1..parts.len()).step_by(2).map(|i| (parts[i], parts[i - 1])).collect() };
+        let commands: Vec<_> = if parts.len() == 1 {
+            vec![(line.trim().trim_start_matches("$ "), "")]
+        } else {
+            (1..parts.len())
+                .step_by(2)
+                .map(|i| (parts[i], parts[i - 1]))
+                .collect()
+        };
         for (command, context) in commands {
-            let context = context.rsplit([';', '.', ',', '\n']).next().unwrap_or(context).to_lowercase();
-            let named: Vec<_> = context.split(|c: char| !c.is_alphanumeric()).filter(|name| tool(name).is_some()).collect();
+            let context = context
+                .rsplit([';', '.', ',', '\n'])
+                .next()
+                .unwrap_or(context)
+                .to_lowercase();
+            let named: Vec<_> = context
+                .split(|c: char| !c.is_alphanumeric())
+                .filter(|name| tool(name).is_some())
+                .collect();
             for segment in workload_command_segments(command) {
-                let Some(words) = shlex::split(segment) else { continue; };
-                let assignment = |word: &str| word.split_once('=').is_some_and(|(key, _)|
-                    !key.is_empty() && key.chars().enumerate().all(|(i, c)| c == '_' || c.is_ascii_alphabetic() || (i > 0 && c.is_ascii_digit())));
+                let Some(words) = shlex::split(segment) else {
+                    continue;
+                };
+                let assignment = |word: &str| {
+                    word.split_once('=').is_some_and(|(key, _)| {
+                        !key.is_empty()
+                            && key.chars().enumerate().all(|(i, c)| {
+                                c == '_' || c.is_ascii_alphabetic() || (i > 0 && c.is_ascii_digit())
+                            })
+                    })
+                };
                 let mut i = usize::from(words.first().is_some_and(|w| w == "env"));
-                while words.get(i).is_some_and(|word| assignment(word)) { i += 1; }
-                let Some(name) = words.get(i).map(String::as_str) else { continue; };
-                let Some(kind) = tool(name) else { continue; };
+                while words.get(i).is_some_and(|word| assignment(word)) {
+                    i += 1;
+                }
+                let Some(name) = words.get(i).map(String::as_str) else {
+                    continue;
+                };
+                let Some(kind) = tool(name) else {
+                    continue;
+                };
                 let applies = named.is_empty() || named.contains(&name);
-                if ["sans ", "pas de ", "no "].iter().any(|prefix| context.contains(&format!("{prefix}{name}")))
-                    || (applies && ["facultatif", "facultative", "optional", "ne pas exécuter", "ne pas lancer", "do not run"]
-                        .iter().any(|word| context.contains(word))) { continue; }
+                if ["sans ", "pas de ", "no "]
+                    .iter()
+                    .any(|prefix| context.contains(&format!("{prefix}{name}")))
+                    || (applies
+                        && [
+                            "facultatif",
+                            "facultative",
+                            "optional",
+                            "ne pas exécuter",
+                            "ne pas lancer",
+                            "do not run",
+                        ]
+                        .iter()
+                        .any(|word| context.contains(word)))
+                {
+                    continue;
+                }
                 let args = &words[i + 1..];
                 writes |= workload_command_writes(name, args);
                 required.insert(kind);
-                if kind == T::Docker && args.first().is_some_and(|a| a == "compose") { required.insert(T::DockerCompose); }
+                if kind == T::Docker && args.first().is_some_and(|a| a == "compose") {
+                    required.insert(T::DockerCompose);
+                }
             }
         }
     }
@@ -1108,8 +1454,14 @@ fn observe_routing_candidates(
     attested: Option<&bridget_transport::protocol::ProviderPermissions>,
     state: &Arc<Mutex<DaemonState>>,
 ) -> Result<(), String> {
-    observe_routing_candidates_for_project(conn, request, plan, attested, state,
-        request.project_id.as_deref())
+    observe_routing_candidates_for_project(
+        conn,
+        request,
+        plan,
+        attested,
+        state,
+        request.project_id.as_deref(),
+    )
 }
 
 /// Même observation et même canon ; seule la clé de mapping déjà observée peut
@@ -1127,22 +1479,38 @@ fn observe_routing_candidates_for_project(
         .map_err(|error| error.to_string())?;
     let admission_id = auto_admission_id(&canonical);
     let now = unix_timestamp();
-    let (required_tools,requires_workspace_write)=identified_workload_requirements(&request.task);
-    let (source_env,has_local,source_root)={
-        let st=state.lock().recover_poison();
-        let (owner,instance)=live_connection_identity(&st,conn).ok_or("identity_unavailable")?;
-        let parent=parent_fact(&st,&owner,&instance,Some(&request.request_id),attested)?
+    let (required_tools, requires_workspace_write) =
+        identified_workload_requirements(&request.task);
+    let (source_env, has_local, source_root) = {
+        let st = state.lock().recover_poison();
+        let (owner, instance) =
+            live_connection_identity(&st, conn).ok_or("identity_unavailable")?;
+        let parent = parent_fact(&st, &owner, &instance, Some(&request.request_id), attested)?
             .ok_or("permission_attestation_unavailable")?;
-        let source_root=crate::lifecycle::source_root(&parent,Path::new(&request.cwd))?;
-        (st.source_env.clone(),plan.candidates.iter().any(|c|routing_is_local(&c.machine_id,&st.host)),source_root)
+        let source_root = crate::lifecycle::source_root(&parent, Path::new(&request.cwd))?;
+        (
+            st.source_env.clone(),
+            plan.candidates
+                .iter()
+                .any(|c| routing_is_local(&c.machine_id, &st.host)),
+            source_root,
+        )
     };
-    let local_tools=if has_local {crate::remote_worker::qualify_workload_tools(&source_env,&required_tools,&[source_root],
-        Instant::now()+Duration::from_secs(3))} else {Vec::new()};
-    let mut local_tool_refusals=Vec::new();
-    let mut local_profile_refusals=Vec::new();
+    let local_tools = if has_local {
+        crate::remote_worker::qualify_workload_tools(
+            &source_env,
+            &required_tools,
+            &[source_root],
+            Instant::now() + Duration::from_secs(3),
+        )
+    } else {
+        Vec::new()
+    };
+    let mut local_tool_refusals = Vec::new();
+    let mut local_profile_refusals = Vec::new();
     let mut mapping_refusals = BTreeMap::new();
-    let mut option_accounts=HashMap::new();
-    let mut option_refusals=Vec::new();
+    let mut option_accounts = HashMap::new();
+    let mut option_refusals = Vec::new();
     let (parent, mut observations, batches, host) = {
         let mut st = state.lock().recover_poison();
         let (owner, instance) =
@@ -1154,13 +1522,13 @@ fn observe_routing_candidates_for_project(
             || source
                 .components()
                 .any(|c| matches!(c, std::path::Component::ParentDir))
-            || crate::lifecycle::source_root(&parent,source).is_err()
+            || crate::lifecycle::source_root(&parent, source).is_err()
         {
             return Err("cwd_outside_parent_project".into());
         }
         let registry = AgentRegistry::load_from_path(st.registry.source().to_path_buf())
             .map_err(|_| "routing_policy_unavailable")?;
-        let origin_host=super::origin_proof::host_for_owner(&st,&owner)?;
+        let origin_host = super::origin_proof::host_for_owner(&st, &owner)?;
         let host = st.host.clone();
         let local_capacity = plan
             .policy
@@ -1197,17 +1565,29 @@ fn observe_routing_candidates_for_project(
             .collect::<HashSet<_>>();
         for (index, candidate) in plan.candidates.iter().enumerate() {
             let candidate_id = routing_candidate_id(index);
-            let option_account=match super::native_provider_catalogue220::model_option_account(
-                &st,&registry,candidate,request.service_tier.as_deref()) {
-                Ok(account)=>account,
-                Err(code)=>{option_refusals.push(code);continue;},
+            let option_account = match super::native_provider_catalogue220::model_option_account(
+                &st,
+                &registry,
+                candidate,
+                request.service_tier.as_deref(),
+            ) {
+                Ok(account) => account,
+                Err(code) => {
+                    option_refusals.push(code);
+                    continue;
+                }
             };
-            option_accounts.insert(candidate_id.clone(),option_account.clone());
+            option_accounts.insert(candidate_id.clone(), option_account.clone());
             // Une vue appartient au WorkerRuntime provisionné, même sur l'hôte du maître.
             // Le chemin local historique ne porte ni reçu de vue ni lecteur durable.
-            if origin_host==host && routing_is_local(&candidate.machine_id, &host)
-                && !matches!(request.workspace,Some(WorkspaceRequest::CommitView {})) {
-                if local_tools.iter().any(|fact|fact.state!=WorkloadToolState::Available) {
+            if origin_host == host
+                && routing_is_local(&candidate.machine_id, &host)
+                && !matches!(request.workspace, Some(WorkspaceRequest::CommitView {}))
+            {
+                if local_tools
+                    .iter()
+                    .any(|fact| fact.state != WorkloadToolState::Available)
+                {
                     local_tool_refusals.push(candidate_id.clone());
                     continue;
                 }
@@ -1239,7 +1619,9 @@ fn observe_routing_candidates_for_project(
                             ttl,
                         );
                         let account = registry.routing_account_scope244(&candidate.connection_id);
-                        let quota = st.provider_limits.account_quota244(quota, account.as_deref(), now);
+                        let quota =
+                            st.provider_limits
+                                .account_quota244(quota, account.as_deref(), now);
                         plan.connections.push(RoutingDecisionFact {
                             id: candidate.connection_id.clone(),
                             observed_at: quota.as_ref().map(|q| q.observed_at),
@@ -1253,36 +1635,44 @@ fn observe_routing_candidates_for_project(
                 if blocked {
                     continue;
                 }
-                let pinned=registry.clone().pin_delegation_service_tier(
-                    &candidate.agent_type,&candidate.model,request.service_tier.as_deref())?;
+                let pinned = registry.clone().pin_delegation_service_tier(
+                    &candidate.agent_type,
+                    &candidate.model,
+                    request.service_tier.as_deref(),
+                )?;
                 let Ok((_, snapshot, _)) = resolve_target(ResolveTargetArgs {
-registry: &pinned,
-source: &st.source_env,
-limits: &unknown_limits,
-owner: &owner,
-instance: &instance,
-fact: Some(&parent),
-agent_type: &candidate.agent_type,
-model: &candidate.model,
-effort: candidate.default_effort.as_deref(),
-cwd: source,
-posture: request.posture,
-workspace: request.workspace.as_ref(),
-child_requests: request.child_requests.as_deref(),
-}) else {
+                    registry: &pinned,
+                    source: &st.source_env,
+                    limits: &unknown_limits,
+                    owner: &owner,
+                    instance: &instance,
+                    fact: Some(&parent),
+                    agent_type: &candidate.agent_type,
+                    model: &candidate.model,
+                    effort: candidate.default_effort.as_deref(),
+                    cwd: source,
+                    posture: request.posture,
+                    workspace: request.workspace.as_ref(),
+                    child_requests: request.child_requests.as_deref(),
+                }) else {
                     continue;
                 };
                 let Some(snapshot) = snapshot else {
                     continue;
                 };
-                if !required_tools.is_empty() && !crate::native_permissions::permits_command_execution(&snapshot.child_policy,requires_workspace_write) {
+                if !required_tools.is_empty()
+                    && !crate::native_permissions::permits_command_execution(
+                        &snapshot.child_policy,
+                        requires_workspace_write,
+                    )
+                {
                     local_profile_refusals.push(candidate_id.clone());
                     continue;
                 }
                 observations.insert(
                     candidate_id,
                     RoutingCandidateObservation {
-                        model_option_account:option_account,
+                        model_option_account: option_account,
                         definition_digest: definition.digest,
                         permission_digest: format!(
                             "{:x}",
@@ -1312,28 +1702,43 @@ child_requests: request.child_requests.as_deref(),
             if !provision.permits_agent_type(&candidate.agent_type) {
                 continue;
             }
-            let resolved = mappings.entry(candidate.machine_id.clone()).or_insert_with(||
-                routing_project_mapping(&registry, &candidate.machine_id,
-                    project_id, &origin_host, source));
+            let resolved = mappings
+                .entry(candidate.machine_id.clone())
+                .or_insert_with(|| {
+                    routing_project_mapping(
+                        &registry,
+                        &candidate.machine_id,
+                        project_id,
+                        &origin_host,
+                        source,
+                    )
+                });
             let (project_id, mapping) = match resolved {
                 Ok(mapping) => mapping,
-                Err(reason) => { mapping_refusals.insert(candidate.machine_id.clone(),reason.clone()); continue; }
+                Err(reason) => {
+                    mapping_refusals.insert(candidate.machine_id.clone(), reason.clone());
+                    continue;
+                }
             };
             let Ok(relative) = source.strip_prefix(&mapping.source_root) else {
                 continue;
             };
-            let probe_candidate = CandidateProbeV2Candidate { service_tier: request.service_tier.clone(),
+            let probe_candidate = CandidateProbeV2Candidate {
+                service_tier: request.service_tier.clone(),
                 candidate_id,
                 project_id: project_id.clone(),
                 origin_host: mapping.source_host.clone(),
-                origin_cwd: if matches!(request.workspace,Some(WorkspaceRequest::CommitView {})) {
+                origin_cwd: if matches!(request.workspace, Some(WorkspaceRequest::CommitView {})) {
                     mapping.source_root.to_string_lossy().into_owned()
-                } else {request.cwd.clone()},
+                } else {
+                    request.cwd.clone()
+                },
                 source_root: mapping.source_root.to_string_lossy().into_owned(),
                 remote_root: mapping.remote_root.to_string_lossy().into_owned(),
                 source_root_identity: mapping.expected_git_identity.clone(),
-                relative_cwd: if matches!(request.workspace,Some(WorkspaceRequest::CommitView {}))
-                    || relative.as_os_str().is_empty() {
+                relative_cwd: if matches!(request.workspace, Some(WorkspaceRequest::CommitView {}))
+                    || relative.as_os_str().is_empty()
+                {
                     ".".into()
                 } else {
                     relative.to_string_lossy().into_owned()
@@ -1348,7 +1753,8 @@ child_requests: request.child_requests.as_deref(),
                 posture: request.posture,
                 workspace: request.workspace.as_ref().map(|workspace| match workspace {
                     WorkspaceRequest::Worktree { branch, .. } => WorkspaceRequest::Worktree {
-                        base_ref: request.expected_base_commit.clone(), branch: branch.clone(),
+                        base_ref: request.expected_base_commit.clone(),
+                        branch: branch.clone(),
                     },
                     other => other.clone(),
                 }),
@@ -1371,20 +1777,37 @@ child_requests: request.child_requests.as_deref(),
         (parent, observations, batches, host)
     };
     for candidate_id in local_tool_refusals {
-        let correlation=Uuid::new_v4().to_string();
-        for fact in local_tools.iter().filter(|fact|fact.state!=WorkloadToolState::Available) {
-            record_routing_probe_refusal(plan,&correlation,&admission_id,&candidate_id,
-                RoutingProbeRefusalCode::Tool(fact.clone()));
+        let correlation = Uuid::new_v4().to_string();
+        for fact in local_tools
+            .iter()
+            .filter(|fact| fact.state != WorkloadToolState::Available)
+        {
+            record_routing_probe_refusal(
+                plan,
+                &correlation,
+                &admission_id,
+                &candidate_id,
+                RoutingProbeRefusalCode::Tool(fact.clone()),
+            );
         }
     }
     for candidate_id in local_profile_refusals {
-        record_routing_probe_refusal(plan,&Uuid::new_v4().to_string(),&admission_id,&candidate_id,
-            RoutingProbeRefusalCode::Candidate(bridget_transport::protocol::CandidateProbeRefusal::CommandExecutionUnavailable));
+        record_routing_probe_refusal(
+            plan,
+            &Uuid::new_v4().to_string(),
+            &admission_id,
+            &candidate_id,
+            RoutingProbeRefusalCode::Candidate(
+                bridget_transport::protocol::CandidateProbeRefusal::CommandExecutionUnavailable,
+            ),
+        );
     }
     let mut unsupported_worker = false;
     for (machine, (worker, candidates)) in batches {
         let wanted: HashSet<String> = candidates.iter().map(|c| c.candidate_id.clone()).collect();
-        let probe = CandidateProbeV2 { requires_workspace_write, required_tools:required_tools.clone(),
+        let probe = CandidateProbeV2 {
+            requires_workspace_write,
+            required_tools: required_tools.clone(),
             version: WORKER_CANDIDATE_PROBE_V2_VERSION,
             correlation_id: Uuid::new_v4().to_string(),
             connection_epoch: String::new(),
@@ -1395,40 +1818,79 @@ child_requests: request.child_requests.as_deref(),
             candidates,
         };
         let correlation_id = probe.correlation_id.clone();
-        let candidate_connections = probe.candidates.iter()
-            .map(|candidate| (candidate.candidate_id.clone(), candidate.connection_id.clone()))
+        let candidate_connections = probe
+            .candidates
+            .iter()
+            .map(|candidate| {
+                (
+                    candidate.candidate_id.clone(),
+                    candidate.connection_id.clone(),
+                )
+            })
             .collect::<HashMap<_, _>>();
-        let candidate_projects = probe.candidates.iter()
+        let candidate_projects = probe
+            .candidates
+            .iter()
             .map(|candidate| (candidate.candidate_id.clone(), candidate.project_id.clone()))
             .collect::<HashMap<_, _>>();
-        let result = match remote_candidate_probe_v2(
-            state,
-            probe,
-            Instant::now() + ROUTING_PROBE_BUDGET,
-        ) {
-            Ok(result) => result,
-            Err(reason) => {
-                unsupported_worker |= reason == WorkerRefusal::CapabilityRequired;
-                for candidate_id in &wanted {
-                    record_routing_probe_refusal(plan, &correlation_id, &admission_id,
-                        candidate_id, RoutingProbeRefusalCode::Worker(reason));
+        let result =
+            match remote_candidate_probe_v2(state, probe, Instant::now() + ROUTING_PROBE_BUDGET) {
+                Ok(result) => result,
+                Err(reason) => {
+                    unsupported_worker |= reason == WorkerRefusal::CapabilityRequired;
+                    for candidate_id in &wanted {
+                        record_routing_probe_refusal(
+                            plan,
+                            &correlation_id,
+                            &admission_id,
+                            candidate_id,
+                            RoutingProbeRefusalCode::Worker(reason),
+                        );
+                    }
+                    continue;
                 }
-                continue;
-            }
-        };
-        if (result.verdicts.iter().any(|v|matches!(v,CandidateProbeV2Verdict::Eligible{..}))
+            };
+        if (result
+            .verdicts
+            .iter()
+            .any(|v| matches!(v, CandidateProbeV2Verdict::Eligible { .. }))
             || !result.tool_observations.is_empty())
-            && result.tool_observations.iter().map(|fact|fact.tool).collect::<Vec<_>>() != required_tools {
-            for candidate_id in &wanted {record_routing_probe_refusal(plan,&correlation_id,&admission_id,
-                candidate_id,RoutingProbeRefusalCode::Worker(WorkerRefusal::InvalidEnvelope));}
+            && result
+                .tool_observations
+                .iter()
+                .map(|fact| fact.tool)
+                .collect::<Vec<_>>()
+                != required_tools
+        {
+            for candidate_id in &wanted {
+                record_routing_probe_refusal(
+                    plan,
+                    &correlation_id,
+                    &admission_id,
+                    candidate_id,
+                    RoutingProbeRefusalCode::Worker(WorkerRefusal::InvalidEnvelope),
+                );
+            }
             continue;
         }
-        let tools_available=result.tool_observations.iter().all(|fact|fact.state==WorkloadToolState::Available);
+        let tools_available = result
+            .tool_observations
+            .iter()
+            .all(|fact| fact.state == WorkloadToolState::Available);
         if !tools_available {
             for candidate_id in &wanted {
-                for fact in result.tool_observations.iter().filter(|fact|fact.state!=WorkloadToolState::Available) {
-                    record_routing_probe_refusal(plan,&correlation_id,&admission_id,candidate_id,
-                        RoutingProbeRefusalCode::Tool(fact.clone()));
+                for fact in result
+                    .tool_observations
+                    .iter()
+                    .filter(|fact| fact.state != WorkloadToolState::Available)
+                {
+                    record_routing_probe_refusal(
+                        plan,
+                        &correlation_id,
+                        &admission_id,
+                        candidate_id,
+                        RoutingProbeRefusalCode::Tool(fact.clone()),
+                    );
                 }
             }
             continue;
@@ -1449,12 +1911,20 @@ child_requests: request.child_requests.as_deref(),
         }
         let mut quota_seen = HashMap::new();
         for verdict in result.verdicts {
-            if let CandidateProbeV2Verdict::Ineligible { candidate_id, reason } = &verdict
-                && wanted.contains(candidate_id) {
-                    record_routing_probe_refusal(plan, &result.correlation_id,
-                        &result.admission_id, candidate_id,
-                        RoutingProbeRefusalCode::Candidate(*reason));
-                }
+            if let CandidateProbeV2Verdict::Ineligible {
+                candidate_id,
+                reason,
+            } = &verdict
+                && wanted.contains(candidate_id)
+            {
+                record_routing_probe_refusal(
+                    plan,
+                    &result.correlation_id,
+                    &result.admission_id,
+                    candidate_id,
+                    RoutingProbeRefusalCode::Candidate(*reason),
+                );
+            }
             if let CandidateProbeV2Verdict::Eligible {
                 candidate_id,
                 mapping_revision,
@@ -1463,52 +1933,61 @@ child_requests: request.child_requests.as_deref(),
                 observed_at,
             } = verdict
                 && wanted.contains(&candidate_id)
-                    && observed_at > 0
-                    && routing_fact_fresh(received_at, unix_timestamp(), ttl)
-                {
-                    let connection = &candidate_connections[&candidate_id];
-                    let blocked = *quota_seen.entry((connection.clone(), definition_digest.clone()))
-                        .or_insert_with(|| {
-                            let st = state.lock().recover_poison();
-                            let live = st.conn_instances.values().cloned().collect();
-                            let scope = st
-                                .registry
-                                .routing_connection_scope(connection)
-                                .unwrap_or_default();
-                            let quota = st.provider_limits.routing_quota(
-                                connection,
-                                &definition_digest,
-                                st.coordinator_epoch,
-                                &scope,
-                                &live,
-                                received_at,
-                                ttl,
-                            );
-                            let account = st.registry.routing_account_scope244(connection);
-                            let quota = st.provider_limits.account_quota244(quota, account.as_deref(), received_at);
-                            plan.connections.push(RoutingDecisionFact {
-                                id: connection.clone(),
-                                observed_at: quota.as_ref().map(|q| q.observed_at),
-                                summary: quota.as_ref().and_then(|q| serde_json::to_string(q).ok())
-                                    .unwrap_or_else(|| "unknown".into()),
-                            });
-                            quota.as_ref().is_some_and(|q| q.launch_blocked)
-                        });
-                    if blocked { continue; }
-                    observations.insert(
-                        candidate_id.clone(),
-                        RoutingCandidateObservation {
-                            model_option_account:option_accounts.get(&candidate_id).cloned().flatten(),
-                            definition_digest,
-                            permission_digest,
-                            mapping_revision: Some(mapping_revision),
-                            project_id: candidate_projects.get(&candidate_id).cloned(),
-                            connection_epoch: result.connection_epoch.clone(),
-                            observed_at,
+                && observed_at > 0
+                && routing_fact_fresh(received_at, unix_timestamp(), ttl)
+            {
+                let connection = &candidate_connections[&candidate_id];
+                let blocked = *quota_seen
+                    .entry((connection.clone(), definition_digest.clone()))
+                    .or_insert_with(|| {
+                        let st = state.lock().recover_poison();
+                        let live = st.conn_instances.values().cloned().collect();
+                        let scope = st
+                            .registry
+                            .routing_connection_scope(connection)
+                            .unwrap_or_default();
+                        let quota = st.provider_limits.routing_quota(
+                            connection,
+                            &definition_digest,
+                            st.coordinator_epoch,
+                            &scope,
+                            &live,
                             received_at,
-                        },
-                    );
+                            ttl,
+                        );
+                        let account = st.registry.routing_account_scope244(connection);
+                        let quota = st.provider_limits.account_quota244(
+                            quota,
+                            account.as_deref(),
+                            received_at,
+                        );
+                        plan.connections.push(RoutingDecisionFact {
+                            id: connection.clone(),
+                            observed_at: quota.as_ref().map(|q| q.observed_at),
+                            summary: quota
+                                .as_ref()
+                                .and_then(|q| serde_json::to_string(q).ok())
+                                .unwrap_or_else(|| "unknown".into()),
+                        });
+                        quota.as_ref().is_some_and(|q| q.launch_blocked)
+                    });
+                if blocked {
+                    continue;
                 }
+                observations.insert(
+                    candidate_id.clone(),
+                    RoutingCandidateObservation {
+                        model_option_account: option_accounts.get(&candidate_id).cloned().flatten(),
+                        definition_digest,
+                        permission_digest,
+                        mapping_revision: Some(mapping_revision),
+                        project_id: candidate_projects.get(&candidate_id).cloned(),
+                        connection_epoch: result.connection_epoch.clone(),
+                        observed_at,
+                        received_at,
+                    },
+                );
+            }
         }
     }
     let mut candidates = Vec::with_capacity(plan.candidates.len());
@@ -1537,23 +2016,35 @@ child_requests: request.child_requests.as_deref(),
     }
     if plan.candidates.is_empty() {
         return Err(if !option_refusals.is_empty() {
-            if option_refusals.iter().all(|code|code=="model_options_not_announced") {
+            if option_refusals
+                .iter()
+                .all(|code| code == "model_options_not_announced")
+            {
                 "model_options_not_announced".into()
-            } else {"model_options_observation_unavailable".into()}
+            } else {
+                "model_options_observation_unavailable".into()
+            }
         } else if unsupported_worker {
-            if matches!(request.workspace,Some(WorkspaceRequest::CommitView {})) {
+            if matches!(request.workspace, Some(WorkspaceRequest::CommitView {})) {
                 "worker_commit_view_capabilities_unsupported".into()
-            } else {"worker_candidate_probe_v2_unsupported".into()}
+            } else {
+                "worker_candidate_probe_v2_unsupported".into()
+            }
         } else if !mapping_refusals.is_empty() {
-            admission_guidance211::mapping_context_error("candidate_mapping",&mapping_refusals)
-        } else if let Some(quota) = plan.connections.iter()
+            admission_guidance211::mapping_context_error("candidate_mapping", &mapping_refusals)
+        } else if let Some(quota) = plan
+            .connections
+            .iter()
             .filter_map(|fact| serde_json::from_str::<Value>(&fact.summary).ok())
             .find(|quota| quota["launch_blocked"] == true)
         {
-            format!("provider_quota_exhausted:{}", json!({
-                "message":"Le quota d’une connexion compatible est épuisé ; aucune autre cible n’est disponible.",
-                "detail":{"resets_at":quota["resets_at"]},
-            }))
+            format!(
+                "provider_quota_exhausted:{}",
+                json!({
+                    "message":"Le quota d’une connexion compatible est épuisé ; aucune autre cible n’est disponible.",
+                    "detail":{"resets_at":quota["resets_at"]},
+                })
+            )
         } else {
             "routing_candidate_unavailable".into()
         });
@@ -1703,11 +2194,24 @@ fn score_routing_candidates(
         && let Some(fact) = machine_facts.get(machine).filter(|fact| fact.saturated)
     {
         let code = routing_telemetry(plan, machine)
-            .and_then(|policy| crate::capacity_refusal::CapacityRefusal::new(
-                fact.resources.observed_at?, now,
-                [fact.resources.cpu_percent, fact.resources.available_memory_percent, fact.resources.normalized_load_percent],
-                [policy.cpu_saturation_percent, policy.memory_available_min_percent, policy.normalized_load_saturation_percent],
-            )).map(|proof| proof.encoded()).unwrap_or_else(|| "resource_saturated".into());
+            .and_then(|policy| {
+                crate::capacity_refusal::CapacityRefusal::new(
+                    fact.resources.observed_at?,
+                    now,
+                    [
+                        fact.resources.cpu_percent,
+                        fact.resources.available_memory_percent,
+                        fact.resources.normalized_load_percent,
+                    ],
+                    [
+                        policy.cpu_saturation_percent,
+                        policy.memory_available_min_percent,
+                        policy.normalized_load_saturation_percent,
+                    ],
+                )
+            })
+            .map(|proof| proof.encoded())
+            .unwrap_or_else(|| "resource_saturated".into());
         return Err(code);
     }
     let mut connection_facts = HashMap::new();
@@ -1923,8 +2427,9 @@ fn routing_delegate(
     host: &str,
     mapped_project: Option<&str>,
 ) -> NativeDelegationRequest {
-    let local = mapped_project.is_none() && routing_is_local(&candidate.machine_id, host)
-        && !matches!(request.workspace,Some(WorkspaceRequest::CommitView {}));
+    let local = mapped_project.is_none()
+        && routing_is_local(&candidate.machine_id, host)
+        && !matches!(request.workspace, Some(WorkspaceRequest::CommitView {}));
     let workspace = request.workspace.as_ref().map(|workspace| match workspace {
         WorkspaceRequest::Worktree { branch, .. } => WorkspaceRequest::Worktree {
             base_ref: request.expected_base_commit.clone(),
@@ -1937,7 +2442,9 @@ fn routing_delegate(
         project_id: if local {
             None
         } else {
-            mapped_project.map(str::to_owned).or_else(|| request.project_id.clone())
+            mapped_project
+                .map(str::to_owned)
+                .or_else(|| request.project_id.clone())
         },
         request_id: request.request_id.clone(),
         agent_type: candidate.agent_type.clone(),
@@ -1960,29 +2467,66 @@ fn routing_delegate(
 // Diagnostic fermé199 : seules les catégories de contrôle sont conservées.
 // Aucun hash, chemin, identifiant de connexion ou texte externe n'est repris.
 fn routing_change_detail(code: &str) -> Option<(&str, Vec<&str>)> {
-    if code.len() > 128 { return None; }
+    if code.len() > 128 {
+        return None;
+    }
     let rest = code.strip_prefix("routing_connection_changed:")?;
     let (stage, fields) = rest.split_once(':')?;
-    if !matches!(stage, "selected_probe" | "effort_probe" | "decision_definition"
-        | "delegate_contract" | "worker_prepare" | "local_definition" | "start_recovery") { return None; }
+    if !matches!(
+        stage,
+        "selected_probe"
+            | "effort_probe"
+            | "decision_definition"
+            | "delegate_contract"
+            | "worker_prepare"
+            | "local_definition"
+            | "start_recovery"
+    ) {
+        return None;
+    }
     let fields: Vec<_> = fields.split(',').collect();
-    if fields.is_empty() || fields.len() > 8 { return None; }
+    if fields.is_empty() || fields.len() > 8 {
+        return None;
+    }
     let mut seen = std::collections::BTreeSet::new();
     for field in &fields {
-        if !matches!(*field, "definition" | "permissions" | "worker_epoch" | "mapping"
-            | "project" | "protocol" | "canonical" | "effort" | "machine" | "profile"
-            | "model" | "base") || !seen.insert(*field) { return None; }
+        if !matches!(
+            *field,
+            "definition"
+                | "permissions"
+                | "worker_epoch"
+                | "mapping"
+                | "project"
+                | "protocol"
+                | "canonical"
+                | "effort"
+                | "machine"
+                | "profile"
+                | "model"
+                | "base"
+        ) || !seen.insert(*field)
+        {
+            return None;
+        }
     }
     Some((stage, fields))
 }
 
 fn routing_change_error(stage: &str, checks: &[(&str, bool)]) -> Option<String> {
-    let fields: Vec<_> = checks.iter().filter(|(_, changed)| *changed)
-        .map(|(field, _)| *field).collect();
-    if fields.is_empty() { return None; }
+    let fields: Vec<_> = checks
+        .iter()
+        .filter(|(_, changed)| *changed)
+        .map(|(field, _)| *field)
+        .collect();
+    if fields.is_empty() {
+        return None;
+    }
     let code = format!("routing_connection_changed:{stage}:{}", fields.join(","));
-    Some(if routing_change_detail(&code).is_some() { code }
-        else { "routing_connection_changed".into() })
+    Some(if routing_change_detail(&code).is_some() {
+        code
+    } else {
+        "routing_connection_changed".into()
+    })
 }
 
 /// Un seul candidat déjà choisi est re-sondé. Un refus ne déclenche jamais de
@@ -2003,7 +2547,10 @@ fn refresh_routing_selected(
         .get(index)
         .ok_or("auto_admission_invalid")?;
     // La clé déjà observée ne change ni le canon ni admission_id de la sonde.
-    let project_id = request.project_id.as_deref().or(previous.project_id.as_deref());
+    let project_id = request
+        .project_id
+        .as_deref()
+        .or(previous.project_id.as_deref());
     let mut single = plan.clone();
     single.candidates = vec![original.clone()];
     single.observations.clear();
@@ -2018,19 +2565,45 @@ fn refresh_routing_selected(
         .first()
         .cloned()
         .ok_or("routing_candidate_unavailable")?;
-    if observed.model_option_account!=previous.model_option_account {
-        return Err(if observed.connection_epoch!=previous.connection_epoch {
+    if observed.model_option_account != previous.model_option_account {
+        return Err(if observed.connection_epoch != previous.connection_epoch {
             "model_options_account_unverified"
-        } else {"model_options_account_changed"}.into());
+        } else {
+            "model_options_account_changed"
+        }
+        .into());
     }
-    if let Some(code) = routing_change_error("selected_probe", &[
-        ("definition", observed.definition_digest != previous.definition_digest),
-        ("permissions", observed.permission_digest != previous.permission_digest),
-        ("worker_epoch", !allow_epoch_change && observed.connection_epoch != previous.connection_epoch),
-        ("mapping", observed.mapping_revision != previous.mapping_revision),
-        ("project", observed.project_id.as_deref() != previous.project_id.as_deref()
-            .or_else(|| previous.mapping_revision.and(request.project_id.as_deref()))),
-    ]) { return Err(code); }
+    if let Some(code) = routing_change_error(
+        "selected_probe",
+        &[
+            (
+                "definition",
+                observed.definition_digest != previous.definition_digest,
+            ),
+            (
+                "permissions",
+                observed.permission_digest != previous.permission_digest,
+            ),
+            (
+                "worker_epoch",
+                !allow_epoch_change && observed.connection_epoch != previous.connection_epoch,
+            ),
+            (
+                "mapping",
+                observed.mapping_revision != previous.mapping_revision,
+            ),
+            (
+                "project",
+                observed.project_id.as_deref()
+                    != previous
+                        .project_id
+                        .as_deref()
+                        .or_else(|| previous.mapping_revision.and(request.project_id.as_deref())),
+            ),
+        ],
+    ) {
+        return Err(code);
+    }
     if effort != original.default_effort.as_deref() {
         single.candidates[0].default_effort = effort.map(str::to_owned);
         // Une définition distante inclut les arguments de l'effort. Re-sonder
@@ -2041,8 +2614,15 @@ fn refresh_routing_selected(
         single.machines.clear();
         single.connections.clear();
         single.decision_notes.clear();
-        observe_routing_candidates_for_project(conn, request, &mut single, attested, state, project_id)
-            .map_err(|code| routing_probe_error(&single, code))?;
+        observe_routing_candidates_for_project(
+            conn,
+            request,
+            &mut single,
+            attested,
+            state,
+            project_id,
+        )
+        .map_err(|code| routing_probe_error(&single, code))?;
         let observed_effort = |wanted: Option<&str>| {
             single
                 .candidates
@@ -2056,21 +2636,43 @@ fn refresh_routing_selected(
             .map_err(|code| routing_probe_error(&single, code.to_owned()))?;
         let selected = observed_effort(effort)
             .map_err(|code| routing_probe_error(&single, code.to_owned()))?;
-        if control.model_option_account!=observed.model_option_account
-            || selected.model_option_account!=observed.model_option_account {
+        if control.model_option_account != observed.model_option_account
+            || selected.model_option_account != observed.model_option_account
+        {
             return Err("model_options_account_changed".into());
         }
         // La variation d'effort n'autorise aucune dérive du profil initial.
         // Les droits du choix restent attestés, puis revalidés à Prepare.
-        if let Some(code) = routing_change_error("effort_probe", &[
-            ("definition", control.definition_digest != observed.definition_digest),
-            ("permissions", control.permission_digest != observed.permission_digest),
-            ("worker_epoch", control.connection_epoch != observed.connection_epoch
-                || selected.connection_epoch != observed.connection_epoch),
-            ("mapping", control.mapping_revision != observed.mapping_revision
-                || selected.mapping_revision != observed.mapping_revision),
-            ("project", control.project_id != observed.project_id || selected.project_id != observed.project_id),
-        ]) { return Err(code); }
+        if let Some(code) = routing_change_error(
+            "effort_probe",
+            &[
+                (
+                    "definition",
+                    control.definition_digest != observed.definition_digest,
+                ),
+                (
+                    "permissions",
+                    control.permission_digest != observed.permission_digest,
+                ),
+                (
+                    "worker_epoch",
+                    control.connection_epoch != observed.connection_epoch
+                        || selected.connection_epoch != observed.connection_epoch,
+                ),
+                (
+                    "mapping",
+                    control.mapping_revision != observed.mapping_revision
+                        || selected.mapping_revision != observed.mapping_revision,
+                ),
+                (
+                    "project",
+                    control.project_id != observed.project_id
+                        || selected.project_id != observed.project_id,
+                ),
+            ],
+        ) {
+            return Err(code);
+        }
         return Ok(selected.clone());
     }
     Ok(observed)
@@ -2113,10 +2715,18 @@ fn routing_lightweight_options(
     let registry = AgentRegistry::load_from_path(st.registry.source().to_path_buf())
         .map_err(|_| "lightweight_decision_unavailable")?;
     let definition = registry.resolved_definition(&connection.agent_type)?;
-    if let Some(code) = routing_change_error("decision_definition", &[
-        ("definition", Some(&definition.digest) != plan.lightweight_definition_digest.as_ref()),
-        ("protocol", definition.protocol != "claude_stream_json"),
-    ]) { return Err(code); }
+    if let Some(code) = routing_change_error(
+        "decision_definition",
+        &[
+            (
+                "definition",
+                Some(&definition.digest) != plan.lightweight_definition_digest.as_ref(),
+            ),
+            ("protocol", definition.protocol != "claude_stream_json"),
+        ],
+    ) {
+        return Err(code);
+    }
     let pinned = registry.clone().pin_delegation_model(
         &connection.agent_type,
         model,
@@ -2212,10 +2822,7 @@ struct RoutingAdmissionClaim {
 
 impl Drop for RoutingAdmissionClaim {
     fn drop(&mut self) {
-        self.active
-            .lock()
-            .recover_poison()
-            .remove(&self.key);
+        self.active.lock().recover_poison().remove(&self.key);
     }
 }
 
@@ -2247,11 +2854,7 @@ fn route_selected_admission(
         }
         let active = Arc::clone(&st.routing_admission_claims);
         let key = (receipt.owner.clone(), receipt.request_id.clone());
-        if !active
-            .lock()
-            .recover_poison()
-            .insert(key.clone())
-        {
+        if !active.lock().recover_poison().insert(key.clone()) {
             return Err("admission_pending".into());
         }
         RoutingAdmissionClaim { active, key }
@@ -2280,8 +2883,9 @@ fn route_selected_admission(
             state,
             recovering,
         )?;
-        if matches!(request.workspace,Some(WorkspaceRequest::CommitView {}))
-            && observed.project_id.is_none() {
+        if matches!(request.workspace, Some(WorkspaceRequest::CommitView {}))
+            && observed.project_id.is_none()
+        {
             return Err("project_mapping_unknown".into());
         }
         let delegate = routing_delegate(
@@ -2437,12 +3041,18 @@ fn choose_routing_admission(
             if !recovering && st.coordinator_epoch != receipt.coordinator_epoch {
                 return Err("admission_pending".into());
             }
-            if matches!(request.workspace,Some(WorkspaceRequest::CommitView {}))
-                && plan.observations[index].project_id.is_none() {
+            if matches!(request.workspace, Some(WorkspaceRequest::CommitView {}))
+                && plan.observations[index].project_id.is_none()
+            {
                 return Err("project_mapping_unknown".into());
             }
-            let delegate = routing_delegate(request, candidate, choice.effort.clone(), &st.host,
-                plan.observations[index].project_id.as_deref());
+            let delegate = routing_delegate(
+                request,
+                candidate,
+                choice.effort.clone(),
+                &st.host,
+                plan.observations[index].project_id.as_deref(),
+            );
             st.delegation_store.choose_auto_admission_at(
                 receipt,
                 receipt.coordinator_epoch,
@@ -2537,7 +3147,13 @@ fn admit_auto_routing(
                 {
                     drop(st);
                     return start_recovery::resume(
-                        state, conn, &task_id, &receipt, attested, thread, permission_proof,
+                        state,
+                        conn,
+                        &task_id,
+                        &receipt,
+                        attested,
+                        thread,
+                        permission_proof,
                     );
                 }
                 return auto_receipt_view(&mut st, &receipt);
@@ -2566,12 +3182,16 @@ fn admit_auto_routing(
         {
             return current_task_view(&st, &task, true);
         }
-        if request.service_tier.as_deref().is_some_and(|tier|
-            !bridget_transport::provider_catalogue::catalogue_token(tier)) {
+        if request
+            .service_tier
+            .as_deref()
+            .is_some_and(|tier| !bridget_transport::provider_catalogue::catalogue_token(tier))
+        {
             return Err("model_options_invalid".into());
         }
         if request.service_tier.is_some()
-            && !crate::provider_catalogue220::MODEL_OPTIONS_LAUNCH_ENABLED {
+            && !crate::provider_catalogue220::MODEL_OPTIONS_LAUNCH_ENABLED
+        {
             return Err("model_options_not_activated".into());
         }
         let registry = AgentRegistry::load_from_path(st.registry.source().to_path_buf())
@@ -2584,11 +3204,21 @@ fn admit_auto_routing(
     prepare_routing_projects(conn, request, &mut plan, attested, thread, state)?;
     if let Err(code) = observe_routing_candidates(conn, request, &mut plan, attested, state) {
         return if code == "routing_candidate_unavailable" {
-            let mut view=routing_probe_failure(&plan);
-            let observed_quota=plan.connections.iter().any(|fact|serde_json::from_str::<Value>(&fact.summary).ok().is_some_and(|q|q["launch_blocked"]==true));
-            let st=state.lock().recover_poison();
-            if let Err(code)=quota_questions246::pre_admission(&st,conn,&NativeDelegationRequest::AutoDelegateV2(request.clone()),observed_quota,&mut view) {
-                view["quota_question_error"]=json!(code);
+            let mut view = routing_probe_failure(&plan);
+            let observed_quota = plan.connections.iter().any(|fact| {
+                serde_json::from_str::<Value>(&fact.summary)
+                    .ok()
+                    .is_some_and(|q| q["launch_blocked"] == true)
+            });
+            let st = state.lock().recover_poison();
+            if let Err(code) = quota_questions246::pre_admission(
+                &st,
+                conn,
+                &NativeDelegationRequest::AutoDelegateV2(request.clone()),
+                observed_quota,
+                &mut view,
+            ) {
+                view["quota_question_error"] = json!(code);
             }
             Ok(view)
         } else {
@@ -3052,9 +3682,18 @@ fn auto_receipt_view(
 // Liste volontairement fermée : l'admission auto ne clôt durablement qu'un
 // refus métier déjà décidé. Une chaîne SQLite/Git/E/S inconnue reste `chosen`
 // et sera entretenue avec le même choix, sans nouvelle décision.
-fn handoff_error_code(error:crate::handoff::HandoffError)->String {
-    let mut detail:String=error.to_string().chars().map(|c|
-        if bridget_core::is_disallowed_control(c) {' '} else {c}).collect();
+fn handoff_error_code(error: crate::handoff::HandoffError) -> String {
+    let mut detail: String = error
+        .to_string()
+        .chars()
+        .map(|c| {
+            if bridget_core::is_disallowed_control(c) {
+                ' '
+            } else {
+                c
+            }
+        })
+        .collect();
     // Le reçu historique borne refusal_code à128octets : garder son format.
     detail.truncate(detail.floor_char_boundary(114));
     format!("brief_invalid:{detail}")
@@ -3066,8 +3705,12 @@ fn auto_terminal_refusal_code(code: &str) -> Option<&str> {
         .map_or(code, |(canonical, _)| canonical);
     // Le champ et la cause validés sont bornés par handoff_error_code.
     // Les conserver dans le reçu rend aussi le rejeu du refus actionnable.
-    if canonical=="brief_invalid" && code.len()<=128 {return Some(code);}
-    if routing_change_detail(code).is_some() { return Some(code); }
+    if canonical == "brief_invalid" && code.len() <= 128 {
+        return Some(code);
+    }
+    if routing_change_detail(code).is_some() {
+        return Some(code);
+    }
     if matches!(
         canonical,
         "agent_type_unknown"
@@ -3119,14 +3762,18 @@ fn close_auto_admission_error(
     let Some(refusal) = auto_terminal_refusal_code(&code) else {
         return Ok(code);
     };
-    let capacity=crate::capacity_refusal::CapacityRefusal::decode(&code);
-    let closed=if let Some(proof)=capacity.as_ref() {
-        st.delegation_store.refuse_auto_admission_with_capacity(receipt, proof, unix_timestamp())
+    let capacity = crate::capacity_refusal::CapacityRefusal::decode(&code);
+    let closed = if let Some(proof) = capacity.as_ref() {
+        st.delegation_store
+            .refuse_auto_admission_with_capacity(receipt, proof, unix_timestamp())
     } else {
-        st.delegation_store.refuse_auto_admission(receipt, refusal, unix_timestamp())
+        st.delegation_store
+            .refuse_auto_admission(receipt, refusal, unix_timestamp())
     };
     match closed {
-        Ok(closed) if capacity.is_some() || routing_change_detail(&code).is_some() => Ok(auto_refusal_error(&closed)),
+        Ok(closed) if capacity.is_some() || routing_change_detail(&code).is_some() => {
+            Ok(auto_refusal_error(&closed))
+        }
         Ok(_) => Ok(code),
         Err(refusal_error) if refusal_error == "admission_pending" => {
             let current = st
@@ -3399,11 +4046,11 @@ fn filter_auto_candidates(
             || source
                 .components()
                 .any(|component| matches!(component, std::path::Component::ParentDir))
-            || crate::lifecycle::source_root(&parent,source).is_err()
+            || crate::lifecycle::source_root(&parent, source).is_err()
         {
             return Ok(Vec::new());
         }
-        let origin_host=super::origin_proof::host_for_owner(&st,&owner)?;
+        let origin_host = super::origin_proof::host_for_owner(&st, &owner)?;
         let mut eligible = std::collections::BTreeSet::new();
         let mut remote_batches: BTreeMap<String, (WorkerIdentity, Vec<CandidateProbeCandidate>)> =
             BTreeMap::new();
@@ -3412,20 +4059,20 @@ fn filter_auto_candidates(
             if candidate.machine_id == "local" {
                 if request.project_id.is_some()
                     || resolve_target(ResolveTargetArgs {
-registry: &st.registry,
-source: &st.source_env,
-limits: &st.provider_limits,
-owner: &owner,
-instance: &instance,
-fact: Some(&parent),
-agent_type: &candidate.agent_type,
-model: &candidate.model,
-effort: candidate.effort.as_deref(),
-cwd: source,
-posture: request.posture,
-workspace: request.workspace.as_ref(),
-child_requests: request.child_requests.as_deref(),
-})
+                        registry: &st.registry,
+                        source: &st.source_env,
+                        limits: &st.provider_limits,
+                        owner: &owner,
+                        instance: &instance,
+                        fact: Some(&parent),
+                        agent_type: &candidate.agent_type,
+                        model: &candidate.model,
+                        effort: candidate.effort.as_deref(),
+                        cwd: source,
+                        posture: request.posture,
+                        workspace: request.workspace.as_ref(),
+                        child_requests: request.child_requests.as_deref(),
+                    })
                     .is_err()
                 {
                     continue;
@@ -3897,7 +4544,13 @@ struct WorkspaceReservation {
     task_id: String,
     owner_instance: String,
     // Lu par le banc de capacité 154 (union des chemins réservés).
-    #[cfg_attr(not(test), expect(dead_code, reason = "lu par le banc de capacité 154 ; non utilisé en production"))]
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "lu par le banc de capacité 154 ; non utilisé en production"
+        )
+    )]
     path: PathBuf,
 }
 
@@ -3953,48 +4606,86 @@ impl ParentPermission {
 // Pistes du maître, jamais une preuve des réservations du worker.
 // Les chemins servent au filtrage mais ne quittent pas cette projection.
 fn owned_workspace_task_hints(
-    tasks: &[Value], owner: &str, roots: &[(String, String, std::path::PathBuf)],
+    tasks: &[Value],
+    owner: &str,
+    roots: &[(String, String, std::path::PathBuf)],
 ) -> Value {
     let mut rows = Vec::new();
     for task in tasks {
-        if task["owner"] != owner { continue; }
-        let (Some(machine),Some(project),Some(cwd)) = (task["machine_id"].as_str(),
-            task["project_id"].as_str(),task["execution_cwd"].as_str()) else {continue;};
-        let cwd=Path::new(cwd);
-        if !roots.iter().any(|(m,p,root)|m==machine && p==project
-            && (cwd.starts_with(root) || root.starts_with(cwd))) {continue;}
-        rows.push(json!({"task_id":task["task_id"],"owner":owner,"state":task["state"],
+        if task["owner"] != owner {
+            continue;
+        }
+        let (Some(machine), Some(project), Some(cwd)) = (
+            task["machine_id"].as_str(),
+            task["project_id"].as_str(),
+            task["execution_cwd"].as_str(),
+        ) else {
+            continue;
+        };
+        let cwd = Path::new(cwd);
+        if !roots.iter().any(|(m, p, root)| {
+            m == machine && p == project && (cwd.starts_with(root) || root.starts_with(cwd))
+        }) {
+            continue;
+        }
+        rows.push(
+            json!({"task_id":task["task_id"],"owner":owner,"state":task["state"],
             "machine_id":machine,"project_id":project,"guarded":task["guarded"].as_i64()==Some(1),
-            "cleanup_done":task["cleanup_done"].as_i64()==Some(1)}));
+            "cleanup_done":task["cleanup_done"].as_i64()==Some(1)}),
+        );
     }
-    rows.sort_by(|a,b|a["task_id"].as_str().cmp(&b["task_id"].as_str()));
-    let truncated=rows.len()>8 || tasks.len()==129;rows.truncate(8);
+    rows.sort_by(|a, b| a["task_id"].as_str().cmp(&b["task_id"].as_str()));
+    let truncated = rows.len() > 8 || tasks.len() == 129;
+    rows.truncate(8);
     json!({"scope":"owned_current_instance_tasks","basis":"coordinator_task_state",
         "blocker_identity_attested":false,"tasks":rows,"truncated":truncated,
         "next_action":"Lire bridget_task_status pour les task_id indiqués. Ces tâches de votre instance native recoupent le dépôt ciblé ; leur état maître ne prouve pas quelle réservation worker a causé le refus. Une liste vide ne prouve pas le dossier libre : préparations worker, autres instances et tâches d’autrui ne sont pas exposées. Si l’identifiant reste inconnu, demander au responsable de cette machine de corréler le refus avec les préparations et reçus de commande du worker. Ne libérer aucune garde, ne pas interrompre autrui ; les autres travaux suivent leur propre état."})
 }
 
 fn project_owned_workspace_tasks(
-    st: &DaemonState, conn: &str, request: &AutoDelegateV2, result: &mut Value,
+    st: &DaemonState,
+    conn: &str,
+    request: &AutoDelegateV2,
+    result: &mut Value,
 ) -> Result<(), String> {
     if !matches!(request.workspace, None | Some(WorkspaceRequest::Shared {}))
-        || !result["detail"]["reasons"].as_array().is_some_and(|reasons|reasons.iter().any(|r|
-            r["kind"]=="candidate" && r["code"]=="workspace_busy")) { return Ok(()); }
-    let (owner,instance)=live_connection_identity(st,conn).ok_or("identity_unavailable")?;
-    let host=super::origin_proof::host_for_owner(st,&owner)?;
-    let tasks=st.delegation_store.workspace_task_hints(&owner,&instance)?;
-    let mut roots=Vec::new();
+        || !result["detail"]["reasons"]
+            .as_array()
+            .is_some_and(|reasons| {
+                reasons
+                    .iter()
+                    .any(|r| r["kind"] == "candidate" && r["code"] == "workspace_busy")
+            })
+    {
+        return Ok(());
+    }
+    let (owner, instance) = live_connection_identity(st, conn).ok_or("identity_unavailable")?;
+    let host = super::origin_proof::host_for_owner(st, &owner)?;
+    let tasks = st
+        .delegation_store
+        .workspace_task_hints(&owner, &instance)?;
+    let mut roots = Vec::new();
     for machine in st.registry.machines().keys() {
-        if request.machine_id.as_ref().is_some_and(|m|m!=machine) {continue;}
-        if let Ok((project,mapping))=routing_project_mapping(&st.registry,machine,
-            request.project_id.as_deref(),&host,Path::new(&request.cwd)) {
-            roots.push((machine.clone(),project,mapping.remote_root));
+        if request.machine_id.as_ref().is_some_and(|m| m != machine) {
+            continue;
+        }
+        if let Ok((project, mapping)) = routing_project_mapping(
+            &st.registry,
+            machine,
+            request.project_id.as_deref(),
+            &host,
+            Path::new(&request.cwd),
+        ) {
+            roots.push((machine.clone(), project, mapping.remote_root));
         }
     }
-    result["detail"]["workspace_tasks"]=owned_workspace_task_hints(&tasks,&owner,&roots);
-    if let Some(message)=result["message"].as_str() {
-        let message=format!("{message} Consultez detail.workspace_tasks puis bridget_task_status sur les identifiants propres au demandeur.");
-        result["message"]=json!(message);result["detail"]["message"]=json!(message);
+    result["detail"]["workspace_tasks"] = owned_workspace_task_hints(&tasks, &owner, &roots);
+    if let Some(message) = result["message"].as_str() {
+        let message = format!(
+            "{message} Consultez detail.workspace_tasks puis bridget_task_status sur les identifiants propres au demandeur."
+        );
+        result["message"] = json!(message);
+        result["detail"]["message"] = json!(message);
     }
     Ok(())
 }
@@ -4015,22 +4706,31 @@ fn routing_failure_admission(
     let observed = (|| -> Result<(&str, Option<String>), String> {
         recheck_attested_thread(&st, conn, thread)?;
         let (owner, _) = live_connection_identity(&st, conn).ok_or("identity_unavailable")?;
-        let canonical = serde_json::to_vec(&NativeDelegationRequest::AutoDelegateV2(request.clone()))
-            .map_err(|_| "invalid_request")?;
-        if let Some(receipt) = st.delegation_store.auto_admission_receipt(&owner, &request.request_id)? {
+        let canonical =
+            serde_json::to_vec(&NativeDelegationRequest::AutoDelegateV2(request.clone()))
+                .map_err(|_| "invalid_request")?;
+        if let Some(receipt) = st
+            .delegation_store
+            .auto_admission_receipt(&owner, &request.request_id)?
+        {
             if receipt.canonical != canonical {
                 return Err("envelope_mismatch".into());
             }
             return match receipt.state {
-                AutoAdmissionState::Admitted => receipt.task_id
+                AutoAdmissionState::Admitted => receipt
+                    .task_id
                     .map(|id| ("admitted", Some(id)))
                     .ok_or_else(|| "auto_admission_invalid".into()),
                 AutoAdmissionState::Refused => Ok(("refused", None)),
-                AutoAdmissionState::Pending | AutoAdmissionState::DecisionStarted
+                AutoAdmissionState::Pending
+                | AutoAdmissionState::DecisionStarted
                 | AutoAdmissionState::Chosen => Ok(("pending", None)),
             };
         }
-        match st.delegation_store.by_agent_request(&owner, &request.request_id, &canonical)? {
+        match st
+            .delegation_store
+            .by_agent_request(&owner, &request.request_id, &canonical)?
+        {
             Some(task) => Ok(("admitted", Some(task.task_id))),
             None => Ok(("not_recorded", None)),
         }
@@ -4042,18 +4742,36 @@ fn routing_failure_admission(
         Err(_) => ("unknown", None),
     };
     let recovery = match admission {
-        "not_recorded" if result["code"] == "auto_admission_invalid"
-            && result["detail"]["field"] == "agent_type" =>
-            "Aucun reçu ni tâche enregistré pour cette clé à cette lecture. Omettez agent_type et utilisez engine pour le moteur ; connection_id reste facultatif. Après confirmation de la fin de tout appel avec cette clé et de l’absence d’appel concurrent, vous pouvez corriger les paramètres avec la même request_id avant admission. Ce n’est pas un rejeu strict. Si un reçu ou une tâche apparaît, conservez son canon et suivez son état. Gardez expected_base_commit et le workspace demandés.",
-        "not_recorded" if result["code"]=="expected_base_commit_required" =>
-            "Aucun reçu ni tâche enregistré pour cette clé à cette lecture. Après confirmation de la fin de tous les appels et de l’absence d’appel concurrent, vous pouvez ajouter le SHA source exact avec la même request_id avant admission. Ce n’est pas un rejeu strict. Si un reçu ou une tâche apparaît, conserver son canon et suivre son état ; ne pas corriger une enveloppe déjà enregistrée.",
-        "not_recorded" => "Aucun reçu ni tâche enregistré pour cette clé à cette lecture. Corrigez la cause indiquée puis rejouez avec la même request_id et les mêmes paramètres. Si les paramètres doivent changer, attendez la fin de tout appel déjà envoyé avec cette clé avant une nouvelle request_id : un appel concurrent peut encore enregistrer une admission. Cette lecture du registre est fournie par Bridget ; inutile de la demander à un autre agent. Ne changez pas expected_base_commit sans autorisation.",
-        "envelope_mismatch" => "Cette clé appartient déjà à une demande dont les paramètres sont différents. Le nouveau corps n'est pas admis. Reprenez la clé avec ses paramètres d'origine pour lire le sort de cette demande ; ne créez pas de nouvelle demande tant que ce sort reste inconnu.",
-        "pending" => "Une admission reste en cours pour cette clé et peut encore créer une tâche. Après correction de la cause, rejouez avec la même request_id et tous les paramètres d’origine. Si le choix est déjà enregistré et aucune préparation de cette demande ne tourne, Bridget reprend ce choix après revalidation ; sinon l’admission reste en attente. Ne créez pas de nouvelle demande.",
-        "admitted" => "Une tâche existe pour cette clé. Suivez le task_id indiqué avec bridget_task_status ; ne créez pas de doublon.",
-        "refused" => "Un refus durable sans tâche est enregistré pour cette clé. Un rejeu identique relit ce refus sans le rouvrir. Après correction autorisée, utilisez une nouvelle request_id.",
-        "expired" => "Cette clé a expiré ; son ancien résultat n'est plus disponible. Ne réutilisez pas cette clé et ne déduisez pas qu'aucun travail n'a eu lieu.",
-        _ => "Le sort de cette clé n'a pas pu être établi. Conservez request_id et tous les paramètres pour le relire après rétablissement du lien ou de la vérification. Ne créez pas de nouvelle demande tant que ce sort reste inconnu.",
+        "not_recorded"
+            if result["code"] == "auto_admission_invalid"
+                && result["detail"]["field"] == "agent_type" =>
+        {
+            "Aucun reçu ni tâche enregistré pour cette clé à cette lecture. Omettez agent_type et utilisez engine pour le moteur ; connection_id reste facultatif. Après confirmation de la fin de tout appel avec cette clé et de l’absence d’appel concurrent, vous pouvez corriger les paramètres avec la même request_id avant admission. Ce n’est pas un rejeu strict. Si un reçu ou une tâche apparaît, conservez son canon et suivez son état. Gardez expected_base_commit et le workspace demandés."
+        }
+        "not_recorded" if result["code"] == "expected_base_commit_required" => {
+            "Aucun reçu ni tâche enregistré pour cette clé à cette lecture. Après confirmation de la fin de tous les appels et de l’absence d’appel concurrent, vous pouvez ajouter le SHA source exact avec la même request_id avant admission. Ce n’est pas un rejeu strict. Si un reçu ou une tâche apparaît, conserver son canon et suivre son état ; ne pas corriger une enveloppe déjà enregistrée."
+        }
+        "not_recorded" => {
+            "Aucun reçu ni tâche enregistré pour cette clé à cette lecture. Corrigez la cause indiquée puis rejouez avec la même request_id et les mêmes paramètres. Si les paramètres doivent changer, attendez la fin de tout appel déjà envoyé avec cette clé avant une nouvelle request_id : un appel concurrent peut encore enregistrer une admission. Cette lecture du registre est fournie par Bridget ; inutile de la demander à un autre agent. Ne changez pas expected_base_commit sans autorisation."
+        }
+        "envelope_mismatch" => {
+            "Cette clé appartient déjà à une demande dont les paramètres sont différents. Le nouveau corps n'est pas admis. Reprenez la clé avec ses paramètres d'origine pour lire le sort de cette demande ; ne créez pas de nouvelle demande tant que ce sort reste inconnu."
+        }
+        "pending" => {
+            "Une admission reste en cours pour cette clé et peut encore créer une tâche. Après correction de la cause, rejouez avec la même request_id et tous les paramètres d’origine. Si le choix est déjà enregistré et aucune préparation de cette demande ne tourne, Bridget reprend ce choix après revalidation ; sinon l’admission reste en attente. Ne créez pas de nouvelle demande."
+        }
+        "admitted" => {
+            "Une tâche existe pour cette clé. Suivez le task_id indiqué avec bridget_task_status ; ne créez pas de doublon."
+        }
+        "refused" => {
+            "Un refus durable sans tâche est enregistré pour cette clé. Un rejeu identique relit ce refus sans le rouvrir. Après correction autorisée, utilisez une nouvelle request_id."
+        }
+        "expired" => {
+            "Cette clé a expiré ; son ancien résultat n'est plus disponible. Ne réutilisez pas cette clé et ne déduisez pas qu'aucun travail n'a eu lieu."
+        }
+        _ => {
+            "Le sort de cette clé n'a pas pu être établi. Conservez request_id et tous les paramètres pour le relire après rétablissement du lien ou de la vérification. Ne créez pas de nouvelle demande tant que ce sort reste inconnu."
+        }
     };
     if !result["detail"].is_object() {
         result["detail"] = json!({});
@@ -4062,16 +4780,26 @@ fn routing_failure_admission(
         "request_id": request.request_id, "state": admission, "task_id": task_id,
         "observed_at": unix_timestamp(), "recovery": recovery,
     });
-    if matches!(admission,"not_recorded"|"pending"|"admitted"|"refused")
-        && project_owned_workspace_tasks(&st,conn,request,&mut result).is_err() {
-        result["detail"]["workspace_tasks"]=json!({"status":"unavailable",
+    if matches!(
+        admission,
+        "not_recorded" | "pending" | "admitted" | "refused"
+    ) && project_owned_workspace_tasks(&st, conn, request, &mut result).is_err()
+    {
+        result["detail"]["workspace_tasks"] = json!({"status":"unavailable",
             "next_action":"Faire vérifier la projection des tâches par le responsable Bridget ; une absence de diagnostic ne prouve pas le dossier libre. Conserver demande, clé et autres travaux sans libérer de garde."});
     }
-    if let Some((owner,_))=live_connection_identity(&st,conn)
-        && let Err(_)=crate::sentinel244::record_admission_observation(st.store.connection(),&owner,&request.request_id,admission,
-            result["code"].as_str().unwrap_or("unobserved"),unix_timestamp()) {
-            warn!("observation du refus d'admission indisponible ; reçu courant conservé");
-        }
+    if let Some((owner, _)) = live_connection_identity(&st, conn)
+        && let Err(_) = crate::sentinel244::record_admission_observation(
+            st.store.connection(),
+            &owner,
+            &request.request_id,
+            admission,
+            result["code"].as_str().unwrap_or("unobserved"),
+            unix_timestamp(),
+        )
+    {
+        warn!("observation du refus d'admission indisponible ; reçu courant conservé");
+    }
     result
 }
 
@@ -4080,23 +4808,44 @@ mod incident240_tests {
     use super::*;
     #[test]
     fn spec240_preparation_timeout_and_origin_capacity_keep_actionable_causes() {
-        let result=failure("remote_prepare:WorkerUnavailable");
-        assert_eq!(result["code"],"remote_prepare:WorkerUnavailable");
-        assert_eq!(result["scope"],"this_request");
-        assert_eq!(result["detail"]["cause"],"reply_unavailable");
-        assert!(result["detail"]["recovery"].as_str().unwrap().contains("même clé"));
-        for code in ["origin_proof_busy","origin_proof_unavailable","origin_worker_unavailable","origin_binding_unavailable"] {
-            let error=format!("remote_start_failed:{code}");
-            let message=remote_start_error_message(&error).expect("conduite pour cet échec avant Release");
-            assert!(message.contains("cette tâche et sa clé") && message.contains("autres travaux"));
+        let result = failure("remote_prepare:WorkerUnavailable");
+        assert_eq!(result["code"], "remote_prepare:WorkerUnavailable");
+        assert_eq!(result["scope"], "this_request");
+        assert_eq!(result["detail"]["cause"], "reply_unavailable");
+        assert!(
+            result["detail"]["recovery"]
+                .as_str()
+                .unwrap()
+                .contains("même clé")
+        );
+        for code in [
+            "origin_proof_busy",
+            "origin_proof_unavailable",
+            "origin_worker_unavailable",
+            "origin_binding_unavailable",
+        ] {
+            let error = format!("remote_start_failed:{code}");
+            let message =
+                remote_start_error_message(&error).expect("conduite pour cet échec avant Release");
+            assert!(
+                message.contains("cette tâche et sa clé") && message.contains("autres travaux")
+            );
             assert!(!message.contains("a refusé les droits"));
         }
         assert!(remote_start_error_message("remote_start_failed:unknown with secret").is_none());
-        let explicit=failure("origin_proof_rejected:permissions_changed");
-        assert_eq!(explicit["code"],"origin_proof_rejected:permissions_changed");
-        assert_eq!(explicit["detail"]["worker_refusal"],"permissions_changed");
-        assert_eq!(explicit["detail"]["cause"],"origin_explicit_refusal");
-        assert!(!explicit["message"].as_str().unwrap().contains("cause précise reste inconnue"));
+        let explicit = failure("origin_proof_rejected:permissions_changed");
+        assert_eq!(
+            explicit["code"],
+            "origin_proof_rejected:permissions_changed"
+        );
+        assert_eq!(explicit["detail"]["worker_refusal"], "permissions_changed");
+        assert_eq!(explicit["detail"]["cause"], "origin_explicit_refusal");
+        assert!(
+            !explicit["message"]
+                .as_str()
+                .unwrap()
+                .contains("cause précise reste inconnue")
+        );
     }
 }
 
@@ -4111,63 +4860,98 @@ fn failure(code: &str) -> Value {
                 "recovery":"Lire le reçu durable avec la même clé avant toute reprise. Si une tâche existe, conserver son task_id et suivre son état ; ne pas changer de clé, de machine ou de permissions pour contourner l’incertitude.",
                 "human_action":"Si la liaison ou le sort de la préparation reste inconnu, demander au responsable Bridget de le qualifier avant de reprendre."}});
     }
-    if code=="agent_dormant" {
+    if code == "agent_dormant" {
         return json!({"version":1,"status":"refused","code":code,"scope":"this_request","message":crate::agent_tracking::DORMANT_MESSAGE});
     }
-    if code=="tracking_storage_unavailable" {
+    if code == "tracking_storage_unavailable" {
         return json!({"version":1,"status":"refused","code":code,"scope":"this_request","message":"Relisez la fiche de cet agent avant une nouvelle ronde. Son état de sommeil est illisible ; cette nouvelle ronde n'est pas admise. Conservez tâche et clé. Si la lecture reste indisponible, le responsable Bridget doit vérifier le stockage de cette fiche. Les travaux déjà acceptés et les autres travaux autorisés suivent leur propre état."});
     }
-    if let Some(encoded)=code.strip_prefix("routing_project_refused:") {
+    if let Some(encoded) = code.strip_prefix("routing_project_refused:") {
         return admission_guidance211::contextual_refusal(encoded);
     }
-    if matches!(code,"origin_proof_busy"|"origin_project_preparation_busy"|"project_preparation_source_busy"|"project_preparation_busy"|"project_preparation_link_missing") {
+    if matches!(
+        code,
+        "origin_proof_busy"
+            | "origin_project_preparation_busy"
+            | "project_preparation_source_busy"
+            | "project_preparation_busy"
+            | "project_preparation_link_missing"
+    ) {
         return origin_attestation_refusal(code);
     }
-    if matches!(code,"model_options_invalid"|"model_options_not_activated"
-        |"model_options_not_permitted"|"model_options_launcher_ambiguous"
-        |"model_options_observation_unavailable"|"model_options_account_unidentified"
-        |"model_options_not_announced"|"model_options_account_changed"|"model_options_account_unverified"
-        |"model_options_launch_mismatch") {
-        let (cause,action,human)=if code=="model_options_invalid" {
-            ("invalid_service_tier",
-             "Corriger service_tier : fournir un identifiant non vide, de256octets au plus, composé de lettres, chiffres ou ._:/-.",
-             "Si le niveau voulu n'est pas connu, demander à l'utilisateur lequel choisir parmi les niveaux réellement annoncés et autorisés. Aucun remplacement automatique.")
-        } else if code=="model_options_not_permitted" {
-            ("option_not_authorized_by_profile",
-             "Faire qualifier le niveau voulu dans le profil de cette connexion et les capacités de son adaptateur. Ce contrôle ne prouve pas un refus de votre abonnement.",
-             "Si ce choix dépasse le profil autorisé, demander à l'utilisateur s'il veut faire qualifier et autoriser ce niveau. Ne pas élargir les droits ou changer de connexion silencieusement.")
-        } else if code=="model_options_launch_mismatch" {
-            ("saved_option_definition_mismatch",
-             "Conserver cette tâche et sa clé : sa définition enregistrée ne reconstruit pas exactement le niveau choisi. Aucun lancement n'est autorisé sur un défaut différent.",
-             "Demander au responsable Bridget une vérification du reçu et du lecteur compatible, sans réécrire la tâche ni changer son compte, son modèle ou ses droits.")
-        } else if code=="model_options_launcher_ambiguous" {
-            ("option_launcher_ambiguous",
-             "Faire vérifier les arguments du lanceur configuré : ils ne permettent pas de garantir l'application du niveau demandé.",
-             "Demander au responsable Bridget une correction ciblée du lanceur avant toute admission ; conserver le compte, le modèle et les droits.")
-        } else if code=="model_options_not_announced" {
-            ("option_not_announced",
-             "Faire actualiser puis relire les options annoncées pour ce modèle sur cette connexion de ce serveur. Le niveau demandé n'y figure pas ; cela ne prouve pas une interdiction de l'abonnement.",
-             "Si la liste actuelle reste différente, demander à l'utilisateur quel choix annoncé et autorisé il souhaite. Aucun remplacement ni achat automatique.")
-        } else if code=="model_options_account_unverified" {
-            ("observed_account_continuity_unverified",
-             "Conserver cette tâche et sa clé : le worker a changé d'époque, donc son nonce local ne permet plus de vérifier la continuité du compte choisi. Cela ne prouve pas un changement de compte.",
-             "Demander au responsable Bridget de vérifier l'ancienne tâche, son arrêt et le compte prévu avant toute décision de nouvelle admission. Aucun rejeu, achat ou remplacement automatique.")
-        } else if code=="model_options_account_changed" {
-            ("observed_account_changed",
-             "Conserver cette tâche et sa clé : le compte observé n'est plus celui figé pendant sa décision. Vérifier son état et l'arrêt avant toute nouvelle admission.",
-             "Demander à l'utilisateur quel compte était prévu. Ne pas reconnecter, changer de compte ou relancer cette mission automatiquement.")
-        } else if code=="model_options_account_unidentified" {
-            ("observed_account_unidentified",
-             "Faire qualifier l'identité non secrète fournie par le programme pour cette connexion. Le compte n'est pas identifiable ; la continuité de ce choix ne peut pas être attestée.",
-             "Demander au responsable Bridget le diagnostic de l'adaptateur. Ce constat ne demande ni réinstallation ni nouvelle connexion.")
-        } else if code=="model_options_observation_unavailable" {
-            ("current_option_observation_missing",
-             "Attendre le contrôle des modèles ou demander une actualisation native, puis relire une fois l'observation de cette connexion sur ce serveur. Aucune observation actuelle compatible n'a confirmé ce choix.",
-             "Si l'observation reste indisponible, demander au responsable Bridget de qualifier le worker et l'adaptateur nommés. Ne pas déduire un défaut de compte ou d'abonnement.")
+    if matches!(
+        code,
+        "model_options_invalid"
+            | "model_options_not_activated"
+            | "model_options_not_permitted"
+            | "model_options_launcher_ambiguous"
+            | "model_options_observation_unavailable"
+            | "model_options_account_unidentified"
+            | "model_options_not_announced"
+            | "model_options_account_changed"
+            | "model_options_account_unverified"
+            | "model_options_launch_mismatch"
+    ) {
+        let (cause, action, human) = if code == "model_options_invalid" {
+            (
+                "invalid_service_tier",
+                "Corriger service_tier : fournir un identifiant non vide, de256octets au plus, composé de lettres, chiffres ou ._:/-.",
+                "Si le niveau voulu n'est pas connu, demander à l'utilisateur lequel choisir parmi les niveaux réellement annoncés et autorisés. Aucun remplacement automatique.",
+            )
+        } else if code == "model_options_not_permitted" {
+            (
+                "option_not_authorized_by_profile",
+                "Faire qualifier le niveau voulu dans le profil de cette connexion et les capacités de son adaptateur. Ce contrôle ne prouve pas un refus de votre abonnement.",
+                "Si ce choix dépasse le profil autorisé, demander à l'utilisateur s'il veut faire qualifier et autoriser ce niveau. Ne pas élargir les droits ou changer de connexion silencieusement.",
+            )
+        } else if code == "model_options_launch_mismatch" {
+            (
+                "saved_option_definition_mismatch",
+                "Conserver cette tâche et sa clé : sa définition enregistrée ne reconstruit pas exactement le niveau choisi. Aucun lancement n'est autorisé sur un défaut différent.",
+                "Demander au responsable Bridget une vérification du reçu et du lecteur compatible, sans réécrire la tâche ni changer son compte, son modèle ou ses droits.",
+            )
+        } else if code == "model_options_launcher_ambiguous" {
+            (
+                "option_launcher_ambiguous",
+                "Faire vérifier les arguments du lanceur configuré : ils ne permettent pas de garantir l'application du niveau demandé.",
+                "Demander au responsable Bridget une correction ciblée du lanceur avant toute admission ; conserver le compte, le modèle et les droits.",
+            )
+        } else if code == "model_options_not_announced" {
+            (
+                "option_not_announced",
+                "Faire actualiser puis relire les options annoncées pour ce modèle sur cette connexion de ce serveur. Le niveau demandé n'y figure pas ; cela ne prouve pas une interdiction de l'abonnement.",
+                "Si la liste actuelle reste différente, demander à l'utilisateur quel choix annoncé et autorisé il souhaite. Aucun remplacement ni achat automatique.",
+            )
+        } else if code == "model_options_account_unverified" {
+            (
+                "observed_account_continuity_unverified",
+                "Conserver cette tâche et sa clé : le worker a changé d'époque, donc son nonce local ne permet plus de vérifier la continuité du compte choisi. Cela ne prouve pas un changement de compte.",
+                "Demander au responsable Bridget de vérifier l'ancienne tâche, son arrêt et le compte prévu avant toute décision de nouvelle admission. Aucun rejeu, achat ou remplacement automatique.",
+            )
+        } else if code == "model_options_account_changed" {
+            (
+                "observed_account_changed",
+                "Conserver cette tâche et sa clé : le compte observé n'est plus celui figé pendant sa décision. Vérifier son état et l'arrêt avant toute nouvelle admission.",
+                "Demander à l'utilisateur quel compte était prévu. Ne pas reconnecter, changer de compte ou relancer cette mission automatiquement.",
+            )
+        } else if code == "model_options_account_unidentified" {
+            (
+                "observed_account_unidentified",
+                "Faire qualifier l'identité non secrète fournie par le programme pour cette connexion. Le compte n'est pas identifiable ; la continuité de ce choix ne peut pas être attestée.",
+                "Demander au responsable Bridget le diagnostic de l'adaptateur. Ce constat ne demande ni réinstallation ni nouvelle connexion.",
+            )
+        } else if code == "model_options_observation_unavailable" {
+            (
+                "current_option_observation_missing",
+                "Attendre le contrôle des modèles ou demander une actualisation native, puis relire une fois l'observation de cette connexion sur ce serveur. Aucune observation actuelle compatible n'a confirmé ce choix.",
+                "Si l'observation reste indisponible, demander au responsable Bridget de qualifier le worker et l'adaptateur nommés. Ne pas déduire un défaut de compte ou d'abonnement.",
+            )
         } else {
-            ("model_option_selection_not_active",
-             "Conserver cette demande et faire terminer l'activation de ce choix par le responsable Bridget. La lecture des niveaux annoncés ne permet pas encore leur sélection pour une mission.",
-             "Si l'activation dépasse votre accès, demander à l'utilisateur de faire charger une version Bridget qui admet ce choix. Ne pas changer le compte, le modèle, le niveau ou les droits pour contourner ce contrôle.")
+            (
+                "model_option_selection_not_active",
+                "Conserver cette demande et faire terminer l'activation de ce choix par le responsable Bridget. La lecture des niveaux annoncés ne permet pas encore leur sélection pour une mission.",
+                "Si l'activation dépasse votre accès, demander à l'utilisateur de faire charger une version Bridget qui admet ce choix. Ne pas changer le compte, le modèle, le niveau ou les droits pour contourner ce contrôle.",
+            )
         };
         return json!({"status":"refused","code":code,
             "message":format!("{action} Ce refus concerne cette demande ; les autres travaux autorisés suivent leur propre état."),
@@ -4175,11 +4959,16 @@ fn failure(code: &str) -> Value {
                 "recovery":"Conserver la clé et l'enveloppe, puis vérifier detail.admission. Pour une demande non admise seulement, corriger la cause avant un nouvel essai autorisé. Ne pas dupliquer ni relancer une mission d'issue inconnue.",
                 "human_action":human}});
     }
-    if matches!(code, "routing_policy_disabled" | "routing_policy_unavailable" | "routing_catalogue_unavailable") {
+    if matches!(
+        code,
+        "routing_policy_disabled" | "routing_policy_unavailable" | "routing_catalogue_unavailable"
+    ) {
         let fact = match code {
             "routing_policy_disabled" => "La politique du catalogue est désactivée.",
             "routing_policy_unavailable" => "La politique du catalogue est indisponible.",
-            _ => "Le registre du catalogue n'a pas pu être lu ou validé ; la cause précise reste inconnue.",
+            _ => {
+                "Le registre du catalogue n'a pas pu être lu ou validé ; la cause précise reste inconnue."
+            }
         };
         return json!({"status":"refused","code":code,
             "message":format!("Faire vérifier ce catalogue par le responsable Bridget. {fact} Son indisponibilité ne confirme aucun arrêt de sonde. Les autres travaux autorisés suivent leur propre état."),
@@ -4188,7 +4977,7 @@ fn failure(code: &str) -> Value {
                 "human_action":"Si la correction dépasse votre accès, demander au responsable Bridget l'intervention ciblée sur le registre ou la décision d'activation. Ne pas changer de compte ni de droits pour contourner ce refus."}});
     }
 
-    if code=="worker_commit_view_capabilities_unsupported" {
+    if code == "worker_commit_view_capabilities_unsupported" {
         return json!({"status":"refused","code":code,
             "message":"Faire vérifier et charger les capacités de sonde, de lecture et de création des vues sur les workers candidats. Au moins un worker n'a pas confirmé ce parcours complet. Ce refus concerne les candidats cités de cette admission ; les autres travaux autorisés suivent leur propre état.",
             "detail":{"scope":"candidate_subset","cause":"worker_view_capabilities_unconfirmed",
@@ -4196,13 +4985,20 @@ fn failure(code: &str) -> Value {
                 "recovery":"Conserver la clé, l'enveloppe et toute tâche connue. Attendre la fin des appels concurrents et vérifier leur issue avant un rejeu strict après qualification des capacités. Aucun repli vers shared, worktree ou une autre base.",
                 "human_action":"Si le chargement dépasse votre accès, demander au responsable Bridget de qualifier ces capacités sur les workers indiqués. Ne pas modifier les comptes, modèles ou droits."}});
     }
-    if matches!(code,"origin_commit_view_unsupported"|"workspace_commit_view_requires_discovery") {
-        let (cause,action)=if code=="origin_commit_view_unsupported" {
-            ("origin_view_capabilities_missing",
-             "Faire charger et qualifier les capacités de lecture et de création des vues sur le worker de la machine source. Les deux sont requises pour préparer les objets du commit.")
+    if matches!(
+        code,
+        "origin_commit_view_unsupported" | "workspace_commit_view_requires_discovery"
+    ) {
+        let (cause, action) = if code == "origin_commit_view_unsupported" {
+            (
+                "origin_view_capabilities_missing",
+                "Faire charger et qualifier les capacités de lecture et de création des vues sur le worker de la machine source. Les deux sont requises pour préparer les objets du commit.",
+            )
         } else {
-            ("effective_posture_not_discovery",
-             "Une vue exige des droits effectifs de lecture seule (discovery). Faire vérifier la posture de cette demande ; ne pas retirer une restriction du parent.")
+            (
+                "effective_posture_not_discovery",
+                "Une vue exige des droits effectifs de lecture seule (discovery). Faire vérifier la posture de cette demande ; ne pas retirer une restriction du parent.",
+            )
         };
         return json!({"status":"refused","code":code,
             "message":format!("{action} Ce refus concerne cette admission de vue ; les autres travaux autorisés suivent leur propre état."),
@@ -4210,7 +5006,7 @@ fn failure(code: &str) -> Value {
                 "recovery":"Conserver la clé, l'enveloppe et toute tâche connue. Attendre la fin des appels concurrents et vérifier leur issue avant un rejeu strict après résolution. Aucun repli vers shared, worktree ou une autre base.",
                 "human_action":"Si la vérification dépasse votre accès, demander au responsable Bridget le chargement ciblé du support ou à l'utilisateur de confirmer la posture de lecture seule. Ne pas changer de compte, modèle ou droits."}});
     }
-    if code=="workspace_commit_view_not_enabled" {
+    if code == "workspace_commit_view_not_enabled" {
         return json!({"status":"refused","code":code,
             "message":"La vue de lecture n'est pas encore admise. Faire qualifier son parcours natif et son retour compatible avant une demande de vue. Les autres travaux autorisés suivent leur propre état.",
             "detail":{"scope":"this_admission","cause":"reader_transition_incomplete","task_id":null,
@@ -4218,14 +5014,25 @@ fn failure(code: &str) -> Value {
                 "human_action":"Demander au responsable Bridget de terminer et charger la vue, puis de vérifier le binaire de retour. Aucun changement de droits, compte ou modèle n'est requis par ce refus."}});
     }
     if code.starts_with("provider_catalogue_") {
-        let (message,action)=match code {
-            "provider_catalogue_machine_invalid"=>("L’identifiant du serveur est invalide.","Recopier machine_id dans le catalogue déclaré ; aucun chemin ni nom libre n’est accepté."),
-            "provider_catalogue_worker_unavailable"=>("Aucun worker ne correspond au serveur demandé.","Vérifier son identifiant dans le catalogue, puis son lien natif. Demander au responsable Bridget de rétablir ce lien si nécessaire."),
-            _=>("L’observation des modèles n’est pas disponible.","Transmettre ce code au responsable Bridget pour vérifier le programme et le lien du serveur ; aucune cause de compte n’est déduite de ce refus."),
+        let (message, action) = match code {
+            "provider_catalogue_machine_invalid" => (
+                "L’identifiant du serveur est invalide.",
+                "Recopier machine_id dans le catalogue déclaré ; aucun chemin ni nom libre n’est accepté.",
+            ),
+            "provider_catalogue_worker_unavailable" => (
+                "Aucun worker ne correspond au serveur demandé.",
+                "Vérifier son identifiant dans le catalogue, puis son lien natif. Demander au responsable Bridget de rétablir ce lien si nécessaire.",
+            ),
+            _ => (
+                "L’observation des modèles n’est pas disponible.",
+                "Transmettre ce code au responsable Bridget pour vérifier le programme et le lien du serveur ; aucune cause de compte n’est déduite de ce refus.",
+            ),
         };
         return json!({"status":"refused","code":code,"message":message,"detail":{"recovery":action,"human_action":"Si cette vérification exige un accès indisponible, demander au responsable une intervention ciblée sur ce serveur. Ne pas changer de compte ni de droits.","scope":"Ce refus concerne cette demande d’observation. Les autres travaux autorisés suivent leur propre état."}});
     }
-    if let Some(view)=admission_guidance211::refusal(code){return view;}
+    if let Some(view) = admission_guidance211::refusal(code) {
+        return view;
+    }
     if permission_change::recognizes(code) {
         return permission_change::failure(code);
     }
@@ -4233,28 +5040,42 @@ fn failure(code: &str) -> Value {
         return json!({"status":"refused","code":code,"message":message,
             "detail":{"message":message,"recovery":recovery,"human_action":human}});
     }
-    if matches!(code,"project_preparation_failed"|"project_preparation_disk_full"|"project_preparation_disk_quota") {
-        let (cause,message)=match code {
-            "project_preparation_disk_full" => ("storage_full","Le système a signalé un espace de stockage épuisé pendant la préparation."),
-            "project_preparation_disk_quota" => ("storage_quota","Le système a signalé un quota de stockage épuisé pendant la préparation."),
-            _ => ("unobserved","La préparation a échoué ; sa cause précise n’a pas été conservée ou reconnue."),
+    if matches!(
+        code,
+        "project_preparation_failed"
+            | "project_preparation_disk_full"
+            | "project_preparation_disk_quota"
+    ) {
+        let (cause, message) = match code {
+            "project_preparation_disk_full" => (
+                "storage_full",
+                "Le système a signalé un espace de stockage épuisé pendant la préparation.",
+            ),
+            "project_preparation_disk_quota" => (
+                "storage_quota",
+                "Le système a signalé un quota de stockage épuisé pendant la préparation.",
+            ),
+            _ => (
+                "unobserved",
+                "La préparation a échoué ; sa cause précise n’a pas été conservée ou reconnue.",
+            ),
         };
         return json!({"status":"refused","code":code,"message":message,
             "detail":{"stage":"project_preparation","cause":cause,
                 "recovery":"Vérifiez les volumes et les inodes du dossier temporaire, du dépôt et du journal sur la source et la cible, puis le quota de stockage si ce code le signale. Sans errno conservé, le disque plein n’est qu’une vérification à faire. Identifiez le propriétaire et l’état des gros fichiers avant archivage ou retrait ; ne déplacez pas un dossier de travail vivant. Consultez detail.admission : une issue inconnue ou une tâche connue interdit un remplacement. Après correction et confirmation not_recorded sans appel concurrent, rejouez seulement la même clé et les mêmes paramètres.",
                 "human_action":"Si les fichiers appartiennent à un autre travail ou si le stockage ne peut pas être libéré dans votre mandat, demandez à son propriétaire ou à l’utilisateur quel archivage ou stockage autoriser. Ne changez ni droits, garde ou service pour contourner le refus."}});
     }
-    if code=="admission_diagnostic_capacity_unavailable" {
+    if code == "admission_diagnostic_capacity_unavailable" {
         return json!({"status":"refused","code":code,"message":"Le reçu ne peut pas contenir la preuve de capacité sans dépasser sa borne.",
             "detail":{"recovery":"L’admission n’a pas été clôturée par cette tentative. Conservez la même clé et vérifiez son état natif ; aucune nouvelle mission ou nouvelle clé n’est autorisée tant que son sort n’est pas confirmé.",
             "human_action":"Le responsable doit examiner la taille du reçu et faire qualifier sa conservation ; ne tronquez ni la preuve ni l’historique à la main."}});
     }
-    if code=="resource_saturated" || code.starts_with("resource_saturated:") {
+    if code == "resource_saturated" || code.starts_with("resource_saturated:") {
         let capacity=crate::capacity_refusal::CapacityRefusal::decode(code)
             .map(|proof|proof.projection()).unwrap_or_else(||json!({"evidence_available":false,"scope":"historical_refusal","cause":"measurement_not_recorded_or_invalid"}));
-        let message="Le contrôle de capacité a refusé la cible imposée à cet instant.";
-        let recovery="Appliquez detail.admission.recovery pour choisir la clé : resource_saturated ne prouve pas à lui seul un refus durable. Consultez detail.capacity pour le seuil constaté à cet instant, puis vérifiez une capacité fraîche sur la même machine sans changer vos contraintes. Sans mesure jointe, la valeur historique reste inconnue. Ne créez aucun remplacement si une tâche ou une admission reste en cours ou inconnue. Les autres travaux autorisés suivent leur propre état.";
-        let human="Si la capacité ne peut pas être libérée dans votre périmètre, demandez à l’utilisateur de décider quels travaux peuvent attendre ou quelle capacité ajouter. Ne terminez pas les tâches d’autrui et ne changez pas de machine sans autorisation.";
+        let message = "Le contrôle de capacité a refusé la cible imposée à cet instant.";
+        let recovery = "Appliquez detail.admission.recovery pour choisir la clé : resource_saturated ne prouve pas à lui seul un refus durable. Consultez detail.capacity pour le seuil constaté à cet instant, puis vérifiez une capacité fraîche sur la même machine sans changer vos contraintes. Sans mesure jointe, la valeur historique reste inconnue. Ne créez aucun remplacement si une tâche ou une admission reste en cours ou inconnue. Les autres travaux autorisés suivent leur propre état.";
+        let human = "Si la capacité ne peut pas être libérée dans votre périmètre, demandez à l’utilisateur de décider quels travaux peuvent attendre ou quelle capacité ajouter. Ne terminez pas les tâches d’autrui et ne changez pas de machine sans autorisation.";
         return json!({"status":"refused","code":"resource_saturated","message":message,
             "detail":{"message":message,"recovery":recovery,"human_action":human,"capacity":capacity}});
     }
@@ -4273,130 +5094,192 @@ fn failure(code: &str) -> Value {
         // O(R), R <=128. Refuser le contenu libre avant toute projection MCP.
         use bridget_transport::protocol::{CandidateProbeRefusal, WorkerRefusal};
         let mut result = failure("routing_candidate_unavailable");
-        let decoded=if encoded.len()<=65536 {serde_json::from_str::<Value>(encoded).ok()} else {None};
-        let (reasons,targets)=match decoded {
-            Some(Value::Array(reasons)) if encoded.len()<=16384 => (Some(reasons),None),
-            Some(Value::Object(mut object)) if object.len()==2 && object.contains_key("reasons") && object.contains_key("targets") => {
-                let reasons=object.remove("reasons").and_then(|v|v.as_array().cloned());
-                let targets=object.remove("targets").and_then(|v|v.as_array().cloned());
-                if targets.is_none() {return result;} (reasons,targets)
-            }
-            _=>(None,None),
+        let decoded = if encoded.len() <= 65536 {
+            serde_json::from_str::<Value>(encoded).ok()
+        } else {
+            None
         };
-        if let Some(reasons)=reasons
-            && !reasons.is_empty() && reasons.len() <= MAX_ROUTING_PROBE_REFUSAL_NOTES
+        let (reasons, targets) = match decoded {
+            Some(Value::Array(reasons)) if encoded.len() <= 16384 => (Some(reasons), None),
+            Some(Value::Object(mut object))
+                if object.len() == 2
+                    && object.contains_key("reasons")
+                    && object.contains_key("targets") =>
+            {
+                let reasons = object.remove("reasons").and_then(|v| v.as_array().cloned());
+                let targets = object.remove("targets").and_then(|v| v.as_array().cloned());
+                if targets.is_none() {
+                    return result;
+                }
+                (reasons, targets)
+            }
+            _ => (None, None),
+        };
+        if let Some(reasons) = reasons
+            && !reasons.is_empty()
+            && reasons.len() <= MAX_ROUTING_PROBE_REFUSAL_NOTES
             && reasons.iter().all(|reason| {
-                reason.as_object().is_some_and(|r| r.len()==3)
-                    && reason["candidates"].as_u64().is_some_and(|n| (1..=128).contains(&n))
+                reason.as_object().is_some_and(|r| r.len() == 3)
+                    && reason["candidates"]
+                        .as_u64()
+                        .is_some_and(|n| (1..=128).contains(&n))
                     && match reason["kind"].as_str() {
-                        Some("candidate") => serde_json::from_value::<CandidateProbeRefusal>(reason["code"].clone()).is_ok(),
-                        Some("worker") => serde_json::from_value::<WorkerRefusal>(reason["code"].clone()).is_ok(),
-                        Some("tool_absent"|"tool_unusable"|"tool_unknown") => serde_json::from_value::<bridget_transport::protocol::WorkloadTool>(reason["code"].clone()).is_ok(),
+                        Some("candidate") => {
+                            serde_json::from_value::<CandidateProbeRefusal>(reason["code"].clone())
+                                .is_ok()
+                        }
+                        Some("worker") => {
+                            serde_json::from_value::<WorkerRefusal>(reason["code"].clone()).is_ok()
+                        }
+                        Some("tool_absent" | "tool_unusable" | "tool_unknown") => {
+                            serde_json::from_value::<bridget_transport::protocol::WorkloadTool>(
+                                reason["code"].clone(),
+                            )
+                            .is_ok()
+                        }
                         _ => false,
                     }
-            }) {
-            if targets.as_ref().is_some_and(|targets|!valid_probe_targets(targets,&reasons)) {return result;}
+            })
+        {
+            if targets
+                .as_ref()
+                .is_some_and(|targets| !valid_probe_targets(targets, &reasons))
+            {
+                return result;
+            }
             project_probe_constraints(&mut result, &reasons);
             result["detail"]["reasons"] = json!(reasons);
-            if let Some(targets)=targets {project_probe_targets(&mut result,&targets);}
+            if let Some(targets) = targets {
+                project_probe_targets(&mut result, &targets);
+            }
         }
         return result;
     }
 
     if code.starts_with("workspace_repair") {
-        let (message,recovery,human)=match code {
+        let (message, recovery, human) = match code {
             "workspace_repair_child_upgrade_required" => (
                 "Le programme qui pilote cet enfant ne sait pas encore exécuter la réparation native.",
                 "Conservez cette tâche et son dossier. Installer un binaire ne modifie pas le programme déjà chargé. Ne créez pas de nouvelle mission et ne forcez pas le placement.",
-                "Une migration ciblée du pilote doit être qualifiée avant son exécution ; aucun redémarrage de service n'est déduit de ce refus."),
+                "Une migration ciblée du pilote doit être qualifiée avant son exécution ; aucun redémarrage de service n'est déduit de ce refus.",
+            ),
             "workspace_repair_platform_unsupported" => (
                 "Cette version ne qualifie la réparation distante que sur les workers Linux.",
                 "Conservez la même tâche, ses résultats et son dossier. Ne changez pas sa machine pour contourner ce refus.",
-                "Le responsable doit faire qualifier le mécanisme de drainage sur cette plateforme avant de l'activer."),
+                "Le responsable doit faire qualifier le mécanisme de drainage sur cette plateforme avant de l'activer.",
+            ),
             "workspace_repair_adapter_unsupported" | "workspace_repair_resume_unattested" => (
                 "Le pilote admis pour cet enfant ne confirme pas une reprise de conversation qualifiée pour cette réparation.",
                 "Conservez la même tâche, ses résultats et son dossier. Relevez le pilote et sa version effective sur la machine d'exécution. La réparation ne doit jamais démarrer une conversation neuve pour contourner cette absence de preuve.",
-                "Le responsable doit faire qualifier cette reprise native ou un mécanisme de migration ciblée ; aucun changement de fournisseur ni remplacement de mission n'est automatique."),
-            "workspace_repair_master_upgrade_required" | "workspace_repair_remote:CapabilityRequired" => (
+                "Le responsable doit faire qualifier cette reprise native ou un mécanisme de migration ciblée ; aucun changement de fournisseur ni remplacement de mission n'est automatique.",
+            ),
+            "workspace_repair_master_upgrade_required"
+            | "workspace_repair_remote:CapabilityRequired" => (
                 "Le maître ou le worker connecté n'annonce pas la capacité requise pour cette réparation.",
                 "Conservez la tâche et la clé de réparation. Vérifiez les versions chargées et préparez leur mise à jour par la maintenance native ; ne transmettez pas la nouvelle commande à un ancien pair.",
-                "Une activation admise est nécessaire ; un refus de maintenance ne permet ni redémarrage forcé ni modification directe de l'état."),
+                "Une activation admise est nécessaire ; un refus de maintenance ne permet ni redémarrage forcé ni modification directe de l'état.",
+            ),
             "workspace_repair_busy" => (
                 "Le fournisseur a encore un tour, un message, une demande ou un événement à traiter.",
                 "Laissez finir le travail et résolvez les demandes ouvertes. Relisez ensuite la même tâche ; cette tentative n'a pas arrêté le fournisseur.",
-                "Si l'activité ne se termine pas, demandez au responsable de décider de son traitement avant une nouvelle tentative."),
+                "Si l'activité ne se termine pas, demandez au responsable de décider de son traitement avant une nouvelle tentative.",
+            ),
             "workspace_repair_cancelled" | "workspace_repair_task_changed" => (
                 "La tâche a été annulée ou ses conditions de réparation ont changé.",
                 "Relisez le statut, la garde et la phase de cette même tâche. N'essayez pas de réactiver une commande annulée ; conservez les sorties et le reçu de réparation.",
-                "Le propriétaire doit décider de la récupération si la garde est libérée ou la tâche arrêtée."),
+                "Le propriétaire doit décider de la récupération si la garde est libérée ou la tâche arrêtée.",
+            ),
             "workspace_repair_stop_unconfirmed" => (
                 "L'arrêt du fournisseur ou de ses lecteurs n'a pas été confirmé dans le délai.",
                 "Conservez le même wrapper et son reçu. Vérifiez les processus détenus et leur état ; aucun second fournisseur ne doit être lancé tant que cet arrêt reste incertain.",
-                "Transmettez les identités et le reçu au responsable pour une récupération native ; aucun arrêt forcé n'est autorisé par ce message."),
-            "workspace_repair_permissions_changed" | "workspace_repair_permissions_unconfirmed" => (
-                "Les droits au nouvel emplacement ne sont pas confirmés identiques aux droits admis.",
-                "Comparez la politique d'origine, les racines d'écriture et leurs traductions au nouvel emplacement. Ne modifiez pas les droits pour rendre la réparation acceptable.",
-                "Si la politique doit réellement changer, le propriétaire doit valider cette décision séparément."),
+                "Transmettez les identités et le reçu au responsable pour une récupération native ; aucun arrêt forcé n'est autorisé par ce message.",
+            ),
+            "workspace_repair_permissions_changed" | "workspace_repair_permissions_unconfirmed" => {
+                (
+                    "Les droits au nouvel emplacement ne sont pas confirmés identiques aux droits admis.",
+                    "Comparez la politique d'origine, les racines d'écriture et leurs traductions au nouvel emplacement. Ne modifiez pas les droits pour rendre la réparation acceptable.",
+                    "Si la politique doit réellement changer, le propriétaire doit valider cette décision séparément.",
+                )
+            }
             "workspace_repair_destination_invalid" | "workspace_repair_destination_changed" => (
                 "Le dossier cible est invalide ou son identité physique a changé.",
                 "Vérifiez que le chemin absolu est un dossier réel sans alias, hors des racines protégées, et qu'il désigne toujours la copie déplacée attendue. Conservez tous les fichiers.",
-                "Le propriétaire doit confirmer la destination si plusieurs copies existent ; ne remplacez aucun dossier pour contourner ce contrôle."),
+                "Le propriétaire doit confirmer la destination si plusieurs copies existent ; ne remplacez aucun dossier pour contourner ce contrôle.",
+            ),
             "workspace_repair_head_changed" | "workspace_repair_history_unconfirmed" => (
                 "Le commit ou l'historique Git ne correspond pas à la réparation demandée.",
                 "Comparez le HEAD complet, la branche et leur ascendance avec les commits conservés. Aucun reset, checkout ou effacement n'est une solution à ce refus.",
-                "Le propriétaire doit résoudre la divergence et confirmer le commit attendu avant une nouvelle décision."),
+                "Le propriétaire doit résoudre la divergence et confirmer le commit attendu avant une nouvelle décision.",
+            ),
             "workspace_repair_anchor_unconfirmed" | "workspace_repair_original_conflict" => (
                 "Le dépôt de confiance ne rattache pas cette copie à l'ancien worktree de façon vérifiable.",
                 "Comparez le fichier .git de la copie et l'entrée administrative du dépôt d'origine. L'ancien chemin doit être absent ou être le lien exact vers cette copie ; conservez tout autre contenu.",
-                "Si les liens ou la provenance ne peuvent pas être prouvés, demandez une récupération examinée par le responsable sans réécrire les reçus."),
-            "workspace_repair_wrapper_changed" | "workspace_repair_identity_unconfirmed"
-                | "workspace_repair_child_incompatible" | "workspace_repair_session_unconfirmed"
-                | "workspace_repair_child_unavailable" | "workspace_repair_execution_unconfirmed"
-                | "workspace_repair_resume_unconfirmed" => (
+                "Si les liens ou la provenance ne peuvent pas être prouvés, demandez une récupération examinée par le responsable sans réécrire les reçus.",
+            ),
+            "workspace_repair_wrapper_changed"
+            | "workspace_repair_identity_unconfirmed"
+            | "workspace_repair_child_incompatible"
+            | "workspace_repair_session_unconfirmed"
+            | "workspace_repair_child_unavailable"
+            | "workspace_repair_execution_unconfirmed"
+            | "workspace_repair_resume_unconfirmed" => (
                 "L'identité ou la reprise de l'exécution attendue n'a pas été confirmée.",
                 "Vérifiez le worker, la commande, l'instance, la génération et le fil fournisseur de cette même tâche. Relisez le reçu durable ; ne démarrez pas une autre conversation.",
-                "Transmettez les identités manquantes et la phase au responsable pour une récupération native ciblée."),
-            "workspace_repair_not_prepared" | "workspace_repair_not_committed"
-                | "workspace_repair_proof_missing" | "workspace_repair_proof_invalid" => (
+                "Transmettez les identités manquantes et la phase au responsable pour une récupération native ciblée.",
+            ),
+            "workspace_repair_not_prepared"
+            | "workspace_repair_not_committed"
+            | "workspace_repair_proof_missing"
+            | "workspace_repair_proof_invalid" => (
                 "Le reçu nécessaire à cette étape est absent ou invalide.",
                 "Relisez le statut de la même réparation et réconciliez la même clé. Ne fabriquez pas le reçu et ne passez pas manuellement à l'étape suivante.",
-                "Si le reçu ne peut pas être retrouvé ou vérifié, le responsable doit examiner cette opération conservée."),
+                "Si le reçu ne peut pas être retrouvé ou vérifié, le responsable doit examiner cette opération conservée.",
+            ),
             "workspace_repair_already_recorded" => (
                 "Une réparation engagée ou publiée existe déjà pour cette génération.",
                 "Suivez sa clé et son reçu. Une autre clé n'est permise qu'après un refus sans effet confirmé et dans la limite des tentatives admises.",
-                "Une nouvelle migration après publication doit faire l'objet d'un parcours qualifié ; ne remplacez pas l'historique."),
+                "Une nouvelle migration après publication doit faire l'objet d'un parcours qualifié ; ne remplacez pas l'historique.",
+            ),
             "workspace_repair_remote_required" | "workspace_repair_unsupported" => (
                 "Cette exécution ne remplit pas le contrat de réparation distante pris en charge.",
                 "Conservez la même tâche et relevez sa machine, son pilote et sa version. Ne changez pas de machine ou de fournisseur pour contourner ce refus.",
-                "Le responsable doit faire qualifier le parcours correspondant avant son activation."),
+                "Le responsable doit faire qualifier le parcours correspondant avant son activation.",
+            ),
             "workspace_repair_invalid_request" => (
                 "La demande de réparation ne respecte pas le contrat.",
                 "Fournissez une clé stable, un chemin absolu sans composant ambigu et un HEAD Git complet de40 caractères. Conservez les paramètres d'une clé déjà enregistrée.",
-                "Demandez au propriétaire le chemin et le commit attendus si ces valeurs ne sont pas connues."),
+                "Demandez au propriétaire le chemin et le commit attendus si ces valeurs ne sont pas connues.",
+            ),
             "workspace_repair_not_idle" => (
                 "La tâche ne remplit pas les conditions de repos nécessaires à sa réparation.",
                 "Attendez le résultat remis, la fin du tour et la résolution des demandes ouvertes. Vérifiez que la garde de l'enfant reste valide. Ne créez pas de nouvelle ronde pendant la réparation.",
-                "Si la garde est terminée, demandez au responsable de choisir un parcours de récupération qui conserve les sorties."),
+                "Si la garde est terminée, demandez au responsable de choisir un parcours de récupération qui conserve les sorties.",
+            ),
             "workspace_repair_envelope_mismatch" => (
                 "Cette clé de réparation désigne déjà des paramètres différents.",
                 "Relisez workspace_repair dans le statut de cette tâche. Pour suivre cette opération, conservez sa request_id et tous ses paramètres. Ne modifiez pas sa destination au rejeu.",
-                "Un changement de destination exige un refus sans effet confirmé, puis une nouvelle décision de réparation."),
+                "Un changement de destination exige un refus sans effet confirmé, puis une nouvelle décision de réparation.",
+            ),
             "workspace_repair_receipt_unconfirmed" => (
                 "Le wrapper n'a pas pu enregistrer durablement son résultat de réparation.",
                 "Conservez la même tâche et la même clé. Vérifiez l'espace disque et l'accès au store technique du worker. Le wrapper garde les admissions fermées et retente seulement l'écriture du reçu, sans rejouer la réparation.",
-                "Si le stockage ne peut pas être rétabli dans le mandat existant, demandez cette intervention au responsable. Ne créez pas une autre clé tant que le reçu reste incertain."),
+                "Si le stockage ne peut pas être rétabli dans le mandat existant, demandez cette intervention au responsable. Ne créez pas une autre clé tant que le reçu reste incertain.",
+            ),
             "workspace_repair_pending" => (
                 "La réparation n'est pas encore confirmée de bout en bout.",
                 "Relisez le statut de la même tâche. Rejouez uniquement la même réparation avec la même request_id et les mêmes paramètres pour réconcilier son reçu. N'envoyez aucune nouvelle mission.",
-                "Si un arrêt ou une reprise reste incertain, transmettez la phase et le code au responsable ; aucune relance forcée."),
+                "Si un arrêt ou une reprise reste incertain, transmettez la phase et le code au responsable ; aucune relance forcée.",
+            ),
             "workspace_repair_authority_expired" | "workspace_repair_remote:PrepareExpired" => (
                 "La fenêtre autorisée de cette réparation est terminée.",
                 "Conservez la tâche, ses fichiers et son reçu. Vérifiez sa phase : un arrêt engagé ne doit pas devenir une nouvelle tentative sous une autre clé.",
-                "Le responsable doit renouveler explicitement les conditions de reprise si l'exécution est déjà arrêtée."),
+                "Le responsable doit renouveler explicitement les conditions de reprise si l'exécution est déjà arrêtée.",
+            ),
             _ => (
                 "Bridget refuse cette étape de réparation. Le code conservé précise le contrôle qui n'a pas été confirmé.",
                 "Conservez cette tâche, sa request_id de réparation et ses fichiers. Vérifiez workspace_repair.phase et workspace_repair.code dans son statut. Ne recréez ni dossier, ni mission et ne modifiez pas les reçus à la main.",
-                "Si le contrôle ne peut pas être rétabli dans les droits existants, transmettez ce code et la phase au responsable pour une décision ciblée."),
+                "Si le contrôle ne peut pas être rétabli dans les droits existants, transmettez ce code et la phase au responsable pour une décision ciblée.",
+            ),
         };
         return json!({"status":"refused","code":code,"message":message,
             "detail":{"message":message,"recovery":recovery,"human_action":human}});
@@ -4434,7 +5317,9 @@ fn failure(code: &str) -> Value {
         }).collect();
         let message = if stage == "start_recovery" {
             "Le contrat figé de la cible ne concorde plus pendant la reprise du démarrage."
-        } else { "Les faits vérifiés pour la cible ont changé pendant l’admission." };
+        } else {
+            "Les faits vérifiés pour la cible ont changé pendant l’admission."
+        };
         let recovery = if stage == "start_recovery" {
             "Cette admission conserve sa tâche. Aucun nouveau fence, Start ni remplacement n’a été envoyé par ce contrôle. Conservez la tâche, request_id et l’enveloppe. Faites vérifier les champs de detail.checks par le responsable Bridget ; une fois la cause corrigée ou le changement validé, seul un rejeu strict de cette même admission peut reprendre cette tâche. Ne créez pas de nouvelle clé et ne modifiez pas ses reçus."
         } else if changes.is_empty() {
@@ -4450,55 +5335,68 @@ fn failure(code: &str) -> Value {
         "round_limit" => Some((
             "Cette tâche a atteint le plafond de huit rondes, première mission comprise. Aucune neuvième ronde n'a été ouverte.",
             "Conservez le résultat, les commits et les fichiers, y compris non suivis ou ignorés. Depuis le parent propriétaire, fermez la garde avec bridget_task_cancel sur cette même tâche. Vérifiez ensuite son statut : continuable=false ne prouve pas l'arrêt ; task_active ou stop_unconfirmed imposent d'attendre sa confirmation, report_unavailable impose une inspection. Après clôture confirmée, une suite autorisée utilise une nouvelle tâche, une nouvelle clé et un brief citant le travail conservé. Pour un nouveau worktree, rendez le commit complet disponible dans le dépôt source du parent et donnez ce même SHA à expected_base_commit et workspace.base_ref. Ne modifiez ni le compteur, ni la clé refusée, ni l'identité de l'ancien enfant.",
-            "Si la suite dépasse le mandat existant ou si l'arrêt et la conservation du travail ne peuvent pas être confirmés, demandez au propriétaire ou à l'utilisateur de décider de cette suite. Le plafond de cette tâche ne peut pas être levé par un changement de clé.")),
+            "Si la suite dépasse le mandat existant ou si l'arrêt et la conservation du travail ne peuvent pas être confirmés, demandez au propriétaire ou à l'utilisateur de décider de cette suite. Le plafond de cette tâche ne peut pas être levé par un changement de clé.",
+        )),
         "permission_attestation_unavailable" => Some((
             "Bridget n'a pas pu confirmer l'identité et les droits actuels de la session appelante. La cause précise n'est pas établie.",
             "Ce refus ne permet pas de conclure sur l'état d'une tâche distante. Vérifiez son rattachement Bridget et la disponibilité de son attestation native de droits dans le tour actif. L'outil bridget_session n'a pas besoin d'être exposé au modèle : Bridget l'appelle par son adaptateur. Conservez task_id, request_id et le refus exact ; aucune reprise, nouvelle mission ou modification de droits.",
-            "Si l'attestation ne peut pas être rétablie depuis le même fil actif, demandez au responsable de rétablir le rattachement ou la source de droits de ce fil. Ne demandez pas une relance distante sur ce seul code.")),
+            "Si l'attestation ne peut pas être rétablie depuis le même fil actif, demandez au responsable de rétablir le rattachement ou la source de droits de ce fil. Ne demandez pas une relance distante sur ce seul code.",
+        )),
         "remote_execution_ended" => Some((
             "La commande distante est terminée ou son lancement a été refusé. Elle ne peut plus recevoir de travail.",
             "Lisez le résultat et les éléments conservés de cette même tâche. Confirmez son arrêt et son nettoyage avant de préparer une suite autorisée. Le rejeu de cette reprise ne redémarre pas la commande.",
-            "Demandez à l'utilisateur de choisir la suite si la mission doit changer. Ne créez pas de remplacement sans autorisation.")),
+            "Demandez à l'utilisateur de choisir la suite si la mission doit changer. Ne créez pas de remplacement sans autorisation.",
+        )),
         "remote_execution_unconfirmed" => Some((
             "Le worker n'a pas confirmé une exécution libérée et prête à recevoir une nouvelle ronde. Conservez cette tâche sans créer de doublon.",
             "Relisez le statut et le journal de l'enfant indiqué. Vérifiez sur la machine d'exécution que le wrapper et le fournisseur sont encore actifs. Un résultat disponible ou continuable=true ne prouve pas à lui seul que l'exécution peut reprendre. Réessayez la même requête seulement après clarification de cette condition.",
-            "Si l'exécution ne peut pas être vérifiée ou s'est arrêtée, demandez à l'utilisateur de décider de sa remise en état ou de sa clôture.")),
+            "Si l'exécution ne peut pas être vérifiée ou s'est arrêtée, demandez à l'utilisateur de décider de sa remise en état ou de sa clôture.",
+        )),
         "remote_workspace_unconfirmed" => Some((
             "Le worker n'a pas fourni le rapport Git du dossier de travail attendu. La reprise reste bloquée.",
             "Sur la machine indiquée dans detail.execution, vérifiez que execution_cwd existe encore, désigne le même dossier réel et reste un worktree du dépôt attendu. Comparez aussi le dossier courant du wrapper et du fournisseur. Un chemin déplacé, remplacé ou devenu un lien peut invalider ce contrôle. Conservez la tâche, sa requête et ses résultats ; ne recréez pas un dossier au même nom pour forcer la reprise.",
-            "Si le dossier a été déplacé ou supprimé, demandez au responsable ou à l'utilisateur si ce déplacement était voulu et quelle remise en état est autorisée avant un nouvel essai.")),
+            "Si le dossier a été déplacé ou supprimé, demandez au responsable ou à l'utilisateur si ce déplacement était voulu et quelle remise en état est autorisée avant un nouvel essai.",
+        )),
         "remote_permissions_unconfirmed" => Some((
             "Le worker confirme une exécution prête, mais n'a pas confirmé la vérification actuelle de ses droits.",
             "Vérifiez sur la machine d'exécution la lisibilité du dossier et des sources de droits utilisées à l'admission, ainsi que les changements de configuration du fournisseur. Ce refus ne prouve pas une révocation : la cause précise du contrôle reste inconnue. Conservez la même tâche et la même requête.",
-            "Si la politique ou les accès doivent changer, demandez l'autorisation de l'utilisateur. N'élargissez pas les permissions pour contourner ce refus.")),
+            "Si la politique ou les accès doivent changer, demandez l'autorisation de l'utilisateur. N'élargissez pas les permissions pour contourner ce refus.",
+        )),
         "remote_permissions:WorkerUnavailable" | "remote_permissions:StaleConnection" => Some((
             "La liaison au worker n'a pas fourni de confirmation exploitable pour cette reprise.",
             "Vérifiez le service worker et sa liaison au maître sur la machine d'exécution. Relisez ensuite cette tâche et rejouez strictement la même requête si la liaison est rétablie. Ce refus ne prouve ni un arrêt du travail ni une déconnexion du compte fournisseur.",
-            "Si le service ou le réseau doit être modifié hors du périmètre autorisé, demandez cette intervention à l'utilisateur.")),
+            "Si le service ou le réseau doit être modifié hors du périmètre autorisé, demandez cette intervention à l'utilisateur.",
+        )),
         "remote_permissions:PlacementMismatch" => Some((
             "Le dossier ou le rattachement de projet observé par le worker ne correspond plus à la commande admise.",
             "Comparez le mapping du projet et execution_cwd avec le dossier réel sur la machine d'exécution. Vérifiez un éventuel déplacement ou changement de worktree. Conservez cette commande et ses résultats ; ne modifiez pas son placement durable à la main.",
-            "Si une migration était voulue, demandez au responsable ou à l'utilisateur de valider sa réconciliation avant la reprise.")),
+            "Si une migration était voulue, demandez au responsable ou à l'utilisateur de valider sa réconciliation avant la reprise.",
+        )),
         "permission_not_inherited" => Some((
             "Les droits actuels du parent ne correspondent pas aux droits figés pour cette opération.",
             "Vérifiez l'identité du parent, son projet, son dossier et sa politique actuelle par rapport à la demande admise. Conservez la tâche et la clé de requête ; ne changez pas de compte ou d'identité pour contourner ce refus.",
-            "Si les droits ou le périmètre ont changé volontairement, demandez à l'utilisateur quelle autorisation doit s'appliquer avant de poursuivre.")),
+            "Si les droits ou le périmètre ont changé volontairement, demandez à l'utilisateur quelle autorisation doit s'appliquer avant de poursuivre.",
+        )),
         "remote_permissions:DefinitionChanged" => Some((
             "Le worker n'a pas revalidé la définition du programme fournisseur utilisée lors de l'admission.",
             "Sur la machine d'exécution, comparez le programme installé et la définition du registre avec la commande admise : chemin, version observée, empreinte, arguments et capacités. Ne réinstallez pas un programme et ne changez pas de modèle sur ce seul refus.",
-            "Si une mise à jour ou une modification de configuration était voulue, demandez à l'utilisateur de valider la remise en état attendue.")),
+            "Si une mise à jour ou une modification de configuration était voulue, demandez à l'utilisateur de valider la remise en état attendue.",
+        )),
         "remote_permissions:CommandMismatch" => Some((
             "L'identité de la commande observée par le worker ne correspond pas à celle de la tâche admise.",
             "Conservez les identifiants de tâche, commande, instance et génération. Vérifiez le worker et le reçu de cette même commande ; ne réécrivez pas ces identités et ne créez pas de doublon.",
-            "Si les reçus ne peuvent pas être rapprochés, transmettez ces éléments au responsable ou à l'utilisateur pour décider d'une clôture ou d'une réconciliation autorisée.")),
+            "Si les reçus ne peuvent pas être rapprochés, transmettez ces éléments au responsable ou à l'utilisateur pour décider d'une clôture ou d'une réconciliation autorisée.",
+        )),
         "remote_permissions:Unauthorized" => Some((
             "Le worker a refusé l'autorisation de cette opération distante.",
             "Vérifiez l'activation de la machine, son provisionnement et les droits du projet pour cette commande. Ce refus ne prouve pas un problème du compte fournisseur. Ne modifiez pas les clés ou les autorisations pour forcer la reprise.",
-            "Demandez à l'utilisateur ou à l'administrateur de valider toute modification des droits ou du provisionnement.")),
+            "Demandez à l'utilisateur ou à l'administrateur de valider toute modification des droits ou du provisionnement.",
+        )),
         "remote_permissions:PermissionsChanged" => Some((
             "Le worker n'a pas revalidé les droits de cette exécution.",
             "Comparez les sources de droits et la configuration courante avec celles admises. Vérifiez aussi leur lisibilité. Conservez les éléments d'origine ; l'absence de revalidation n'autorise pas une politique plus large.",
-            "Si une politique a changé volontairement, demandez à l'utilisateur d'autoriser la suite avec le périmètre approprié.")),
+            "Si une politique a changé volontairement, demandez à l'utilisateur d'autoriser la suite avec le périmètre approprié.",
+        )),
         _ => None,
     };
     if let Some((message, recovery, human_action)) = guidance {
@@ -4512,16 +5410,30 @@ fn failure(code: &str) -> Value {
         return json!({"status":"refused","code":"brief_invalid","message":message,
             "detail":{"message":message,"recovery":recovery,"scope":"this_request"}});
     }
-    if code == "workspace_preflight_technical" || code.starts_with("workspace_preflight_technical:") {
-        let cause = code.split_once(':').map(|(_, detail)| detail.trim_start().split(':').next().unwrap_or(""));
+    if code == "workspace_preflight_technical" || code.starts_with("workspace_preflight_technical:")
+    {
+        let cause = code
+            .split_once(':')
+            .map(|(_, detail)| detail.trim_start().split(':').next().unwrap_or(""));
         let (message, recovery) = match cause {
-            Some("workspace_branch_exists") => ("La branche demandée existe déjà.", "Conservez cette demande et vérifiez le travail associé à cette branche avant de proposer une autre destination. Ne supprimez pas la branche pour forcer le lancement."),
-            Some("workspace_limit") => ("Le plafond des worktrees de ce dépôt est atteint.", "Organisez le nettoyage des travaux terminés avec leurs responsables, sans supprimer les travaux actifs, modifiés ou non intégrés. Ne changez pas la base pour contourner ce plafond."),
-            _ => ("Le contrôle préalable du dossier source a refusé la demande.", "Le champ cwd doit désigner le dossier source sur la machine du parent qui appelle Bridget, pas le dossier de destination. Vérifiez que ce dossier existe, que Git peut le lire et que la référence demandée est disponible. Avant un nouvel essai, vérifiez si une tâche existe déjà pour cette demande ; ne créez pas de doublon et ne changez pas la base automatiquement."),
+            Some("workspace_branch_exists") => (
+                "La branche demandée existe déjà.",
+                "Conservez cette demande et vérifiez le travail associé à cette branche avant de proposer une autre destination. Ne supprimez pas la branche pour forcer le lancement.",
+            ),
+            Some("workspace_limit") => (
+                "Le plafond des worktrees de ce dépôt est atteint.",
+                "Organisez le nettoyage des travaux terminés avec leurs responsables, sans supprimer les travaux actifs, modifiés ou non intégrés. Ne changez pas la base pour contourner ce plafond.",
+            ),
+            _ => (
+                "Le contrôle préalable du dossier source a refusé la demande.",
+                "Le champ cwd doit désigner le dossier source sur la machine du parent qui appelle Bridget, pas le dossier de destination. Vérifiez que ce dossier existe, que Git peut le lire et que la référence demandée est disponible. Avant un nouvel essai, vérifiez si une tâche existe déjà pour cette demande ; ne créez pas de doublon et ne changez pas la base automatiquement.",
+            ),
         };
         return json!({"status":"refused","code":"workspace_preflight_technical","message":message,"detail":{"message":message,"recovery":recovery}});
     }
-    if code == "workspace_base_preflight_failed" || code.starts_with("workspace_base_preflight_failed:") {
+    if code == "workspace_base_preflight_failed"
+        || code.starts_with("workspace_base_preflight_failed:")
+    {
         let message = "Bridget n’a pas pu contrôler le dossier source avant l’admission.";
         let recovery = "Le champ cwd désigne un dossier sur la machine du parent appelant. machine_id choisit seulement la destination : vérifier le chemin par SSH sur cette destination ne valide pas la source. Sur la machine du parent, vérifiez que cwd existe et est lisible, puis exécutez git rev-parse --show-toplevel et git rev-parse HEAD dans ce dossier. Corrigez le chemin ou l’accès Git en cas d’échec. En shared, le HEAD source doit être égal à expected_base_commit. Ne changez pas le SHA attendu et ne déplacez pas un checkout utilisé pour contourner le refus. Si shared est imposé, conservez ce mode ; sinon, pour une base figée en worktree autorisé, donnez le même SHA complet à workspace.base_ref et expected_base_commit. Ce refus technique ne clôt pas une admission déjà en cours et ne prouve pas l’absence de tâche. Suivez toute tâche connue avec bridget_task_status. Un rejeu strict conserve request_id et tous les paramètres : admission_pending signifie que la demande reste en attente. Avant une nouvelle clé pour des paramètres corrigés, confirmez qu’aucune tâche et aucune admission en cours ne subsistent pour l’ancienne demande. Si le sort reste inconnu, ne créez pas de nouvelle demande.";
         return json!({"status":"refused","code":"workspace_base_preflight_failed","message":message,"detail":{"message":message,"recovery":recovery}});
@@ -4536,7 +5448,10 @@ fn failure(code: &str) -> Value {
         let recovery = "Dans cwd, sur la machine du parent, vérifiez que Git peut résoudre le commit demandé. Sa présence sur la machine de destination ne suffit pas. Si le commit manque, identifiez le dépôt distant et la branche qui le contiennent, puis récupérez cette branche avec git fetch dans le dépôt source. Vérifiez à nouveau le SHA exact, sans changer expected_base_commit, faire de reset ou avancer la branche de travail. Si une tâche existe, suivez-la avec bridget_task_status. Sinon, après correction, faites au plus un rejeu strict avec la même request_id et les mêmes paramètres. Un refus enregistré reste un refus au rejeu : si ce refus durable et l’absence de tâche sont confirmés, utilisez une nouvelle request_id après correction. Ne multipliez pas les essais si le sort reste inconnu. Ce code ne désigne pas le plafond des worktrees.";
         return json!({"status":"refused","code":"workspace_base_unavailable","message":message,"detail":{"message":message,"recovery":recovery}});
     }
-    if matches!(code, "delivery_check_unavailable" | "permission_source_unavailable") {
+    if matches!(
+        code,
+        "delivery_check_unavailable" | "permission_source_unavailable"
+    ) {
         let message = "La vérification des droits de remise est indisponible ; aucune révocation n’est établie.";
         let recovery = "Aucune réponse positive n’a été remise. Consultez bridget_task_status sur la tâche existante et ses demandes en attente. Rétablissez la source de droits ou la configuration signalée avant de répondre à une demande encore ouverte. Ne créez pas une autre tâche et ne changez pas les droits pour contourner ce refus.";
         return json!({"status":"refused","code":code,"message":message,"detail":{"message":message,"recovery":recovery}});
@@ -4741,14 +5656,21 @@ pub(super) fn stamp_mission_deadline_for_delivery(
     if message.from != task.owner || message.to != task.child {
         return Err("mission_delivery_mismatch".into());
     }
-    let tracked = st.store.get_request(&message.id)
+    let tracked = st
+        .store
+        .get_request(&message.id)
         .map_err(|error| error.to_string())?
         .ok_or("request_unavailable")?;
-    task.mission_deadline_at.get_or_insert_with(|| tracked.created_at.saturating_add(
-        task.reply_timeout.unwrap_or(MISSION_REPLY_LIMIT_SECS),
-    ));
-    message.deadline_at = Some(effective_deadline(st, &task, unix_timestamp())?
-        .ok_or("mission_deadline_unavailable")?.max(0) as u64);
+    task.mission_deadline_at.get_or_insert_with(|| {
+        tracked
+            .created_at
+            .saturating_add(task.reply_timeout.unwrap_or(MISSION_REPLY_LIMIT_SECS))
+    });
+    message.deadline_at = Some(
+        effective_deadline(st, &task, unix_timestamp())?
+            .ok_or("mission_deadline_unavailable")?
+            .max(0) as u64,
+    );
     Ok(())
 }
 
@@ -4771,8 +5693,12 @@ fn parent_fact(
             return Err("permission_not_inherited".into());
         }
         let command = if parent.remote_placement.is_some() {
-            remote_command_identity(st,&parent).map_err(|_|"parent_task_unavailable")?.command_id
-        } else {current_command(st,&parent)?};
+            remote_command_identity(st, &parent)
+                .map_err(|_| "parent_task_unavailable")?
+                .command_id
+        } else {
+            current_command(st, &parent)?
+        };
         if st.managed_by_instance.get(instance) != Some(&command)
             || st
                 .fleet
@@ -4787,7 +5713,7 @@ fn parent_fact(
             return Err("parent_task_unavailable".into());
         }
         if let Some(policy) = parent.effective_child_policy().cloned() {
-            let cwd=parent.effective_execution_cwd().to_owned();
+            let cwd = parent.effective_execution_cwd().to_owned();
             return Ok(Some(bridget_transport::protocol::ProviderPermissions {
                 version: 1,
                 source: "native_wrapper".into(),
@@ -4797,8 +5723,7 @@ fn parent_fact(
                 revision: 1,
                 driver: parent.definition.protocol,
                 cwd,
-                runtime_mode: crate::native_permissions::runtime_mode(&policy)
-                    .into(),
+                runtime_mode: crate::native_permissions::runtime_mode(&policy).into(),
                 interaction_mode: if policy["permission_mode"] == "plan"
                     || policy["sandbox_policy"]["type"] == "readOnly"
                 {
@@ -4854,36 +5779,69 @@ fn remote_result_slot_error_reason(error: &str) -> Option<&str> {
 
 // Texte fermé : conserver le code technique et ne jamais recopier stderr.
 fn remote_start_error_message(error: &str) -> Option<&'static str> {
-    if let Some(reason)=super::origin_proof::rejected_reason(error.strip_prefix("remote_start_failed:").unwrap_or(error)) {
+    if let Some(reason) = super::origin_proof::rejected_reason(
+        error.strip_prefix("remote_start_failed:").unwrap_or(error),
+    ) {
         return Some(super::origin_proof::rejection_message(reason));
     }
     match error.strip_prefix("remote_start_failed:").unwrap_or(error) {
-        "origin_proof_busy" | "origin_project_preparation_busy" => return Some(
-            "Conservez cette tâche et sa clé, puis faites vérifier les contrôles d’origine déjà en cours. La capacité de contrôle était occupée avant la remise métier ; aucun changement de droits n’est établi. Lisez son état natif avant toute reprise, sans nouvelle mission de remplacement. Ce refus concerne cette tâche ; les autres travaux autorisés suivent leur propre état."),
-        "origin_proof_unavailable" | "origin_worker_unavailable" | "origin_binding_unavailable" => return Some(
-            "Conservez cette tâche et sa clé, puis faites vérifier le lien vers l’hôte d’origine. Le contrôle d’origine n’a pas été confirmé avant la remise métier ; la cause précise reste inconnue et aucun changement de droits n’est établi. Lisez son état natif avant toute reprise, sans nouvelle mission de remplacement. Ce refus concerne cette tâche ; les autres travaux autorisés suivent leur propre état."),
-        _ => {},
+        "origin_proof_busy" | "origin_project_preparation_busy" => {
+            return Some(
+                "Conservez cette tâche et sa clé, puis faites vérifier les contrôles d’origine déjà en cours. La capacité de contrôle était occupée avant la remise métier ; aucun changement de droits n’est établi. Lisez son état natif avant toute reprise, sans nouvelle mission de remplacement. Ce refus concerne cette tâche ; les autres travaux autorisés suivent leur propre état.",
+            );
+        }
+        "origin_proof_unavailable" | "origin_worker_unavailable" | "origin_binding_unavailable" => {
+            return Some(
+                "Conservez cette tâche et sa clé, puis faites vérifier le lien vers l’hôte d’origine. Le contrôle d’origine n’a pas été confirmé avant la remise métier ; la cause précise reste inconnue et aucun changement de droits n’est établi. Lisez son état natif avant toute reprise, sans nouvelle mission de remplacement. Ce refus concerne cette tâche ; les autres travaux autorisés suivent leur propre état.",
+            );
+        }
+        _ => {}
     }
-    if matches!(error.strip_prefix("remote_start_failed:").unwrap_or(error),
-        "model_options_account_changed"|"model_options_observation_unavailable"
-        |"model_options_not_announced"|"model_options_not_permitted"|"model_options_account_unidentified"
-        |"model_options_account_unverified") {
-        return Some("Conserver cette tâche et sa clé, puis vérifier le compte prévu, le profil autorisé et l'observation actuelle de cette connexion sur ce serveur. Le choix demandé n'est plus confirmé ; un nouveau nonce ne prouve pas à lui seul un changement de compte. Demander au responsable Bridget le contrôle manquant avant toute nouvelle admission ; aucune reconnexion, substitution ou relance automatique. Ce refus concerne cette tâche ; les autres travaux autorisés suivent leur propre état.");
+    if matches!(
+        error.strip_prefix("remote_start_failed:").unwrap_or(error),
+        "model_options_account_changed"
+            | "model_options_observation_unavailable"
+            | "model_options_not_announced"
+            | "model_options_not_permitted"
+            | "model_options_account_unidentified"
+            | "model_options_account_unverified"
+    ) {
+        return Some(
+            "Conserver cette tâche et sa clé, puis vérifier le compte prévu, le profil autorisé et l'observation actuelle de cette connexion sur ce serveur. Le choix demandé n'est plus confirmé ; un nouveau nonce ne prouve pas à lui seul un changement de compte. Demander au responsable Bridget le contrôle manquant avant toute nouvelle admission ; aucune reconnexion, substitution ou relance automatique. Ce refus concerne cette tâche ; les autres travaux autorisés suivent leur propre état.",
+        );
     }
     if let Some(cause) = start_recovery::capacity_refusal(error) {
         return Some(start_recovery::capacity_message(cause));
     }
     if let Some(reason) = remote_result_slot_error_reason(error) {
         return Some(match reason {
-            "WorkerUnavailable" | "StaleConnection" => "Le service Bridget distant n’a pas confirmé la réservation du résultat. Le travail métier n’a pas été remis à l’agent.",
-            "ResourceLimit" => "Faire vérifier le budget partagé des résultats et reçus sur le worker de cette tâche. La capacité réservée par Bridget était insuffisante lors de cette tentative ; ce code seul ne prouve ni un disque plein ni un quota fournisseur. Les workers anciens partageaient 16 Mio, soit au plus sept retours de 2 Mio sur un store vide. Le correctif porte ce budget à 256 Mio ; son chargement sur le worker doit être confirmé. Le travail métier n’a pas été remis à l’agent. Ce refus concerne cette tâche ; les autres travaux autorisés suivent leur propre état.",
-            "ResultSlotExpired" => "Le délai de réservation du résultat distant est dépassé. Le travail métier n’a pas été remis à l’agent.",
-            "Unauthorized" | "PermissionsChanged" => "Le service distant a refusé les droits de cette demande. La réservation du résultat n’est pas confirmée.",
-            "PlacementMismatch" | "DefinitionChanged" | "CommandMismatch" => "L’identité ou la configuration de la demande distante ne correspond plus. La réservation du résultat n’est pas confirmée.",
-            "InvalidEnvelope" => "L’échange de réservation du résultat n’est pas conforme. Le travail métier n’a pas été remis à l’agent.",
-            "DiskFull" => "Le retour du résultat ne peut pas être réservé : espace disque insuffisant sur la machine distante.",
-            "FilesystemAccessDenied" => "Le retour du résultat ne peut pas être réservé : accès au stockage distant refusé.",
-            _ => "Le retour du résultat n’a pas pu être réservé. Le service distant n’a pas fourni de cause précise.",
+            "WorkerUnavailable" | "StaleConnection" => {
+                "Le service Bridget distant n’a pas confirmé la réservation du résultat. Le travail métier n’a pas été remis à l’agent."
+            }
+            "ResourceLimit" => {
+                "Faire vérifier le budget partagé des résultats et reçus sur le worker de cette tâche. La capacité réservée par Bridget était insuffisante lors de cette tentative ; ce code seul ne prouve ni un disque plein ni un quota fournisseur. Les workers anciens partageaient 16 Mio, soit au plus sept retours de 2 Mio sur un store vide. Le correctif porte ce budget à 256 Mio ; son chargement sur le worker doit être confirmé. Le travail métier n’a pas été remis à l’agent. Ce refus concerne cette tâche ; les autres travaux autorisés suivent leur propre état."
+            }
+            "ResultSlotExpired" => {
+                "Le délai de réservation du résultat distant est dépassé. Le travail métier n’a pas été remis à l’agent."
+            }
+            "Unauthorized" | "PermissionsChanged" => {
+                "Le service distant a refusé les droits de cette demande. La réservation du résultat n’est pas confirmée."
+            }
+            "PlacementMismatch" | "DefinitionChanged" | "CommandMismatch" => {
+                "L’identité ou la configuration de la demande distante ne correspond plus. La réservation du résultat n’est pas confirmée."
+            }
+            "InvalidEnvelope" => {
+                "L’échange de réservation du résultat n’est pas conforme. Le travail métier n’a pas été remis à l’agent."
+            }
+            "DiskFull" => {
+                "Le retour du résultat ne peut pas être réservé : espace disque insuffisant sur la machine distante."
+            }
+            "FilesystemAccessDenied" => {
+                "Le retour du résultat ne peut pas être réservé : accès au stockage distant refusé."
+            }
+            _ => {
+                "Le retour du résultat n’a pas pu être réservé. Le service distant n’a pas fourni de cause précise."
+            }
         });
     }
     if let Some(action) = admission_guidance211::worker_start_action(error) {
@@ -4891,13 +5849,27 @@ fn remote_start_error_message(error: &str) -> Option<&'static str> {
     }
     let reason = error.strip_prefix(workspace_preparation210::REMOTE_WORKSPACE_PREPARE_PREFIX)?;
     Some(match reason {
-        "DiskFull" => "Préparation distante impossible : espace disque insuffisant sur la machine cible. La tâche reste enregistrée.",
-        "FilesystemAccessDenied" => "Préparation distante impossible : accès au disque refusé ou système de fichiers en lecture seule. La tâche reste enregistrée.",
-        "WorkspacePrepareFailed" => "Git n’a pas pu préparer ou vérifier le dossier de travail distant. La tâche reste enregistrée.",
-        "WorkspacePrepareIncomplete" => "Le reçu d’une préparation précédente est incomplet. Vérifiez l’espace disque et le dossier de travail. La tâche est conservée.",
-        "ResourceLimit" => "La capacité réservée par Bridget ne permet pas de préparer un dossier supplémentaire. La tâche reste enregistrée.",
-        "WorkerUnavailable" | "StaleConnection" => "Le service Bridget distant n’a pas confirmé la préparation du dossier de travail. La tâche reste enregistrée.",
-        _ => "La préparation du dossier de travail distant a échoué. Le service distant n’a pas fourni de cause précise. La tâche reste enregistrée.",
+        "DiskFull" => {
+            "Préparation distante impossible : espace disque insuffisant sur la machine cible. La tâche reste enregistrée."
+        }
+        "FilesystemAccessDenied" => {
+            "Préparation distante impossible : accès au disque refusé ou système de fichiers en lecture seule. La tâche reste enregistrée."
+        }
+        "WorkspacePrepareFailed" => {
+            "Git n’a pas pu préparer ou vérifier le dossier de travail distant. La tâche reste enregistrée."
+        }
+        "WorkspacePrepareIncomplete" => {
+            "Le reçu d’une préparation précédente est incomplet. Vérifiez l’espace disque et le dossier de travail. La tâche est conservée."
+        }
+        "ResourceLimit" => {
+            "La capacité réservée par Bridget ne permet pas de préparer un dossier supplémentaire. La tâche reste enregistrée."
+        }
+        "WorkerUnavailable" | "StaleConnection" => {
+            "Le service Bridget distant n’a pas confirmé la préparation du dossier de travail. La tâche reste enregistrée."
+        }
+        _ => {
+            "La préparation du dossier de travail distant a échoué. Le service distant n’a pas fourni de cause précise. La tâche reste enregistrée."
+        }
     })
 }
 
@@ -4908,11 +5880,15 @@ fn project_sender_and_prepare_refusals(task: &Task, view: &mut Value) {
         "native_sender_primary_absent" => Some("primary_absent"),
         "native_sender_instance_changed" => Some("parent_instance_changed"),
         "native_sender_not_live" => Some("live_identity_unconfirmed"),
-        "identité expéditeur non attestée : rattachement auxiliaire requis" => Some("unobserved"),
+        "identité expéditeur non attestée : rattachement auxiliaire requis" => {
+            Some("unobserved")
+        }
         _ => None,
     };
     if let Some(cause) = sender_cause {
-        if !view["detail"].is_object() { view["detail"] = json!({}); }
+        if !view["detail"].is_object() {
+            view["detail"] = json!({});
+        }
         view["detail"]["sender_attestation"] = json!({
             "scope":"this_task", "cause":cause, "code":error,
             "verification":if cause=="unobserved" {
@@ -4923,23 +5899,39 @@ fn project_sender_and_prepare_refusals(task: &Task, view: &mut Value) {
             "requires_auxiliary_registration":false,
         });
         view["error_message"] = if cause == "unobserved" {
-            json!("Conserver cette tâche et sa clé, puis faire vérifier le reçu natif par le responsable Bridget. Le reçu historique signale un refus d'expéditeur sans conserver la vérification qui a échoué ; sa cause précise reste inconnue. Ne pas fabriquer de rattachement auxiliaire. Ce refus concerne cette tâche ; les autres travaux autorisés suivent leur propre état.")
+            json!(
+                "Conserver cette tâche et sa clé, puis faire vérifier le reçu natif par le responsable Bridget. Le reçu historique signale un refus d'expéditeur sans conserver la vérification qui a échoué ; sa cause précise reste inconnue. Ne pas fabriquer de rattachement auxiliaire. Ce refus concerne cette tâche ; les autres travaux autorisés suivent leur propre état."
+            )
         } else {
-            json!("Vérifier le lien natif du même fil parent, puis conserver cette tâche et sa clé. La remise interne de la mission a refusé l'identité actuelle du parent ; aucun nouveau rattachement auxiliaire ne doit être fabriqué. Ce refus concerne cette tâche ; les autres travaux autorisés suivent leur propre état.")
+            json!(
+                "Vérifier le lien natif du même fil parent, puis conserver cette tâche et sa clé. La remise interne de la mission a refusé l'identité actuelle du parent ; aucun nouveau rattachement auxiliaire ne doit être fabriqué. Ce refus concerne cette tâche ; les autres travaux autorisés suivent leur propre état."
+            )
         };
-        view["error_recovery"] = json!("Une seule bridget_session atteste le tour courant ; elle ne prouve pas que le lien principal est revenu. Confirmer sa présence native, puis relire CETTE tâche par bridget_task_status. Une tâche failed ou cancelled ne redémarre pas au rejeu : attendre arrêt, nettoyage et rapport du dossier avant une suite autorisée. Ne pas créer de remplacement tant que son issue reste inconnue.");
-        view["error_human_action"] = json!("Si le lien reste absent ou si l'instance du parent diffère, demander au responsable Bridget de vérifier le rattachement du même fil et les éventuels enregistrements concurrents. Ne pas changer de compte, de moteur, d'identité ou de droits. Ne pas arrêter un autre travail.");
+        view["error_recovery"] = json!(
+            "Une seule bridget_session atteste le tour courant ; elle ne prouve pas que le lien principal est revenu. Confirmer sa présence native, puis relire CETTE tâche par bridget_task_status. Une tâche failed ou cancelled ne redémarre pas au rejeu : attendre arrêt, nettoyage et rapport du dossier avant une suite autorisée. Ne pas créer de remplacement tant que son issue reste inconnue."
+        );
+        view["error_human_action"] = json!(
+            "Si le lien reste absent ou si l'instance du parent diffère, demander au responsable Bridget de vérifier le rattachement du même fil et les éventuels enregistrements concurrents. Ne pas changer de compte, de moteur, d'identité ou de droits. Ne pas arrêter un autre travail."
+        );
     }
     if error == "remote_start_failed:remote_workspace_prepare:ResourceLimit" {
-        if !view["detail"].is_object() { view["detail"] = json!({}); }
+        if !view["detail"].is_object() {
+            view["detail"] = json!({});
+        }
         view["detail"]["preparation_capacity"] = json!({
             "scope":"this_task_on_its_worker","cause":"unobserved",
             "stage":"workspace_prepare","current_occupancy":"not_observed",
             "verification":"Le reçu ne distingue pas une file de commandes pleine, un bootstrap retenu, la limite de préparations ou le stockage du worker.",
         });
-        view["error_message"] = json!("Faire lire par le responsable Bridget la file de commandes, les bootstraps retenus, les préparations et le stockage du worker de cette tâche. La préparation a refusé ResourceLimit, sans sous-cause conservée ; ce code ne prouve ni disque plein ni saturation du fournisseur. La tâche et sa clé restent enregistrées. Ce refus concerne cette préparation ; les autres travaux autorisés suivent leur propre état.");
-        view["error_recovery"] = json!("Conserver cette tâche et son dossier. Le propriétaire clôture CETTE tâche puis vérifie arrêt, nettoyage et rapport du dossier. Une nouvelle demande exige une cause corrigée et une nouvelle clé ; le rejeu de l'ancienne clé ne reprend pas la préparation. Aucun drainage global ni effacement d'un travail retenu.");
-        view["error_human_action"] = json!("Si un bootstrap reste retenu ou si la capacité est réellement insuffisante, demander au propriétaire quel travail conserver et au responsable Bridget le contrôle ciblé ou l'ajustement autorisé. Ne pas augmenter les droits ou interrompre les autres missions pour contourner le refus.");
+        view["error_message"] = json!(
+            "Faire lire par le responsable Bridget la file de commandes, les bootstraps retenus, les préparations et le stockage du worker de cette tâche. La préparation a refusé ResourceLimit, sans sous-cause conservée ; ce code ne prouve ni disque plein ni saturation du fournisseur. La tâche et sa clé restent enregistrées. Ce refus concerne cette préparation ; les autres travaux autorisés suivent leur propre état."
+        );
+        view["error_recovery"] = json!(
+            "Conserver cette tâche et son dossier. Le propriétaire clôture CETTE tâche puis vérifie arrêt, nettoyage et rapport du dossier. Une nouvelle demande exige une cause corrigée et une nouvelle clé ; le rejeu de l'ancienne clé ne reprend pas la préparation. Aucun drainage global ni effacement d'un travail retenu."
+        );
+        view["error_human_action"] = json!(
+            "Si un bootstrap reste retenu ou si la capacité est réellement insuffisante, demander au propriétaire quel travail conserver et au responsable Bridget le contrôle ciblé ou l'ajustement autorisé. Ne pas augmenter les droits ou interrompre les autres missions pour contourner le refus."
+        );
     }
 }
 
@@ -4987,7 +5979,11 @@ fn task_view(task: &Task, phase: Option<&str>, full: bool) -> Value {
             error.starts_with(workspace_preparation210::REMOTE_WORKSPACE_PREPARE_PREFIX)
         });
     let result_reservation_failed = task.mission_issued_at.is_none()
-        && task.error.as_deref().and_then(remote_result_slot_error_reason).is_some();
+        && task
+            .error
+            .as_deref()
+            .and_then(remote_result_slot_error_reason)
+            .is_some();
     let work_state = if result_reservation_failed
         && matches!(task.state.as_str(), "queued" | "starting" | "cancelling")
     {
@@ -5022,26 +6018,38 @@ fn task_view(task: &Task, phase: Option<&str>, full: bool) -> Value {
     });
     if release_unconfirmed {
         let (message, recovery) = if body.is_some() {
-            ("Le résultat est disponible. La confirmation initiale du démarrage distant n’avait pas été obtenue.",
-             "Récupérez le résultat de cette même tâche. Ne créez pas de nouvelle demande pour remplacer ce résultat.")
+            (
+                "Le résultat est disponible. La confirmation initiale du démarrage distant n’avait pas été obtenue.",
+                "Récupérez le résultat de cette même tâche. Ne créez pas de nouvelle demande pour remplacer ce résultat.",
+            )
         } else if task.terminal() && task.cleanup_done && workspace_report_ready(task) {
-            ("La tâche est terminée. La confirmation initiale du démarrage distant n’avait pas été obtenue.",
-             "Consultez l’état final de cette même tâche avant de décider d’une nouvelle demande. Rejouer la demande ne relance pas la mission.")
+            (
+                "La tâche est terminée. La confirmation initiale du démarrage distant n’avait pas été obtenue.",
+                "Consultez l’état final de cette même tâche avant de décider d’une nouvelle demande. Rejouer la demande ne relance pas la mission.",
+            )
         } else if task.terminal() {
-            ("La tâche est clôturée côté Bridget. La vérification de son arrêt ou de son dossier de travail n’est pas terminée.",
-             "Conservez cette tâche jusqu’à la confirmation de son nettoyage. Consultez son statut avant toute nouvelle demande.")
+            (
+                "La tâche est clôturée côté Bridget. La vérification de son arrêt ou de son dossier de travail n’est pas terminée.",
+                "Conservez cette tâche jusqu’à la confirmation de son nettoyage. Consultez son statut avant toute nouvelle demande.",
+            )
         } else if task.mission_issued_at.is_some() {
-            ("La tentative d’envoi du travail métier est enregistrée. Ce délai de réponse ne permet pas de conclure à un échec.",
-             "Consultez le statut et le résultat de cette même tâche. Ne lancez pas de remplacement pendant son exécution ou son nettoyage.")
+            (
+                "La tentative d’envoi du travail métier est enregistrée. Ce délai de réponse ne permet pas de conclure à un échec.",
+                "Consultez le statut et le résultat de cette même tâche. Ne lancez pas de remplacement pendant son exécution ou son nettoyage.",
+            )
         } else {
-            ("La confirmation du démarrage distant est indisponible. La mission peut déjà être en cours.",
-             "Consultez le statut et le résultat de cette même tâche. Ne créez pas de nouvelle demande tant que son issue reste inconnue. Rejouer la demande ne relance pas la mission.")
+            (
+                "La confirmation du démarrage distant est indisponible. La mission peut déjà être en cours.",
+                "Consultez le statut et le résultat de cette même tâche. Ne créez pas de nouvelle demande tant que son issue reste inconnue. Rejouer la demande ne relance pas la mission.",
+            )
         };
         view["error_message"] = json!(message);
         view["error_recovery"] = json!(recovery);
         if body.is_some() || task.mission_issued_at.is_some() {
             view["error"] = Value::Null;
-            if !view["detail"].is_object() { view["detail"] = json!({}); }
+            if !view["detail"].is_object() {
+                view["detail"] = json!({});
+            }
             view["detail"]["initial_start"] = json!({
                 "code":task.projected_error(), "current_failure":false,
                 "message":message, "recovery":recovery,
@@ -5049,17 +6057,23 @@ fn task_view(task: &Task, phase: Option<&str>, full: bool) -> Value {
             view.as_object_mut().unwrap().remove("error_message");
             view.as_object_mut().unwrap().remove("error_recovery");
         }
-    } else if matches!(task.projected_error(), Some(
-        "remote_start_failed:remote_start:WorkerUnavailable"
-            | "remote_start_failed:remote_start:StaleConnection"
-    )) {
+    } else if matches!(
+        task.projected_error(),
+        Some(
+            "remote_start_failed:remote_start:WorkerUnavailable"
+                | "remote_start_failed:remote_start:StaleConnection"
+        )
+    ) {
         let code = task.projected_error();
         if task.result.is_some() || task.mission_issued_at.is_some() {
             // Une preuve ultérieure de remise ou résultat prime ce fait historique.
             view["error"] = Value::Null;
-            if !view["detail"].is_object() { view["detail"] = json!({}); }
+            if !view["detail"].is_object() {
+                view["detail"] = json!({});
+            }
             let recovery = if task.terminal()
-                && (!task.cleanup_done || !workspace_report_ready(task)) {
+                && (!task.cleanup_done || !workspace_report_ready(task))
+            {
                 "Conservez cette tâche jusqu’à la confirmation native de son arrêt, de son nettoyage et du rapport de son dossier. Consultez son état actuel ; ce défaut historique ne justifie aucune relance ni mission de remplacement."
             } else if task.result.is_some() && body.is_none() {
                 "Le résultat est enregistré mais pas encore exposé. Consultez cette même tâche jusqu’à la fin des contrôles de nettoyage et du rapport du dossier ; ne recréez pas la mission."
@@ -5072,18 +6086,28 @@ fn task_view(task: &Task, phase: Option<&str>, full: bool) -> Value {
                 "recovery":recovery
             });
         } else {
-            view["error_message"] = json!("Faites vérifier le lien natif et le reçu de démarrage de cette tâche. Bridget n’a pas reçu la confirmation du lancement distant ; la cause précise reste inconnue. Ce constat concerne cette tâche ; les autres travaux autorisés suivent leur propre état.");
+            view["error_message"] = json!(
+                "Faites vérifier le lien natif et le reçu de démarrage de cette tâche. Bridget n’a pas reçu la confirmation du lancement distant ; la cause précise reste inconnue. Ce constat concerne cette tâche ; les autres travaux autorisés suivent leur propre état."
+            );
             view["error_recovery"] = if task.terminal() {
-                json!("Conservez la tâche, sa request_id, son dossier et les produits. Vérifiez la clôture native, le reçu de démarrage et le rapport du dossier avant de décider d’une suite autorisée. Un état terminal local ou une absence de reçu ne prouvent pas seuls l’arrêt physique. Rejouer cette clé ne relance pas la mission ; ne créez aucun remplacement automatique.")
+                json!(
+                    "Conservez la tâche, sa request_id, son dossier et les produits. Vérifiez la clôture native, le reçu de démarrage et le rapport du dossier avant de décider d’une suite autorisée. Un état terminal local ou une absence de reçu ne prouvent pas seuls l’arrêt physique. Rejouer cette clé ne relance pas la mission ; ne créez aucun remplacement automatique."
+                )
             } else {
-                json!("Conservez cette tâche, sa request_id et son dossier ; aucune remise métier n’est enregistrée. Faites corréler le reçu de démarrage, la commande, l’instance et la génération, puis l’observation d’exécution native. Utilisez le placement de detail.remote_start ; s’il manque, faites identifier le worker avant de le contacter. Une absence de reçu ou un délai ne prouvent pas l’arrêt. Ne rejouez pas le lancement, ne créez pas de remplacement et ne changez ni machine, ni compte, ni droits. Relire cette même clé consulte son état, sans relancer la mission.")
+                json!(
+                    "Conservez cette tâche, sa request_id et son dossier ; aucune remise métier n’est enregistrée. Faites corréler le reçu de démarrage, la commande, l’instance et la génération, puis l’observation d’exécution native. Utilisez le placement de detail.remote_start ; s’il manque, faites identifier le worker avant de le contacter. Une absence de reçu ou un délai ne prouvent pas l’arrêt. Ne rejouez pas le lancement, ne créez pas de remplacement et ne changez ni machine, ni compte, ni droits. Relire cette même clé consulte son état, sans relancer la mission."
+                )
             };
-            view["error_human_action"] = json!("Si votre mandat de maintenance couvre ces lectures, effectuez-les. Sinon, transmettez ces références au responsable Bridget désigné. Si le contrôle nécessaire dépasse son mandat ou reste refusé, demandez la décision ciblée sur l’accès ou la maintenance nommés par ce contrôle. Ce message n’accorde aucun droit. Ne demandez pas de réinstallation ou de changement de compte sur le seul code WorkerUnavailable ou StaleConnection.");
+            view["error_human_action"] = json!(
+                "Si votre mandat de maintenance couvre ces lectures, effectuez-les. Sinon, transmettez ces références au responsable Bridget désigné. Si le contrôle nécessaire dépasse son mandat ou reste refusé, demandez la décision ciblée sur l’accès ou la maintenance nommés par ce contrôle. Ce message n’accorde aucun droit. Ne demandez pas de réinstallation ou de changement de compte sur le seul code WorkerUnavailable ou StaleConnection."
+            );
             let request_id = match &task.request {
-                NativeDelegationRequest::Delegate {request_id,..} => Some(request_id.as_str()),
+                NativeDelegationRequest::Delegate { request_id, .. } => Some(request_id.as_str()),
                 _ => None,
             };
-            if !view["detail"].is_object() { view["detail"] = json!({}); }
+            if !view["detail"].is_object() {
+                view["detail"] = json!({});
+            }
             view["detail"]["remote_start"] = json!({
                 "scope":"this_task", "stage":"remote_start", "code":code,
                 "task_id":task.task_id, "request_id":request_id,
@@ -5096,9 +6120,13 @@ fn task_view(task: &Task, phase: Option<&str>, full: bool) -> Value {
     } else if let Some(message) = task.projected_error().and_then(remote_start_error_message) {
         view["error_message"] = json!(message);
         if result_reservation_failed {
-            if remote_result_slot_error_reason(task.error.as_deref().unwrap_or(""))==Some("ResourceLimit") {
-                if !view["detail"].is_object(){view["detail"]=json!({});}
-                view["detail"]["result_capacity"]=json!({
+            if remote_result_slot_error_reason(task.error.as_deref().unwrap_or(""))
+                == Some("ResourceLimit")
+            {
+                if !view["detail"].is_object() {
+                    view["detail"] = json!({});
+                }
+                view["detail"]["result_capacity"] = json!({
                     "scope":"this_task_on_its_worker",
                     "cause":"worker_store_budget_exceeded",
                     "worker_budget_at_failure":"not_recorded",
@@ -5111,107 +6139,218 @@ fn task_view(task: &Task, phase: Option<&str>, full: bool) -> Value {
                     "limiting_facts":["retained_results","active_reservations","metadata","commit_views","store_entries","disk","execution_capacity"],
                     "next_action":"Confirmer le chargement du worker corrigé et lire ses réservations/reçus avant une nouvelle admission. Ne pas purger de résultat ou modifier une mission vivante pour faire de la place."
                 });
-                view["error_human_action"]=json!("Si le budget reste occupé après mise à jour, demander au propriétaire quel historique terminé archiver ou quelle capacité augmenter. Conserver la tâche et sa clé ; une nouvelle demande exige arrêt, nettoyage et rapport du dossier confirmés. Ne pas rejouer ni remplacer une mission d'issue inconnue.");
+                view["error_human_action"] = json!(
+                    "Si le budget reste occupé après mise à jour, demander au propriétaire quel historique terminé archiver ou quelle capacité augmenter. Conserver la tâche et sa clé ; une nouvelle demande exige arrêt, nettoyage et rapport du dossier confirmés. Ne pas rejouer ni remplacer une mission d'issue inconnue."
+                );
             }
-            view["error_recovery"] = if task.terminal() && task.cleanup_done && workspace_report_ready(task) {
-                json!("L’arrêt du démarrage est terminé. Après correction de la cause, une nouvelle demande peut être créée. Rejouer la même demande ne la redémarre pas.")
+            view["error_recovery"] = if task.terminal()
+                && task.cleanup_done
+                && workspace_report_ready(task)
+            {
+                json!(
+                    "L’arrêt du démarrage est terminé. Après correction de la cause, une nouvelle demande peut être créée. Rejouer la même demande ne la redémarre pas."
+                )
             } else if task.terminal() && task.cleanup_done {
-                json!("Attendez la vérification du dossier de travail avant toute nouvelle demande. Rejouer la même demande ne la redémarre pas.")
+                json!(
+                    "Attendez la vérification du dossier de travail avant toute nouvelle demande. Rejouer la même demande ne la redémarre pas."
+                )
             } else {
-                json!("Attendez la confirmation de l’arrêt et du nettoyage de cette tâche avant toute nouvelle demande. Rejouer la même demande ne la redémarre pas.")
+                json!(
+                    "Attendez la confirmation de l’arrêt et du nettoyage de cette tâche avant toute nouvelle demande. Rejouer la même demande ne la redémarre pas."
+                )
             };
         } else if preparation_failed {
-            view["error_recovery"] = json!("Corrigez la cause, puis annulez cette tâche avant de créer une nouvelle demande. Rejouer la même demande ne la redémarre pas.");
-        } else if task.state == "starting" && task.mission_issued_at.is_none()
-            && task.error.as_deref().is_some_and(start_recovery::recoverable_refusal) {
-            view["error_recovery"] = json!("Conservez cette tâche, sa request_id et son dossier. Rejouez à l’identique la même demande auto (mêmes paramètres) : Bridget ferme d’abord l’ancienne commande côté worker, puis reprend la MÊME tâche si les droits, la source et la définition sont inchangés. Prérequis : un worker qui annonce start_recovery_v1 et aucune pause ou annulation. Les reprises sont bornées à trois ; ne créez pas de nouvelle tâche.");
-            view["error_human_action"] = json!("Si le worker n’annonce pas start_recovery_v1 ou si les reprises sont épuisées, demandez à l’utilisateur d’autoriser la mise à jour du worker par la maintenance native ou de décider du sort de cette mission.");
+            view["error_recovery"] = json!(
+                "Corrigez la cause, puis annulez cette tâche avant de créer une nouvelle demande. Rejouer la même demande ne la redémarre pas."
+            );
+        } else if task.state == "starting"
+            && task.mission_issued_at.is_none()
+            && task
+                .error
+                .as_deref()
+                .is_some_and(start_recovery::recoverable_refusal)
+        {
+            view["error_recovery"] = json!(
+                "Conservez cette tâche, sa request_id et son dossier. Rejouez à l’identique la même demande auto (mêmes paramètres) : Bridget ferme d’abord l’ancienne commande côté worker, puis reprend la MÊME tâche si les droits, la source et la définition sont inchangés. Prérequis : un worker qui annonce start_recovery_v1 et aucune pause ou annulation. Les reprises sont bornées à trois ; ne créez pas de nouvelle tâche."
+            );
+            view["error_human_action"] = json!(
+                "Si le worker n’annonce pas start_recovery_v1 ou si les reprises sont épuisées, demandez à l’utilisateur d’autoriser la mise à jour du worker par la maintenance native ou de décider du sort de cette mission."
+            );
         }
     }
-    view["mission_reply_timeout_secs"] = json!(task.reply_timeout.unwrap_or(MISSION_REPLY_LIMIT_SECS));
+    view["mission_reply_timeout_secs"] =
+        json!(task.reply_timeout.unwrap_or(MISSION_REPLY_LIMIT_SECS));
     permission_change::project_task(task, &mut view);
     workspace_preparation210::project(task, &mut view);
     project_sender_and_prepare_refusals(task, &mut view);
-    if task.projected_error()==Some("terminal Codex: failed:cause=server_overloaded") {
-        view["error_message"]=json!("Le fournisseur a terminé le tour en signalant une saturation du modèle (server_overloaded). Cette preuve ne constate ni une file Bridget pleine, ni un disque plein, ni un quota de compte épuisé.");
-        view["error_recovery"]=if task.terminal() && task.cleanup_done && workspace_report_ready(task) {
-            json!("Conservez les commits, fichiers et sorties, puis clôturez la garde propriétaire. Une tâche failed ne reprend ni par bridget_task_continue ni par rejeu de sa clé initiale. Après retour de capacité du modèle et confirmation de l’arrêt et du rapport du dossier, une suite autorisée utilise une nouvelle clé, avec passation explicite du travail conservé ; aucune substitution automatique de modèle.")
+    if task.projected_error() == Some("terminal Codex: failed:cause=server_overloaded") {
+        view["error_message"] = json!(
+            "Le fournisseur a terminé le tour en signalant une saturation du modèle (server_overloaded). Cette preuve ne constate ni une file Bridget pleine, ni un disque plein, ni un quota de compte épuisé."
+        );
+        view["error_recovery"] = if task.terminal()
+            && task.cleanup_done
+            && workspace_report_ready(task)
+        {
+            json!(
+                "Conservez les commits, fichiers et sorties, puis clôturez la garde propriétaire. Une tâche failed ne reprend ni par bridget_task_continue ni par rejeu de sa clé initiale. Après retour de capacité du modèle et confirmation de l’arrêt et du rapport du dossier, une suite autorisée utilise une nouvelle clé, avec passation explicite du travail conservé ; aucune substitution automatique de modèle."
+            )
         } else {
-            json!("Conservez la tâche, sa clé, les fichiers et les sorties. Attendez la confirmation native d’arrêt et le rapport du dossier avant toute suite ; continuable=false ne prouve pas l’arrêt. Ne rejouez pas la clé initiale et ne créez pas de remplacement pendant le nettoyage.")
+            json!(
+                "Conservez la tâche, sa clé, les fichiers et les sorties. Attendez la confirmation native d’arrêt et le rapport du dossier avant toute suite ; continuable=false ne prouve pas l’arrêt. Ne rejouez pas la clé initiale et ne créez pas de remplacement pendant le nettoyage."
+            )
         };
-        view["error_human_action"]=json!("Si le modèle reste saturé, demandez à l’utilisateur de choisir entre attendre et autoriser une suite avec une autre contrainte de modèle. Ne changez ni moteur, ni compte, ni droits et ne redémarrez aucun service pour contourner ce refus.");
+        view["error_human_action"] = json!(
+            "Si le modèle reste saturé, demandez à l’utilisateur de choisir entre attendre et autoriser une suite avec une autre contrainte de modèle. Ne changez ni moteur, ni compte, ni droits et ne redémarrez aucun service pour contourner ce refus."
+        );
     }
-    if task.projected_error()==Some("terminal Codex: failed:cause=model_not_found") {
-        view["error_message"]=json!("Cette connexion ne permet pas d’utiliser le modèle demandé : le fournisseur le refuse (HTTP 400, model_not_found). Ce refus concerne cette tâche et cette connexion, pas toute la flotte. Les autres travaux autorisés suivent leur propre état.");
-        view["error_recovery"]=if task.terminal() && task.cleanup_done && workspace_report_ready(task) {
-            json!("Expliquez directement ce refus à l’utilisateur. Une connexion réussie ne prouve pas l’accès au modèle. Conservez la tâche, sa clé et ses fichiers ; une tâche failed ne reprend ni par Continue ni par rejeu initial. Après correction de l’accès, confirmation de l’arrêt et vérification du dossier, une nouvelle demande autorisée utilise une nouvelle clé. Ne substituez pas de modèle automatiquement.")
+    if task.projected_error() == Some("terminal Codex: failed:cause=model_not_found") {
+        view["error_message"] = json!(
+            "Cette connexion ne permet pas d’utiliser le modèle demandé : le fournisseur le refuse (HTTP 400, model_not_found). Ce refus concerne cette tâche et cette connexion, pas toute la flotte. Les autres travaux autorisés suivent leur propre état."
+        );
+        view["error_recovery"] = if task.terminal()
+            && task.cleanup_done
+            && workspace_report_ready(task)
+        {
+            json!(
+                "Expliquez directement ce refus à l’utilisateur. Une connexion réussie ne prouve pas l’accès au modèle. Conservez la tâche, sa clé et ses fichiers ; une tâche failed ne reprend ni par Continue ni par rejeu initial. Après correction de l’accès, confirmation de l’arrêt et vérification du dossier, une nouvelle demande autorisée utilise une nouvelle clé. Ne substituez pas de modèle automatiquement."
+            )
         } else {
-            json!("Expliquez directement ce refus à l’utilisateur et conservez la tâche, sa clé et ses fichiers. Attendez l’arrêt natif, la fin du nettoyage et un rapport complet du dossier avant toute nouvelle demande. Ne rejouez pas la clé initiale et ne créez pas de remplacement pendant ce contrôle.")
+            json!(
+                "Expliquez directement ce refus à l’utilisateur et conservez la tâche, sa clé et ses fichiers. Attendez l’arrêt natif, la fin du nettoyage et un rapport complet du dossier avant toute nouvelle demande. Ne rejouez pas la clé initiale et ne créez pas de remplacement pendant ce contrôle."
+            )
         };
-        view["error_human_action"]=json!("Dites à l’utilisateur : cette connexion ne permet pas d’utiliser le modèle demandé sur ce serveur. Vérifiez avec lui que le compte et l’abonnement sont ceux prévus, puis l’accès au modèle. Un changement de compte, d’offre ou de modèle exige son accord. Ne conseillez pas une réinstallation, un nouveau login ou un changement de droits sur ce seul refus.");
+        view["error_human_action"] = json!(
+            "Dites à l’utilisateur : cette connexion ne permet pas d’utiliser le modèle demandé sur ce serveur. Vérifiez avec lui que le compte et l’abonnement sont ceux prévus, puis l’accès au modèle. Un changement de compte, d’offre ou de modèle exige son accord. Ne conseillez pas une réinstallation, un nouveau login ou un changement de droits sur ce seul refus."
+        );
     }
-    if matches!(task.projected_error(),Some("terminal Claude inconnu" | "error_during_execution")) {
-        view["error_message"]=json!("Conservez les produits et faites vérifier les métadonnées provider_result du journal corrélé à cette tâche. Le résultat final Claude est inconnu ou signale une erreur d’exécution sans cause plus précise. Ce constat concerne cette tâche ; les autres travaux autorisés suivent leur propre état.");
-        view["error_recovery"]=json!("Depuis le statut complet, transmettez detail.provider_failure au responsable Bridget. Il doit corréler tâche, ronde, mission, instance et génération avant de lire subtype, is_error et terminal_reason. Sans événement conservé, la cause historique reste inconnue. Un commit poussé ne prouve pas la réussite du tour fournisseur. Conservez tâche, clé et fichiers ; aucun rejeu initial, remplacement ni reclassification automatique. Avant toute suite distincte autorisée, confirmez l’arrêt natif et le rapport du dossier.");
-        view["error_human_action"]=json!("Si le diagnostic manque ou qu’une reprise dépasse votre mandat, demandez à l’utilisateur la décision sur la suite du travail conservé. Ne changez ni compte, ni modèle, ni droits et ne réinstallez pas le programme sur ce seul refus.");
+    if matches!(
+        task.projected_error(),
+        Some("terminal Claude inconnu" | "error_during_execution")
+    ) {
+        view["error_message"] = json!(
+            "Conservez les produits et faites vérifier les métadonnées provider_result du journal corrélé à cette tâche. Le résultat final Claude est inconnu ou signale une erreur d’exécution sans cause plus précise. Ce constat concerne cette tâche ; les autres travaux autorisés suivent leur propre état."
+        );
+        view["error_recovery"] = json!(
+            "Depuis le statut complet, transmettez detail.provider_failure au responsable Bridget. Il doit corréler tâche, ronde, mission, instance et génération avant de lire subtype, is_error et terminal_reason. Sans événement conservé, la cause historique reste inconnue. Un commit poussé ne prouve pas la réussite du tour fournisseur. Conservez tâche, clé et fichiers ; aucun rejeu initial, remplacement ni reclassification automatique. Avant toute suite distincte autorisée, confirmez l’arrêt natif et le rapport du dossier."
+        );
+        view["error_human_action"] = json!(
+            "Si le diagnostic manque ou qu’une reprise dépasse votre mandat, demandez à l’utilisateur la décision sur la suite du travail conservé. Ne changez ni compte, ni modèle, ni droits et ne réinstallez pas le programme sur ce seul refus."
+        );
     }
-    if let Some(recovery)=task.projected_error().and_then(provider_error_recovery) {
-        view["error_message"]=json!("Reconnectez la session Claude de cette machine : sa session OAuth a expiré et le renouvellement a échoué. Aucun résultat de revue n’a été obtenu.");
-        view["error_recovery"]=json!(recovery);
-        view["error_human_action"]=json!("Demandez à l’utilisateur de reconnecter le compte Claude existant sur la machine indiquée. Gardez le même compte et modèle ; n’essayez ni autre connexion ni rejeu de cette tâche failed sans une suite autorisée.");
+    if let Some(recovery) = task.projected_error().and_then(provider_error_recovery) {
+        view["error_message"] = json!(
+            "Reconnectez la session Claude de cette machine : sa session OAuth a expiré et le renouvellement a échoué. Aucun résultat de revue n’a été obtenu."
+        );
+        view["error_recovery"] = json!(recovery);
+        view["error_human_action"] = json!(
+            "Demandez à l’utilisateur de reconnecter le compte Claude existant sur la machine indiquée. Gardez le même compte et modèle ; n’essayez ni autre connexion ni rejeu de cette tâche failed sans une suite autorisée."
+        );
     }
-    if task.projected_error()==Some("api_error") {
-        view["error_message"]=json!("Le fournisseur a refusé ce tour avec api_error. Ce code seul ne prouve ni quota épuisé, ni compte invalide, ni durée excessive.");
-        view["error_recovery"]=json!("Conservez cette tâche, sa clé et ses fichiers. Depuis son statut complet, transmettez detail.provider_failure au responsable pour retrouver le dernier diagnostic fournisseur de CE tour dans son journal et son stderr corrélés. Un modèle non pris en charge peut demander une mise à jour du programme fournisseur ; seule la preuve corrélée permet de le conclure. Une tâche failed ne reprend ni par Continue ni par rejeu initial. Vérifiez son arrêt et son dossier avant une suite autorisée ; ne créez pas de remplacement pendant ce contrôle. Les autres travaux autorisés suivent leur propre état.");
-        view["error_human_action"]=json!("Si le diagnostic exige une mise à jour du programme, une reconnexion au compte ou un choix de modèle hors de votre mandat, demandez cette décision précise à l’utilisateur. Ne changez ni compte, ni modèle, ni droits sur le seul code api_error.");
+    if task.projected_error() == Some("api_error") {
+        view["error_message"] = json!(
+            "Le fournisseur a refusé ce tour avec api_error. Ce code seul ne prouve ni quota épuisé, ni compte invalide, ni durée excessive."
+        );
+        view["error_recovery"] = json!(
+            "Conservez cette tâche, sa clé et ses fichiers. Depuis son statut complet, transmettez detail.provider_failure au responsable pour retrouver le dernier diagnostic fournisseur de CE tour dans son journal et son stderr corrélés. Un modèle non pris en charge peut demander une mise à jour du programme fournisseur ; seule la preuve corrélée permet de le conclure. Une tâche failed ne reprend ni par Continue ni par rejeu initial. Vérifiez son arrêt et son dossier avant une suite autorisée ; ne créez pas de remplacement pendant ce contrôle. Les autres travaux autorisés suivent leur propre état."
+        );
+        view["error_human_action"] = json!(
+            "Si le diagnostic exige une mise à jour du programme, une reconnexion au compte ou un choix de modèle hors de votre mandat, demandez cette décision précise à l’utilisateur. Ne changez ni compte, ni modèle, ni droits sur le seul code api_error."
+        );
     }
-    if task.projected_error()==Some("stdout Codex fermé pendant le tour") {
-        view["error_message"]=json!("Le flux de sortie du fournisseur est devenu indisponible pendant le tour. Sa cause précise reste à vérifier.");
-        view["error_recovery"]=if task.terminal() && task.cleanup_done && workspace_report_ready(task) {
-            json!("Depuis le parent propriétaire, consultez le statut complet. Avec detail.provider_failure, demandez au responsable de vérifier le reçu natif de la tâche et le stderr corrélé à la commande, instance et génération confirmées, ainsi que les volumes et inodes du journal fournisseur, du dépôt et du dossier temporaire. Un ENOSPC observé établit un disque plein à cet instant ; sans preuve, la cause reste inconnue. Conservez commits, fichiers et sorties. Cet échec ne reprend pas par bridget_task_continue ni par rejeu de la clé initiale. Après correction et confirmation de l’arrêt et du rapport du dossier, une suite autorisée utilise une nouvelle tâche et une nouvelle clé, avec passation explicite du travail conservé.")
+    if task.projected_error() == Some("stdout Codex fermé pendant le tour") {
+        view["error_message"] = json!(
+            "Le flux de sortie du fournisseur est devenu indisponible pendant le tour. Sa cause précise reste à vérifier."
+        );
+        view["error_recovery"] = if task.terminal()
+            && task.cleanup_done
+            && workspace_report_ready(task)
+        {
+            json!(
+                "Depuis le parent propriétaire, consultez le statut complet. Avec detail.provider_failure, demandez au responsable de vérifier le reçu natif de la tâche et le stderr corrélé à la commande, instance et génération confirmées, ainsi que les volumes et inodes du journal fournisseur, du dépôt et du dossier temporaire. Un ENOSPC observé établit un disque plein à cet instant ; sans preuve, la cause reste inconnue. Conservez commits, fichiers et sorties. Cet échec ne reprend pas par bridget_task_continue ni par rejeu de la clé initiale. Après correction et confirmation de l’arrêt et du rapport du dossier, une suite autorisée utilise une nouvelle tâche et une nouvelle clé, avec passation explicite du travail conservé."
+            )
         } else {
-            json!("Depuis le parent propriétaire, consultez le statut complet. Transmettez detail.provider_failure au responsable pour retrouver le reçu natif de la tâche et vérifier son stderr, puis l’espace de stockage du journal fournisseur et du dossier temporaire. Sans preuve conservée, la cause reste inconnue. Conservez tous les fichiers et attendez la confirmation native d’arrêt et le rapport du dossier avant toute nouvelle demande ; continuable=false ne prouve pas l’arrêt.")
+            json!(
+                "Depuis le parent propriétaire, consultez le statut complet. Transmettez detail.provider_failure au responsable pour retrouver le reçu natif de la tâche et vérifier son stderr, puis l’espace de stockage du journal fournisseur et du dossier temporaire. Sans preuve conservée, la cause reste inconnue. Conservez tous les fichiers et attendez la confirmation native d’arrêt et le rapport du dossier avant toute nouvelle demande ; continuable=false ne prouve pas l’arrêt."
+            )
         };
-        view["error_human_action"]=json!("Si la source de l’échec ne peut pas être rétablie dans votre mandat, demandez au responsable ou à l’utilisateur la décision précise sur les fichiers à archiver ou le stockage à ajouter. Aucun arrêt d’autrui, déplacement d’un dossier vivant ou redémarrage forcé.");
+        view["error_human_action"] = json!(
+            "Si la source de l’échec ne peut pas être rétablie dans votre mandat, demandez au responsable ou à l’utilisateur la décision précise sur les fichiers à archiver ou le stockage à ajouter. Aucun arrêt d’autrui, déplacement d’un dossier vivant ou redémarrage forcé."
+        );
     }
     if task.state == "failed"
-        && matches!(task.error.as_deref(),
-            Some("mission_reply_timeout" | "échéance Claude dépassée"))
+        && matches!(
+            task.error.as_deref(),
+            Some("mission_reply_timeout" | "échéance Claude dépassée")
+        )
     {
         let duration = task.reply_timeout.unwrap_or(MISSION_REPLY_LIMIT_SECS);
         view["mission_reply_timeout_secs"] = json!(duration);
-        view["error_message"] = json!(format!("La durée maximale de cette mission ({duration} secondes) est dépassée. La tâche est terminée ; ses effets et ses fichiers sont conservés."));
-        view["future_mission_duration"] = json!("Pour une future admission longue, fixer reply_timeout avant le premier appel, par exemple 14400 pour 4 h (maximum 86400, sous la limite du parent). Le défaut est 3600, y compris development. Ne pas modifier la clé ou l’enveloppe de cette tâche terminée ; suivre les contrôles d’arrêt et de dossier indiqués ci-dessous.");
+        view["error_message"] = json!(format!(
+            "La durée maximale de cette mission ({duration} secondes) est dépassée. La tâche est terminée ; ses effets et ses fichiers sont conservés."
+        ));
+        view["future_mission_duration"] = json!(
+            "Pour une future admission longue, fixer reply_timeout avant le premier appel, par exemple 14400 pour 4 h (maximum 86400, sous la limite du parent). Le défaut est 3600, y compris development. Ne pas modifier la clé ou l’enveloppe de cette tâche terminée ; suivre les contrôles d’arrêt et de dossier indiqués ci-dessous."
+        );
         view["error_recovery"] = if task.cleanup_done && workspace_report_ready(task) {
-            json!("bridget_task_continue ne reprend pas une tâche failed ; rejouer sa request_id ne la redémarre pas. Conservez les commits, le worktree et les sorties. Vérifiez aussi l’arrêt des calculs métier détachés. Une nouvelle mission de reprise, avec une nouvelle request_id, doit réutiliser ces sorties et ne faire que le travail restant.")
+            json!(
+                "bridget_task_continue ne reprend pas une tâche failed ; rejouer sa request_id ne la redémarre pas. Conservez les commits, le worktree et les sorties. Vérifiez aussi l’arrêt des calculs métier détachés. Une nouvelle mission de reprise, avec une nouvelle request_id, doit réutiliser ces sorties et ne faire que le travail restant."
+            )
         } else {
-            json!("Attendez la confirmation d’arrêt et le rapport du dossier dans bridget_task_status. Conservez la tâche et ses sorties ; ne lancez pas de remplacement pendant ce contrôle. bridget_task_continue ne reprend pas une tâche failed.")
+            json!(
+                "Attendez la confirmation d’arrêt et le rapport du dossier dans bridget_task_status. Conservez la tâche et ses sorties ; ne lancez pas de remplacement pendant ce contrôle. bridget_task_continue ne reprend pas une tâche failed."
+            )
         };
     }
-    if task.state == "cancelling" && task.error.as_deref().is_some_and(|e|
-        e.starts_with("native_cancel_unverifiable:")) {
-        let cause = task.error.as_deref().and_then(|e| e.rsplit(':').next())
+    if task.state == "cancelling"
+        && task
+            .error
+            .as_deref()
+            .is_some_and(|e| e.starts_with("native_cancel_unverifiable:"))
+    {
+        let cause = task
+            .error
+            .as_deref()
+            .and_then(|e| e.rsplit(':').next())
             .filter(|c| cancel_fence_cause(&format!("cancel_fence:{c}")).is_some())
             .unwrap_or("unobserved");
         view["error_cause"] = json!(cause);
-        view["error_message"] = json!("L’annulation est enregistrée, mais sa preuve de clôture n’est pas encore acquise.");
+        view["error_message"] = json!(
+            "L’annulation est enregistrée, mais sa preuve de clôture n’est pas encore acquise."
+        );
         view["error_recovery"] = json!(match cause {
-            "capability_required" => "Le worker doit annoncer worker_start_recovery_v1 pour fermer une commande sans reçu avant naissance. Faites qualifier et charger maître/worker compatibles par la maintenance admise ; conservez cette tâche et sa clé. Aucun nouveau travail n’est lancé par cette clôture.",
-            "master_pending" => "ResourceLimit : la table des réponses en attente du maître est pleine ; aucune requête de clôture n’a été envoyée. Laissez se terminer les opérations natives en cours ; le responsable vérifie leur drainage sans purger de demande. La même annulation reste en attente.",
-            "master_request_frame" => "ResourceLimit : la trame de clôture dépasse la borne locale du maître ; aucune requête n’a été envoyée. Le responsable doit vérifier le contrat de cette commande exacte, sans changer son identité ni élargir la borne.",
-            "resource_limit_unobserved" => "ResourceLimit refuse la clôture ; sa sous-cause distante n’est pas observée. Le responsable doit vérifier la file d’entrée et la capacité du store du même worker, sans en déduire un manque de stockage, de mémoire ou de disque et sans purger de garde. La même annulation reste en attente.",
-            "reply_unavailable" => "La réponse de clôture n’est pas confirmée. La même annulation pourra relire son reçu ; ne créez ni commande ni mission de remplacement.",
-            "not_unstarted" => "La commande n’est plus éligible à une clôture avant naissance. Le responsable doit réconcilier son reçu et son exécution ; ne déduisez pas l’arrêt d’une absence de reçu.",
-            "identity_changed" | "identity_unavailable" => "Le responsable doit retrouver la commande, l’instance, la génération et le placement exacts depuis l’autorité native. Ne reconstituez pas une identité et ne modifiez pas le store à la main.",
-            _ => "Le responsable doit vérifier le reçu de commande et les faits du worker pour cette même tâche. Un état inconnu ne prouve pas un arrêt ; conservez le dossier, la clé et tous les travaux.",
+            "capability_required" =>
+                "Le worker doit annoncer worker_start_recovery_v1 pour fermer une commande sans reçu avant naissance. Faites qualifier et charger maître/worker compatibles par la maintenance admise ; conservez cette tâche et sa clé. Aucun nouveau travail n’est lancé par cette clôture.",
+            "master_pending" =>
+                "ResourceLimit : la table des réponses en attente du maître est pleine ; aucune requête de clôture n’a été envoyée. Laissez se terminer les opérations natives en cours ; le responsable vérifie leur drainage sans purger de demande. La même annulation reste en attente.",
+            "master_request_frame" =>
+                "ResourceLimit : la trame de clôture dépasse la borne locale du maître ; aucune requête n’a été envoyée. Le responsable doit vérifier le contrat de cette commande exacte, sans changer son identité ni élargir la borne.",
+            "resource_limit_unobserved" =>
+                "ResourceLimit refuse la clôture ; sa sous-cause distante n’est pas observée. Le responsable doit vérifier la file d’entrée et la capacité du store du même worker, sans en déduire un manque de stockage, de mémoire ou de disque et sans purger de garde. La même annulation reste en attente.",
+            "reply_unavailable" =>
+                "La réponse de clôture n’est pas confirmée. La même annulation pourra relire son reçu ; ne créez ni commande ni mission de remplacement.",
+            "not_unstarted" =>
+                "La commande n’est plus éligible à une clôture avant naissance. Le responsable doit réconcilier son reçu et son exécution ; ne déduisez pas l’arrêt d’une absence de reçu.",
+            "identity_changed" | "identity_unavailable" =>
+                "Le responsable doit retrouver la commande, l’instance, la génération et le placement exacts depuis l’autorité native. Ne reconstituez pas une identité et ne modifiez pas le store à la main.",
+            _ =>
+                "Le responsable doit vérifier le reçu de commande et les faits du worker pour cette même tâche. Un état inconnu ne prouve pas un arrêt ; conservez le dossier, la clé et tous les travaux.",
         });
-        view["error_human_action"] = json!("Si la maintenance native refuse le chargement ou si l’identité ne peut pas être établie, demander à l’utilisateur une décision ciblée de maintenance qualifiée. Ne pas forcer un redémarrage, élargir les droits, recréer la mission ou déclarer Terminal sans preuve.");
+        view["error_human_action"] = json!(
+            "Si la maintenance native refuse le chargement ou si l’identité ne peut pas être établie, demander à l’utilisateur une décision ciblée de maintenance qualifiée. Ne pas forcer un redémarrage, élargir les droits, recréer la mission ou déclarer Terminal sans preuve."
+        );
     }
     if task.state == "failed"
-        && task.error.as_deref().is_some_and(|error| error.starts_with("cross_project_reason_required:"))
+        && task
+            .error
+            .as_deref()
+            .is_some_and(|error| error.starts_with("cross_project_reason_required:"))
     {
-        view["error_message"] = json!("Le contrôle de projet a refusé la remise de la mission à l’enfant. Ce message décrit l’échec de la tâche, pas un refus de lecture de son statut.");
-        view["error_recovery"] = json!("N’ajoutez pas cross_project_reason à bridget_task_status. Conservez la tâche, sa request_id et ses fichiers. Rejouer la demande ne la redémarre pas ; bridget_task_continue ne reprend pas une tâche failed. Après mise à jour de Bridget, vérifiez l’arrêt, le nettoyage et le rapport du dossier avant toute nouvelle demande. Aucun remplacement automatique.");
+        view["error_message"] = json!(
+            "Le contrôle de projet a refusé la remise de la mission à l’enfant. Ce message décrit l’échec de la tâche, pas un refus de lecture de son statut."
+        );
+        view["error_recovery"] = json!(
+            "N’ajoutez pas cross_project_reason à bridget_task_status. Conservez la tâche, sa request_id et ses fichiers. Rejouer la demande ne la redémarre pas ; bridget_task_continue ne reprend pas une tâche failed. Après mise à jour de Bridget, vérifiez l’arrêt, le nettoyage et le rapport du dossier avant toute nouvelle demande. Aucun remplacement automatique."
+        );
     }
     view["quota_wait"] = task.quota_waits.last().filter(|wait| task.state == "working" && wait.phase != QuotaWaitPhase::Done)
         .map(|wait| json!({"round":wait.round,"phase":wait.phase,"resumes_at":wait.reset_at.saturating_add(30)}))
@@ -5229,53 +6368,111 @@ fn task_view(task: &Task, phase: Option<&str>, full: bool) -> Value {
     }
     view["substitution"] = json!(task.substitution);
     if let Some(workspace) = &task.workspace {
-        let is_view = matches!(workspace.strategy, crate::delegation::WorkspaceStrategy::CommitView);
+        let is_view = matches!(
+            workspace.strategy,
+            crate::delegation::WorkspaceStrategy::CommitView
+        );
         let (code, message, recovery) = if !task.terminal()
             || task.continuation_guard_open()
             || (!is_view && task.state == "result_available" && !task.result_sent)
         {
-            ("task_active", "La garde de cet espace reste ouverte. Son retrait n’est pas autorisé par cette lecture.",
-             if is_view { "Conservez la vue. Terminez ou clôturez cette tâche avant tout examen de retrait ; les autres travaux autorisés suivent leur propre état." }
-             else { "Conservez le worktree. Terminez ou clôturez la tâche existante avant tout examen de retrait." })
-        } else if is_view && task.state=="result_available" && !task.result_sent {
-            ("result_delivery_pending", "Le résultat n'a pas encore été remis ; les fichiers de la vue restent conservés.",
-             "Lire le résultat de cette même tâche et suivre son accusé natif. Ce constat ne prouve ni une exécution active ni un arrêt ; la conservation ne remplace pas ces preuves. Ne pas créer de mission de remplacement. Les autres travaux autorisés suivent leur propre état.")
-        } else if is_view && !task.cleanup_done && workspace.commit_view.is_some()
-            && (!task.guarded || task.guard_released) && workspace_report_ready(task) {
-            ("view_conservation_unconfirmed", "La clôture de conservation de cette vue n'est pas confirmée.",
-             "Conserver la tâche, sa clé et tous les fichiers. Faire vérifier la capacité WorkspaceViewV1 et le reçu de conservation de la même liaison par le responsable Bridget ; la cause précise de l'absence d'accusé reste inconnue. Ne pas effacer un marqueur, déduire l'arrêt ou relancer une mission. Si cet accès manque, demander une intervention ciblée du responsable. Les autres travaux autorisés suivent leur propre état.")
+            (
+                "task_active",
+                "La garde de cet espace reste ouverte. Son retrait n’est pas autorisé par cette lecture.",
+                if is_view {
+                    "Conservez la vue. Terminez ou clôturez cette tâche avant tout examen de retrait ; les autres travaux autorisés suivent leur propre état."
+                } else {
+                    "Conservez le worktree. Terminez ou clôturez la tâche existante avant tout examen de retrait."
+                },
+            )
+        } else if is_view && task.state == "result_available" && !task.result_sent {
+            (
+                "result_delivery_pending",
+                "Le résultat n'a pas encore été remis ; les fichiers de la vue restent conservés.",
+                "Lire le résultat de cette même tâche et suivre son accusé natif. Ce constat ne prouve ni une exécution active ni un arrêt ; la conservation ne remplace pas ces preuves. Ne pas créer de mission de remplacement. Les autres travaux autorisés suivent leur propre état.",
+            )
+        } else if is_view
+            && !task.cleanup_done
+            && workspace.commit_view.is_some()
+            && (!task.guarded || task.guard_released)
+            && workspace_report_ready(task)
+        {
+            (
+                "view_conservation_unconfirmed",
+                "La clôture de conservation de cette vue n'est pas confirmée.",
+                "Conserver la tâche, sa clé et tous les fichiers. Faire vérifier la capacité WorkspaceViewV1 et le reçu de conservation de la même liaison par le responsable Bridget ; la cause précise de l'absence d'accusé reste inconnue. Ne pas effacer un marqueur, déduire l'arrêt ou relancer une mission. Si cet accès manque, demander une intervention ciblée du responsable. Les autres travaux autorisés suivent leur propre état.",
+            )
         } else if !task.cleanup_done {
-            ("stop_unconfirmed", "L’arrêt de l’exécution n’est pas confirmé.",
-             if is_view { "Conservez la vue et ses preuves ; attendez la confirmation d’arrêt de cette tâche. Les autres travaux autorisés suivent leur propre état." }
-             else { "Conservez le worktree et attendez la confirmation d’arrêt de cette tâche." })
+            (
+                "stop_unconfirmed",
+                "L’arrêt de l’exécution n’est pas confirmé.",
+                if is_view {
+                    "Conservez la vue et ses preuves ; attendez la confirmation d’arrêt de cette tâche. Les autres travaux autorisés suivent leur propre état."
+                } else {
+                    "Conservez le worktree et attendez la confirmation d’arrêt de cette tâche."
+                },
+            )
         } else if !workspace_report_ready(task)
             || workspace.dirty.is_none()
-            || (!is_view && (workspace.head_on_branch.is_none() || workspace.commit_count.is_none()))
-            || (is_view && (workspace.commit_view.is_none() || !workspace.branch.is_empty()
-                || workspace.head_commit.is_some() || workspace.branch_commit.is_some()
-                || workspace.head_on_branch.is_some() || workspace.commit_count.is_some()
-                || !workspace.commits.is_empty() || workspace.truncated))
+            || (!is_view
+                && (workspace.head_on_branch.is_none() || workspace.commit_count.is_none()))
+            || (is_view
+                && (workspace.commit_view.is_none()
+                    || !workspace.branch.is_empty()
+                    || workspace.head_commit.is_some()
+                    || workspace.branch_commit.is_some()
+                    || workspace.head_on_branch.is_some()
+                    || workspace.commit_count.is_some()
+                    || !workspace.commits.is_empty()
+                    || workspace.truncated))
         {
-            ("report_unavailable", if is_view { "Le dernier contrôle de la vue est absent ou incomplet." }
-                else { "Le dernier rapport Git est absent ou incomplet." },
-             "Inspectez le dossier et ses usages avant toute décision. Un état inconnu ne permet pas le retrait.")
+            (
+                "report_unavailable",
+                if is_view {
+                    "Le dernier contrôle de la vue est absent ou incomplet."
+                } else {
+                    "Le dernier rapport Git est absent ou incomplet."
+                },
+                "Inspectez le dossier et ses usages avant toute décision. Un état inconnu ne permet pas le retrait.",
+            )
         } else if workspace.dirty == Some(true) {
-            ("changes_present", if is_view { "Le dernier contrôle de la vue signale une divergence de fichiers." }
-                else { "Le dernier rapport signale des modifications non commitées." },
-             if is_view { "Conservez les fichiers et la preuve privée de cette tâche. Demandez au propriétaire quelles données préserver avant son nettoyage natif ; ne régénérez pas la vue. Les autres travaux autorisés suivent leur propre état." }
-                else { "Préservez ou intégrez les modifications et les fichiers ignorés, puis relisez l’état réel du dossier." })
+            (
+                "changes_present",
+                if is_view {
+                    "Le dernier contrôle de la vue signale une divergence de fichiers."
+                } else {
+                    "Le dernier rapport signale des modifications non commitées."
+                },
+                if is_view {
+                    "Conservez les fichiers et la preuve privée de cette tâche. Demandez au propriétaire quelles données préserver avant son nettoyage natif ; ne régénérez pas la vue. Les autres travaux autorisés suivent leur propre état."
+                } else {
+                    "Préservez ou intégrez les modifications et les fichiers ignorés, puis relisez l’état réel du dossier."
+                },
+            )
         } else if is_view {
-            ("review_required", "Le dernier contrôle n’a pas signalé de divergence. La vue reste conservée.",
-             "Vérifiez les processus, les usages et les preuves de cette tâche avant son retrait natif. Ce statut n’autorise pas un retrait ; les autres travaux autorisés suivent leur propre état.")
+            (
+                "review_required",
+                "Le dernier contrôle n’a pas signalé de divergence. La vue reste conservée.",
+                "Vérifiez les processus, les usages et les preuves de cette tâche avant son retrait natif. Ce statut n’autorise pas un retrait ; les autres travaux autorisés suivent leur propre état.",
+            )
         } else if workspace.head_on_branch == Some(false) {
-            ("branch_changed", "Le dernier rapport ne place plus HEAD sur la branche attendue.",
-             "Examinez les commits et la branche réelle. Préservez le travail avant toute décision de retrait.")
+            (
+                "branch_changed",
+                "Le dernier rapport ne place plus HEAD sur la branche attendue.",
+                "Examinez les commits et la branche réelle. Préservez le travail avant toute décision de retrait.",
+            )
         } else if workspace.commit_count.unwrap_or(0) > 0 {
-            ("commits_to_review", "Le dernier rapport contient des commits à examiner.",
-             "Vérifiez leur intégration ou leur conservation, puis les fichiers ignorés et les usages du dossier.")
+            (
+                "commits_to_review",
+                "Le dernier rapport contient des commits à examiner.",
+                "Vérifiez leur intégration ou leur conservation, puis les fichiers ignorés et les usages du dossier.",
+            )
         } else {
-            ("review_required", "La tâche est arrêtée ; le dossier reste conservé.",
-             "Vérifiez à nouveau Git, les fichiers ignorés, les processus et les autres tâches ou fils. Ce statut n’autorise pas un retrait.")
+            (
+                "review_required",
+                "La tâche est arrêtée ; le dossier reste conservé.",
+                "Vérifiez à nouveau Git, les fichiers ignorés, les processus et les autres tâches ou fils. Ce statut n’autorise pas un retrait.",
+            )
         };
         view["workspace"] = json!({"strategy":workspace.strategy,"state":workspace.state,
             "path":workspace.path,"branch":workspace.branch,"base_commit":workspace.base_commit,
@@ -5284,19 +6481,26 @@ fn task_view(task: &Task, phase: Option<&str>, full: bool) -> Value {
             "commits":workspace.commits,"truncated":workspace.truncated,"dirty":workspace.dirty,
             "retention":{"code":code,"message":message,"recovery":recovery}});
     }
-    if let Some(repair)=task.workspace_repairs.last() {
-        view["workspace_repair"]=json!({
+    if let Some(repair) = task.workspace_repairs.last() {
+        view["workspace_repair"] = json!({
             "request_id":repair.request.request_id,"target_cwd":repair.request.target_cwd,
             "expected_head":repair.request.expected_head,"phase":repair.phase,"code":repair.code,
             "history":task.workspace_repairs.iter().map(|r|json!({
                 "request_id":r.request.request_id,"target_cwd":r.request.target_cwd,
                 "phase":r.phase,"code":r.code})).collect::<Vec<_>>()
         });
-        if repair.phase=="published" {view["cwd"]=json!(task.effective_execution_cwd());}
+        if repair.phase == "published" {
+            view["cwd"] = json!(task.effective_execution_cwd());
+        }
     }
-    if full && task.workspace.is_none() && let Some(binding)=task.commit_view_prepare.as_ref() {
-        if !view["detail"].is_object() {view["detail"]=json!({});}
-        view["detail"]["commit_view_preparation"]=json!({
+    if full
+        && task.workspace.is_none()
+        && let Some(binding) = task.commit_view_prepare.as_ref()
+    {
+        if !view["detail"].is_object() {
+            view["detail"] = json!({});
+        }
+        view["detail"]["commit_view_preparation"] = json!({
             "binding":binding,"publication":"not_attested",
             "conservation":if task.cleanup_done {"confirmed"} else {"unconfirmed"},
             "message":"La publication du dossier de cette tâche n'est pas attestée ; cela ne prouve pas son absence.",
@@ -5317,72 +6521,130 @@ fn task_view(task: &Task, phase: Option<&str>, full: bool) -> Value {
 
 // Même contrôle de présence que Continue, sans effet ni appel fournisseur.
 // La preuve distante de remise reste obligatoire dans le parcours Continue.
-fn continuation_child_live(st: &DaemonState, saved: &Task) -> Result<bool,String> {
-    Ok(match (&saved.child_instance, st.router.get_agent(&saved.child)) {
-                (Some(child_instance), Some(route))
-                    if live_connection_identity(st, &route.connection_id)
-                        == Some((saved.child.clone(), child_instance.clone())) =>
+fn continuation_child_live(st: &DaemonState, saved: &Task) -> Result<bool, String> {
+    Ok(
+        match (&saved.child_instance, st.router.get_agent(&saved.child)) {
+            (Some(child_instance), Some(route))
+                if live_connection_identity(st, &route.connection_id)
+                    == Some((saved.child.clone(), child_instance.clone())) =>
+            {
+                if st
+                    .fleet
+                    .desired_entry(&saved.child)
+                    .map_err(|error| error.to_string())?
+                    .is_some_and(|entry| entry.lifecycle_state == DesiredLifecycleState::Running)
                 {
-                    if st
-                        .fleet
-                        .desired_entry(&saved.child)
-                        .map_err(|error| error.to_string())?
-                        .is_some_and(|entry| {
-                            entry.lifecycle_state == DesiredLifecycleState::Running
-                        })
-                    {
-                        match restart_identity(st, saved) {
-                            Ok(identity) => {
-                                identity.instance_id == *child_instance
-                                    && st.managed_by_instance.get(child_instance)
-                                        == Some(&identity.command_id)
-                            }
-                            Err(code) if code == "native_restart_identity_mismatch" => false,
-                            Err(error) => return Err(error),
+                    match restart_identity(st, saved) {
+                        Ok(identity) => {
+                            identity.instance_id == *child_instance
+                                && st.managed_by_instance.get(child_instance)
+                                    == Some(&identity.command_id)
                         }
-                    } else {
-                        false
+                        Err(code) if code == "native_restart_identity_mismatch" => false,
+                        Err(error) => return Err(error),
                     }
+                } else {
+                    false
                 }
-                _ => false,
-            })
+            }
+            _ => false,
+        },
+    )
 }
 
-fn project_continuation(st: &DaemonState, task: &Task, view: &mut Value, now: i64,
-    worker: Option<&bridget_transport::protocol::WorkerObservation>) {
+fn project_continuation(
+    st: &DaemonState,
+    task: &Task,
+    view: &mut Value,
+    now: i64,
+    worker: Option<&bridget_transport::protocol::WorkerObservation>,
+) {
     use bridget_transport::protocol::WorkerCommandPhase;
-    if task.state!="result_available" {return;}
-    let ended=task.remote_placement.is_some() && (task.child_instance.as_ref()
-        .is_some_and(|id|st.managed_terminal_instances.contains(id))
-        || worker.is_some_and(|v|matches!(v.phase,WorkerCommandPhase::Terminal|WorkerCommandPhase::Refused)));
-    let eligible=task.continuable_at(now);
-    let presence=if eligible && task.remote_placement.is_some() {
-        Some(continuation_child_live(st,task))
-    } else {None};
-    let refused=worker.is_some_and(|v|v.phase==WorkerCommandPhase::Refused);
-    let (status,code,action)=if refused {
-        ("refused","remote_execution_ended","Conserver le résultat et les produits. Le worker signale que cette commande a été refusée ; cela ne prouve pas qu’elle a exécuté la mission. Clôturer la garde par le parcours propriétaire, puis vérifier arrêt et rapport avant une suite autorisée ; aucun rejeu ne lance cette commande.")
-    } else if ended {
-        ("ended","remote_execution_ended","Conserver le résultat, les commits et les fichiers de cette tâche. Le maître a confirmé que cette instance distante ne peut plus recevoir de ronde. Fermer sa garde par le parcours propriétaire puis vérifier arrêt et rapport avant une suite autorisée ; aucun rejeu ne redémarre cette commande.")
-    } else if task.guard_released {
-        ("closed","keep_alive_ended","Conserver les produits. La garde de cette tâche est close ; ne pas rejouer sa clé pour relancer la commande.")
-    } else if task.guarded && task.idle_deadline_at.is_some_and(|deadline|deadline<=now) {
-        ("expired","idle_deadline_elapsed","Conserver cette tâche et ses produits. Son délai de garde est dépassé ; cela ne prouve pas l’arrêt physique. Faire confirmer clôture, arrêt et rapport avant toute suite autorisée, sans prolonger la garde ni rejouer une ancienne mission.")
-    } else if task.round_no()>=8 {
-        ("closed","round_limit","Conserver les résultats. Le plafond de rondes de cette tâche est atteint ; clôturer sa garde par le parcours propriétaire avant une suite distincte autorisée.")
-    } else if !eligible {
-        ("not_eligible","continuation_not_eligible","Relire l’état et les conditions de cette tâche : garde, remise du résultat et éventuelle réparation du dossier. Ne pas créer de remplacement d’issue inconnue.")
-    } else if matches!(presence,Some(Err(_))) {
-        ("unconfirmed","continuation_state_unavailable","Faire vérifier la lecture du magasin et de l’état natif par le responsable Bridget. Ce contrôle a échoué ; sa cause précise reste à établir. Conserver tâche, clé et produits, sans purger ni remplacer le travail.")
-    } else if task.remote_placement.is_some()
-        && (!matches!(presence,Some(Ok(true))) || !worker.is_some_and(|v|
-            v.phase==WorkerCommandPhase::Released && v.native_ready)) {
-        ("unconfirmed","remote_execution_unconfirmed","Relire bridget_task_status pour obtenir une observation ciblée du worker. La commande n’est pas confirmée prête ; cela ne prouve pas son arrêt. Ne pas appeler Continue pour tester le lien : si la présence manque, ce parcours peut fermer la garde. Conserver tâche, clé et produits sans doublon ; demander une intervention ciblée si le lien ne revient pas.")
+    if task.state != "result_available" {
+        return;
+    }
+    let ended = task.remote_placement.is_some()
+        && (task
+            .child_instance
+            .as_ref()
+            .is_some_and(|id| st.managed_terminal_instances.contains(id))
+            || worker.is_some_and(|v| {
+                matches!(
+                    v.phase,
+                    WorkerCommandPhase::Terminal | WorkerCommandPhase::Refused
+                )
+            }));
+    let eligible = task.continuable_at(now);
+    let presence = if eligible && task.remote_placement.is_some() {
+        Some(continuation_child_live(st, task))
     } else {
-        ("eligible","continuation_requires_recheck","Une reprise de cette même tâche peut être demandée dans le mandat existant. Continue revérifie les droits, le contrôle et la commande distante avant remise ; cet état lu à un instant ne garantit pas qu’elle sera encore active au prochain appel.")
+        None
     };
-    view["continuable"]=json!(status=="eligible");
-    view["continuation"]=json!({"status":status,"code":code,"scope":"this_task",
+    let refused = worker.is_some_and(|v| v.phase == WorkerCommandPhase::Refused);
+    let (status, code, action) = if refused {
+        (
+            "refused",
+            "remote_execution_ended",
+            "Conserver le résultat et les produits. Le worker signale que cette commande a été refusée ; cela ne prouve pas qu’elle a exécuté la mission. Clôturer la garde par le parcours propriétaire, puis vérifier arrêt et rapport avant une suite autorisée ; aucun rejeu ne lance cette commande.",
+        )
+    } else if ended {
+        (
+            "ended",
+            "remote_execution_ended",
+            "Conserver le résultat, les commits et les fichiers de cette tâche. Le maître a confirmé que cette instance distante ne peut plus recevoir de ronde. Fermer sa garde par le parcours propriétaire puis vérifier arrêt et rapport avant une suite autorisée ; aucun rejeu ne redémarre cette commande.",
+        )
+    } else if task.guard_released {
+        (
+            "closed",
+            "keep_alive_ended",
+            "Conserver les produits. La garde de cette tâche est close ; ne pas rejouer sa clé pour relancer la commande.",
+        )
+    } else if task.guarded
+        && task
+            .idle_deadline_at
+            .is_some_and(|deadline| deadline <= now)
+    {
+        (
+            "expired",
+            "idle_deadline_elapsed",
+            "Conserver cette tâche et ses produits. Son délai de garde est dépassé ; cela ne prouve pas l’arrêt physique. Faire confirmer clôture, arrêt et rapport avant toute suite autorisée, sans prolonger la garde ni rejouer une ancienne mission.",
+        )
+    } else if task.round_no() >= 8 {
+        (
+            "closed",
+            "round_limit",
+            "Conserver les résultats. Le plafond de rondes de cette tâche est atteint ; clôturer sa garde par le parcours propriétaire avant une suite distincte autorisée.",
+        )
+    } else if !eligible {
+        (
+            "not_eligible",
+            "continuation_not_eligible",
+            "Relire l’état et les conditions de cette tâche : garde, remise du résultat et éventuelle réparation du dossier. Ne pas créer de remplacement d’issue inconnue.",
+        )
+    } else if matches!(presence, Some(Err(_))) {
+        (
+            "unconfirmed",
+            "continuation_state_unavailable",
+            "Faire vérifier la lecture du magasin et de l’état natif par le responsable Bridget. Ce contrôle a échoué ; sa cause précise reste à établir. Conserver tâche, clé et produits, sans purger ni remplacer le travail.",
+        )
+    } else if task.remote_placement.is_some()
+        && (!matches!(presence, Some(Ok(true)))
+            || !worker.is_some_and(|v| v.phase == WorkerCommandPhase::Released && v.native_ready))
+    {
+        (
+            "unconfirmed",
+            "remote_execution_unconfirmed",
+            "Relire bridget_task_status pour obtenir une observation ciblée du worker. La commande n’est pas confirmée prête ; cela ne prouve pas son arrêt. Ne pas appeler Continue pour tester le lien : si la présence manque, ce parcours peut fermer la garde. Conserver tâche, clé et produits sans doublon ; demander une intervention ciblée si le lien ne revient pas.",
+        )
+    } else {
+        (
+            "eligible",
+            "continuation_requires_recheck",
+            "Une reprise de cette même tâche peut être demandée dans le mandat existant. Continue revérifie les droits, le contrôle et la commande distante avant remise ; cet état lu à un instant ne garantit pas qu’elle sera encore active au prochain appel.",
+        )
+    };
+    view["continuable"] = json!(status == "eligible");
+    view["continuation"] = json!({"status":status,"code":code,"scope":"this_task",
          "observed_at":now,"requires_recheck":true,"eligible_for_check":eligible,
         "master_presence_confirmed":presence.as_ref().and_then(|v|v.as_ref().ok().copied()),"next_action":action,
         "human_action":"Si l’arrêt, le lien ou la suite dépasse votre mandat, demander au propriétaire ou à l’utilisateur la décision ciblée sur le travail conservé. Les autres travaux autorisés suivent leur propre état ; aucun arrêt global n’est déduit."});
@@ -5412,7 +6674,7 @@ fn current_task_view(st: &DaemonState, task: &Task, full: bool) -> Result<Value,
     let control = crate::referent_control::read(st.store.connection())
         .map_err(|_| "control_state_unavailable")?;
     let mut view = task_view(task, phase.as_deref(), full);
-    project_continuation(st,task,&mut view,unix_timestamp(),None);
+    project_continuation(st, task, &mut view, unix_timestamp(), None);
     view["suspended"] = json!(
         control.paused
             && matches!(
@@ -5422,17 +6684,24 @@ fn current_task_view(st: &DaemonState, task: &Task, full: bool) -> Result<Value,
     );
     view["resume_attempts"] = json!(task.restart_resumes);
     // Ancien handler d’admission interrompu : diagnostic seul, jamais une preuve d’arrêt.
-    if task.state == "queued" && task.remote_placement.is_some() && !task.remote_prepared
-        && task.child_instance.is_none() && task.launch_issued_at.is_none()
+    if task.state == "queued"
+        && task.remote_placement.is_some()
+        && !task.remote_prepared
+        && task.child_instance.is_none()
+        && task.launch_issued_at.is_none()
         && task.mission_issued_at.is_none()
-        && let NativeDelegationRequest::Delegate {request_id,..} = &task.request
-        && let Some(receipt) = st.delegation_store.auto_admission_receipt(&task.owner,request_id)?
+        && let NativeDelegationRequest::Delegate { request_id, .. } = &task.request
+        && let Some(receipt) = st
+            .delegation_store
+            .auto_admission_receipt(&task.owner, request_id)?
         && receipt.state == AutoAdmissionState::Admitted
         && receipt.task_id.as_deref() == Some(task.task_id.as_str())
         && receipt.coordinator_epoch < st.coordinator_epoch
     {
-        if !view["detail"].is_object() {view["detail"]=json!({});}
-        view["detail"]["admission_interruption"]=json!({
+        if !view["detail"].is_object() {
+            view["detail"] = json!({});
+        }
+        view["detail"]["admission_interruption"] = json!({
             "cause":"coordinator_restarted_before_prepared",
             "task_id":task.task_id,"request_id":request_id,
             "message":"Le maître a redémarré avant confirmation de la préparation distante. Cette admission reste en attente ; aucun lancement n’est attesté dans son reçu. Ce constat ne prouve ni une révocation des droits ni l’arrêt physique sur le worker.",
@@ -5453,13 +6722,33 @@ fn current_task_view(st: &DaemonState, task: &Task, full: bool) -> Result<Value,
         json!({"request_id":row.request_id,"kind":row.kind,"outcome":row.outcome,"decision":row.decision,"decided_at":row.decided_at,"delivery_state":row.delivery_state,"delivery_error":row.void_reason.as_deref().map(|reason| match reason { "permission_source_unavailable" | "delivery_check_unavailable" | "provider_quota_exhausted" | "revoked" => reason, _ => "delivery_invalidated" })})).collect::<Vec<_>>());
     st.dispatch_diagnostics.attach(task, &mut view, full);
     quota_questions246::attach(st, task, &mut view);
-    if full && matches!(task.projected_error(),Some("stdout Codex fermé pendant le tour" | "api_error" | "api_error:oauth_session_expired" | "terminal Codex: failed:cause=model_not_found" | "terminal Claude inconnu" | "error_during_execution")) {
+    if full
+        && matches!(
+            task.projected_error(),
+            Some(
+                "stdout Codex fermé pendant le tour"
+                    | "api_error"
+                    | "api_error:oauth_session_expired"
+                    | "terminal Codex: failed:cause=model_not_found"
+                    | "terminal Claude inconnu"
+                    | "error_during_execution"
+            )
+        )
+    {
         // Projection après autorisation : aucun contenu de stderr ni chemin privé.
         // Une commande manquante reste inconnue, jamais reconstruite depuis un ancien slot.
-        let command=task.remote_placement.as_ref().and_then(|_|remote_command_identity(st,task).ok());
-        let request_id=match &task.request {NativeDelegationRequest::Delegate {request_id,..}=>Some(request_id),_=>None};
-        if !view["detail"].is_object() {view["detail"]=json!({});}
-        view["detail"]["provider_failure"]=json!({
+        let command = task
+            .remote_placement
+            .as_ref()
+            .and_then(|_| remote_command_identity(st, task).ok());
+        let request_id = match &task.request {
+            NativeDelegationRequest::Delegate { request_id, .. } => Some(request_id),
+            _ => None,
+        };
+        if !view["detail"].is_object() {
+            view["detail"] = json!({});
+        }
+        view["detail"]["provider_failure"] = json!({
             "task_id":task.task_id,"admission_request_id":request_id,"child_agent_id":task.child,
             "machine_id":task.remote_placement.as_ref().map(|p|&p.machine_id),
             "daemon_host":if task.remote_placement.is_none() {Some(&st.host)} else {None},
@@ -5470,20 +6759,31 @@ fn current_task_view(st: &DaemonState, task: &Task, full: bool) -> Result<Value,
             "cause":match task.projected_error(){Some("terminal Codex: failed:cause=model_not_found")=>"model_not_found",Some("api_error:oauth_session_expired")=>"oauth_session_expired",_=>"unobserved"},
             "verification":"Transmettez cette référence au responsable de la machine : retrouver le reçu natif lié à task_id, vérifier instance et génération, puis lire seulement le stderr de cette identité. Si command_identity_confirmed=false, la référence de commande reste à vérifier ; ne choisissez pas un journal par approximation ni un ancien slot. Ces identifiants n’autorisent aucune reprise et ne prouvent pas un état courant du fournisseur."});
     }
-    if full && task.projected_error()==Some("api_error:oauth_session_expired") {
-        view["detail"]["provider_failure"]["provider_code"]=json!("api_error");
-        view["detail"]["provider_failure"]["round"]=json!(task.round);
-        view["detail"]["provider_failure"]["mission_id"]=json!(task.mission);
-        view["detail"]["provider_failure"]["verification"]=json!("Diagnostic OAuth exact observé pendant ce tour et corrélé à son terminal fournisseur api_error. Aucune lecture de secret ni nouveau journal n’est nécessaire pour connaître cette cause. Ne reclassifiez pas les anciens api_error sans leur propre preuve.");
+    if full && task.projected_error() == Some("api_error:oauth_session_expired") {
+        view["detail"]["provider_failure"]["provider_code"] = json!("api_error");
+        view["detail"]["provider_failure"]["round"] = json!(task.round);
+        view["detail"]["provider_failure"]["mission_id"] = json!(task.mission);
+        view["detail"]["provider_failure"]["verification"] = json!(
+            "Diagnostic OAuth exact observé pendant ce tour et corrélé à son terminal fournisseur api_error. Aucune lecture de secret ni nouveau journal n’est nécessaire pour connaître cette cause. Ne reclassifiez pas les anciens api_error sans leur propre preuve."
+        );
     }
-    if full && matches!(task.projected_error(),Some("terminal Claude inconnu" | "error_during_execution")) {
-        view["detail"]["provider_failure"]["round"]=json!(task.round);
-        view["detail"]["provider_failure"]["mission_id"]=json!(task.mission);
-        view["detail"]["provider_failure"]["verification"]=json!("Retrouvez le reçu natif de cette tâche, instance et génération, puis les événements provider_result de la mission et ronde indiquées. Leur vocabulaire est fermé ; ils ne contiennent aucun résultat ni texte d’erreur privé. En l’absence de ces métadonnées dans un ancien journal, conservez la cause inconnue et les produits, sans déduire un succès depuis un commit ou un message assistant.");
+    if full
+        && matches!(
+            task.projected_error(),
+            Some("terminal Claude inconnu" | "error_during_execution")
+        )
+    {
+        view["detail"]["provider_failure"]["round"] = json!(task.round);
+        view["detail"]["provider_failure"]["mission_id"] = json!(task.mission);
+        view["detail"]["provider_failure"]["verification"] = json!(
+            "Retrouvez le reçu natif de cette tâche, instance et génération, puis les événements provider_result de la mission et ronde indiquées. Leur vocabulaire est fermé ; ils ne contiennent aucun résultat ni texte d’erreur privé. En l’absence de ces métadonnées dans un ancien journal, conservez la cause inconnue et les produits, sans déduire un succès depuis un commit ou un message assistant."
+        );
     }
-    if full && task.projected_error()==Some("terminal Codex: failed:cause=model_not_found") {
-        view["detail"]["provider_failure"]["http_status"]=json!(400);
-        view["detail"]["provider_failure"]["verification"]=json!("Code fournisseur structuré constaté : expliquez le refus et la décision nécessaire à l’utilisateur avec error_human_action. Aucun journal privé n’est requis pour connaître cette cause. Ces identifiants ne permettent aucune reprise automatique.");
+    if full && task.projected_error() == Some("terminal Codex: failed:cause=model_not_found") {
+        view["detail"]["provider_failure"]["http_status"] = json!(400);
+        view["detail"]["provider_failure"]["verification"] = json!(
+            "Code fournisseur structuré constaté : expliquez le refus et la décision nécessaire à l’utilisateur avec error_human_action. Aucun journal privé n’est requis pour connaître cette cause. Ces identifiants ne permettent aucune reprise automatique."
+        );
     }
     Ok(view)
 }
@@ -5683,30 +6983,37 @@ pub(super) fn handle_with_peer(
 }
 
 fn origin_attestation_refusal(code: &str) -> Value {
-    let mut result=failure("permission_attestation_unavailable");
-    result["detail"]["verification"]=json!("origin_session_reattest");
-    if let Some(reason)=super::origin_proof::rejected_reason(code) {
-        let message=super::origin_proof::rejection_message(reason);
-        result["code"]=json!(code);
-        result["message"]=json!(message);
-        result["detail"]["message"]=json!(message);
-        result["detail"]["cause"]=json!("origin_explicit_refusal");
-        result["detail"]["worker_refusal"]=json!(reason);
-        result["detail"]["scope"]=json!("this_attestation");
+    let mut result = failure("permission_attestation_unavailable");
+    result["detail"]["verification"] = json!("origin_session_reattest");
+    if let Some(reason) = super::origin_proof::rejected_reason(code) {
+        let message = super::origin_proof::rejection_message(reason);
+        result["code"] = json!(code);
+        result["message"] = json!(message);
+        result["detail"]["message"] = json!(message);
+        result["detail"]["cause"] = json!("origin_explicit_refusal");
+        result["detail"]["worker_refusal"] = json!(reason);
+        result["detail"]["scope"] = json!("this_attestation");
         return result;
     }
-    if matches!(code,"origin_worker_unavailable"|"origin_proof_unavailable") {
-        let message=if code=="origin_worker_unavailable" {
+    if matches!(
+        code,
+        "origin_worker_unavailable" | "origin_proof_unavailable"
+    ) {
+        let message = if code == "origin_worker_unavailable" {
             "Le worker de l'hôte d'origine n'est pas disponible pour ce contrôle. Ce constat ne prouve pas un changement de droits."
         } else {
             "Le contrôle n'a pas reçu de réponse d'origine encore valide dans son délai, ou sa connexion a changé. Ce constat ne prouve pas un changement de droits."
         };
-        result["message"]=json!(message);
-        result["detail"]["message"]=json!(message);
-        result["detail"]["cause"]=json!(code);
-        result["detail"]["scope"]=json!("this_attestation");
-        result["detail"]["recovery"]=json!("Faire vérifier la connexion du worker source et le reçu de cette clé. Une mission peut déjà être admise malgré ce refus de lecture. Conserver request_id, task_id connu et enveloppe ; après le retour du lien natif, relire la même admission sans créer de clé ni de mission de remplacement. Un appel manuel bridget_session lit la preuve : il ne répare pas la connexion et ne modifie pas les droits. Les autres travaux autorisés suivent leur propre état.");
-        result["detail"]["human_action"]=json!("Si la connexion source ne revient pas dans le périmètre autorisé, demander au responsable le contrôle de ce worker et de son lien. Ne demander ni hausse de droits ni relance métier sur ce seul refus.");
+        result["message"] = json!(message);
+        result["detail"]["message"] = json!(message);
+        result["detail"]["cause"] = json!(code);
+        result["detail"]["scope"] = json!("this_attestation");
+        result["detail"]["recovery"] = json!(
+            "Faire vérifier la connexion du worker source et le reçu de cette clé. Une mission peut déjà être admise malgré ce refus de lecture. Conserver request_id, task_id connu et enveloppe ; après le retour du lien natif, relire la même admission sans créer de clé ni de mission de remplacement. Un appel manuel bridget_session lit la preuve : il ne répare pas la connexion et ne modifie pas les droits. Les autres travaux autorisés suivent leur propre état."
+        );
+        result["detail"]["human_action"] = json!(
+            "Si la connexion source ne revient pas dans le périmètre autorisé, demander au responsable le contrôle de ce worker et de son lien. Ne demander ni hausse de droits ni relance métier sur ce seul refus."
+        );
         return result;
     }
     if code == "project_preparation_link_missing" {
@@ -5717,34 +7024,57 @@ fn origin_attestation_refusal(code: &str) -> Value {
         result["detail"]["scope"] = json!("this_project_preparation");
         result["detail"]["cause"] = json!(code);
         result["detail"]["verification"] = json!("origin_project_preparation_link");
-        result["detail"]["recovery"] = json!("Conserver request_id, task_id éventuel et enveloppe ; lire l'admission durable avant tout rejeu strict. Sur la source, comparer le parent du --registry-file effectif aux champs root des configurations de fédération. Le parcours actuel utilise ce dossier comme namespace. Vérifier le raccord dans le namespace déjà attesté, puis confirmer le chargement du worker et le contrôle du lien. Ne créer aucune mission ou clé de remplacement d'issue inconnue.");
-        result["detail"]["human_action"] = json!("Si le raccord ne peut pas être corrigé dans le périmètre autorisé, demander au responsable Bridget de confirmer le registre et le namespace à utiliser avant toute modification. Ne pas réécrire les liens de fédération ni changer de droits, de compte ou de serveur pour contourner le refus.");
+        result["detail"]["recovery"] = json!(
+            "Conserver request_id, task_id éventuel et enveloppe ; lire l'admission durable avant tout rejeu strict. Sur la source, comparer le parent du --registry-file effectif aux champs root des configurations de fédération. Le parcours actuel utilise ce dossier comme namespace. Vérifier le raccord dans le namespace déjà attesté, puis confirmer le chargement du worker et le contrôle du lien. Ne créer aucune mission ou clé de remplacement d'issue inconnue."
+        );
+        result["detail"]["human_action"] = json!(
+            "Si le raccord ne peut pas être corrigé dans le périmètre autorisé, demander au responsable Bridget de confirmer le registre et le namespace à utiliser avant toute modification. Ne pas réécrire les liens de fédération ni changer de droits, de compte ou de serveur pour contourner le refus."
+        );
         return result;
     }
-    if matches!(code,"origin_project_preparation_busy"|"project_preparation_source_busy"|"project_preparation_busy") {
-        let message="Attendez la fin des préparations de projet déjà reçues, puis vérifiez cette admission avec sa même clé. La capacité de préparation du projet est occupée ; ce refus concerne cet appel et ne constate aucun changement de droits. Les autres travaux autorisés suivent leur propre état.";
-        let message=match code {
-            "project_preparation_source_busy"=>"Attendez la fin de la préparation source, puis vérifiez cette admission avec sa même clé. Son verrou est resté occupé pendant les 30 s d’attente. Ce refus concerne cet appel et ne constate aucun changement de droits. Les autres travaux autorisés suivent leur propre état.",
-            "project_preparation_busy"=>"Attendez la fin de la préparation sur la destination, puis vérifiez cette admission avec sa même clé. Son verrou était occupé au contrôle non bloquant. Ce refus concerne cet appel et ne constate aucun changement de droits. Les autres travaux autorisés suivent leur propre état.",
-            _=>message
+    if matches!(
+        code,
+        "origin_project_preparation_busy"
+            | "project_preparation_source_busy"
+            | "project_preparation_busy"
+    ) {
+        let message = "Attendez la fin des préparations de projet déjà reçues, puis vérifiez cette admission avec sa même clé. La capacité de préparation du projet est occupée ; ce refus concerne cet appel et ne constate aucun changement de droits. Les autres travaux autorisés suivent leur propre état.";
+        let message = match code {
+            "project_preparation_source_busy" => {
+                "Attendez la fin de la préparation source, puis vérifiez cette admission avec sa même clé. Son verrou est resté occupé pendant les 30 s d’attente. Ce refus concerne cet appel et ne constate aucun changement de droits. Les autres travaux autorisés suivent leur propre état."
+            }
+            "project_preparation_busy" => {
+                "Attendez la fin de la préparation sur la destination, puis vérifiez cette admission avec sa même clé. Son verrou était occupé au contrôle non bloquant. Ce refus concerne cet appel et ne constate aucun changement de droits. Les autres travaux autorisés suivent leur propre état."
+            }
+            _ => message,
         };
-        result["message"]=json!(message);
-        result["detail"]["message"]=json!(message);
-        if code!="origin_project_preparation_busy" {result["code"]=json!(code);}
-        result["detail"]["cause"]=json!(code);
-        result["detail"]["verification"]=json!("origin_project_preparation");
-        result["detail"]["recovery"]=json!("Conserver request_id, task_id éventuel et enveloppe. Vérifier l'admission durable avant tout rejeu strict. Ne créer aucune clé ou mission de remplacement d'issue inconnue. Une préparation attend au plus 30 s le verrou source, dans le délai original ; le verrou distant reste non bloquant.");
-        result["detail"]["human_action"]=json!("Si la préparation reste occupée, demander au responsable de vérifier la préparation détentrice du verrou et son délai avant toute décision de rangement. Ne supprimer ni verrou ni dossier et ne modifier ni droits, ni compte pour forcer le passage.");
+        result["message"] = json!(message);
+        result["detail"]["message"] = json!(message);
+        if code != "origin_project_preparation_busy" {
+            result["code"] = json!(code);
+        }
+        result["detail"]["cause"] = json!(code);
+        result["detail"]["verification"] = json!("origin_project_preparation");
+        result["detail"]["recovery"] = json!(
+            "Conserver request_id, task_id éventuel et enveloppe. Vérifier l'admission durable avant tout rejeu strict. Ne créer aucune clé ou mission de remplacement d'issue inconnue. Une préparation attend au plus 30 s le verrou source, dans le délai original ; le verrou distant reste non bloquant."
+        );
+        result["detail"]["human_action"] = json!(
+            "Si la préparation reste occupée, demander au responsable de vérifier la préparation détentrice du verrou et son délai avant toute décision de rangement. Ne supprimer ni verrou ni dossier et ne modifier ni droits, ni compte pour forcer le passage."
+        );
         return result;
     }
 
-    if code=="origin_proof_busy" {
-        let message="Attendez la fin des contrôles d’origine en cours, puis relisez les mêmes identifiants de tâches. La capacité de contrôle est occupée ; ce refus concerne cet appel, pas un changement de droits. Les autres travaux autorisés suivent leur propre état.";
-        result["message"]=json!(message);
-        result["detail"]["message"]=json!(message);
-        result["detail"]["cause"]=json!("origin_proof_busy");
-        result["detail"]["recovery"]=json!("Conserver chaque task_id, request_id et enveloppe. Pour une lecture, reprendre les mêmes task_id après la fin des contrôles ; ne créer ni mission ni clé de remplacement. Pour une opération mutante, vérifier d’abord son admission durable avant tout rejeu strict. Une attestation précédente ne remplace pas celle de cet appel.");
-        result["detail"]["human_action"]=json!("Si la capacité reste occupée après la fin des contrôles, demander au responsable de vérifier les contrôles d’origine encore en cours et leur délai. Ne changer ni droits, ni compte, ni rattachement pour contourner cette saturation.");
+    if code == "origin_proof_busy" {
+        let message = "Attendez la fin des contrôles d’origine en cours, puis relisez les mêmes identifiants de tâches. La capacité de contrôle est occupée ; ce refus concerne cet appel, pas un changement de droits. Les autres travaux autorisés suivent leur propre état.";
+        result["message"] = json!(message);
+        result["detail"]["message"] = json!(message);
+        result["detail"]["cause"] = json!("origin_proof_busy");
+        result["detail"]["recovery"] = json!(
+            "Conserver chaque task_id, request_id et enveloppe. Pour une lecture, reprendre les mêmes task_id après la fin des contrôles ; ne créer ni mission ni clé de remplacement. Pour une opération mutante, vérifier d’abord son admission durable avant tout rejeu strict. Une attestation précédente ne remplace pas celle de cet appel."
+        );
+        result["detail"]["human_action"] = json!(
+            "Si la capacité reste occupée après la fin des contrôles, demander au responsable de vérifier les contrôles d’origine encore en cours et leur délai. Ne changer ni droits, ni compte, ni rattachement pour contourner cette saturation."
+        );
     }
     result
 }
@@ -5759,14 +7089,12 @@ pub(super) fn handle_attested(
     // HTTP hors verrou. La connexion, le fil et le projet sont revérifiés
     // après la réponse authentifiée, au même puits que l'admission durable.
     let permission_proof = proof;
-    let attested = {
-        super::origin_proof::reattest(conn, permission_proof, state)
-    };
+    let attested = { super::origin_proof::reattest(conn, permission_proof, state) };
     let proof = match attested {
         Ok(p) => p,
         Err(code) => {
             return DaemonToWrapper::NativeDelegationResult {
-                result: origin_attestation_refusal(&code)
+                result: origin_attestation_refusal(&code),
             };
         }
     };
@@ -5802,65 +7130,142 @@ pub(super) fn handle_attested(
 
 /// Le lecteur ne choisit jamais l'exécution ou le worker. Ces faits viennent
 /// de la connexion vivante, du lien Fleet et du slot courant de la Task.
-fn commit_file_context(st:&DaemonState,conn:&str,task_id:Option<&str>,thread:Option<&str>)
-    ->Result<(Task,bridget_transport::protocol::WorkerResultIdentity),&'static str> {
-    recheck_attested_thread(st,conn,thread).map_err(|_|"commit_file_attestation_unavailable")?;
-    let (actor,instance)=live_connection_identity(st,conn).ok_or("commit_file_identity_unavailable")?;
-    let task=if let Some(id)=task_id {
-        let task=st.delegation_store.get(id).map_err(|_|"commit_file_store_unavailable")?
+fn commit_file_context(
+    st: &DaemonState,
+    conn: &str,
+    task_id: Option<&str>,
+    thread: Option<&str>,
+) -> Result<(Task, bridget_transport::protocol::WorkerResultIdentity), &'static str> {
+    recheck_attested_thread(st, conn, thread).map_err(|_| "commit_file_attestation_unavailable")?;
+    let (actor, instance) =
+        live_connection_identity(st, conn).ok_or("commit_file_identity_unavailable")?;
+    let task = if let Some(id) = task_id {
+        let task = st
+            .delegation_store
+            .get(id)
+            .map_err(|_| "commit_file_store_unavailable")?
             .ok_or("task_unavailable")?;
-        if !can_own_task(st,&task,&actor,&instance).map_err(|_|"commit_file_ownership_unavailable")? {
+        if !can_own_task(st, &task, &actor, &instance)
+            .map_err(|_| "commit_file_ownership_unavailable")?
+        {
             return Err("task_unavailable");
-        }task
+        }
+        task
     } else {
-        let task=st.delegation_store.for_child(&actor).map_err(|_|"commit_file_store_unavailable")?
+        let task = st
+            .delegation_store
+            .for_child(&actor)
+            .map_err(|_| "commit_file_store_unavailable")?
             .ok_or("commit_file_child_unlinked")?;
-        if task.child!=actor || task.child_instance.as_deref()!=Some(instance.as_str()) {
+        if task.child != actor || task.child_instance.as_deref() != Some(instance.as_str()) {
             return Err("commit_file_child_unlinked");
-        }task
+        }
+        task
     };
-    if !matches!(task.state.as_str(),"mission_pending"|"working"|"waiting_for_children")
-        || task.cleanup_done || task.guard_released
-        || task.mission_deadline_at.is_some_and(|deadline|deadline<=unix_timestamp()) {
+    if !matches!(
+        task.state.as_str(),
+        "mission_pending" | "working" | "waiting_for_children"
+    ) || task.cleanup_done
+        || task.guard_released
+        || task
+            .mission_deadline_at
+            .is_some_and(|deadline| deadline <= unix_timestamp())
+    {
         return Err("commit_file_task_not_active");
     }
-    if crate::referent_control::read(st.store.connection()).map_err(|_|"commit_file_control_unavailable")?.paused {
+    if crate::referent_control::read(st.store.connection())
+        .map_err(|_| "commit_file_control_unavailable")?
+        .paused
+    {
         return Err("commit_file_task_paused");
     }
-    if st.delegation_store.revoked_agent(&task.owner).map_err(|_|"commit_file_revocation_unavailable")?
-        || st.delegation_store.revoked_agent(&task.root_owner_agent_id).map_err(|_|"commit_file_revocation_unavailable")?
-        || st.delegation_store.revoked(&task.owner_instance).map_err(|_|"commit_file_revocation_unavailable")?
-        || st.delegation_store.revoked(task.child_instance.as_deref().ok_or("commit_file_child_unlinked")?)
-            .map_err(|_|"commit_file_revocation_unavailable")? {
+    if st
+        .delegation_store
+        .revoked_agent(&task.owner)
+        .map_err(|_| "commit_file_revocation_unavailable")?
+        || st
+            .delegation_store
+            .revoked_agent(&task.root_owner_agent_id)
+            .map_err(|_| "commit_file_revocation_unavailable")?
+        || st
+            .delegation_store
+            .revoked(&task.owner_instance)
+            .map_err(|_| "commit_file_revocation_unavailable")?
+        || st
+            .delegation_store
+            .revoked(
+                task.child_instance
+                    .as_deref()
+                    .ok_or("commit_file_child_unlinked")?,
+            )
+            .map_err(|_| "commit_file_revocation_unavailable")?
+    {
         return Err("commit_file_revoked");
     }
-    let record=task.workspace.as_ref().ok_or("commit_file_view_unavailable")?;
-    if !matches!(record.strategy,crate::delegation::WorkspaceStrategy::CommitView)
-        || record.commit_view.is_none() || task.commit_view_binding().is_none() || !task.remote_prepared {
+    let record = task
+        .workspace
+        .as_ref()
+        .ok_or("commit_file_view_unavailable")?;
+    if !matches!(
+        record.strategy,
+        crate::delegation::WorkspaceStrategy::CommitView
+    ) || record.commit_view.is_none()
+        || task.commit_view_binding().is_none()
+        || !task.remote_prepared
+    {
         return Err("commit_file_view_unavailable");
     }
-    let command=remote_command_identity(st,&task).map_err(|_|"commit_file_execution_unavailable")?;
-    let current=st.execution_store.latest_in_chain(&format!("execution-{}",task.mission))
-        .map_err(|_|"commit_file_execution_unavailable")?.ok_or("commit_file_execution_unavailable")?;
-    let slots=task.remote_result_slots.iter().filter(|slot|slot.identity.command==command
-        && slot.identity.mission_id==task.mission && slot.identity.round==task.round
-        && slot.identity.execution_id==current.execution_id && slot.identity.execution_generation==current.generation)
+    let command =
+        remote_command_identity(st, &task).map_err(|_| "commit_file_execution_unavailable")?;
+    let current = st
+        .execution_store
+        .latest_in_chain(&format!("execution-{}", task.mission))
+        .map_err(|_| "commit_file_execution_unavailable")?
+        .ok_or("commit_file_execution_unavailable")?;
+    let slots = task
+        .remote_result_slots
+        .iter()
+        .filter(|slot| {
+            slot.identity.command == command
+                && slot.identity.mission_id == task.mission
+                && slot.identity.round == task.round
+                && slot.identity.execution_id == current.execution_id
+                && slot.identity.execution_generation == current.generation
+        })
         .collect::<Vec<_>>();
-    if slots.len()!=1 {return Err("commit_file_execution_unavailable");}
-    slots[0].validate().map_err(|_|"commit_file_execution_unavailable")?;
-    let execution=slots[0].identity.clone();
-    Ok((task,execution))
+    if slots.len() != 1 {
+        return Err("commit_file_execution_unavailable");
+    }
+    slots[0]
+        .validate()
+        .map_err(|_| "commit_file_execution_unavailable")?;
+    let execution = slots[0].identity.clone();
+    Ok((task, execution))
 }
 
-fn commit_file_refusal(code:&str,task:Option<&Task>)->Value {
-    let action=match code {
-        "commit_file_path_invalid"=>"Utiliser le chemin relatif exact indiqué dans la carte de cette vue, sans préfixe absolu ni composant parent. Aucun chemin de preuve privée n'est une entrée autorisée.",
-        "commit_file_task_not_active"=>"Lire les fichiers déjà présents dans la vue. Cette tâche n'est plus active : cette lecture ne la relance pas et ne crée aucun export de remplacement.",
-        "commit_file_task_paused"=>"Attendre la reprise autorisée de cette tâche, puis demander le même fichier. Ne pas lever une pause ni interrompre un autre travail pour forcer la lecture.",
-        "commit_file_view_unavailable"=>"Vérifier que cette tâche possède une vue de commit publiée. Ne pas employer ce port sur Shared ou Worktree ni changer le mode d'une tâche existante.",
-        "commit_file_revoked"=>"Demander au propriétaire de vérifier la révocation de cette tâche. Ne pas élargir les droits ou changer de compte pour passer.",
-        "commit_file_child_unlinked"|"task_unavailable"=>"L'enfant doit utiliser sa connexion native courante, ou le parent fournir l'identifiant de sa propre tâche. Aucun identifiant tiers ne donne accès.",
-        _=>"Conserver cette tâche et toute opération en cours. Faire vérifier par le responsable Bridget le lien, le reçu et l'exécution courante ; la vérification manquante ne prouve pas une panne de stockage, de compte ou de réseau.",
+fn commit_file_refusal(code: &str, task: Option<&Task>) -> Value {
+    let action = match code {
+        "commit_file_path_invalid" => {
+            "Utiliser le chemin relatif exact indiqué dans la carte de cette vue, sans préfixe absolu ni composant parent. Aucun chemin de preuve privée n'est une entrée autorisée."
+        }
+        "commit_file_task_not_active" => {
+            "Lire les fichiers déjà présents dans la vue. Cette tâche n'est plus active : cette lecture ne la relance pas et ne crée aucun export de remplacement."
+        }
+        "commit_file_task_paused" => {
+            "Attendre la reprise autorisée de cette tâche, puis demander le même fichier. Ne pas lever une pause ni interrompre un autre travail pour forcer la lecture."
+        }
+        "commit_file_view_unavailable" => {
+            "Vérifier que cette tâche possède une vue de commit publiée. Ne pas employer ce port sur Shared ou Worktree ni changer le mode d'une tâche existante."
+        }
+        "commit_file_revoked" => {
+            "Demander au propriétaire de vérifier la révocation de cette tâche. Ne pas élargir les droits ou changer de compte pour passer."
+        }
+        "commit_file_child_unlinked" | "task_unavailable" => {
+            "L'enfant doit utiliser sa connexion native courante, ou le parent fournir l'identifiant de sa propre tâche. Aucun identifiant tiers ne donne accès."
+        }
+        _ => {
+            "Conserver cette tâche et toute opération en cours. Faire vérifier par le responsable Bridget le lien, le reçu et l'exécution courante ; la vérification manquante ne prouve pas une panne de stockage, de compte ou de réseau."
+        }
     };
     json!({"version":1,"status":"refused","code":code,"message":format!("{action} Portée : cette lecture de fichier. Les autres travaux autorisés suivent leur propre état."),
         "detail":{"scope":"this_file_read","task_id":task.map(|task|&task.task_id),
@@ -5874,179 +7279,349 @@ fn commit_file_refusal(code:&str,task:Option<&Task>)->Value {
 
 /// Réutiliser la forme de refus native ; ce port conserve le code worker
 /// observé, sans transformer ce fait en diagnostic de compte ou de réseau.
-fn commit_file_worker_refusal(reason:bridget_transport::protocol::WorkerRefusal,task:&Task)->Value {
+fn commit_file_worker_refusal(
+    reason: bridget_transport::protocol::WorkerRefusal,
+    task: &Task,
+) -> Value {
     use bridget_transport::protocol::WorkerRefusal::*;
-    let action=match reason {
-        UnsupportedVersion|CapabilityRequired=>"Comparer les versions chargées et la capacité WorkspaceViewV1 du maître et du worker de cette machine. Si la capacité n'est pas négociée, faire charger un lecteur compatible avant de demander de nouveau ce fichier.",
-        WorkerUnavailable|StaleConnection=>"Vérifier le lien natif courant avec ce worker et attendre son retour attesté avant de demander de nouveau ce fichier. La réponse n'est pas disponible ; cela ne prouve ni panne réseau ni arrêt de l'opération.",
-        Unauthorized=>"Faire vérifier l'autorisation native de cette lecture entre maître et worker. Ne pas copier de secret, changer de compte fournisseur ou élargir les droits pour passer.",
-        PlacementMismatch=>"Comparer la machine, le worker et le placement au reçu de cette tâche, sans déplacer la vue ni modifier le reçu pour passer.",
-        CommandMismatch=>"Comparer la commande, l'instance, la ronde et la génération à l'exécution courante de cette tâche. Faire réconcilier une divergence ; ne pas réécrire ces identifiants.",
-        DefinitionChanged|PermissionsChanged=>"Faire comparer la définition et les restrictions courantes avec celles admises pour cette tâche. Ne retirer aucune restriction et ne changer aucun compte pour passer.",
-        ResourceLimit=>"Faire lire le diagnostic corrélé de ce worker pour nommer la borne atteinte. Ce code seul ne distingue pas file, store ou métadonnées ; ne pas interrompre les tâches d'autrui.",
-        PrepareExpired|ReleaseExpired|ProbeExpired|ResultSlotExpired=>"Vérifier l'échéance et l'état natif de cette opération. Une expiration n'atteste aucun arrêt ; conserver la vue et toute opération encore détenue avant une nouvelle lecture du même fichier.",
-        StoreUnavailable|JournalUnavailable=>"Faire vérifier la lecture du store ou du journal de ce worker. Ne pas purger les reçus ; la cause d'accès précise reste inconnue.",
-        _=>"Conserver cette tâche et l'opération connue. Faire vérifier par le responsable Bridget le diagnostic corrélé à ce code worker ; sa cause précise reste inconnue.",
+    let action = match reason {
+        UnsupportedVersion | CapabilityRequired => {
+            "Comparer les versions chargées et la capacité WorkspaceViewV1 du maître et du worker de cette machine. Si la capacité n'est pas négociée, faire charger un lecteur compatible avant de demander de nouveau ce fichier."
+        }
+        WorkerUnavailable | StaleConnection => {
+            "Vérifier le lien natif courant avec ce worker et attendre son retour attesté avant de demander de nouveau ce fichier. La réponse n'est pas disponible ; cela ne prouve ni panne réseau ni arrêt de l'opération."
+        }
+        Unauthorized => {
+            "Faire vérifier l'autorisation native de cette lecture entre maître et worker. Ne pas copier de secret, changer de compte fournisseur ou élargir les droits pour passer."
+        }
+        PlacementMismatch => {
+            "Comparer la machine, le worker et le placement au reçu de cette tâche, sans déplacer la vue ni modifier le reçu pour passer."
+        }
+        CommandMismatch => {
+            "Comparer la commande, l'instance, la ronde et la génération à l'exécution courante de cette tâche. Faire réconcilier une divergence ; ne pas réécrire ces identifiants."
+        }
+        DefinitionChanged | PermissionsChanged => {
+            "Faire comparer la définition et les restrictions courantes avec celles admises pour cette tâche. Ne retirer aucune restriction et ne changer aucun compte pour passer."
+        }
+        ResourceLimit => {
+            "Faire lire le diagnostic corrélé de ce worker pour nommer la borne atteinte. Ce code seul ne distingue pas file, store ou métadonnées ; ne pas interrompre les tâches d'autrui."
+        }
+        PrepareExpired | ReleaseExpired | ProbeExpired | ResultSlotExpired => {
+            "Vérifier l'échéance et l'état natif de cette opération. Une expiration n'atteste aucun arrêt ; conserver la vue et toute opération encore détenue avant une nouvelle lecture du même fichier."
+        }
+        StoreUnavailable | JournalUnavailable => {
+            "Faire vérifier la lecture du store ou du journal de ce worker. Ne pas purger les reçus ; la cause d'accès précise reste inconnue."
+        }
+        _ => {
+            "Conserver cette tâche et l'opération connue. Faire vérifier par le responsable Bridget le diagnostic corrélé à ce code worker ; sa cause précise reste inconnue."
+        }
     };
-    let mut view=commit_file_refusal("commit_file_worker_refused",Some(task));
-    view["detail"]["worker_reason"]=json!(reason);
-    view["detail"]["cause"]=json!(reason);
-    view["detail"]["cause_kind"]=json!("worker");
-    view["detail"]["machine_id"]=json!(task.remote_placement.as_ref().map(|placement|&placement.machine_id));
-    view["message"]=json!(format!("{action} Portée : cette lecture sur cette machine, pas un arrêt global. Les autres travaux autorisés suivent leur propre état."));
-    view["detail"]["recovery"]=json!("Conserver la même tâche, sa vue et sa base. Après résolution du contrôle nommé et fin attestée de l'opération précédente, demander de nouveau le même fichier ; aucune mission de remplacement.");
-    view["detail"]["human_action"]=json!(format!("Si cette intervention dépasse vos droits, demander à l'utilisateur l'autorisation ciblée sur ce composant de cette machine : {action}"));
+    let mut view = commit_file_refusal("commit_file_worker_refused", Some(task));
+    view["detail"]["worker_reason"] = json!(reason);
+    view["detail"]["cause"] = json!(reason);
+    view["detail"]["cause_kind"] = json!("worker");
+    view["detail"]["machine_id"] = json!(
+        task.remote_placement
+            .as_ref()
+            .map(|placement| &placement.machine_id)
+    );
+    view["message"] = json!(format!(
+        "{action} Portée : cette lecture sur cette machine, pas un arrêt global. Les autres travaux autorisés suivent leur propre état."
+    ));
+    view["detail"]["recovery"] = json!(
+        "Conserver la même tâche, sa vue et sa base. Après résolution du contrôle nommé et fin attestée de l'opération précédente, demander de nouveau le même fichier ; aucune mission de remplacement."
+    );
+    view["detail"]["human_action"] = json!(format!(
+        "Si cette intervention dépasse vos droits, demander à l'utilisateur l'autorisation ciblée sur ce composant de cette machine : {action}"
+    ));
     view
 }
 
-fn read_commit_file(conn:&str,task_id:Option<&str>,path:&str,thread:Option<&str>,state:&Arc<Mutex<DaemonState>>)->Value {
+fn read_commit_file(
+    conn: &str,
+    task_id: Option<&str>,
+    path: &str,
+    thread: Option<&str>,
+    state: &Arc<Mutex<DaemonState>>,
+) -> Value {
     use bridget_transport::protocol::*;
-    if !commit_view_file_path(path){return commit_file_refusal("commit_file_path_invalid",None);}
-    let (task,execution)={
-        let st=state.lock().recover_poison();
-        match commit_file_context(&st,conn,task_id,thread){Ok(context)=>context,Err(code)=>return commit_file_refusal(code,None)}
-    };
-    let worker=remote_worker_identity(task.remote_placement.as_ref().unwrap());
-    let response=remote_worker_roundtrip_with_send_deadline(state,&worker,&execution.command,
-        WorkerRequestOperation::ReadCommitViewFile{execution:execution.clone(),path:path.into()},
-        Instant::now()+Duration::from_secs(125),Instant::now()+Duration::from_secs(1));
-    let response=match response {
-        Ok(response)=>response,
-        Err(reason)=>return commit_file_worker_refusal(reason,&task),
-    };
-    let current={
-        let st=state.lock().recover_poison();
-        match commit_file_context(&st,conn,task_id,thread){Ok(context)=>context,Err(code)=>return commit_file_refusal(code,Some(&task))}
-    };
-    let same_workspace=serde_json::to_value(&current.0.workspace).ok()
-        .zip(serde_json::to_value(&task.workspace).ok()).is_some_and(|(current,previous)|current==previous);
-    if current.0.task_id!=task.task_id || current.1!=execution || !same_workspace
-        || current.0.permission_snapshot!=task.permission_snapshot {
-        return commit_file_refusal("commit_file_context_changed",Some(&task));
+    if !commit_view_file_path(path) {
+        return commit_file_refusal("commit_file_path_invalid", None);
     }
-    let WorkerResponseOperation::CommitViewFile{execution:observed,path:returned,available,reason,failure}=response
-        else{return commit_file_refusal("commit_file_response_unavailable",Some(&task));};
-    if observed!=execution || returned!=path {return commit_file_refusal("commit_file_response_unavailable",Some(&task));}
-    if !available {
-        if matches!(failure,None|Some(CommitViewFailure::Unknown)) && let Some(reason)=reason {
-            return commit_file_worker_refusal(reason,&task);
+    let (task, execution) = {
+        let st = state.lock().recover_poison();
+        match commit_file_context(&st, conn, task_id, thread) {
+            Ok(context) => context,
+            Err(code) => return commit_file_refusal(code, None),
         }
-        let mut view=commit_file_refusal("commit_file_materialization_refused",Some(&task));
-        view["detail"]["worker_reason"]=json!(reason);view["detail"]["cause"]=json!(failure);
-        if let Some(cause)=failure {
-            view["detail"]["cause_kind"]=json!("commit_view");
-            let action=workspace_preparation210::view_failure_action(cause);
-            let file_action=if cause==CommitViewFailure::OperationCapacity {
+    };
+    let worker = remote_worker_identity(task.remote_placement.as_ref().unwrap());
+    let response = remote_worker_roundtrip_with_send_deadline(
+        state,
+        &worker,
+        &execution.command,
+        WorkerRequestOperation::ReadCommitViewFile {
+            execution: execution.clone(),
+            path: path.into(),
+        },
+        Instant::now() + Duration::from_secs(125),
+        Instant::now() + Duration::from_secs(1),
+    );
+    let response = match response {
+        Ok(response) => response,
+        Err(reason) => return commit_file_worker_refusal(reason, &task),
+    };
+    let current = {
+        let st = state.lock().recover_poison();
+        match commit_file_context(&st, conn, task_id, thread) {
+            Ok(context) => context,
+            Err(code) => return commit_file_refusal(code, Some(&task)),
+        }
+    };
+    let same_workspace = serde_json::to_value(&current.0.workspace)
+        .ok()
+        .zip(serde_json::to_value(&task.workspace).ok())
+        .is_some_and(|(current, previous)| current == previous);
+    if current.0.task_id != task.task_id
+        || current.1 != execution
+        || !same_workspace
+        || current.0.permission_snapshot != task.permission_snapshot
+    {
+        return commit_file_refusal("commit_file_context_changed", Some(&task));
+    }
+    let WorkerResponseOperation::CommitViewFile {
+        execution: observed,
+        path: returned,
+        available,
+        reason,
+        failure,
+    } = response
+    else {
+        return commit_file_refusal("commit_file_response_unavailable", Some(&task));
+    };
+    if observed != execution || returned != path {
+        return commit_file_refusal("commit_file_response_unavailable", Some(&task));
+    }
+    if !available {
+        if matches!(failure, None | Some(CommitViewFailure::Unknown))
+            && let Some(reason) = reason
+        {
+            return commit_file_worker_refusal(reason, &task);
+        }
+        let mut view = commit_file_refusal("commit_file_materialization_refused", Some(&task));
+        view["detail"]["worker_reason"] = json!(reason);
+        view["detail"]["cause"] = json!(failure);
+        if let Some(cause) = failure {
+            view["detail"]["cause_kind"] = json!("commit_view");
+            let action = workspace_preparation210::view_failure_action(cause);
+            let file_action = if cause == CommitViewFailure::OperationCapacity {
                 " Après sa fin attestée, demander de nouveau le même fichier sur cette tâche, sans boucle serrée."
-            } else {""};
-            view["message"]=json!(format!("{action}{file_action} Portée : cette lecture de fichier de cette tâche, pas toute la machine. Les autres travaux autorisés suivent leur propre état."));
-            view["detail"]["recovery"]=json!("Conserver cette tâche, sa vue et l'opération connue. Attendre la fin attestée d'un helper encore détenu avant de demander de nouveau le même fichier ; ne pas créer de tâche de remplacement ni changer sa base.");
-            view["detail"]["human_action"]=json!(format!("Si cette intervention dépasse vos droits, demander à l'utilisateur de l'autoriser seulement pour cette tâche et cette machine : {action}"));
+            } else {
+                ""
+            };
+            view["message"] = json!(format!(
+                "{action}{file_action} Portée : cette lecture de fichier de cette tâche, pas toute la machine. Les autres travaux autorisés suivent leur propre état."
+            ));
+            view["detail"]["recovery"] = json!(
+                "Conserver cette tâche, sa vue et l'opération connue. Attendre la fin attestée d'un helper encore détenu avant de demander de nouveau le même fichier ; ne pas créer de tâche de remplacement ni changer sa base."
+            );
+            view["detail"]["human_action"] = json!(format!(
+                "Si cette intervention dépasse vos droits, demander à l'utilisateur de l'autoriser seulement pour cette tâche et cette machine : {action}"
+            ));
         }
         return view;
     }
-    let record=task.workspace.as_ref().unwrap();
+    let record = task.workspace.as_ref().unwrap();
     json!({"version":1,"status":"available","task_id":task.task_id,"base_commit":record.base_commit,
         "file":Path::new(&record.path).join(path),"path":path,"machine_id":worker.machine_id,
         "message":"Le fichier du commit exact est disponible dans cette vue privée sur la machine indiquée. L'enfant peut le lire sur place ; le parent distant ne doit pas traiter ce chemin comme local. Le dépôt source et les fichiers existants n'ont pas été remplacés."})
 }
 
-fn catalogue_blocked177(st:&DaemonState,instance:&str)->Result<Vec<String>,String>{
-    Ok(st.registry.resolved_definitions()?.into_iter().map(|(name,_)|name).filter(|name|st.provider_limits
-        .scoped_quota(name,instance,unix_timestamp()).or_else(||st.provider_limits.quota(name,unix_timestamp()))
-        .is_some_and(|quota|quota.launch_blocked)).collect())
+fn catalogue_blocked177(st: &DaemonState, instance: &str) -> Result<Vec<String>, String> {
+    Ok(st
+        .registry
+        .resolved_definitions()?
+        .into_iter()
+        .map(|(name, _)| name)
+        .filter(|name| {
+            st.provider_limits
+                .scoped_quota(name, instance, unix_timestamp())
+                .or_else(|| st.provider_limits.quota(name, unix_timestamp()))
+                .is_some_and(|quota| quota.launch_blocked)
+        })
+        .collect())
 }
-fn foreign_catalogue177(conn:&str,attested:Option<&bridget_transport::protocol::ProviderPermissions>,
-    thread:Option<&str>,state:&Arc<Mutex<DaemonState>>)->Result<Option<Value>,String>{
-    let (owner,instance,parent,blocked)={let st=state.lock().recover_poison();
-        recheck_attested_thread(&st,conn,thread)?;
-        let (owner,instance)=live_connection_identity(&st,conn).ok_or("identity_unavailable")?;
-        if super::origin_proof::foreign_host(&st,&owner)?.is_none(){return Ok(None);}
-        let parent=parent_fact(&st,&owner,&instance,None,attested)?.ok_or("permission_attestation_unavailable")?;
-        let blocked=catalogue_blocked177(&st,&instance)?;(owner,instance,parent,blocked)};
-    let mut entries=super::origin_proof::catalogue(state,&owner,&parent,blocked.clone())?;
-    let st=state.lock().recover_poison();
-    recheck_attested_thread(&st,conn,thread)?;
-    if live_connection_identity(&st,conn)!=Some((owner.clone(),instance.clone()))
-        || parent_fact(&st,&owner,&instance,None,attested)?.as_ref()!=Some(&parent)
-        || catalogue_blocked177(&st,&instance)?!=blocked {return Err("catalogue_changed".into());}
+fn foreign_catalogue177(
+    conn: &str,
+    attested: Option<&bridget_transport::protocol::ProviderPermissions>,
+    thread: Option<&str>,
+    state: &Arc<Mutex<DaemonState>>,
+) -> Result<Option<Value>, String> {
+    let (owner, instance, parent, blocked) = {
+        let st = state.lock().recover_poison();
+        recheck_attested_thread(&st, conn, thread)?;
+        let (owner, instance) =
+            live_connection_identity(&st, conn).ok_or("identity_unavailable")?;
+        if super::origin_proof::foreign_host(&st, &owner)?.is_none() {
+            return Ok(None);
+        }
+        let parent = parent_fact(&st, &owner, &instance, None, attested)?
+            .ok_or("permission_attestation_unavailable")?;
+        let blocked = catalogue_blocked177(&st, &instance)?;
+        (owner, instance, parent, blocked)
+    };
+    let mut entries = super::origin_proof::catalogue(state, &owner, &parent, blocked.clone())?;
+    let st = state.lock().recover_poison();
+    recheck_attested_thread(&st, conn, thread)?;
+    if live_connection_identity(&st, conn) != Some((owner.clone(), instance.clone()))
+        || parent_fact(&st, &owner, &instance, None, attested)?.as_ref() != Some(&parent)
+        || catalogue_blocked177(&st, &instance)? != blocked
+    {
+        return Err("catalogue_changed".into());
+    }
     for entry in &mut entries {
-        let name=entry["agent_type"].as_str().ok_or("origin_proof_unavailable")?;
-        let quota=st.provider_limits.scoped_quota(name,&instance,unix_timestamp())
-            .or_else(||st.provider_limits.quota(name,unix_timestamp()));
-        if entry["can_run"]==true && quota.as_ref().is_some_and(|q|q.limit_reached && !q.exhausted) {
-            entry["constraints"]=json!([{"code":"provider_limit_reached_window_unknown",
+        let name = entry["agent_type"]
+            .as_str()
+            .ok_or("origin_proof_unavailable")?;
+        let quota = st
+            .provider_limits
+            .scoped_quota(name, &instance, unix_timestamp())
+            .or_else(|| st.provider_limits.quota(name, unix_timestamp()));
+        if entry["can_run"] == true
+            && quota
+                .as_ref()
+                .is_some_and(|q| q.limit_reached && !q.exhausted)
+        {
+            entry["constraints"] = json!([{"code":"provider_limit_reached_window_unknown",
                 "message":"Le fournisseur signale une limite atteinte sans attester une fenêtre épuisée ; le lancement reste permis."}]);
         }
-        entry["quota"]=json!(quota);
+        entry["quota"] = json!(quota);
     }
-    let permission=root_permission(&st,&owner,&instance)?;
-    let held=st.presences.get(&instance).and_then(|p|st.registry.get(&p.agent_type).ok()).is_some_and(|d|d.held_queue);
-    let halted=st.delegation_store.delegation_halt().map_err(|_|"control_state_unavailable")?.halted;
-    let mut result=catalogue_projection177(entries,held,halted,Some(&parent),permission.as_ref(),Some(Path::new(&parent.cwd)));
-    let origin_machine = super::origin_proof::host_for_owner(&st,&owner)?;
-    result["verdict_context"]["machine_id"]=json!(origin_machine);
-    super::native_provider_catalogue220::enrich(&st,&mut result,&origin_machine);
+    let permission = root_permission(&st, &owner, &instance)?;
+    let held = st
+        .presences
+        .get(&instance)
+        .and_then(|p| st.registry.get(&p.agent_type).ok())
+        .is_some_and(|d| d.held_queue);
+    let halted = st
+        .delegation_store
+        .delegation_halt()
+        .map_err(|_| "control_state_unavailable")?
+        .halted;
+    let mut result = catalogue_projection177(
+        entries,
+        held,
+        halted,
+        Some(&parent),
+        permission.as_ref(),
+        Some(Path::new(&parent.cwd)),
+    );
+    let origin_machine = super::origin_proof::host_for_owner(&st, &owner)?;
+    result["verdict_context"]["machine_id"] = json!(origin_machine);
+    super::native_provider_catalogue220::enrich(&st, &mut result, &origin_machine);
     Ok(Some(result))
 }
 
 fn status_with_worker_observation(
-    conn:&str, request:&NativeDelegationRequest,
-    project:Option<&bridget_transport::protocol::CommunicationProject>,
-    fact:Option<&bridget_transport::protocol::ProviderPermissions>, thread:Option<&str>,
-    state:&Arc<Mutex<DaemonState>>,
-)->Result<Value,String> {
+    conn: &str,
+    request: &NativeDelegationRequest,
+    project: Option<&bridget_transport::protocol::CommunicationProject>,
+    fact: Option<&bridget_transport::protocol::ProviderPermissions>,
+    thread: Option<&str>,
+    state: &Arc<Mutex<DaemonState>>,
+) -> Result<Value, String> {
     use bridget_transport::protocol::*;
-    let NativeDelegationRequest::Status {task_id}=request else {return Err("invalid_request".into());};
-    let (task,worker,command,epoch)={
-        let mut st=state.lock().recover_poison();
-        recheck_attested_thread(&st,conn,thread)?;
-        let mut initial=handle_locked_with_project(conn,request.clone(),project,fact,&mut st)?;
-        let task=st.delegation_store.get(task_id)?.ok_or("task_unavailable")?;
-        if !task.continuable_at(unix_timestamp()) || task.remote_placement.is_none()
-            || task.child_instance.as_ref().is_some_and(|id|st.managed_terminal_instances.contains(id)) {
+    let NativeDelegationRequest::Status { task_id } = request else {
+        return Err("invalid_request".into());
+    };
+    let (task, worker, command, epoch) = {
+        let mut st = state.lock().recover_poison();
+        recheck_attested_thread(&st, conn, thread)?;
+        let mut initial =
+            handle_locked_with_project(conn, request.clone(), project, fact, &mut st)?;
+        let task = st
+            .delegation_store
+            .get(task_id)?
+            .ok_or("task_unavailable")?;
+        if !task.continuable_at(unix_timestamp())
+            || task.remote_placement.is_none()
+            || task
+                .child_instance
+                .as_ref()
+                .is_some_and(|id| st.managed_terminal_instances.contains(id))
+        {
             return Ok(initial);
         }
-        let command=match remote_command_identity(&st,&task) {
-            Ok(v)=>v,
-            Err(reason)=>{
-                initial["continuation"]["worker_check"]=json!({"status":"unavailable",
+        let command = match remote_command_identity(&st, &task) {
+            Ok(v) => v,
+            Err(reason) => {
+                initial["continuation"]["worker_check"] = json!({"status":"unavailable",
                     "stage":"command_identity","reason":reason});
-                initial["continuation"]["next_action"]=json!("Faire vérifier le reçu et l’identité de commande par le responsable Bridget. Ce contrôle a refusé avant tout échange worker ; conserver tâche, clé et produits sans utiliser Continue comme sonde. Les autres travaux autorisés suivent leur propre état.");
+                initial["continuation"]["next_action"] = json!(
+                    "Faire vérifier le reçu et l’identité de commande par le responsable Bridget. Ce contrôle a refusé avant tout échange worker ; conserver tâche, clé et produits sans utiliser Continue comme sonde. Les autres travaux autorisés suivent leur propre état."
+                );
                 return Ok(initial);
             }
         };
-        let placement=task.remote_placement.as_ref().unwrap();
-        let worker=remote_worker_identity(placement);
-        let epoch=st.remote_workers.get(&worker.machine_id).map(|v|v.epoch.clone());
-        (task,worker,command,epoch)
+        let placement = task.remote_placement.as_ref().unwrap();
+        let worker = remote_worker_identity(placement);
+        let epoch = st
+            .remote_workers
+            .get(&worker.machine_id)
+            .map(|v| v.epoch.clone());
+        (task, worker, command, epoch)
     };
-    let result=remote_worker_roundtrip_with_send_deadline(state,&worker,&command,
+    let result = remote_worker_roundtrip_with_send_deadline(
+        state,
+        &worker,
+        &command,
         WorkerRequestOperation::ExecutionStatus {},
-        Instant::now()+Duration::from_secs(2),Instant::now()+Duration::from_millis(250));
-    let mut st=state.lock().recover_poison();
-    recheck_attested_thread(&st,conn,thread)?;
-    let mut view=handle_locked_with_project(conn,request.clone(),project,fact,&mut st)?;
-    let current=st.delegation_store.get(task_id)?.ok_or("task_unavailable")?;
-    if current.mission!=task.mission || current.round_no()!=task.round_no()
-        || remote_command_identity(&st,&current).ok().as_ref()!=Some(&command)
-        || st.remote_workers.get(&worker.machine_id).map(|v|v.epoch.clone())!=epoch {
+        Instant::now() + Duration::from_secs(2),
+        Instant::now() + Duration::from_millis(250),
+    );
+    let mut st = state.lock().recover_poison();
+    recheck_attested_thread(&st, conn, thread)?;
+    let mut view = handle_locked_with_project(conn, request.clone(), project, fact, &mut st)?;
+    let current = st
+        .delegation_store
+        .get(task_id)?
+        .ok_or("task_unavailable")?;
+    if current.mission != task.mission
+        || current.round_no() != task.round_no()
+        || remote_command_identity(&st, &current).ok().as_ref() != Some(&command)
+        || st
+            .remote_workers
+            .get(&worker.machine_id)
+            .map(|v| v.epoch.clone())
+            != epoch
+    {
         return Ok(view);
     }
     match result {
-        Ok(WorkerResponseOperation::Observation {observation})=>{
-            project_continuation(&st,&current,&mut view,unix_timestamp(),Some(&observation));
-            view["continuation"]["worker_check"]=json!({"status":"observed",
+        Ok(WorkerResponseOperation::Observation { observation }) => {
+            project_continuation(
+                &st,
+                &current,
+                &mut view,
+                unix_timestamp(),
+                Some(&observation),
+            );
+            view["continuation"]["worker_check"] = json!({"status":"observed",
                 "phase":observation.phase,"native_ready":observation.native_ready,
                 "command_id":command.command_id,"generation":command.generation});
         }
-        Err(reason)=>{
-            view["continuation"]["worker_check"]=json!({"status":"unavailable","reason":reason});
-            if reason==WorkerRefusal::CapabilityRequired {
-                view["continuation"]["next_action"]=json!("Faire charger un worker qui propose execution_status_v1 pour vérifier cette commande sans lancer de ronde. Cette ancienne version ne prouve ni arrêt ni disponibilité. Conserver tâche et clé ; ne pas utiliser Continue comme test de présence.");
+        Err(reason) => {
+            view["continuation"]["worker_check"] = json!({"status":"unavailable","reason":reason});
+            if reason == WorkerRefusal::CapabilityRequired {
+                view["continuation"]["next_action"] = json!(
+                    "Faire charger un worker qui propose execution_status_v1 pour vérifier cette commande sans lancer de ronde. Cette ancienne version ne prouve ni arrêt ni disponibilité. Conserver tâche et clé ; ne pas utiliser Continue comme test de présence."
+                );
             }
         }
-        _=>{view["continuation"]["worker_check"]=json!({"status":"unavailable","reason":"unexpected_response"});}
+        _ => {
+            view["continuation"]["worker_check"] =
+                json!({"status":"unavailable","reason":"unexpected_response"});
+        }
     }
     Ok(view)
 }
@@ -6060,14 +7635,24 @@ fn handle_with_fact(
     state: &Arc<Mutex<DaemonState>>,
     peer: Option<&UnixStream>,
 ) -> DaemonToWrapper {
-    let explicit=matches!(&request,NativeDelegationRequest::Delegate{..}).then(||request.clone());
-    let mut response=handle_with_fact_inner(conn,request,fact,thread,permission_proof,state,peer);
-    if let (Some(request),DaemonToWrapper::NativeDelegationResult{result})=(explicit,&mut response) {
-        let known=result["code"]=="provider_quota_exhausted" || (result["code"]=="fallback_exhausted"
-            && result["detail"]["tried"].as_array().is_some_and(|rows|!rows.is_empty() && rows.iter().all(|r|r["code"]=="provider_quota_exhausted")));
+    let explicit =
+        matches!(&request, NativeDelegationRequest::Delegate { .. }).then(|| request.clone());
+    let mut response =
+        handle_with_fact_inner(conn, request, fact, thread, permission_proof, state, peer);
+    if let (Some(request), DaemonToWrapper::NativeDelegationResult { result }) =
+        (explicit, &mut response)
+    {
+        let known = result["code"] == "provider_quota_exhausted"
+            || (result["code"] == "fallback_exhausted"
+                && result["detail"]["tried"].as_array().is_some_and(|rows| {
+                    !rows.is_empty() && rows.iter().all(|r| r["code"] == "provider_quota_exhausted")
+                }));
         if known && result["task_id"].is_null() {
-            let st=state.lock().recover_poison();
-            if let Err(code)=quota_questions246::pre_admission(&st,conn,&request,true,result) {result["quota_question_error"]=json!(code);}
+            let st = state.lock().recover_poison();
+            if let Err(code) = quota_questions246::pre_admission(&st, conn, &request, true, result)
+            {
+                result["quota_question_error"] = json!(code);
+            }
         }
     }
     response
@@ -6083,117 +7668,221 @@ fn handle_with_fact_inner(
     peer: Option<&UnixStream>,
 ) -> DaemonToWrapper {
     if let NativeDelegationRequest::Specialists { request: operation } = &request {
-        if matches!(operation,bridget_transport::specialists::SpecialistRequest::RequestTemporary{..}) {
-            let prepared=(||->Result<_,String>{
-                let st=state.lock().recover_poison();
-                recheck_attested_thread(&st,conn,thread)?;
-                let (owner,instance)=live_connection_identity(&st,conn).ok_or("identity_unavailable")?;
-                parent_fact(&st,&owner,&instance,None,fact.as_ref())?.ok_or("permission_attestation_unavailable")?;
-                let native=super::specialists222::prepare_temporary(&st,conn,&owner,operation)?;
-                Ok((owner,native))
+        if matches!(
+            operation,
+            bridget_transport::specialists::SpecialistRequest::RequestTemporary { .. }
+        ) {
+            let prepared = (|| -> Result<_, String> {
+                let st = state.lock().recover_poison();
+                recheck_attested_thread(&st, conn, thread)?;
+                let (owner, instance) =
+                    live_connection_identity(&st, conn).ok_or("identity_unavailable")?;
+                parent_fact(&st, &owner, &instance, None, fact.as_ref())?
+                    .ok_or("permission_attestation_unavailable")?;
+                let native =
+                    super::specialists222::prepare_temporary(&st, conn, &owner, operation)?;
+                Ok((owner, native))
             })();
-            let (owner,native)=match prepared{Ok(v)=>v,Err(code)=>return DaemonToWrapper::NativeDelegationResult{result:super::specialists222::failure(&code)}};
-            let mut response=handle_with_fact(conn,NativeDelegationRequest::AutoDelegateV2(native),fact,thread,permission_proof,state,peer);
-            if let DaemonToWrapper::NativeDelegationResult{result}=&mut response{
-                let st=state.lock().recover_poison();
-                if let Err(code)=super::specialists222::attach_temporary_result(&st,&owner,operation,result){
-                    result["specialist_attachment"]=super::specialists222::failure(&code);
-                    result["next_action"]=json!("Conserver la tâche native déjà admise. Faire vérifier son rattachement au profil ; aucune nouvelle mission ni nouvelle clé.");
+            let (owner, native) = match prepared {
+                Ok(v) => v,
+                Err(code) => {
+                    return DaemonToWrapper::NativeDelegationResult {
+                        result: super::specialists222::failure(&code),
+                    };
+                }
+            };
+            let mut response = handle_with_fact(
+                conn,
+                NativeDelegationRequest::AutoDelegateV2(native),
+                fact,
+                thread,
+                permission_proof,
+                state,
+                peer,
+            );
+            if let DaemonToWrapper::NativeDelegationResult { result } = &mut response {
+                let st = state.lock().recover_poison();
+                if let Err(code) =
+                    super::specialists222::attach_temporary_result(&st, &owner, operation, result)
+                {
+                    result["specialist_attachment"] = super::specialists222::failure(&code);
+                    result["next_action"] = json!(
+                        "Conserver la tâche native déjà admise. Faire vérifier son rattachement au profil ; aucune nouvelle mission ni nouvelle clé."
+                    );
                 }
             }
             return response;
         }
-        if matches!(operation,bridget_transport::specialists::SpecialistRequest::CaptureHistory{..}) {
-            let principal=(||->Result<_,String>{
-                let st=state.lock().recover_poison();
-                recheck_attested_thread(&st,conn,thread)?;
-                if !st.client_negotiations.get(conn).is_some_and(|n|n.capabilities.contains(&ClientCapability::SpecialistsV1)){return Err("specialists_capability_required".into());}
-                let (owner,instance)=live_connection_identity(&st,conn).ok_or("identity_unavailable")?;
-                parent_fact(&st,&owner,&instance,None,fact.as_ref())?.ok_or("permission_attestation_unavailable")?;
-                Ok(super::specialists222::agent_principal(&st,&owner,agent_communication_project(&st,&owner).as_ref()))
+        if matches!(
+            operation,
+            bridget_transport::specialists::SpecialistRequest::CaptureHistory { .. }
+        ) {
+            let principal = (|| -> Result<_, String> {
+                let st = state.lock().recover_poison();
+                recheck_attested_thread(&st, conn, thread)?;
+                if !st
+                    .client_negotiations
+                    .get(conn)
+                    .is_some_and(|n| n.capabilities.contains(&ClientCapability::SpecialistsV1))
+                {
+                    return Err("specialists_capability_required".into());
+                }
+                let (owner, instance) =
+                    live_connection_identity(&st, conn).ok_or("identity_unavailable")?;
+                parent_fact(&st, &owner, &instance, None, fact.as_ref())?
+                    .ok_or("permission_attestation_unavailable")?;
+                Ok(super::specialists222::agent_principal(
+                    &st,
+                    &owner,
+                    agent_communication_project(&st, &owner).as_ref(),
+                ))
             })();
-            let result=match principal {Ok(principal)=>super::specialists222::capture_history(operation,&principal,state),Err(code)=>super::specialists222::failure(&code)};
-            return DaemonToWrapper::NativeDelegationResult{result};
+            let result = match principal {
+                Ok(principal) => {
+                    super::specialists222::capture_history(operation, &principal, state)
+                }
+                Err(code) => super::specialists222::failure(&code),
+            };
+            return DaemonToWrapper::NativeDelegationResult { result };
         }
-        let mut controls=Vec::new();
+        let mut controls = Vec::new();
         let result = (|| -> Result<Value, String> {
             let mut st = state.lock().recover_poison();
             recheck_attested_thread(&st, conn, thread)?;
-            let (owner, instance) = live_connection_identity(&st, conn).ok_or("identity_unavailable")?;
+            let (owner, instance) =
+                live_connection_identity(&st, conn).ok_or("identity_unavailable")?;
             parent_fact(&st, &owner, &instance, None, fact.as_ref())?
                 .ok_or("permission_attestation_unavailable")?;
             let project = agent_communication_project(&st, &owner);
-            super::specialists222::handle_agent(&mut st, conn, &owner, project.as_ref(), operation, &mut controls)
-        })().unwrap_or_else(|code| super::specialists222::failure(&code));
-        let _failed=execute_controls(controls);
+            super::specialists222::handle_agent(
+                &mut st,
+                conn,
+                &owner,
+                project.as_ref(),
+                operation,
+                &mut controls,
+            )
+        })()
+        .unwrap_or_else(|code| super::specialists222::failure(&code));
+        let _failed = execute_controls(controls);
         return DaemonToWrapper::NativeDelegationResult { result };
     }
     let workspace = match &request {
-        NativeDelegationRequest::Delegate {workspace,..}=>workspace.as_ref(),
-        NativeDelegationRequest::AutoDelegate(request)=>request.workspace.as_ref(),
-        NativeDelegationRequest::AutoDelegateV2(request)=>request.workspace.as_ref(),
-        _=>None,
+        NativeDelegationRequest::Delegate { workspace, .. } => workspace.as_ref(),
+        NativeDelegationRequest::AutoDelegate(request) => request.workspace.as_ref(),
+        NativeDelegationRequest::AutoDelegateV2(request) => request.workspace.as_ref(),
+        _ => None,
     };
     if matches!(workspace, Some(WorkspaceRequest::CommitView {})) {
-        let refusal=if !crate::workspace_git::COMMIT_VIEW_LAUNCH_ENABLED {
+        let refusal = if !crate::workspace_git::COMMIT_VIEW_LAUNCH_ENABLED {
             Some("workspace_commit_view_not_enabled")
-        } else if !matches!(&request,NativeDelegationRequest::AutoDelegateV2(_)) {
+        } else if !matches!(&request, NativeDelegationRequest::AutoDelegateV2(_)) {
             Some("expected_base_commit_required")
         } else if !matches!(&request,NativeDelegationRequest::AutoDelegateV2(auto)
-            if auto.posture==Some(SpawnPosture::Discovery)) {
+            if auto.posture==Some(SpawnPosture::Discovery))
+        {
             Some("workspace_commit_view_requires_discovery")
-        } else {None};
-        if let Some(code)=refusal {
-            return DaemonToWrapper::NativeDelegationResult {result:failure(code)};
+        } else {
+            None
+        };
+        if let Some(code) = refusal {
+            return DaemonToWrapper::NativeDelegationResult {
+                result: failure(code),
+            };
         }
     }
-    if let NativeDelegationRequest::ReadCommitFile{task_id,path}=&request {
-        return DaemonToWrapper::NativeDelegationResult{result:read_commit_file(conn,task_id.as_deref(),path,thread,state)};
+    if let NativeDelegationRequest::ReadCommitFile { task_id, path } = &request {
+        return DaemonToWrapper::NativeDelegationResult {
+            result: read_commit_file(conn, task_id.as_deref(), path, thread, state),
+        };
     }
-    if let NativeDelegationRequest::RepairWorkspace {task_id,repair}=&request {
-        return DaemonToWrapper::NativeDelegationResult {result:
-            workspace_repair::repair(conn,task_id,repair,fact.as_ref(),thread,state)
-                .unwrap_or_else(|code|workspace_repair::failure_context(conn,task_id,&repair.request_id,&code,thread,state))};
+    if let NativeDelegationRequest::RepairWorkspace { task_id, repair } = &request {
+        return DaemonToWrapper::NativeDelegationResult {
+            result: workspace_repair::repair(conn, task_id, repair, fact.as_ref(), thread, state)
+                .unwrap_or_else(|code| {
+                    workspace_repair::failure_context(
+                        conn,
+                        task_id,
+                        &repair.request_id,
+                        &code,
+                        thread,
+                        state,
+                    )
+                }),
+        };
     }
-    if matches!(&request,NativeDelegationRequest::Catalogue) {
-        match foreign_catalogue177(conn,fact.as_ref(),thread,state) {
-            Ok(Some(result))=>return DaemonToWrapper::NativeDelegationResult {result},
-            Err(code)=>return DaemonToWrapper::NativeDelegationResult {result:failure(&code)},
-            Ok(None)=>{},
+    if matches!(&request, NativeDelegationRequest::Catalogue) {
+        match foreign_catalogue177(conn, fact.as_ref(), thread, state) {
+            Ok(Some(result)) => return DaemonToWrapper::NativeDelegationResult { result },
+            Err(code) => {
+                return DaemonToWrapper::NativeDelegationResult {
+                    result: failure(&code),
+                };
+            }
+            Ok(None) => {}
         }
     }
-    if let NativeDelegationRequest::ProviderCatalogueV1 {refresh,machine_id}=&request {
-        let mut controls=Vec::new();
-        let mut result=(|| {
-            let mut st=state.lock().recover_poison();
-            let human=st.connection_roles.get(conn)==Some(&ConnectionRole::Client)
-                && !st.conn_names.contains_key(conn) && !st.auxiliary_connections.contains(conn)
-                && st.peer_uids.get(conn).copied()==Some(bridget_transport::fsutil::effective_uid())
-                && st.client_negotiations.get(conn).is_some_and(|n|n.version==CLIENT_CONTRACT_VERSION && n.capabilities.contains(&bridget_transport::protocol::ClientCapability::ProviderCatalogueV1));
+    if let NativeDelegationRequest::ProviderCatalogueV1 {
+        refresh,
+        machine_id,
+    } = &request
+    {
+        let mut controls = Vec::new();
+        let mut result = (|| {
+            let mut st = state.lock().recover_poison();
+            let human = st.connection_roles.get(conn) == Some(&ConnectionRole::Client)
+                && !st.conn_names.contains_key(conn)
+                && !st.auxiliary_connections.contains(conn)
+                && st.peer_uids.get(conn).copied()
+                    == Some(bridget_transport::fsutil::effective_uid())
+                && st.client_negotiations.get(conn).is_some_and(|n| {
+                    n.version == CLIENT_CONTRACT_VERSION
+                        && n.capabilities.contains(
+                            &bridget_transport::protocol::ClientCapability::ProviderCatalogueV1,
+                        )
+                });
             if !human {
-                recheck_attested_thread(&st,conn,thread)?;
-                let (owner,instance)=live_connection_identity(&st,conn).ok_or("identity_unavailable")?;
-                parent_fact(&st,&owner,&instance,None,fact.as_ref())?.ok_or("permission_attestation_unavailable")?;
+                recheck_attested_thread(&st, conn, thread)?;
+                let (owner, instance) =
+                    live_connection_identity(&st, conn).ok_or("identity_unavailable")?;
+                parent_fact(&st, &owner, &instance, None, fact.as_ref())?
+                    .ok_or("permission_attestation_unavailable")?;
                 // The ordinary own-state capability gate remains authoritative.
             }
-            if *refresh {super::native_provider_catalogue220::refresh(&mut st,machine_id.as_deref(),&mut controls)}
-            else {
-                if machine_id.as_deref().is_some_and(|m|!bridget_transport::provider_catalogue::catalogue_token(m)) {return Err("provider_catalogue_machine_invalid".into());}
-                let mut view=super::native_provider_catalogue220::view(&st)?;
-                if let Some(machine)=machine_id {
-                    for key in ["options","connection_catalogues"] {
-                        if let Some(values)=view[key].as_array_mut() {values.retain(|v|v["machine_id"]==machine.as_str());}
+            if *refresh {
+                super::native_provider_catalogue220::refresh(
+                    &mut st,
+                    machine_id.as_deref(),
+                    &mut controls,
+                )
+            } else {
+                if machine_id
+                    .as_deref()
+                    .is_some_and(|m| !bridget_transport::provider_catalogue::catalogue_token(m))
+                {
+                    return Err("provider_catalogue_machine_invalid".into());
+                }
+                let mut view = super::native_provider_catalogue220::view(&st)?;
+                if let Some(machine) = machine_id {
+                    for key in ["options", "connection_catalogues"] {
+                        if let Some(values) = view[key].as_array_mut() {
+                            values.retain(|v| v["machine_id"] == machine.as_str());
+                        }
                     }
                 }
                 Ok(view)
             }
-        })().unwrap_or_else(|code:String|failure(&code));
-        let failed=super::native_provider_catalogue220::send_controls(controls);
+        })()
+        .unwrap_or_else(|code: String| failure(&code));
+        let failed = super::native_provider_catalogue220::send_controls(controls);
         if !failed.is_empty() {
-            result["status"]=json!("unconfirmed");result["code"]=json!("provider_catalogue_refresh_unconfirmed");
-            result["next_action"]=json!("La remise de la demande au worker n’est pas confirmée. Rétablir son lien natif et relire une fois le catalogue. Si aucune observation nouvelle n’arrive, demander un seul rafraîchissement après le délai de 30 secondes. Ne relancer aucune mission.");
+            result["status"] = json!("unconfirmed");
+            result["code"] = json!("provider_catalogue_refresh_unconfirmed");
+            result["next_action"] = json!(
+                "La remise de la demande au worker n’est pas confirmée. Rétablir son lien natif et relire une fois le catalogue. Si aucune observation nouvelle n’arrive, demander un seul rafraîchissement après le délai de 30 secondes. Ne relancer aucune mission."
+            );
         }
-        return DaemonToWrapper::NativeDelegationResult {result};
+        return DaemonToWrapper::NativeDelegationResult { result };
     }
     if matches!(&request, NativeDelegationRequest::RoutingCatalogueV1 {}) {
         let result = {
@@ -6333,10 +8022,17 @@ fn handle_with_fact_inner(
         }
         return DaemonToWrapper::NativeDelegationResult { result };
     }
-    if matches!(&request,NativeDelegationRequest::Status {..}) {
-        let result=status_with_worker_observation(conn,&request,candidate_project.as_ref(),
-            fact.as_ref(),thread,state).unwrap_or_else(|code|failure(&code));
-        return DaemonToWrapper::NativeDelegationResult {result};
+    if matches!(&request, NativeDelegationRequest::Status { .. }) {
+        let result = status_with_worker_observation(
+            conn,
+            &request,
+            candidate_project.as_ref(),
+            fact.as_ref(),
+            thread,
+            state,
+        )
+        .unwrap_or_else(|code| failure(&code));
+        return DaemonToWrapper::NativeDelegationResult { result };
     }
     let continuation_key = match &request {
         NativeDelegationRequest::Continue { request_id, .. } => Some(request_id.clone()),
@@ -6370,13 +8066,18 @@ fn handle_with_fact_inner(
             if !can_own_task(&st, &task, &owner, &instance)? {
                 return Err("task_unavailable".into());
             }
-            if crate::agent_tracking::dormant(st.store.connection(),&task.child).map_err(|_|"tracking_storage_unavailable")? { return Err("agent_dormant".into()); }
+            if crate::agent_tracking::dormant(st.store.connection(), &task.child)
+                .map_err(|_| "tracking_storage_unavailable")?
+            {
+                return Err("agent_dormant".into());
+            }
             let current = parent_fact(&st, &owner, &instance, Some(request_id), fact.as_ref())?;
             if !continuation_parent_matches(
-                task.permission_snapshot.as_ref().map(|snapshot| &snapshot.parent),
+                task.permission_snapshot
+                    .as_ref()
+                    .map(|snapshot| &snapshot.parent),
                 current.as_ref(),
-            )
-            {
+            ) {
                 return Err("permission_not_inherited".into());
             }
             task
@@ -6389,14 +8090,22 @@ fn handle_with_fact_inner(
         Err(code) => {
             let mut result = {
                 let st = state.lock().recover_poison();
-                continuation_failure(&st, conn, remote_task_context.as_ref(), continuation_key.as_deref(), &code)
+                continuation_failure(
+                    &st,
+                    conn,
+                    remote_task_context.as_ref(),
+                    continuation_key.as_deref(),
+                    &code,
+                )
             };
             // Ce contexte vient uniquement de la tâche après contrôle du parent,
             // jamais du chemin ou de l'identité proposés par l'appelant.
             if let Some(task) = remote_task_context
                 && let Some(ref placement) = task.remote_placement
             {
-                if !result["detail"].is_object() { result["detail"] = json!({}); }
+                if !result["detail"].is_object() {
+                    result["detail"] = json!({});
+                }
                 result["detail"]["execution"] = json!({
                     "task_id":task.task_id, "child_agent_id":task.child,
                     "machine_id":placement.machine_id, "execution_cwd":task.effective_execution_cwd(),
@@ -6446,7 +8155,13 @@ fn handle_with_fact_inner(
             &mut st,
         ) {
             Ok(result) => result,
-            Err(code) => continuation_failure(&st, conn, remote_task_context.as_ref(), continuation_key.as_deref(), &code),
+            Err(code) => continuation_failure(
+                &st,
+                conn,
+                remote_task_context.as_ref(),
+                continuation_key.as_deref(),
+                &code,
+            ),
         };
         let drives = drives
             || previous_epoch.is_some_and(|seen| st.delegation_store.wait_epoch().get() != seen);
@@ -6461,25 +8176,55 @@ fn handle_with_fact_inner(
 }
 
 /// Le contexte appartient au parent attesté ; aucune projection de quota voisin.
-fn continuation_failure(st: &DaemonState, conn: &str, task: Option<&Task>, request_id: Option<&str>, code: &str) -> Value {
+fn continuation_failure(
+    st: &DaemonState,
+    conn: &str,
+    task: Option<&Task>,
+    request_id: Option<&str>,
+    code: &str,
+) -> Value {
     let mut result = failure(code);
-    if code != "provider_quota_exhausted" { return result; }
-    let Some(task) = task else { return result; };
-    let Some((owner, instance)) = live_connection_identity(st, conn) else { return result; };
-    if !can_own_task(st, task, &owner, &instance).unwrap_or(false) { return result; }
-    let NativeDelegationRequest::Delegate { agent_type, .. } = &task.request else { return result; };
-    let Some(quota) = st.provider_limits.scoped_quota(agent_type, task.child_instance.as_deref().unwrap_or(""), unix_timestamp()) else { return result; };
-    if !quota.launch_blocked { return result; }
-    if !result["detail"].is_object() { result["detail"] = json!({}); }
+    if code != "provider_quota_exhausted" {
+        return result;
+    }
+    let Some(task) = task else {
+        return result;
+    };
+    let Some((owner, instance)) = live_connection_identity(st, conn) else {
+        return result;
+    };
+    if !can_own_task(st, task, &owner, &instance).unwrap_or(false) {
+        return result;
+    }
+    let NativeDelegationRequest::Delegate { agent_type, .. } = &task.request else {
+        return result;
+    };
+    let Some(quota) = st.provider_limits.scoped_quota(
+        agent_type,
+        task.child_instance.as_deref().unwrap_or(""),
+        unix_timestamp(),
+    ) else {
+        return result;
+    };
+    if !quota.launch_blocked {
+        return result;
+    }
+    if !result["detail"].is_object() {
+        result["detail"] = json!({});
+    }
     result["scope"] = json!("this_continuation");
-    result["message"] = json!("Après un reset, laisser le pilote relire le quota de cet enfant, puis reprendre la même demande si sa garde reste ouverte. Un ancien pilote chargé nécessite une mise à jour native. Ce refus concerne cette reprise ; les autres travaux autorisés suivent leur propre état.");
+    result["message"] = json!(
+        "Après un reset, laisser le pilote relire le quota de cet enfant, puis reprendre la même demande si sa garde reste ouverte. Un ancien pilote chargé nécessite une mise à jour native. Ce refus concerne cette reprise ; les autres travaux autorisés suivent leur propre état."
+    );
     result["detail"]["task_id"] = json!(task.task_id);
     result["detail"]["request_id"] = json!(request_id);
     result["detail"]["child_instance"] = json!(task.child_instance);
     result["detail"]["machine_id"] = json!(task.remote_placement.as_ref().map(|p| &p.machine_id));
     result["detail"]["resets_at"] = json!(quota.resets_at);
     result["detail"]["quota"] = json!(quota);
-    result["detail"]["human_action"] = json!("Si le pilote ne peut pas être actualisé dans le mandat courant, demander une maintenance ciblée de cet enfant. Ne pas effacer le cache ni remplacer le compte ou une mission d'issue inconnue.");
+    result["detail"]["human_action"] = json!(
+        "Si le pilote ne peut pas être actualisé dans le mandat courant, demander une maintenance ciblée de cet enfant. Ne pas effacer le cache ni remplacer le compte ou une mission d'issue inconnue."
+    );
     result
 }
 
@@ -6517,7 +8262,9 @@ fn continuation_parent_matches(
         {
             let mut comparable = frozen.clone();
             comparable.run_id.clone_from(&current.run_id);
-            comparable.provider_session_id.clone_from(&current.provider_session_id);
+            comparable
+                .provider_session_id
+                .clone_from(&current.provider_session_id);
             comparable.revision = current.revision;
             comparable == *current
         }
@@ -6603,8 +8350,12 @@ fn remote_parent_proof(
         }
         Ok(permission_digest)
     } else {
-        if let Some((digest,error))=super::origin_proof::sources(state,owner,parent,None,admitted)? {
-            if error.is_some(){return Err("remote_parent_proof_invalid".into());}
+        if let Some((digest, error)) =
+            super::origin_proof::sources(state, owner, parent, None, admitted)?
+        {
+            if error.is_some() {
+                return Err("remote_parent_proof_invalid".into());
+            }
             return Ok(digest);
         }
         crate::native_permissions::prove_parent_permissions(parent, parent.revision)
@@ -6706,28 +8457,39 @@ fn delegate_remote_with_routing(
                 .cloned()
                 .ok_or("routing_probe_required")?;
             let candidate = plan.candidates[index].clone();
-            let snapshot: RoutingAdmissionSnapshot = serde_json::from_slice(&receipt.metadata)
-                .map_err(|_| "auto_admission_invalid")?;
+            let snapshot: RoutingAdmissionSnapshot =
+                serde_json::from_slice(&receipt.metadata).map_err(|_| "auto_admission_invalid")?;
             let decision = snapshot.decision.ok_or("auto_admission_invalid")?;
             // Le profil initial sert à la revalidation. L’effort d’exécution
             // appartient à la décision durable et au canon Delegate figé.
-            if let Some(code) = routing_change_error("delegate_contract", &[
-                ("canonical", receipt.delegate_canonical.as_deref() != Some(canonical.as_slice())),
-                ("effort", decision.effort != *effort),
-                ("machine", candidate.machine_id != *machine),
-                ("profile", candidate.agent_type != *agent_type),
-                ("model", candidate.model != *model),
-            ]) { return Err(code); }
+            if let Some(code) = routing_change_error(
+                "delegate_contract",
+                &[
+                    (
+                        "canonical",
+                        receipt.delegate_canonical.as_deref() != Some(canonical.as_slice()),
+                    ),
+                    ("effort", decision.effort != *effort),
+                    ("machine", candidate.machine_id != *machine),
+                    ("profile", candidate.agent_type != *agent_type),
+                    ("model", candidate.model != *model),
+                ],
+            ) {
+                return Err(code);
+            }
             Ok::<_, String>((auto, candidate, observation))
         })
         .transpose()?;
-    if matches!(workspace,Some(WorkspaceRequest::CommitView {})) && routing.is_none() {
+    if matches!(workspace, Some(WorkspaceRequest::CommitView {})) && routing.is_none() {
         return Err("expected_base_commit_required".into());
     }
     // Le premier contrôle168 Worktree atteste la base et les droits, sans
     // matérialisation Git avant que la Task ne soit durcie.
-    let inspect_only =
-        routing.is_some() && matches!(workspace, Some(WorkspaceRequest::Worktree { .. } | WorkspaceRequest::CommitView {}));
+    let inspect_only = routing.is_some()
+        && matches!(
+            workspace,
+            Some(WorkspaceRequest::Worktree { .. } | WorkspaceRequest::CommitView {})
+        );
     let (owner, parent, worker, mut prepare, task_id) = {
         let st = state.lock().recover_poison();
         recheck_attested_thread(&st, conn, thread)?;
@@ -6759,15 +8521,16 @@ fn delegate_remote_with_routing(
             return Err("remote_agent_type_forbidden".into());
         }
         let original_mapping = st.registry.project_mapping(machine, project_id)?;
-        let origin_host=super::origin_proof::host_for_owner(&st,&owner)?;
-        let mapping = original_mapping.for_origin(machine, &origin_host)
+        let origin_host = super::origin_proof::host_for_owner(&st, &owner)?;
+        let mapping = original_mapping
+            .for_origin(machine, &origin_host)
             .ok_or("remote_origin_host_mismatch")?;
         let source = Path::new(cwd);
         if !source.is_absolute()
             || source
                 .components()
                 .any(|c| matches!(c, std::path::Component::ParentDir))
-            || crate::lifecycle::source_root(&parent,source).is_err()
+            || crate::lifecycle::source_root(&parent, source).is_err()
         {
             return Err("cwd_outside_parent_project".into());
         }
@@ -6790,29 +8553,42 @@ fn delegate_remote_with_routing(
                 .get(machine)
                 .map(|session| session.epoch.as_str())
                 != Some(observation.connection_epoch.as_str())
-            {
-                return Err("routing_connection_changed:worker_prepare:worker_epoch".into());
-            }
-        if let Some((auto,candidate,observed))=&routing {
-            let current=super::native_provider_catalogue220::model_option_account(
-                &st,&st.registry,candidate,auto.service_tier.as_deref())?;
-            if current!=observed.model_option_account {return Err("model_options_account_changed".into());}
+        {
+            return Err("routing_connection_changed:worker_prepare:worker_epoch".into());
         }
-        let prepare = WorkerPrepare { service_tier: routing.as_ref().and_then(|(auto,_,_)|auto.service_tier.clone()),
+        if let Some((auto, candidate, observed)) = &routing {
+            let current = super::native_provider_catalogue220::model_option_account(
+                &st,
+                &st.registry,
+                candidate,
+                auto.service_tier.as_deref(),
+            )?;
+            if current != observed.model_option_account {
+                return Err("model_options_account_changed".into());
+            }
+        }
+        let prepare = WorkerPrepare {
+            service_tier: routing
+                .as_ref()
+                .and_then(|(auto, _, _)| auto.service_tier.clone()),
             machine_id: machine.clone(),
             project_id: project_id.clone(),
             provisioning_revision: provision.provisioning_revision,
             mapping_revision: mapping.mapping_revision,
             origin_host: mapping.source_host.clone(),
-            origin_cwd: if matches!(workspace,Some(WorkspaceRequest::CommitView {})) {
+            origin_cwd: if matches!(workspace, Some(WorkspaceRequest::CommitView {})) {
                 mapping.source_root.to_string_lossy().into_owned()
-            } else {cwd.clone()},
+            } else {
+                cwd.clone()
+            },
             source_root: mapping.source_root.to_string_lossy().into_owned(),
             remote_root: mapping.remote_root.to_string_lossy().into_owned(),
             source_root_identity: mapping.expected_git_identity.clone(),
-            relative_cwd: if matches!(workspace,Some(WorkspaceRequest::CommitView {})) {
+            relative_cwd: if matches!(workspace, Some(WorkspaceRequest::CommitView {})) {
                 ".".into()
-            } else {relative},
+            } else {
+                relative
+            },
             base_commit: routing
                 .as_ref()
                 .and_then(|(auto, _, _)| auto.expected_base_commit.clone()),
@@ -6853,13 +8629,31 @@ fn delegate_remote_with_routing(
         return Err("remote_prepare_invalid".into());
     }
     if let Some((auto, _, observation)) = &routing
-        && let Some(code) = routing_change_error("worker_prepare", &[
-            ("base", prepared.placement.base_commit != auto.expected_base_commit),
-            ("definition", prepared.placement.definition_digest != observation.definition_digest),
-            ("permissions", prepared.placement.permission_digest != observation.permission_digest),
-        ]) { return Err(code); }
+        && let Some(code) = routing_change_error(
+            "worker_prepare",
+            &[
+                (
+                    "base",
+                    prepared.placement.base_commit != auto.expected_base_commit,
+                ),
+                (
+                    "definition",
+                    prepared.placement.definition_digest != observation.definition_digest,
+                ),
+                (
+                    "permissions",
+                    prepared.placement.permission_digest != observation.permission_digest,
+                ),
+            ],
+        )
+    {
+        return Err(code);
+    }
     if remote_parent_proof(state, &owner, &parent, None)? != proof {
-        return Err(permission_change::code("after_inspection", &["permission_sources"]));
+        return Err(permission_change::code(
+            "after_inspection",
+            &["permission_sources"],
+        ));
     }
     {
         let mut st = state.lock().recover_poison();
@@ -6886,22 +8680,37 @@ fn delegate_remote_with_routing(
         }
     }
     // Garder les deux valeurs d'origine figées après transfert de Prepare.
-    let expected_source=(prepare.origin_cwd.clone(),prepare.relative_cwd.clone());
+    let expected_source = (prepare.origin_cwd.clone(), prepare.relative_cwd.clone());
     let outcome = (|| -> Result<(), String> {
-        if matches!(workspace,Some(WorkspaceRequest::CommitView{})) {
-            prepare.workspace=workspace.clone();
-            let binding=crate::remote_worker::commit_view_preparation_binding(&worker,&provisional,&prepare)
-                .map_err(|reason|format!("remote_prepare:{reason:?}"))?;
-            let st=state.lock().recover_poison();
-            let mut task=st.delegation_store.get(&task_id)?.ok_or("task_unavailable")?;
-            if task.state!="queued" || task.child_instance.is_some()
-                || task.commit_view_prepare.as_ref().is_some_and(|known|known!=&binding) {
+        if matches!(workspace, Some(WorkspaceRequest::CommitView {})) {
+            prepare.workspace = workspace.clone();
+            let binding = crate::remote_worker::commit_view_preparation_binding(
+                &worker,
+                &provisional,
+                &prepare,
+            )
+            .map_err(|reason| format!("remote_prepare:{reason:?}"))?;
+            let st = state.lock().recover_poison();
+            let mut task = st
+                .delegation_store
+                .get(&task_id)?
+                .ok_or("task_unavailable")?;
+            if task.state != "queued"
+                || task.child_instance.is_some()
+                || task
+                    .commit_view_prepare
+                    .as_ref()
+                    .is_some_and(|known| known != &binding)
+            {
                 return Err("remote_admission_changed".into());
             }
-            task.commit_view_prepare=Some(binding);
+            task.commit_view_prepare = Some(binding);
             st.delegation_store.save(&task)?;
         }
-        if matches!(workspace, Some(WorkspaceRequest::Worktree { .. } | WorkspaceRequest::CommitView {})) {
+        if matches!(
+            workspace,
+            Some(WorkspaceRequest::Worktree { .. } | WorkspaceRequest::CommitView {})
+        ) {
             prepare.workspace = workspace.clone();
             let response = remote_worker_roundtrip(
                 state,
@@ -6909,26 +8718,37 @@ fn delegate_remote_with_routing(
                 &provisional,
                 {
                     let operation = routing_prepare_operation(prepare, routing.as_ref(), false);
-                    let negotiated = state.lock().recover_poison()
-                        .remote_workers.get(&worker.machine_id)
-                        .is_some_and(|session| session.capabilities.contains(
-                            &bridget_transport::protocol::WorkerCapability::WorkspaceFailureV1));
+                    let negotiated = state
+                        .lock()
+                        .recover_poison()
+                        .remote_workers
+                        .get(&worker.machine_id)
+                        .is_some_and(|session| {
+                            session.capabilities.contains(
+                                &bridget_transport::protocol::WorkerCapability::WorkspaceFailureV1,
+                            )
+                        });
                     if negotiated {
                         bridget_transport::protocol::WorkerRequestOperation::PrepareDiagnosed {
                             prepare: Box::new(operation),
                         }
-                    } else { operation }
+                    } else {
+                        operation
+                    }
                 },
-                Instant::now()+if matches!(workspace,Some(WorkspaceRequest::CommitView{})) {
-                    Duration::from_secs(125)
-                } else {Duration::from_secs(30)+crate::workspace_git::WORKTREE_ADD_TIMEOUT},
+                Instant::now()
+                    + if matches!(workspace, Some(WorkspaceRequest::CommitView {})) {
+                        Duration::from_secs(125)
+                    } else {
+                        Duration::from_secs(30) + crate::workspace_git::WORKTREE_ADD_TIMEOUT
+                    },
             )
             .map_err(|e| format!("remote_workspace_prepare:{e:?}"))?;
-            if let WorkerResponseOperation::CommitViewRejected{reason,failure}=&response {
-                return Err(workspace_preparation210::view_error_code(*reason,*failure));
+            if let WorkerResponseOperation::CommitViewRejected { reason, failure } = &response {
+                return Err(workspace_preparation210::view_error_code(*reason, *failure));
             }
-            if let WorkerResponseOperation::WorkspaceRejected {reason,failure} = &response {
-                return Err(workspace_preparation210::error_code(*reason,*failure));
+            if let WorkerResponseOperation::WorkspaceRejected { reason, failure } = &response {
+                return Err(workspace_preparation210::error_code(*reason, *failure));
             }
             let WorkerResponseOperation::Prepared { prepared: isolated } = response else {
                 return Err("remote_prepare_invalid".into());
@@ -6936,7 +8756,10 @@ fn delegate_remote_with_routing(
             prepared = isolated;
         }
         if remote_parent_proof(state, &owner, &parent, None)? != proof {
-            return Err(permission_change::code("after_workspace", &["permission_sources"]));
+            return Err(permission_change::code(
+                "after_workspace",
+                &["permission_sources"],
+            ));
         }
         {
             let st = state.lock().recover_poison();
@@ -6960,7 +8783,7 @@ fn delegate_remote_with_routing(
             if mapping.mapping_revision != prepared.placement.mapping_revision
                 || !prepared.placement.matches_worker(&worker)
                 || prepared.placement.origin_cwd != expected_source.0
-                || (matches!(workspace,Some(WorkspaceRequest::CommitView {}))
+                || (matches!(workspace, Some(WorkspaceRequest::CommitView {}))
                     && prepared.placement.relative_cwd != expected_source.1)
                 || prepared.placement.project_id != *project_id
             {
@@ -6975,40 +8798,67 @@ fn delegate_remote_with_routing(
                 })
                 .transpose()?;
             if let Some(record) = &record {
-                if matches!(workspace,Some(WorkspaceRequest::CommitView{})) {
-                    let binding=task.commit_view_prepare.as_ref().ok_or("remote_workspace_missing")?;
-                    let reference=record.commit_view.as_ref().ok_or("remote_workspace_invalid")?;
-                    let path=Path::new(&record.path);
-                    if !matches!(record.strategy,crate::delegation::WorkspaceStrategy::CommitView)
-                        || reference.binding!=*binding || !record.branch.is_empty()
-                        || record.base_commit!=prepared.placement.base_commit.as_deref().ok_or("remote_workspace_invalid")?
-                        || Path::new(&record.toplevel)!=mapping.remote_root.join(&prepared.placement.relative_cwd)
-                        || !path.is_absolute() || path.components().any(|part|matches!(part,std::path::Component::ParentDir))
+                if matches!(workspace, Some(WorkspaceRequest::CommitView {})) {
+                    let binding = task
+                        .commit_view_prepare
+                        .as_ref()
+                        .ok_or("remote_workspace_missing")?;
+                    let reference = record
+                        .commit_view
+                        .as_ref()
+                        .ok_or("remote_workspace_invalid")?;
+                    let path = Path::new(&record.path);
+                    if !matches!(
+                        record.strategy,
+                        crate::delegation::WorkspaceStrategy::CommitView
+                    ) || reference.binding != *binding
+                        || !record.branch.is_empty()
+                        || record.base_commit
+                            != prepared
+                                .placement
+                                .base_commit
+                                .as_deref()
+                                .ok_or("remote_workspace_invalid")?
+                        || Path::new(&record.toplevel)
+                            != mapping.remote_root.join(&prepared.placement.relative_cwd)
+                        || !path.is_absolute()
+                        || path
+                            .components()
+                            .any(|part| matches!(part, std::path::Component::ParentDir))
                         || path.starts_with(&mapping.remote_root)
-                        || !path.ends_with(binding.key().map_err(|_|"remote_workspace_invalid")?)
+                        || !path.ends_with(binding.key().map_err(|_| "remote_workspace_invalid")?)
                         || !Path::new(&prepared.placement.execution_cwd).starts_with(path)
-                        || record.dirty!=Some(false) || record.head_commit.is_some() || record.branch_commit.is_some()
-                        || record.head_on_branch.is_some() || record.commit_count.is_some() || !record.commits.is_empty()
-                        || record.truncated {
+                        || record.dirty != Some(false)
+                        || record.head_commit.is_some()
+                        || record.branch_commit.is_some()
+                        || record.head_on_branch.is_some()
+                        || record.commit_count.is_some()
+                        || !record.commits.is_empty()
+                        || record.truncated
+                    {
                         return Err("remote_workspace_invalid".into());
                     }
                 } else {
-                let expected_branch = match workspace {
-                    Some(WorkspaceRequest::Worktree { branch, .. }) => branch
-                        .clone()
-                        .unwrap_or_else(|| format!("bridget/{}", &task_id[..8])),
-                    _ => return Err("remote_workspace_unexpected".into()),
-                };
-                if record.branch != expected_branch
-                    || prepared.placement.base_commit.as_deref() != Some(record.base_commit.as_str())
-                    || !Path::new(&prepared.placement.execution_cwd).starts_with(&record.path)
-                    || !Path::new(&record.path).starts_with(&mapping.remote_root)
-                    || !record.path.ends_with(&task_id[..8])
-                {
-                    return Err("remote_workspace_invalid".into());
+                    let expected_branch = match workspace {
+                        Some(WorkspaceRequest::Worktree { branch, .. }) => branch
+                            .clone()
+                            .unwrap_or_else(|| format!("bridget/{}", &task_id[..8])),
+                        _ => return Err("remote_workspace_unexpected".into()),
+                    };
+                    if record.branch != expected_branch
+                        || prepared.placement.base_commit.as_deref()
+                            != Some(record.base_commit.as_str())
+                        || !Path::new(&prepared.placement.execution_cwd).starts_with(&record.path)
+                        || !Path::new(&record.path).starts_with(&mapping.remote_root)
+                        || !record.path.ends_with(&task_id[..8])
+                    {
+                        return Err("remote_workspace_invalid".into());
+                    }
                 }
-                }
-            } else if matches!(workspace, Some(WorkspaceRequest::Worktree { .. }|WorkspaceRequest::CommitView{})) {
+            } else if matches!(
+                workspace,
+                Some(WorkspaceRequest::Worktree { .. } | WorkspaceRequest::CommitView {})
+            ) {
                 return Err("remote_workspace_missing".into());
             }
             task.workspace = record;
@@ -7027,7 +8877,13 @@ fn delegate_remote_with_routing(
             st.delegation_store.save(&task)?;
         }
         start_remote_task(
-            state, &task_id, &prepared, &parent, conn, thread, permission_proof,
+            state,
+            &task_id,
+            &prepared,
+            &parent,
+            conn,
+            thread,
+            permission_proof,
         )?;
         Ok(())
     })();
@@ -7098,7 +8954,12 @@ pub(super) fn remote_dispatch_proof(
         state,
         task,
         Stage::ParentProof,
-        remote_parent_proof(state, &task.owner, &snapshot.parent, task.admitted_parent()?.map(|_| task)),
+        remote_parent_proof(
+            state,
+            &task.owner,
+            &snapshot.parent,
+            task.admitted_parent()?.map(|_| task),
+        ),
     )?;
     let command_result = {
         let st = state.lock().recover_poison();
@@ -7565,7 +9426,16 @@ fn start_remote_task(
     thread: Option<&str>,
     permission_proof: Option<&bridget_transport::protocol::NativePermissionProof>,
 ) -> Result<(), String> {
-    start_remote_task_with(state, task_id, prepared, parent, conn, thread, permission_proof, None)
+    start_remote_task_with(
+        state,
+        task_id,
+        prepared,
+        parent,
+        conn,
+        thread,
+        permission_proof,
+        None,
+    )
 }
 
 /// Refus de capacité connu : code stable puis sous-code fermé facultatif.
@@ -7598,7 +9468,11 @@ fn start_remote_task_with(
     // le fait d'un tour ultérieur. La tâche et les révocations sont relues ensuite.
     let admitted_parent = {
         let st = state.lock().recover_poison();
-        st.delegation_store.get(task_id)?.ok_or("task_unavailable")?.admitted_parent()?.cloned()
+        st.delegation_store
+            .get(task_id)?
+            .ok_or("task_unavailable")?
+            .admitted_parent()?
+            .cloned()
     };
     let parent = admitted_parent.as_ref().unwrap_or(parent);
     // Une inspection n'acquiert jamais de slot ni d'identité de lancement.
@@ -7617,12 +9491,15 @@ fn start_remote_task_with(
         {
             return Err("remote_task_changed".into());
         }
-        recheck_task_model_option(&st,&task)?;
+        recheck_task_model_option(&st, &task)?;
         if let Some(plan) = recovery {
             // La préparation distante a libéré le mutex. Revalider avant de
             // réserver une nouvelle commande, y compris Cancel qui peut garder starting.
-            if task.guard_released || task.cleanup_done || task.mission_issued_at.is_some()
-                || task.result.is_some() || task.round_no() != 1
+            if task.guard_released
+                || task.cleanup_done
+                || task.mission_issued_at.is_some()
+                || task.result.is_some()
+                || task.round_no() != 1
                 || task.start_recovery.as_ref() != Some(plan)
                 || plan.phase != crate::delegation::StartRecoveryPhase::Prepared
             {
@@ -7630,22 +9507,36 @@ fn start_remote_task_with(
             }
             start_recovery::admission_open(&st)?;
             recheck_attested_thread(&st, conn, thread)?;
-            let mut changes = permission_change::parent_changes(parent,
-                task.permission_snapshot.as_ref().map(|snapshot| &snapshot.parent));
-            if task.admitted_parent()?.is_none() && live_connection_identity(&st, conn)
-                != Some((task.owner.clone(), task.owner_instance.clone())) {
+            let mut changes = permission_change::parent_changes(
+                parent,
+                task.permission_snapshot
+                    .as_ref()
+                    .map(|snapshot| &snapshot.parent),
+            );
+            if task.admitted_parent()?.is_none()
+                && live_connection_identity(&st, conn)
+                    != Some((task.owner.clone(), task.owner_instance.clone()))
+            {
                 changes.push("connection_identity");
             }
-            if task.permission_snapshot.as_ref().is_none_or(|snapshot| snapshot.child_policy != prepared.child_policy) {
+            if task
+                .permission_snapshot
+                .as_ref()
+                .is_none_or(|snapshot| snapshot.child_policy != prepared.child_policy)
+            {
                 changes.push("child_policy");
             }
-            if task.definition != prepared.definition { changes.push("definition"); }
+            if task.definition != prepared.definition {
+                changes.push("definition");
+            }
             if !changes.is_empty() {
                 return Err(permission_change::code("recovery_before_start", &changes));
             }
             let machine = st.registry.machine(&prepared.placement.machine_id)?;
-            let mapping = st.registry.project_mapping(&prepared.placement.machine_id,
-                &prepared.placement.project_id)?;
+            let mapping = st.registry.project_mapping(
+                &prepared.placement.machine_id,
+                &prepared.placement.project_id,
+            )?;
             if machine.provisioning_revision != prepared.placement.provisioning_revision
                 || mapping.mapping_revision != prepared.placement.mapping_revision
             {
@@ -7686,45 +9577,58 @@ fn start_remote_task_with(
         };
         // Un plan encore Prepared prouve qu'aucun Start n'a été envoyé.
         // Après coupure Fleet→Task, réutiliser le tuple exact déjà réservé.
-        let existing = recovery.and_then(|plan| st.fleet.recovery_candidates().into_iter()
-            .find(|c| c.lease.command_id == plan.new_command_id));
+        let existing = recovery.and_then(|plan| {
+            st.fleet
+                .recovery_candidates()
+                .into_iter()
+                .find(|c| c.lease.command_id == plan.new_command_id)
+        });
         let lease = if let Some(candidate) = existing {
-            if candidate.lease.name != task.child || candidate.cwd != order.cwd
+            if candidate.lease.name != task.child
+                || candidate.cwd != order.cwd
                 || candidate.agent_type != order.agent_type
                 || candidate.lease.remote_placement != order.remote_placement
                 || candidate.lease.deadline_at != order.deadline_at
                 || candidate.lease.deadline_at <= now
-                || candidate.resolved_definition.as_ref().is_some_and(|d| d != &prepared.definition)
-            {return Err("start_recovery_lease_unknown".into());}
+                || candidate
+                    .resolved_definition
+                    .as_ref()
+                    .is_some_and(|d| d != &prepared.definition)
+            {
+                return Err("start_recovery_lease_unknown".into());
+            }
             if candidate.resolved_definition.is_none() {
-                st.fleet.mark_starting(&candidate.lease, now, &prepared.definition)
-                    .map_err(|e|e.to_string())?;
+                st.fleet
+                    .mark_starting(&candidate.lease, now, &prepared.definition)
+                    .map_err(|e| e.to_string())?;
             }
             candidate.lease
         } else {
-        let submission = if recovery.is_some()
-            && st
-                .fleet
-                .desired_entry(&task.child)
-                .map_err(|e| e.to_string())?
-                .is_some_and(|entry| entry.lifecycle_state == DesiredLifecycleState::Stopped)
-        {
-            st.fleet.request_relaunch(&order, now)
-        } else {
-            st.fleet.request_spawn(&order, now)
-        }
-        .map_err(|e| e.to_string())?;
-        let lease=match submission {
-            crate::fleet::SpawnSubmission::Start(lease)=>lease,
-            crate::fleet::SpawnSubmission::Terminal(issue) if recovery.is_some()=>{
-                return Err(start_recovery::local_reservation_refusal(&st,&mut task,&issue)?);
-            },
-            _=>return Err("remote_spawn_not_new".into()),
-        };
-        st.fleet
-            .mark_starting(&lease, now, &prepared.definition)
+            let submission = if recovery.is_some()
+                && st
+                    .fleet
+                    .desired_entry(&task.child)
+                    .map_err(|e| e.to_string())?
+                    .is_some_and(|entry| entry.lifecycle_state == DesiredLifecycleState::Stopped)
+            {
+                st.fleet.request_relaunch(&order, now)
+            } else {
+                st.fleet.request_spawn(&order, now)
+            }
             .map_err(|e| e.to_string())?;
-        lease
+            let lease = match submission {
+                crate::fleet::SpawnSubmission::Start(lease) => lease,
+                crate::fleet::SpawnSubmission::Terminal(issue) if recovery.is_some() => {
+                    return Err(start_recovery::local_reservation_refusal(
+                        &st, &mut task, &issue,
+                    )?);
+                }
+                _ => return Err("remote_spawn_not_new".into()),
+            };
+            st.fleet
+                .mark_starting(&lease, now, &prepared.definition)
+                .map_err(|e| e.to_string())?;
+            lease
         };
         task.child_instance = Some(lease.instance_id.clone());
         task.state = "starting".into();
@@ -7776,9 +9680,12 @@ fn start_remote_task_with(
     let confirmation_timeout = Duration::from_secs(30);
     let detailed = {
         let st = state.lock().recover_poison();
-        st.remote_workers.get(&worker.machine_id).is_some_and(|peer| {
-            peer.capabilities.contains(&WorkerCapability::StartRecoveryV1)
-        })
+        st.remote_workers
+            .get(&worker.machine_id)
+            .is_some_and(|peer| {
+                peer.capabilities
+                    .contains(&WorkerCapability::StartRecoveryV1)
+            })
     };
     let operation = if detailed {
         WorkerRequestOperation::StartDetailed { start }
@@ -7810,9 +9717,16 @@ fn start_remote_task_with(
     if let Err(reason) = reserve_remote_result_slot(state, task_id) {
         // ReadyToRelease garde encore le bootstrap : aucune mission n'a été
         // remise. Demander son arrêt sans prétendre que le nettoyage est acquis.
-        if remote_worker_roundtrip(state, &worker, &command,
-            WorkerRequestOperation::Cancel { target: WorkerCancelScope::Command {} },
-            Instant::now() + Duration::from_secs(3)).is_err()
+        if remote_worker_roundtrip(
+            state,
+            &worker,
+            &command,
+            WorkerRequestOperation::Cancel {
+                target: WorkerCancelScope::Command {},
+            },
+            Instant::now() + Duration::from_secs(3),
+        )
+        .is_err()
         {
             log::warn!("remote_start_cleanup_pending stage=result_slot");
         }
@@ -7820,7 +9734,9 @@ fn start_remote_task_with(
     }
     let authority_task = {
         let st = state.lock().recover_poison();
-        st.delegation_store.get(task_id)?.ok_or("task_unavailable")?
+        st.delegation_store
+            .get(task_id)?
+            .ok_or("task_unavailable")?
     };
     let admitted = authority_task.admitted_parent()?.is_some();
     if authority_task.admitted_parent()?.cloned() != admitted_parent {
@@ -7828,17 +9744,25 @@ fn start_remote_task_with(
     }
     // Seul le contrat historique réatteste le tour. La version 1 conserve
     // l'autorité de cette mission ; révocations et sources sont encore relues.
-    let fresh_attested = if admitted { None } else { match (thread, permission_proof) {
-        (Some(expected_thread), Some(proof)) => {
-            let fresh = super::origin_proof::reattest(conn, proof, state)
-                .map_err(super::origin_proof::attestation_failure)?;
-            permission_change::check_reattested_parent("before_release_attestation", parent,
-                fresh.permissions.as_ref(), fresh.thread_id != expected_thread)?;
-            fresh.permissions
+    let fresh_attested = if admitted {
+        None
+    } else {
+        match (thread, permission_proof) {
+            (Some(expected_thread), Some(proof)) => {
+                let fresh = super::origin_proof::reattest(conn, proof, state)
+                    .map_err(super::origin_proof::attestation_failure)?;
+                permission_change::check_reattested_parent(
+                    "before_release_attestation",
+                    parent,
+                    fresh.permissions.as_ref(),
+                    fresh.thread_id != expected_thread,
+                )?;
+                fresh.permissions
+            }
+            (None, None) => None,
+            _ => return Err("permission_attestation_unavailable".into()),
         }
-        (None, None) => None,
-        _ => return Err("permission_attestation_unavailable".into()),
-    }};
+    };
     remote_parent_proof(state, &owner, parent, admitted.then_some(&authority_task))?;
     let permit = {
         let st = state.lock().recover_poison();
@@ -7849,7 +9773,8 @@ fn start_remote_task_with(
         if !admitted {
             recheck_attested_thread(&st, conn, thread)?;
             if live_connection_identity(&st, conn)
-                != Some((task.owner.clone(), task.owner_instance.clone())) {
+                != Some((task.owner.clone(), task.owner_instance.clone()))
+            {
                 return Err("permission_attestation_unavailable".into());
             }
         }
@@ -7857,10 +9782,18 @@ fn start_remote_task_with(
             return Err("invalid_record".into());
         };
         let current = parent_fact(
-            &st, &task.owner, &task.owner_instance, Some(request_id),
+            &st,
+            &task.owner,
+            &task.owner_instance,
+            Some(request_id),
             task.admitted_parent()?.or(fresh_attested.as_ref()),
         )?;
-        permission_change::check_reattested_parent("before_release_parent", parent, current.as_ref(), false)?;
+        permission_change::check_reattested_parent(
+            "before_release_parent",
+            parent,
+            current.as_ref(),
+            false,
+        )?;
         let provision = st.registry.machine(&worker.machine_id)?;
         let mapping = st
             .registry
@@ -7878,7 +9811,7 @@ fn start_remote_task_with(
             return Err("remote_release_changed".into());
         }
         recheck_remote_dispatch(&st, &task, &authority_task)?;
-        recheck_task_model_option(&st,&task)?;
+        recheck_task_model_option(&st, &task)?;
         let control = crate::referent_control::read(st.store.connection())
             .map_err(|_| "control_state_unavailable")?;
         let halt = st
@@ -7898,10 +9831,19 @@ fn start_remote_task_with(
             mapping_revision: mapping.mapping_revision,
             provisioning_revision: worker.provisioning_revision,
             issued_at: ready_at,
-            expires_at: ready_at + if st.remote_workers.get(&worker.machine_id)
-                .is_some_and(|peer| peer.capabilities.contains(&WorkerCapability::ReleaseLeaseV2)) {
+            expires_at: ready_at
+                + if st
+                    .remote_workers
+                    .get(&worker.machine_id)
+                    .is_some_and(|peer| {
+                        peer.capabilities
+                            .contains(&WorkerCapability::ReleaseLeaseV2)
+                    })
+                {
                     WORKER_RELEASE_LEASE_SECS
-                } else { WORKER_RELEASE_TTL_SECS },
+                } else {
+                    WORKER_RELEASE_TTL_SECS
+                },
         }
     };
     let response = remote_worker_roundtrip(
@@ -8247,7 +10189,9 @@ struct ResolveTargetArgs<'a> {
     pub child_requests: Option<&'a str>,
 }
 
-fn resolve_target(args: ResolveTargetArgs<'_>) -> Result<
+fn resolve_target(
+    args: ResolveTargetArgs<'_>,
+) -> Result<
     (
         AgentRegistry,
         Option<bridget_transport::protocol::NativePermissionSnapshot>,
@@ -8255,7 +10199,21 @@ fn resolve_target(args: ResolveTargetArgs<'_>) -> Result<
     ),
     String,
 > {
-    let ResolveTargetArgs { registry, source, limits, owner, instance, fact, agent_type, model, effort, cwd, posture, workspace, child_requests } = args;
+    let ResolveTargetArgs {
+        registry,
+        source,
+        limits,
+        owner,
+        instance,
+        fact,
+        agent_type,
+        model,
+        effort,
+        cwd,
+        posture,
+        workspace,
+        child_requests,
+    } = args;
     target_resolver(
         registry,
         source,
@@ -8299,17 +10257,37 @@ fn target_resolver<'a>(
     ),
     String,
 > + 'a {
-    target_resolver_in_catalogue171(registry, source, limits, owner, instance, fact, agent_type,
-        model, effort, cwd, workspace, child_requests, None)
+    target_resolver_in_catalogue171(
+        registry,
+        source,
+        limits,
+        owner,
+        instance,
+        fact,
+        agent_type,
+        model,
+        effort,
+        cwd,
+        workspace,
+        child_requests,
+        None,
+    )
 }
 
-pub(crate) fn catalogue_entries177(registry:&AgentRegistry,source:&crate::lifecycle::SourceEnvironment,
-    limits:&crate::provider_limits::ProviderLimits,owner:&str,instance:&str,
-    fact:Option<&bridget_transport::protocol::ProviderPermissions>,verdict_cwd:Option<&Path>,blocked:&[String])
-    ->Result<Vec<Value>,String>{
-            let catalogue_read = std::cell::RefCell::new(crate::native_permissions::CataloguePermissionRead171::new(
-                fact, verdict_cwd));
-            let entries: Vec<Value> = registry.resolved_definitions()?.into_iter()
+pub(crate) fn catalogue_entries177(
+    registry: &AgentRegistry,
+    source: &crate::lifecycle::SourceEnvironment,
+    limits: &crate::provider_limits::ProviderLimits,
+    owner: &str,
+    instance: &str,
+    fact: Option<&bridget_transport::protocol::ProviderPermissions>,
+    verdict_cwd: Option<&Path>,
+    blocked: &[String],
+) -> Result<Vec<Value>, String> {
+    let catalogue_read = std::cell::RefCell::new(
+        crate::native_permissions::CataloguePermissionRead171::new(fact, verdict_cwd),
+    );
+    let entries: Vec<Value> = registry.resolved_definitions()?.into_iter()
                 .filter(|(name,_)| !name.starts_with("__"))
                 .map(|(name,definition)| {
                     // Modèle déclaré, effort omis : aucune requête ni fait request-scoped inventé.
@@ -8385,20 +10363,26 @@ pub(crate) fn catalogue_entries177(registry:&AgentRegistry,source:&crate::lifecy
                         "discovery":discovery.is_ok(),"development":development.as_ref().is_ok_and(|(_,_,p)| *p==SpawnPosture::Development),
                         "development_refusal":development.err().map(|code| code.split_once(':').map_or(code.as_str(), |(canonical, _)| canonical).to_owned()),"can_run":can_run,"constraints":constraints,"quota":quota})
                 }).collect();
-            catalogue_read.into_inner().finish(entries)
+    catalogue_read.into_inner().finish(entries)
 }
 
-fn catalogue_projection177(entries:Vec<Value>,caller_held_queue:bool,halted:bool,
-    fact:Option<&bridget_transport::protocol::ProviderPermissions>,permission:Option<&ParentPermission>,verdict_cwd:Option<&Path>)->Value {
+fn catalogue_projection177(
+    entries: Vec<Value>,
+    caller_held_queue: bool,
+    halted: bool,
+    fact: Option<&bridget_transport::protocol::ProviderPermissions>,
+    permission: Option<&ParentPermission>,
+    verdict_cwd: Option<&Path>,
+) -> Value {
     json!({"version":1,"providers":entries,"queue":{"held":caller_held_queue},"delegations_halted":halted,"features":{"fallback":true,"fallback_max":3,"resume_on_limit":true,"resume_max_wait_secs":21600,"resume_max_rounds":2},"checks":{"binary":true,"quota":"observed","auth":false},"verdict_context":{"cwd":verdict_cwd,"fact_scope":"session"},"workspace_strategies":["shared","worktree"],"child_requests_default":"deny","child_request_parent_window_secs":CHILD_REQUEST_PARENT_WINDOW_SECS,"child_request_human_window_secs":CHILD_REQUEST_HUMAN_WINDOW_SECS,"cwd_root":fact.map(|f|Path::new(&f.cwd)).or_else(||permission.and_then(ParentPermission::root)),"cwd_scope":if fact.is_some(){Some("project")}else{permission.map(ParentPermission::scope)},"max_children":16,"max_depth":8,"mission_reply_limit_secs":MISSION_REPLY_LIMIT_SECS,"mission_reply_default_secs":MISSION_REPLY_LIMIT_SECS,"mission_reply_min_secs":MISSION_REPLY_MIN_SECS,"mission_reply_max_secs":MISSION_REPLY_MAX_SECS,"wait_timeout_default_secs":WAIT_DEFAULT_SECS,"wait_timeout_max_secs":WAIT_MAX_SECS,"brief_max_bytes":crate::handoff::MAX_BODY_BYTES,"keep_alive_min_secs":60,"keep_alive_max_secs":7200,"max_rounds":8})
 }
 
-
 // O(P+O), P entrées locales et O options déclarées. Aucun accès fournisseur,
 // aucune sonde distante, aucun changement du verdict local ni des droits.
-fn fresh_routing_catalogue217(registry: &AgentRegistry, observed_at: i64)
-    -> Result<bridget_transport::protocol::RoutingCatalogueV1, String>
-{
+fn fresh_routing_catalogue217(
+    registry: &AgentRegistry,
+    observed_at: i64,
+) -> Result<bridget_transport::protocol::RoutingCatalogueV1, String> {
     // Relire les options persistantes sans modifier le registre utilisé par
     // les tâches. Si la lecture échoue, aucun choix ancien n’est annoncé.
     AgentRegistry::load_from_path_quiet(registry.source().to_path_buf())
@@ -8452,25 +10436,43 @@ pub(super) fn catalogue_scope212(
 #[cfg(test)]
 mod catalogue212_tests {
     use super::*;
-    use bridget_transport::protocol::{RoutingCatalogueOptionV1, RoutingCatalogueV1, RoutingEntitlement};
+    use bridget_transport::protocol::{
+        RoutingCatalogueOptionV1, RoutingCatalogueV1, RoutingEntitlement,
+    };
 
     #[test]
     fn spec212_local_refusal_does_not_deny_remote_declared_route() {
         let option = RoutingCatalogueOptionV1 {
-            machine_id:"sysle2".into(), engine:"claude".into(),
-            connection_id:"claude-sysle2".into(), model:"claude-opus-5-5".into(),
-            supported_efforts:vec![], default_effort:None,
-            provenance:"declared".into(), observed_at:None,
-            entitlement:RoutingEntitlement::Unknown,
+            machine_id: "sysle2".into(),
+            engine: "claude".into(),
+            connection_id: "claude-sysle2".into(),
+            model: "claude-opus-5-5".into(),
+            supported_efforts: vec![],
+            default_effort: None,
+            provenance: "declared".into(),
+            observed_at: None,
+            entitlement: RoutingEntitlement::Unknown,
         };
         let mut view = json!({"providers":[{"agent_type":"claude-sysle2","can_run":false,
             "constraints":[{"code":"command_missing"}]}],"delegations_halted":true});
         let original = view.clone();
-        catalogue_scope212(&mut view, Ok(RoutingCatalogueV1 {
-            version:1, observed_at:42, options:vec![option],
-        }), "monordinateur");
-        assert_eq!(view["providers"][0]["can_run"], original["providers"][0]["can_run"]);
-        assert_eq!(view["providers"][0]["constraints"], original["providers"][0]["constraints"]);
+        catalogue_scope212(
+            &mut view,
+            Ok(RoutingCatalogueV1 {
+                version: 1,
+                observed_at: 42,
+                options: vec![option],
+            }),
+            "monordinateur",
+        );
+        assert_eq!(
+            view["providers"][0]["can_run"],
+            original["providers"][0]["can_run"]
+        );
+        assert_eq!(
+            view["providers"][0]["constraints"],
+            original["providers"][0]["constraints"]
+        );
         assert_eq!(view["delegations_halted"], true);
         assert_eq!(view["providers"][0]["machine_id"], "monordinateur");
         assert_eq!(view["providers_scope"]["kind"], "origin_machine");
@@ -8483,12 +10485,19 @@ mod catalogue212_tests {
 
     #[test]
     fn spec212_missing_fleet_is_not_success_or_private_error() {
-        for code in ["routing_policy_disabled", "routing_policy_unavailable", "private-path SECRET"] {
+        for code in [
+            "routing_policy_disabled",
+            "routing_policy_unavailable",
+            "private-path SECRET",
+        ] {
             let mut view = json!({"providers":[]});
             catalogue_scope212(&mut view, Err(code.into()), "monordinateur");
             assert_eq!(view["fleet"]["status"], "unavailable");
             assert_eq!(view["fleet"]["options"], json!([]));
-            assert_eq!(view["catalogue_guidance"]["next_action"], view["fleet"]["next_action"]);
+            assert_eq!(
+                view["catalogue_guidance"]["next_action"],
+                view["fleet"]["next_action"]
+            );
             assert!(!view.to_string().contains("SECRET"));
             assert!(!view.to_string().contains("private-path"));
         }
@@ -8509,7 +10518,9 @@ fn target_resolver_in_catalogue171<'a>(
     cwd: &'a Path,
     workspace: Option<&'a WorkspaceRequest>,
     child_requests: Option<&'a str>,
-    catalogue: Option<&'a std::cell::RefCell<crate::native_permissions::CataloguePermissionRead171>>,
+    catalogue: Option<
+        &'a std::cell::RefCell<crate::native_permissions::CataloguePermissionRead171>,
+    >,
 ) -> impl FnMut(
     Option<SpawnPosture>,
 ) -> Result<
@@ -8524,7 +10535,9 @@ fn target_resolver_in_catalogue171<'a>(
     let mut policy_reader = fact
         .zip(registry.get(agent_type).ok())
         .map(|(parent, target)| {
-            crate::native_permissions::child_policy_reader_for_catalogue171(parent, target, cwd, source, catalogue)
+            crate::native_permissions::child_policy_reader_for_catalogue171(
+                parent, target, cwd, source, catalogue,
+            )
         });
     move |posture| {
         let target = registry.get(agent_type).map_err(|_| "agent_type_unknown")?;
@@ -8616,8 +10629,9 @@ fn target_resolver_in_catalogue171<'a>(
                 return Err("workspace_inheritance_unavailable".into());
             }
         }
-        if matches!(workspace,Some(WorkspaceRequest::CommitView {}))
-            && effective != SpawnPosture::Discovery {
+        if matches!(workspace, Some(WorkspaceRequest::CommitView {}))
+            && effective != SpawnPosture::Discovery
+        {
             return Err("workspace_commit_view_requires_discovery".into());
         }
         if child_requests == Some("forward") && target.protocol != "codex_app_server" {
@@ -8826,7 +10840,7 @@ fn admit_delegate(
         {
             return Err("workspace_creation_in_progress".into());
         }
-        super::specialists222::guard_child_admission(st,&owner)?;
+        super::specialists222::guard_child_admission(st, &owner)?;
         let fact = parent_fact(st, &owner, &instance, Some(request_id), attested)?;
         if child_requests.as_deref() == Some("forward")
             && fact.as_ref().is_none_or(|fact| {
@@ -8843,22 +10857,31 @@ fn admit_delegate(
         }
         let frozen_cwd = if let WorkspacePass::Remote { prepared, .. } = pass {
             let parent = fact.as_ref().ok_or("permission_attestation_unavailable")?;
-            let expected_origin=if matches!(workspace,Some(WorkspaceRequest::CommitView {})) {
+            let expected_origin = if matches!(workspace, Some(WorkspaceRequest::CommitView {})) {
                 if auto_receipt.is_none_or(|receipt| receipt.metadata_version != 2) {
                     return Err("expected_base_commit_required".into());
                 }
-                let machine=machine_id.as_ref().ok_or("remote_placement_invalid")?;
-                let origin=super::origin_proof::host_for_owner(st,&owner)?;
-                let mapping=st.registry.project_mapping(machine,
-                    project_id.as_ref().ok_or("remote_placement_invalid")?)?
-                    .for_origin(machine,&origin).ok_or("remote_origin_host_mismatch")?;
-                if prepared.placement.relative_cwd!="." || prepared.placement.origin_host!=origin {
+                let machine = machine_id.as_ref().ok_or("remote_placement_invalid")?;
+                let origin = super::origin_proof::host_for_owner(st, &owner)?;
+                let mapping = st
+                    .registry
+                    .project_mapping(
+                        machine,
+                        project_id.as_ref().ok_or("remote_placement_invalid")?,
+                    )?
+                    .for_origin(machine, &origin)
+                    .ok_or("remote_origin_host_mismatch")?;
+                if prepared.placement.relative_cwd != "."
+                    || prepared.placement.origin_host != origin
+                {
                     return Err("remote_placement_invalid".into());
                 }
                 mapping.source_root.to_string_lossy().into_owned()
-            } else {cwd.clone()};
+            } else {
+                cwd.clone()
+            };
             if prepared.placement.origin_cwd != expected_origin
-                || crate::lifecycle::source_root(parent,Path::new(cwd)).is_err()
+                || crate::lifecycle::source_root(parent, Path::new(cwd)).is_err()
                 || prepared.placement.machine_id
                     != *machine_id.as_ref().ok_or("remote_placement_invalid")?
                 || prepared.placement.project_id
@@ -8870,7 +10893,7 @@ fn admit_delegate(
         } else if let Some(fact) = &fact {
             let path =
                 std::fs::canonicalize(cwd).map_err(|error| path_error("cwd_unavailable", error))?;
-            let root = std::fs::canonicalize(crate::lifecycle::source_root(fact,&path)?)
+            let root = std::fs::canonicalize(crate::lifecycle::source_root(fact, &path)?)
                 .map_err(|error| path_error("cwd_unavailable", error))?;
             if !path.is_dir() || !path.starts_with(&root) {
                 return Err("cwd_outside_parent_project".into());
@@ -8960,20 +10983,20 @@ fn admit_delegate(
                 }
                 let pinned = AgentRegistry::from_resolved(agent_type, definition)?;
                 let (scoped, snapshot, effective) = resolve_target(ResolveTargetArgs {
-registry: &pinned,
-source: &st.source_env,
-limits,
-owner: &owner,
-instance: &instance,
-fact: fact.as_ref(),
-agent_type,
-model,
-effort: effort.as_deref(),
-cwd: &frozen_cwd,
-posture: *posture,
-workspace: workspace.as_ref(),
-child_requests: child_requests.as_deref(),
-})?;
+                    registry: &pinned,
+                    source: &st.source_env,
+                    limits,
+                    owner: &owner,
+                    instance: &instance,
+                    fact: fact.as_ref(),
+                    agent_type,
+                    model,
+                    effort: effort.as_deref(),
+                    cwd: &frozen_cwd,
+                    posture: *posture,
+                    workspace: workspace.as_ref(),
+                    child_requests: child_requests.as_deref(),
+                })?;
                 (
                     selected.clone(),
                     definition.clone(),
@@ -8984,10 +11007,16 @@ child_requests: child_requests.as_deref(),
                 )
             }
             WorkspacePass::Shared | WorkspacePass::Probe => {
-                let service_tier=auto_receipt.filter(|receipt|receipt.metadata_version==2)
-                    .map(recovered_routing_request).transpose()?.and_then(|auto|auto.service_tier);
-                let registry=st.registry.clone().pin_delegation_service_tier(
-                    agent_type,model,service_tier.as_deref())?;
+                let service_tier = auto_receipt
+                    .filter(|receipt| receipt.metadata_version == 2)
+                    .map(recovered_routing_request)
+                    .transpose()?
+                    .and_then(|auto| auto.service_tier);
+                let registry = st.registry.clone().pin_delegation_service_tier(
+                    agent_type,
+                    model,
+                    service_tier.as_deref(),
+                )?;
                 let mut selected = None;
                 let mut tried = Vec::new();
                 let mut requested_error = None;
@@ -8996,23 +11025,22 @@ child_requests: child_requests.as_deref(),
                     .enumerate()
                 {
                     match resolve_target(ResolveTargetArgs {
-registry: &registry,
-source: &st.source_env,
-limits,
-owner: &owner,
-instance: &instance,
-fact: fact.as_ref(),
-agent_type: &candidate.agent_type,
-model: &candidate.model,
-effort: candidate.effort.as_deref(),
-cwd: &frozen_cwd,
-posture: *posture,
-workspace: workspace.as_ref(),
-child_requests: child_requests.as_deref(),
-}) {
+                        registry: &registry,
+                        source: &st.source_env,
+                        limits,
+                        owner: &owner,
+                        instance: &instance,
+                        fact: fact.as_ref(),
+                        agent_type: &candidate.agent_type,
+                        model: &candidate.model,
+                        effort: candidate.effort.as_deref(),
+                        cwd: &frozen_cwd,
+                        posture: *posture,
+                        workspace: workspace.as_ref(),
+                        child_requests: child_requests.as_deref(),
+                    }) {
                         Ok((scoped, snapshot, effective)) => {
-                            let definition =
-                                registry.resolved_definition(&candidate.agent_type)?;
+                            let definition = registry.resolved_definition(&candidate.agent_type)?;
                             selected =
                                 Some((candidate.clone(), definition, scoped, snapshot, effective));
                             break;
@@ -9134,20 +11162,20 @@ child_requests: child_requests.as_deref(),
                 let fact = fact.ok_or("permission_attestation_unavailable")?;
                 let pinned = AgentRegistry::from_resolved(agent_type, &raw_definition)?;
                 let (scoped, snapshot, effective) = resolve_target(ResolveTargetArgs {
-registry: &pinned,
-source: &st.source_env,
-limits,
-owner: &owner,
-instance: &instance,
-fact: Some(&fact),
-agent_type,
-model,
-effort: effort.as_deref(),
-cwd: &child,
-posture: *posture,
-workspace: workspace.as_ref(),
-child_requests: child_requests.as_deref(),
-})?;
+                    registry: &pinned,
+                    source: &st.source_env,
+                    limits,
+                    owner: &owner,
+                    instance: &instance,
+                    fact: Some(&fact),
+                    agent_type,
+                    model,
+                    effort: effort.as_deref(),
+                    cwd: &child,
+                    posture: *posture,
+                    workspace: workspace.as_ref(),
+                    child_requests: child_requests.as_deref(),
+                })?;
                 if Some(effective) != effective_posture {
                     return Err("permission_not_inherited".into());
                 }
@@ -9272,16 +11300,26 @@ child_requests: child_requests.as_deref(),
             }
             None => (owner.clone(), None),
         };
-        let service_tier=auto_receipt.filter(|receipt|receipt.metadata_version==2)
-            .map(recovered_routing_request).transpose()?.and_then(|auto|auto.service_tier);
+        let service_tier = auto_receipt
+            .filter(|receipt| receipt.metadata_version == 2)
+            .map(recovered_routing_request)
+            .transpose()?
+            .and_then(|auto| auto.service_tier);
         // Une preuve fraîche, déjà vérifiée par le port natif, autorise cette
         // mission seulement. Le marqueur ne provient jamais du canon appelant.
-        let admission_authority_version = attested.filter(|fact| fact.source == "provider_turn")
-            .filter(|fact| permission_snapshot.as_ref().is_some_and(|snapshot| snapshot.parent == **fact))
+        let admission_authority_version = attested
+            .filter(|fact| fact.source == "provider_turn")
+            .filter(|fact| {
+                permission_snapshot
+                    .as_ref()
+                    .is_some_and(|snapshot| snapshot.parent == **fact)
+            })
             .map(|_| 1);
-        let record = Task { service_tier, admission_authority_version,
+        let record = Task {
+            service_tier,
+            admission_authority_version,
             remote_prepared: false,
-            commit_view_prepare:None,
+            commit_view_prepare: None,
             start_recovery: None,
             workspace_repairs: Vec::new(),
             remote_result_slots: Vec::new(),
@@ -9504,9 +11542,7 @@ fn handle_locked_with_remote_proof(
                 .and_then(|presence| st.registry.get(&presence.agent_type).ok())
                 .is_some_and(|definition| definition.held_queue);
             let permission = root_permission(st, &owner, &instance)?;
-            let fact = {
-                parent_fact(st, &owner, &instance, None, attested)?
-            };
+            let fact = { parent_fact(st, &owner, &instance, None, attested)? };
             let halted = st
                 .delegation_store
                 .delegation_halt()
@@ -9518,10 +11554,29 @@ fn handle_locked_with_remote_proof(
                     .and_then(ParentPermission::root)
                     .map(Path::to_path_buf)
             });
-            let entries=catalogue_entries177(&st.registry,&st.source_env,&st.provider_limits,&owner,&instance,
-                fact.as_ref(),verdict_cwd.as_deref(),&[])?;
-            let mut result = catalogue_projection177(entries,caller_held_queue,halted,fact.as_ref(),permission.as_ref(),verdict_cwd.as_deref());
-            super::native_provider_catalogue220::enrich(st,&mut result,&crate::build_info::local_host());
+            let entries = catalogue_entries177(
+                &st.registry,
+                &st.source_env,
+                &st.provider_limits,
+                &owner,
+                &instance,
+                fact.as_ref(),
+                verdict_cwd.as_deref(),
+                &[],
+            )?;
+            let mut result = catalogue_projection177(
+                entries,
+                caller_held_queue,
+                halted,
+                fact.as_ref(),
+                permission.as_ref(),
+                verdict_cwd.as_deref(),
+            );
+            super::native_provider_catalogue220::enrich(
+                st,
+                &mut result,
+                &crate::build_info::local_host(),
+            );
             Ok(result)
         }
         NativeDelegationRequest::Delegate { .. } => {
@@ -9540,7 +11595,8 @@ fn handle_locked_with_remote_proof(
         }
         NativeDelegationRequest::AutoDelegate(_) => Err("auto_admission_configured_only".into()),
         NativeDelegationRequest::AutoDelegateV2(_) => Err("auto_admission_configured_only".into()),
-        NativeDelegationRequest::ProviderCatalogueV1 { .. } | NativeDelegationRequest::RoutingCatalogueV1 {} => {
+        NativeDelegationRequest::ProviderCatalogueV1 { .. }
+        | NativeDelegationRequest::RoutingCatalogueV1 {} => {
             Err("routing_catalogue_unavailable".into())
         }
         NativeDelegationRequest::Status { task_id } => {
@@ -9582,17 +11638,25 @@ fn handle_locked_with_remote_proof(
                 tasks.push(task);
             }
             // Toute la propriété est établie avant de révéler un état de préparation.
-            let not_ready: Vec<_> = tasks.iter().filter(|task| {
-                !workspace_report_ready(task)
-                    || !matches!(task.state.as_str(), "result_available" | "failed")
-            }).map(|task| json!({"task_id":task.task_id,"round":task.round_no(),
-                "state":task.state,"workspace_report_ready":workspace_report_ready(task)})).collect();
+            let not_ready: Vec<_> = tasks
+                .iter()
+                .filter(|task| {
+                    !workspace_report_ready(task)
+                        || !matches!(task.state.as_str(), "result_available" | "failed")
+                })
+                .map(|task| {
+                    json!({"task_id":task.task_id,"round":task.round_no(),
+                "state":task.state,"workspace_report_ready":workspace_report_ready(task)})
+                })
+                .collect();
             if !not_ready.is_empty() {
                 let recovery = "Relisez les états de ces tâches, puis accusez seulement les résultats ou échecs disponibles que vous avez lus. Une continuation peut avoir ouvert une nouvelle ronde entre la lecture et cet ACK. Aucun accusé de ce groupe n’a été enregistré ; les tâches et les autres travaux autorisés suivent leur propre état.";
-                return Ok(json!({"version":1,"status":"refused","code":"task_not_ready",
+                return Ok(
+                    json!({"version":1,"status":"refused","code":"task_not_ready",
                     "scope":"this_request","message":recovery,
                     "detail":{"operation":"ack","tasks":not_ready,"acknowledged":[],
-                        "recovery":recovery}}));
+                        "recovery":recovery}}),
+                );
             }
             let (acknowledged, already) = st
                 .delegation_store
@@ -9677,7 +11741,7 @@ fn handle_locked_with_remote_proof(
                     .delegation_store
                     .revoked_agent(&task.root_owner_agent_id)?
                 || st.delegation_store.revoked(&task.owner_instance)?
-        || st.delegation_store.revoked(&task.origin_owner_instance)?
+                || st.delegation_store.revoked(&task.origin_owner_instance)?
                 || st.delegation_store.revoked(&instance)?
             {
                 return Err("permission_not_inherited".into());
@@ -9690,7 +11754,8 @@ fn handle_locked_with_remote_proof(
                     "expired" => "request_expired",
                     "paused" => "referent_paused",
                     "revoked" => "permission_not_inherited",
-                    "provider_quota_exhausted" | "permission_source_unavailable"
+                    "provider_quota_exhausted"
+                    | "permission_source_unavailable"
                     | "delivery_check_unavailable" => code,
                     _ => "request_closed",
                 },
@@ -9776,8 +11841,8 @@ fn handle_locked_with_remote_proof(
                 return Err("invalid_request".into());
             }
             let round_body = if let Some(draft) = brief {
-                let rendered = crate::handoff::validate_and_render(draft)
-                    .map_err(handoff_error_code)?;
+                let rendered =
+                    crate::handoff::validate_and_render(draft).map_err(handoff_error_code)?;
                 format!("{}\n\n--- Consigne ---\n{task}", rendered.body)
             } else {
                 task.clone()
@@ -9803,7 +11868,11 @@ fn handle_locked_with_remote_proof(
             }
             // Seule une nouvelle ronde est une nouvelle sollicitation. Un rejeu
             // d'une ronde déjà admise conserve son reçu, même pendant le sommeil.
-            if crate::agent_tracking::dormant(st.store.connection(),&saved.child).map_err(|_|"tracking_storage_unavailable")? { return Err("agent_dormant".into()); }
+            if crate::agent_tracking::dormant(st.store.connection(), &saved.child)
+                .map_err(|_| "tracking_storage_unavailable")?
+            {
+                return Err("agent_dormant".into());
+            }
             let control = crate::referent_control::read(st.store.connection())
                 .map_err(|_| "control_state_unavailable")?;
             let halt = st
@@ -9830,7 +11899,7 @@ fn handle_locked_with_remote_proof(
             if saved.guard_released || matches!(saved.state.as_str(), "failed" | "cancelled") {
                 return Err("keep_alive_ended".into());
             }
-            let child_live = continuation_child_live(st,&saved)?;
+            let child_live = continuation_child_live(st, &saved)?;
             if !child_live
                 || saved
                     .idle_deadline_at
@@ -9841,7 +11910,11 @@ fn handle_locked_with_remote_proof(
                 st.delegation_store.save(&saved)?;
                 return Err("keep_alive_ended".into());
             }
-            if saved.workspace_repairs.last().is_some_and(|r|r.blocks_dispatch()) {
+            if saved
+                .workspace_repairs
+                .last()
+                .is_some_and(|r| r.blocks_dispatch())
+            {
                 return Err("workspace_repair_pending".into());
             }
             if saved.state != "result_available" {
@@ -9860,10 +11933,12 @@ fn handle_locked_with_remote_proof(
                     remote_proof.ok_or("remote_permission_proof_required")?,
                 )?;
                 if !continuation_parent_matches(
-                    saved.permission_snapshot.as_ref().map(|snapshot| &snapshot.parent),
+                    saved
+                        .permission_snapshot
+                        .as_ref()
+                        .map(|snapshot| &snapshot.parent),
                     fact.as_ref(),
-                )
-                {
+                ) {
                     return Err("permission_not_inherited".into());
                 }
             } else {
@@ -9916,35 +11991,57 @@ fn handle_locked_with_remote_proof(
             )?;
             current_task_view(st, &next, true)
         }
-        NativeDelegationRequest::ReadCommitFile{..}=>Err("commit_file_requires_coordinator".into()),
-        NativeDelegationRequest::RepairWorkspace { .. } => Err("workspace_repair_requires_coordinator".into()),
-        NativeDelegationRequest::Grant { .. } | NativeDelegationRequest::Specialists { .. } => unreachable!(),
+        NativeDelegationRequest::ReadCommitFile { .. } => {
+            Err("commit_file_requires_coordinator".into())
+        }
+        NativeDelegationRequest::RepairWorkspace { .. } => {
+            Err("workspace_repair_requires_coordinator".into())
+        }
+        NativeDelegationRequest::Grant { .. } | NativeDelegationRequest::Specialists { .. } => {
+            unreachable!()
+        }
     }
 }
 
 /// Le choix explicite garde le compte observé pendant la décision. Le reçu
 /// historique, le modèle, les droits et la tâche ne sont jamais réécrits.
 /// Sans option, le chemin historique n'effectue aucune nouvelle lecture.
-pub(super) fn recheck_task_model_option(st:&DaemonState,task:&Task)->Result<(),String> {
-    if task.service_tier.is_none(){return Ok(());}
-    let NativeDelegationRequest::Delegate{request_id,..}=&task.request else {
+pub(super) fn recheck_task_model_option(st: &DaemonState, task: &Task) -> Result<(), String> {
+    if task.service_tier.is_none() {
+        return Ok(());
+    }
+    let NativeDelegationRequest::Delegate { request_id, .. } = &task.request else {
         return Err("invalid_record".into());
     };
-    let receipt=st.delegation_store.auto_admission_receipt(&task.owner,request_id)?
+    let receipt = st
+        .delegation_store
+        .auto_admission_receipt(&task.owner, request_id)?
         .ok_or("auto_admission_invalid")?;
-    let auto=recovered_routing_request(&receipt)?;
-    if auto.service_tier!=task.service_tier {return Err("auto_admission_invalid".into());}
-    let plan=frozen_routing_plan(&receipt)?;
-    let index=routing_choice_index(&plan,receipt.candidate_id.as_deref().ok_or("auto_admission_invalid")?)?;
-    let registry=AgentRegistry::load_from_path(st.registry.source().to_path_buf())
-        .map_err(|_|"model_options_observation_unavailable")?;
-    let candidate=&plan.candidates[index];
+    let auto = recovered_routing_request(&receipt)?;
+    if auto.service_tier != task.service_tier {
+        return Err("auto_admission_invalid".into());
+    }
+    let plan = frozen_routing_plan(&receipt)?;
+    let index = routing_choice_index(
+        &plan,
+        receipt
+            .candidate_id
+            .as_deref()
+            .ok_or("auto_admission_invalid")?,
+    )?;
+    let registry = AgentRegistry::load_from_path(st.registry.source().to_path_buf())
+        .map_err(|_| "model_options_observation_unavailable")?;
+    let candidate = &plan.candidates[index];
     // La fraîcheur, l'identité courante, le profil et la capacité sont relus
     // par model_option_account. Une nouvelle époque n'est pas un nouveau
     // compte : le nonce du même service observateur reste la continuité.
-    let current=super::native_provider_catalogue220::model_option_account(
-        st,&registry,candidate,task.service_tier.as_deref())?;
-    if current.is_none() || current!=plan.observations[index].model_option_account {
+    let current = super::native_provider_catalogue220::model_option_account(
+        st,
+        &registry,
+        candidate,
+        task.service_tier.as_deref(),
+    )?;
+    if current.is_none() || current != plan.observations[index].model_option_account {
         return Err("model_options_account_changed".into());
     }
     Ok(())
@@ -9967,7 +12064,10 @@ pub(super) fn native_launch_registry(
     {
         return Err("permission_not_inherited".into());
     }
-    let NativeDelegationRequest::Delegate { agent_type,model,.. } = &task.request else {
+    let NativeDelegationRequest::Delegate {
+        agent_type, model, ..
+    } = &task.request
+    else {
         return Err("invalid_record".into());
     };
     if std::fs::canonicalize(&task.cwd).map_err(|_| "cwd_unavailable")?
@@ -9976,8 +12076,8 @@ pub(super) fn native_launch_registry(
         return Err("cwd_changed".into());
     }
     let registry = AgentRegistry::from_resolved(agent_type, &task.definition)?
-        .pin_delegation_service_tier(agent_type,model,task.service_tier.as_deref())?;
-    if task.service_tier.is_some() && registry.resolved_definition(agent_type)?!=task.definition {
+        .pin_delegation_service_tier(agent_type, model, task.service_tier.as_deref())?;
+    if task.service_tier.is_some() && registry.resolved_definition(agent_type)? != task.definition {
         return Err("model_options_launch_mismatch".into());
     }
     if let Some(snapshot) = &task.permission_snapshot {
@@ -10136,8 +12236,14 @@ fn spawn_task(st: &mut DaemonState, task: &mut Task) -> Result<(), String> {
         return Ok(());
     }
     let known = st.fleet.knows_command(&task.task_id);
-    if !known {recheck_task_model_option(st,task)?;}
-    let checked_registry = if known { None } else { Some(native_launch_registry(st, task)?) };
+    if !known {
+        recheck_task_model_option(st, task)?;
+    }
+    let checked_registry = if known {
+        None
+    } else {
+        Some(native_launch_registry(st, task)?)
+    };
     let NativeDelegationRequest::Delegate {
         agent_type,
         posture,
@@ -10182,20 +12288,23 @@ fn spawn_task(st: &mut DaemonState, task: &mut Task) -> Result<(), String> {
     // Le superviseur possède déjà ce lancement. Attendre son issue ne lance
     // rien : ne pas rehacher sous le mutex dont Register a besoin pour finir.
     // Le canon, la génération et l'échéance restent vérifiés par la flotte.
-    if task.state == "starting" && known
-        && let crate::fleet::SpawnSubmission::Await(waiter) =
-            st.fleet.request_spawn(&order, unix_timestamp()).map_err(|e| e.to_string())?
-        {
-            if task.child_instance.as_deref() != Some(waiter.instance_id.as_str()) {
-                return Err("native_restart_identity_mismatch".into());
-            }
-            // Seul contrôle conservé pendant l'attente : un stat, sans relecture
-            // lourde sous le mutex. Un worktree disparu clôt la tâche (154).
-            if !std::fs::canonicalize(&task.cwd).is_ok_and(|path| path.is_dir()) {
-                return Err("cwd_unavailable".into());
-            }
-            return Ok(());
+    if task.state == "starting"
+        && known
+        && let crate::fleet::SpawnSubmission::Await(waiter) = st
+            .fleet
+            .request_spawn(&order, unix_timestamp())
+            .map_err(|e| e.to_string())?
+    {
+        if task.child_instance.as_deref() != Some(waiter.instance_id.as_str()) {
+            return Err("native_restart_identity_mismatch".into());
         }
+        // Seul contrôle conservé pendant l'attente : un stat, sans relecture
+        // lourde sous le mutex. Un worktree disparu clôt la tâche (154).
+        if !std::fs::canonicalize(&task.cwd).is_ok_and(|path| path.is_dir()) {
+            return Err("cwd_unavailable".into());
+        }
+        return Ok(());
+    }
     // Relecture fraîche conservée avant le premier lancement et après
     // l'enregistrement, avant de rendre la mission transmissible.
     let registry = match checked_registry {
@@ -10359,61 +12468,125 @@ pub(super) fn authorize_retained_result(
 /// Le worker résout encore Git ; le nom du domaine ou le projet du parent
 /// ne suffisent pas. O(log T + C), C commandes de cette seule instance.
 pub(super) fn communication_project_command253(
-    st: &DaemonState, conn: &str, host: &str, root: &str,
+    st: &DaemonState,
+    conn: &str,
+    host: &str,
+    root: &str,
 ) -> Option<bridget_transport::protocol::WorkerCommandIdentity> {
-    if st.auxiliary_connections.contains(conn) { return None; }
-    let (agent,instance)=live_connection_identity(st,conn)?;
-    let task=st.delegation_store.for_child(&agent).ok()??;
-    let placement=task.remote_placement.as_ref()?;
-    if task.child_instance.as_deref()!=Some(instance.as_str())
-        || task.terminal() || task.state=="cancelling" || task.cleanup_done || task.guard_released
-        || !task.remote_prepared || placement.machine_id!=host
-        || Path::new(&placement.execution_cwd)!=Path::new(root)
-    {return None;}
-    for value in [task.owner.as_str(),task.owner_instance.as_str(),task.origin_owner_instance.as_str(),
-        task.child.as_str(),instance.as_str(),task.root_owner()] {
-        if st.delegation_store.revoked(value).unwrap_or(true)
-            || st.delegation_store.revoked_agent(value).unwrap_or(true) {return None;}
+    if st.auxiliary_connections.contains(conn) {
+        return None;
     }
-    remote_command_identity(st,&task).ok()
+    let (agent, instance) = live_connection_identity(st, conn)?;
+    let task = st.delegation_store.for_child(&agent).ok()??;
+    let placement = task.remote_placement.as_ref()?;
+    if task.child_instance.as_deref() != Some(instance.as_str())
+        || task.terminal()
+        || task.state == "cancelling"
+        || task.cleanup_done
+        || task.guard_released
+        || !task.remote_prepared
+        || placement.machine_id != host
+        || Path::new(&placement.execution_cwd) != Path::new(root)
+    {
+        return None;
+    }
+    for value in [
+        task.owner.as_str(),
+        task.owner_instance.as_str(),
+        task.origin_owner_instance.as_str(),
+        task.child.as_str(),
+        instance.as_str(),
+        task.root_owner(),
+    ] {
+        if st.delegation_store.revoked(value).unwrap_or(true)
+            || st.delegation_store.revoked_agent(value).unwrap_or(true)
+        {
+            return None;
+        }
+    }
+    remote_command_identity(st, &task).ok()
 }
 
 /// Le nom système déclaré n'est pas forcément l'identifiant de placement.
 /// Seule la commande native admise permet de choisir le worker canonique.
 pub(super) fn native_communication_project_worker(
-    st:&DaemonState, conn:&str, root:&str,
-) -> Option<(String,bridget_transport::protocol::WorkerCommandIdentity)> {
-    let (agent,_)=live_connection_identity(st,conn)?;
-    let host=st.delegation_store.for_child(&agent).ok()??.remote_placement?.machine_id;
-    let command=communication_project_command253(st,conn,&host,root)?;
-    Some((host,command))
+    st: &DaemonState,
+    conn: &str,
+    root: &str,
+) -> Option<(String, bridget_transport::protocol::WorkerCommandIdentity)> {
+    let (agent, _) = live_connection_identity(st, conn)?;
+    let host = st
+        .delegation_store
+        .for_child(&agent)
+        .ok()??
+        .remote_placement?
+        .machine_id;
+    let command = communication_project_command253(st, conn, &host, root)?;
+    Some((host, command))
 }
 
 /// La relation admise et les deux instances fixent le projet logique d’une
 /// mission. La direction du guidage reste évaluée séparément par guidance.
 pub(super) fn admitted_task_communication248(
-    st: &DaemonState, conn: &str, target: &str, message_id: Option<&str>,
+    st: &DaemonState,
+    conn: &str,
+    target: &str,
+    message_id: Option<&str>,
 ) -> bool {
-    let Some((sender, instance)) = live_connection_identity(st, conn) else {return false;};
-    let Ok(candidate)=st.delegation_store.for_child(target) else {return false;};
-    let task=match candidate {
-        Some(task) if task.owner==sender && task.owner_instance==instance=>task,
-        _=> {
-            let Ok(Some(task))=st.delegation_store.for_child(&sender) else {return false;};
-            if task.owner!=target || task.child_instance.as_deref()!=Some(instance.as_str()) {return false;}
+    let Some((sender, instance)) = live_connection_identity(st, conn) else {
+        return false;
+    };
+    let Ok(candidate) = st.delegation_store.for_child(target) else {
+        return false;
+    };
+    let task = match candidate {
+        Some(task) if task.owner == sender && task.owner_instance == instance => task,
+        _ => {
+            let Ok(Some(task)) = st.delegation_store.for_child(&sender) else {
+                return false;
+            };
+            if task.owner != target || task.child_instance.as_deref() != Some(instance.as_str()) {
+                return false;
+            }
             task
         }
     };
-    if task.terminal() || task.state == "cancelling" || task.cleanup_done || task.guard_released
-        || message_id.is_some_and(|id| id == task.mission) {return false;}
-    let Some(child_instance)=task.child_instance.as_ref() else {return false;};
-    for (agent, instance) in [(&task.owner,&task.owner_instance),(&task.child,child_instance)] {
-        let Some(route)=st.router.get_agent(agent) else {return false;};
-        if live_connection_identity(st,&route.connection_id)!=Some((agent.clone(),instance.clone())) {return false;}
+    if task.terminal()
+        || task.state == "cancelling"
+        || task.cleanup_done
+        || task.guard_released
+        || message_id.is_some_and(|id| id == task.mission)
+    {
+        return false;
     }
-    for value in [task.owner.as_str(),task.owner_instance.as_str(),task.child.as_str(),child_instance.as_str(),task.root_owner()] {
+    let Some(child_instance) = task.child_instance.as_ref() else {
+        return false;
+    };
+    for (agent, instance) in [
+        (&task.owner, &task.owner_instance),
+        (&task.child, child_instance),
+    ] {
+        let Some(route) = st.router.get_agent(agent) else {
+            return false;
+        };
+        if live_connection_identity(st, &route.connection_id)
+            != Some((agent.clone(), instance.clone()))
+        {
+            return false;
+        }
+    }
+    for value in [
+        task.owner.as_str(),
+        task.owner_instance.as_str(),
+        task.child.as_str(),
+        child_instance.as_str(),
+        task.root_owner(),
+    ] {
         if st.delegation_store.revoked(value).unwrap_or(true)
-            || st.delegation_store.revoked_agent(value).unwrap_or(true) {return false;}
+            || st.delegation_store.revoked_agent(value).unwrap_or(true)
+        {
+            return false;
+        }
     }
     true
 }
@@ -10532,17 +12705,30 @@ fn send_as_with_result_authority(
     // serait trompeur. Aucune réattribution à une nouvelle instance du parent.
     let response = match response {
         DaemonToWrapper::Nack { id, reason }
-            if authority.is_none() && message.from == owner
-                && reason == "identité expéditeur non attestée : rattachement auxiliaire requis" =>
+            if authority.is_none()
+                && message.from == owner
+                && reason
+                    == "identité expéditeur non attestée : rattachement auxiliaire requis" =>
         {
             let reason = match st.router.get_agent(owner) {
                 None => "native_sender_primary_absent",
-                Some(route) if !st.connections.contains_key(&route.connection_id) => "native_sender_not_live",
-                Some(route) if st.conn_instances.get(&route.connection_id)
-                    .is_some_and(|current| current != instance) => "native_sender_instance_changed",
+                Some(route) if !st.connections.contains_key(&route.connection_id) => {
+                    "native_sender_not_live"
+                }
+                Some(route)
+                    if st
+                        .conn_instances
+                        .get(&route.connection_id)
+                        .is_some_and(|current| current != instance) =>
+                {
+                    "native_sender_instance_changed"
+                }
                 Some(_) => "native_sender_not_live",
             };
-            DaemonToWrapper::Nack { id, reason: reason.into() }
+            DaemonToWrapper::Nack {
+                id,
+                reason: reason.into(),
+            }
         }
         response => response,
     };
@@ -10558,8 +12744,10 @@ pub(super) fn capture_reply(
     conn: &str,
     message: &bridget_core::BridgetMessage,
 ) -> Result<bool, String> {
-    super::specialists222::capture_correlated_reply(st,conn,message);
-    if super::specialists222::capture_human_reply(st,conn,message)? {return Ok(true);}
+    super::specialists222::capture_correlated_reply(st, conn, message);
+    if super::specialists222::capture_human_reply(st, conn, message)? {
+        return Ok(true);
+    }
     let Some(correlation) = message.in_reply_to.as_deref() else {
         return Ok(false);
     };
@@ -10906,7 +13094,10 @@ pub(super) fn rejected(
         return Ok(NativeRejection::Pass);
     };
     if matches!(task.state.as_str(), "cancelled" | "cancelling") {
-        info!("refus fournisseur tardif après annulation native conservée : {}", task.task_id);
+        info!(
+            "refus fournisseur tardif après annulation native conservée : {}",
+            task.task_id
+        );
         return Ok(NativeRejection::StaleIgnored);
     }
     let opt_in = quota_enabled(&task);
@@ -12030,18 +14221,29 @@ fn append_workspace_result(task: &mut Task) {
         Some(false) => "non",
         None => "indisponible",
     };
-    let line = if matches!(workspace.strategy,crate::delegation::WorkspaceStrategy::CommitView) {
-        let complete=workspace.commit_view.is_some() && workspace.branch.is_empty()
-            && workspace.head_commit.is_none() && workspace.branch_commit.is_none()
-            && workspace.head_on_branch.is_none() && workspace.commit_count.is_none()
-            && workspace.commits.is_empty() && !workspace.truncated;
-        let checked=match (complete,workspace.dirty) {
-            (true,Some(false))=>"conforme",
-            (true,Some(true))=>"divergence constatée",
-            _=>"indisponible",
+    let line = if matches!(
+        workspace.strategy,
+        crate::delegation::WorkspaceStrategy::CommitView
+    ) {
+        let complete = workspace.commit_view.is_some()
+            && workspace.branch.is_empty()
+            && workspace.head_commit.is_none()
+            && workspace.branch_commit.is_none()
+            && workspace.head_on_branch.is_none()
+            && workspace.commit_count.is_none()
+            && workspace.commits.is_empty()
+            && !workspace.truncated;
+        let checked = match (complete, workspace.dirty) {
+            (true, Some(false)) => "conforme",
+            (true, Some(true)) => "divergence constatée",
+            _ => "indisponible",
         };
-        format!("[Bridget] espace de travail : vue de lecture du commit {}, dernier contrôle des fichiers : {}, dossier conservé : {}. Cette vue ne contient pas de dépôt Git. Consultez le statut de cette tâche, préservez ses fichiers et vérifiez son arrêt et les autres usages avant tout retrait. Les autres travaux autorisés suivent leur propre état.",
-            report_text(&workspace.base_commit),checked,report_text(&workspace.path))
+        format!(
+            "[Bridget] espace de travail : vue de lecture du commit {}, dernier contrôle des fichiers : {}, dossier conservé : {}. Cette vue ne contient pas de dépôt Git. Consultez le statut de cette tâche, préservez ses fichiers et vérifiez son arrêt et les autres usages avant tout retrait. Les autres travaux autorisés suivent leur propre état.",
+            report_text(&workspace.base_commit),
+            checked,
+            report_text(&workspace.path)
+        )
     } else {
         let commits = workspace
             .commit_count
@@ -12094,8 +14296,13 @@ fn complete_workspace_report(state: &Arc<Mutex<DaemonState>>, job: WorkspaceRepo
             if record.path == job.workspace.path
                 && record.branch == job.workspace.branch
                 && record.base_commit == job.workspace.base_commit
-                && (!matches!(job.workspace.strategy,crate::delegation::WorkspaceStrategy::CommitView)
-                    || crate::remote_worker::same_workspace_anchor(&job.workspace,&json!(record)))
+                && (!matches!(
+                    job.workspace.strategy,
+                    crate::delegation::WorkspaceStrategy::CommitView
+                ) || crate::remote_worker::same_workspace_anchor(
+                    &job.workspace,
+                    &json!(record),
+                ))
             {
                 Ok(record)
             } else {
@@ -12626,11 +14833,15 @@ pub(super) fn tick(state: &Arc<Mutex<DaemonState>>) {
         use bridget_transport::protocol::*;
         let mut st = state.lock().recover_poison();
         {
-            let DaemonState { remote_workers, remote_start_reconciles, .. } = &mut *st;
+            let DaemonState {
+                remote_workers,
+                remote_start_reconciles,
+                ..
+            } = &mut *st;
             remote_start_reconciles.retain(|machine, (epoch, receiver)| {
-                remote_workers.get(machine).is_some_and(|worker| worker.epoch == *epoch
-                    && worker.contact == WorkerContactState::Connected)
-                    && matches!(receiver.try_recv(), Err(mpsc::TryRecvError::Empty))
+                remote_workers.get(machine).is_some_and(|worker| {
+                    worker.epoch == *epoch && worker.contact == WorkerContactState::Connected
+                }) && matches!(receiver.try_recv(), Err(mpsc::TryRecvError::Empty))
             });
         }
         let due = st
@@ -12647,9 +14858,14 @@ pub(super) fn tick(state: &Arc<Mutex<DaemonState>>) {
                 && task.state == "starting"
                 && task.child_instance.is_some()
                 && task.mission_issued_at.is_none()
-                && !task.start_recovery.as_ref().is_some_and(|plan| plan.in_progress())
-                && task.remote_placement.as_ref().is_some_and(|placement|
-                    !st.remote_start_reconciles.contains_key(&placement.machine_id))
+                && !task
+                    .start_recovery
+                    .as_ref()
+                    .is_some_and(|plan| plan.in_progress())
+                && task.remote_placement.as_ref().is_some_and(|placement| {
+                    !st.remote_start_reconciles
+                        .contains_key(&placement.machine_id)
+                })
         });
         let candidate = if candidates.is_empty() {
             None
@@ -12704,19 +14920,27 @@ pub(super) fn tick(state: &Arc<Mutex<DaemonState>>) {
             let identity = worker.identity.clone();
             let epoch = worker.epoch.clone();
             let (done, receiver) = mpsc::sync_channel(1);
-            st.remote_start_reconciles.insert(identity.machine_id.clone(), (epoch, receiver));
+            st.remote_start_reconciles
+                .insert(identity.machine_id.clone(), (epoch, receiver));
             Some((identity, command, done))
         })
     };
     if let Some((worker, command, done)) = start_probe {
         let state = state.clone();
-        let _ = thread::Builder::new().name("start-monitor".into()).spawn(move || {
-            let now = Instant::now();
-            let _ = remote_worker_roundtrip_with_send_deadline(&state, &worker, &command,
-                bridget_transport::protocol::WorkerRequestOperation::Reconcile {},
-                now + START_MONITOR_BUDGET, now + CANCEL_NOTIFICATION_BUDGET);
-            let _ = done.try_send(());
-        });
+        let _ = thread::Builder::new()
+            .name("start-monitor".into())
+            .spawn(move || {
+                let now = Instant::now();
+                let _ = remote_worker_roundtrip_with_send_deadline(
+                    &state,
+                    &worker,
+                    &command,
+                    bridget_transport::protocol::WorkerRequestOperation::Reconcile {},
+                    now + START_MONITOR_BUDGET,
+                    now + CANCEL_NOTIFICATION_BUDGET,
+                );
+                let _ = done.try_send(());
+            });
     }
     // O(n) tâches triées par SQL, une opération réseau en vol pour tous les ticks.
     // Le canal ne contient qu'un résultat ; aucun thread n'attend dans cette boucle.
@@ -12725,18 +14949,30 @@ pub(super) fn tick(state: &Arc<Mutex<DaemonState>>) {
         let mut st = state.lock().recover_poison();
         if let Some(receiver) = st.remote_result_reservation.take() {
             match receiver.try_recv() {
-                Ok(Ok(Some(proof))) => { remote_proofs.insert(proof.task_id.clone(), proof); }
+                Ok(Ok(Some(proof))) => {
+                    remote_proofs.insert(proof.task_id.clone(), proof);
+                }
                 Ok(Ok(None)) => {}
                 Ok(Err(error)) => warn!("réservation résultat distant différée: {error}"),
                 Err(mpsc::TryRecvError::Empty) => st.remote_result_reservation = Some(receiver),
-                Err(mpsc::TryRecvError::Disconnected) => warn!("réservation résultat distant interrompue"),
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    warn!("réservation résultat distant interrompue")
+                }
             }
         }
-        let due = st.remote_result_reservation.is_none() && remote_proofs.is_empty()
-            && st.remote_result_reservation_last.as_ref()
+        let due = st.remote_result_reservation.is_none()
+            && remote_proofs.is_empty()
+            && st
+                .remote_result_reservation_last
+                .as_ref()
                 .is_none_or(|(_, at)| at.elapsed() >= Duration::from_secs(1));
-        let pending = if due { st.delegation_store.pending().unwrap_or_default() } else { Vec::new() };
-        let mut candidates = pending.into_iter()
+        let pending = if due {
+            st.delegation_store.pending().unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+        let mut candidates = pending
+            .into_iter()
             .filter(|task| {
                 if task.remote_placement.is_none()
                     || !task.remote_prepared
@@ -12770,10 +15006,17 @@ pub(super) fn tick(state: &Arc<Mutex<DaemonState>>) {
             None
         } else {
             // pending() est trié par task_id ; avancer même après un refus du worker.
-            let offset = st.remote_result_reservation_last.as_ref().map_or(0, |(previous, _)| {
-                candidates.partition_point(|id| id <= previous)
-            });
-            let index = if offset == candidates.len() { 0 } else { offset };
+            let offset = st
+                .remote_result_reservation_last
+                .as_ref()
+                .map_or(0, |(previous, _)| {
+                    candidates.partition_point(|id| id <= previous)
+                });
+            let index = if offset == candidates.len() {
+                0
+            } else {
+                offset
+            };
             let task_id = candidates.swap_remove(index);
             st.remote_result_reservation_last = Some((task_id.clone(), Instant::now()));
             let (sender, receiver) = mpsc::channel();
@@ -12783,14 +15026,19 @@ pub(super) fn tick(state: &Arc<Mutex<DaemonState>>) {
     };
     if let Some((task_id, sender)) = remote_pending {
         let state = Arc::clone(state);
-        if let Err(error) = thread::Builder::new().name("bridget-result-slot".into()).spawn(move || {
-            let result = reserve_remote_result_slot(&state, &task_id);
-            if let Ok(proof) = &result
-                && let Err(error) = dispatch_remote_pause_resume(&state, &task_id, proof.as_ref()) {
+        if let Err(error) = thread::Builder::new()
+            .name("bridget-result-slot".into())
+            .spawn(move || {
+                let result = reserve_remote_result_slot(&state, &task_id);
+                if let Ok(proof) = &result
+                    && let Err(error) =
+                        dispatch_remote_pause_resume(&state, &task_id, proof.as_ref())
+                {
                     warn!("reprise de pause distante différée: {error}");
                 }
-            let _ = sender.send(result);
-        }) {
+                let _ = sender.send(result);
+            })
+        {
             // Le sender est détruit : le prochain tick constate Disconnected et libère le créneau.
             warn!("réservation résultat distant non démarrée: {error}");
         }
@@ -12819,12 +15067,14 @@ pub(super) fn tick(state: &Arc<Mutex<DaemonState>>) {
             for request in open_requests {
                 if let Ok(Some(task)) = st.delegation_store.for_mission(&request.id) {
                     if task.state == "cancelled" {
-                        if let Err(error)=settle_cancelled_tracked_request247(&mut st,&task) {
+                        if let Err(error) = settle_cancelled_tracked_request247(&mut st, &task) {
                             warn!("suivi de mission annulée non clôturé : {error}");
                         }
                         continue;
                     }
-                    if task.remote_placement.is_none() || task.result.is_none() {continue;}
+                    if task.remote_placement.is_none() || task.result.is_none() {
+                        continue;
+                    }
                     if let Err(error) = settle_remote_tracked_request(&mut st, &task) {
                         warn!(
                             "suivi de mission distante {} non clôturé pendant la reprise des demandes ouvertes: {}",
@@ -12871,7 +15121,10 @@ pub(super) fn tick(state: &Arc<Mutex<DaemonState>>) {
             if task.remote_placement.is_some()
                 && task.state == "starting"
                 && task.mission_issued_at.is_none()
-                && !task.start_recovery.as_ref().is_some_and(|plan| plan.in_progress())
+                && !task
+                    .start_recovery
+                    .as_ref()
+                    .is_some_and(|plan| plan.in_progress())
             {
                 let stopped = remote_command_identity(&st, &task)
                     .ok()
@@ -12888,9 +15141,12 @@ pub(super) fn tick(state: &Arc<Mutex<DaemonState>>) {
                             })
                     });
                 if stopped {
-                    let failure = task.error.as_deref()
+                    let failure = task
+                        .error
+                        .as_deref()
                         .filter(|code| code.starts_with("remote_start_failed:"))
-                        .unwrap_or("remote_start_failed").to_owned();
+                        .unwrap_or("remote_start_failed")
+                        .to_owned();
                     if let Err(error) = close_lost_execution(&st, &task, &failure) {
                         warn!("clôture du démarrage distant différée: {error}");
                         continue;
@@ -12960,8 +15216,13 @@ pub(super) fn tick(state: &Arc<Mutex<DaemonState>>) {
                     "queued" | "starting" | "mission_pending" | "working"
                 )
             {
-                if let Some(event)=super::dispatch_diagnostics::record_locked(&mut st,&task,
-                    super::dispatch_diagnostics::Stage::Control,"referent_paused",None) {
+                if let Some(event) = super::dispatch_diagnostics::record_locked(
+                    &mut st,
+                    &task,
+                    super::dispatch_diagnostics::Stage::Control,
+                    "referent_paused",
+                    None,
+                ) {
                     dispatch_events.push(event);
                 }
                 continue;
@@ -13099,9 +15360,12 @@ pub(super) fn tick(state: &Arc<Mutex<DaemonState>>) {
             }
             if task.state == "failed" {
                 if task.acknowledged_at.is_none()
-                    && let Err(code)=quota_questions246::ensure(&st,&task) {
-                        warn!("question de reprise quota non déposée ({code}) ; tâche et refus conservés");
-                    }
+                    && let Err(code) = quota_questions246::ensure(&st, &task)
+                {
+                    warn!(
+                        "question de reprise quota non déposée ({code}) ; tâche et refus conservés"
+                    );
+                }
                 if quota_enabled(&task) {
                     st.pending_replies
                         .retain(|pending| pending.msg_id != task.mission);
@@ -13126,14 +15390,21 @@ pub(super) fn tick(state: &Arc<Mutex<DaemonState>>) {
                         || error.to_string(),
                         |reset| format!("{error} (retour quota : {reset})"),
                     );
-                    let recovery = quota_questions246::notice(&st,&task);
-                    let provider_recovery=provider_error_recovery(error).unwrap_or("");
+                    let recovery = quota_questions246::notice(&st, &task);
+                    let provider_recovery = provider_error_recovery(error).unwrap_or("");
                     let mut notice = bridget_core::BridgetMessage::new(
                         &task.owner,
                         &task.owner,
                         format!(
                             "{}Délégation native {} échouée : {}{}",
-                            if provider_recovery.is_empty(){String::new()}else{format!("{provider_recovery}\n\n")}, task.task_id, description, recovery
+                            if provider_recovery.is_empty() {
+                                String::new()
+                            } else {
+                                format!("{provider_recovery}\n\n")
+                            },
+                            task.task_id,
+                            description,
+                            recovery
                         ),
                     );
                     notice.id = format!("native-failure-{}", task.task_id);
@@ -13261,13 +15532,19 @@ pub(super) fn tick(state: &Arc<Mutex<DaemonState>>) {
                 let _ = st.delegation_store.save(&task);
             }
             if task.state == "mission_pending" {
-                use super::dispatch_diagnostics::{record_locked,Stage};
+                use super::dispatch_diagnostics::{Stage, record_locked};
                 if task.remote_placement.is_some() {
                     // L'absence de réponse d'un travail asynchrone n'est pas
                     // un refus : seule la garde réellement exécutée est observée.
-                    let Some(proof)=remote_proofs.get(&task.task_id) else {continue;};
-                    if let Err(code)=recheck_remote_dispatch(&st,&task,proof) {
-                        if let Some(event)=record_locked(&mut st,&task,Stage::FinalPermissions,&code,None) {dispatch_events.push(event);}
+                    let Some(proof) = remote_proofs.get(&task.task_id) else {
+                        continue;
+                    };
+                    if let Err(code) = recheck_remote_dispatch(&st, &task, proof) {
+                        if let Some(event) =
+                            record_locked(&mut st, &task, Stage::FinalPermissions, &code, None)
+                        {
+                            dispatch_events.push(event);
+                        }
                         continue;
                     }
                 }
@@ -13279,7 +15556,15 @@ pub(super) fn tick(state: &Arc<Mutex<DaemonState>>) {
                                 == task.child_instance.as_deref()
                     })
                 {
-                    if let Some(event)=record_locked(&mut st,&task,Stage::ResultReservation,"remote_result_slot_unconfirmed",None) {dispatch_events.push(event);}
+                    if let Some(event) = record_locked(
+                        &mut st,
+                        &task,
+                        Stage::ResultReservation,
+                        "remote_result_slot_unconfirmed",
+                        None,
+                    ) {
+                        dispatch_events.push(event);
+                    }
                     continue;
                 }
                 if !matches!(
@@ -13447,7 +15732,7 @@ pub(super) fn tick(state: &Arc<Mutex<DaemonState>>) {
                 }
             }
             if task.state == "result_available" && !task.result_sent {
-                super::specialists222::capture_task(&st,&task);
+                super::specialists222::capture_task(&st, &task);
                 let Some(child_instance) = task.child_instance.as_deref() else {
                     task.state = "failed".into();
                     task.error = Some("native_result_invalid".into());
@@ -13721,10 +16006,16 @@ fn fence_cancel_unstarted(
     use bridget_transport::protocol::*;
     let (worker, placement, deadline_at) = {
         let st = state.lock().recover_poison();
-        let task = st.delegation_store.get(task_id).map_err(|_| "store_unavailable")?
+        let task = st
+            .delegation_store
+            .get(task_id)
+            .map_err(|_| "store_unavailable")?
             .ok_or("identity_unavailable")?;
-        if task.state != "cancelling" || task.mission_issued_at.is_some()
-            || !task.remote_prepared || task.cleanup_done {
+        if task.state != "cancelling"
+            || task.mission_issued_at.is_some()
+            || !task.remote_prepared
+            || task.cleanup_done
+        {
             return Err("not_unstarted");
         }
         if remote_command_identity(&st, &task).ok().as_ref() != Some(command) {
@@ -13732,50 +16023,83 @@ fn fence_cancel_unstarted(
         }
         let placement = task.remote_placement.ok_or("identity_unavailable")?;
         let worker = remote_worker_identity(&placement);
-        if !st.remote_workers.get(&worker.machine_id).is_some_and(|w|
-            w.identity == worker && w.capabilities.contains(&WorkerCapability::StartRecoveryV1)) {
+        if !st.remote_workers.get(&worker.machine_id).is_some_and(|w| {
+            w.identity == worker && w.capabilities.contains(&WorkerCapability::StartRecoveryV1)
+        }) {
             return Err("capability_required");
         }
-        let commands = st.idempotency.spawn_commands(&st.fleet.supervisor_scope())
+        let commands = st
+            .idempotency
+            .spawn_commands(&st.fleet.supervisor_scope())
             .map_err(|_| "store_unavailable")?;
-        let known = commands.iter().find(|c| c.command_id == command.command_id
-            && c.instance_id.as_deref() == Some(command.instance_id.as_str())
-            && c.generation == command.generation && c.remote_placement.as_ref() == Some(&placement))
+        let known = commands
+            .iter()
+            .find(|c| {
+                c.command_id == command.command_id
+                    && c.instance_id.as_deref() == Some(command.instance_id.as_str())
+                    && c.generation == command.generation
+                    && c.remote_placement.as_ref() == Some(&placement)
+            })
             .ok_or("identity_unavailable")?;
         (worker, placement, known.deadline_at)
     };
-    let response = remote_worker_roundtrip(state, &worker, command,
-        WorkerRequestOperation::FenceUnstarted { placement, deadline_at },
-        Instant::now() + Duration::from_secs(30)).map_err(|e| match e {
-            WorkerRefusal::CapabilityRequired => "capability_required",
-            WorkerRefusal::WorkerUnavailable | WorkerRefusal::StaleConnection => "reply_unavailable",
-            WorkerRefusal::ResourceLimit => match super::take_local_roundtrip_limit() {
-                Some("master_pending") => "master_pending",
-                Some("master_request_frame") => "master_request_frame",
-                _ => "resource_limit_unobserved",
-            },
-            WorkerRefusal::CommandMismatch | WorkerRefusal::PlacementMismatch => "identity_changed",
-            _ => "refused",
-        })?;
+    let response = remote_worker_roundtrip(
+        state,
+        &worker,
+        command,
+        WorkerRequestOperation::FenceUnstarted {
+            placement,
+            deadline_at,
+        },
+        Instant::now() + Duration::from_secs(30),
+    )
+    .map_err(|e| match e {
+        WorkerRefusal::CapabilityRequired => "capability_required",
+        WorkerRefusal::WorkerUnavailable | WorkerRefusal::StaleConnection => "reply_unavailable",
+        WorkerRefusal::ResourceLimit => match super::take_local_roundtrip_limit() {
+            Some("master_pending") => "master_pending",
+            Some("master_request_frame") => "master_request_frame",
+            _ => "resource_limit_unobserved",
+        },
+        WorkerRefusal::CommandMismatch | WorkerRefusal::PlacementMismatch => "identity_changed",
+        _ => "refused",
+    })?;
     if !matches!(response, WorkerResponseOperation::StartFenced {}) {
         return Err("invalid_reply");
     }
     // L’état métier est relu après l’E/S ; aucun ACK ancien ne clôt une autre tentative.
     let st = state.lock().recover_poison();
-    let task = st.delegation_store.get(task_id).map_err(|_| "store_unavailable")?
+    let task = st
+        .delegation_store
+        .get(task_id)
+        .map_err(|_| "store_unavailable")?
         .ok_or("identity_unavailable")?;
-    if task.state != "cancelling" || task.mission_issued_at.is_some()
-        || remote_command_identity(&st, &task).ok().as_ref() != Some(command) {
+    if task.state != "cancelling"
+        || task.mission_issued_at.is_some()
+        || remote_command_identity(&st, &task).ok().as_ref() != Some(command)
+    {
         return Err("identity_changed");
     }
     Ok(())
 }
 
 fn cancel_fence_cause(state: &str) -> Option<&str> {
-    state.strip_prefix("cancel_fence:").filter(|cause| matches!(*cause,
-        "store_unavailable" | "identity_unavailable" | "not_unstarted" | "identity_changed"
-        | "capability_required" | "reply_unavailable" | "master_pending" | "master_request_frame"
-        | "resource_limit_unobserved" | "refused" | "invalid_reply"))
+    state.strip_prefix("cancel_fence:").filter(|cause| {
+        matches!(
+            *cause,
+            "store_unavailable"
+                | "identity_unavailable"
+                | "not_unstarted"
+                | "identity_changed"
+                | "capability_required"
+                | "reply_unavailable"
+                | "master_pending"
+                | "master_request_frame"
+                | "resource_limit_unobserved"
+                | "refused"
+                | "invalid_reply"
+        )
+    })
 }
 
 pub(super) fn cancel_remote_task(
@@ -13827,7 +16151,9 @@ pub(super) fn cancel_remote_task(
     );
     if matches!(result, Err(WorkerRefusal::UnknownExecution)) {
         if let Err(cause) = fence_cancel_unstarted(state, &task.task_id, &command) {
-            return StopOutcome::Timeout { state: format!("cancel_fence:{cause}") };
+            return StopOutcome::Timeout {
+                state: format!("cancel_fence:{cause}"),
+            };
         }
     } else if !matches!(
         result,
@@ -13887,48 +16213,100 @@ pub(super) fn cancel_remote_task(
 /// Dernière étape de la clôture native, jamais appelée par task_view ou un
 /// ACK. Le claim de rapport existant sérialise la décision sans verrou réseau.
 fn complete_commit_view_conservation(state: &Arc<Mutex<DaemonState>>, snapshot: &Task) -> bool {
-    use bridget_transport::protocol::{WorkerRequestOperation,WorkerResponseOperation};
-    let Some(binding)=snapshot.commit_view_binding().cloned() else {return false;};
-    let reference=snapshot.workspace.as_ref().and_then(|workspace|workspace.commit_view.as_ref());
-    let worker=&binding.worker;
-    let command=&binding.command;
-    let digest=&binding.prepare_digest;
-    let key=(snapshot.task_id.clone(),snapshot.mission.clone(),snapshot.round_no());
-    let _claim={
-        let st=state.lock().recover_poison();
-        let Ok(Some(current))=st.delegation_store.get(&snapshot.task_id) else {return false;};
-        if current.mission!=snapshot.mission || current.round_no()!=snapshot.round_no()
-            || current.workspace.as_ref().and_then(|w|w.commit_view.as_ref())!=reference
-            || current.commit_view_binding()!=Some(&binding)
-            || !super::commit_view_conservation_matches(&current,worker,command,digest)
-            || st.delegation_store.child_closure_pending(&current.task_id).unwrap_or(true) {
+    use bridget_transport::protocol::{WorkerRequestOperation, WorkerResponseOperation};
+    let Some(binding) = snapshot.commit_view_binding().cloned() else {
+        return false;
+    };
+    let reference = snapshot
+        .workspace
+        .as_ref()
+        .and_then(|workspace| workspace.commit_view.as_ref());
+    let worker = &binding.worker;
+    let command = &binding.command;
+    let digest = &binding.prepare_digest;
+    let key = (
+        snapshot.task_id.clone(),
+        snapshot.mission.clone(),
+        snapshot.round_no(),
+    );
+    let _claim = {
+        let st = state.lock().recover_poison();
+        let Ok(Some(current)) = st.delegation_store.get(&snapshot.task_id) else {
+            return false;
+        };
+        if current.mission != snapshot.mission
+            || current.round_no() != snapshot.round_no()
+            || current
+                .workspace
+                .as_ref()
+                .and_then(|w| w.commit_view.as_ref())
+                != reference
+            || current.commit_view_binding() != Some(&binding)
+            || !super::commit_view_conservation_matches(&current, worker, command, digest)
+            || st
+                .delegation_store
+                .child_closure_pending(&current.task_id)
+                .unwrap_or(true)
+        {
             return false;
         }
-        if current.cleanup_done {return true;}
-        let mut work=st.workspace_work.lock().recover_poison();
-        if !work.reports.insert(key.clone()) {return false;}
-        WorkspaceClaim {work:Arc::clone(&st.workspace_work),key:WorkspaceClaimKey::Report(key)}
+        if current.cleanup_done {
+            return true;
+        }
+        let mut work = st.workspace_work.lock().recover_poison();
+        if !work.reports.insert(key.clone()) {
+            return false;
+        }
+        WorkspaceClaim {
+            work: Arc::clone(&st.workspace_work),
+            key: WorkspaceClaimKey::Report(key),
+        }
     };
-    let response=remote_worker_roundtrip(state,worker,command,
-        WorkerRequestOperation::ConserveCommitView {prepare_digest:digest.clone()},
-        Instant::now()+Duration::from_secs(5));
-    if !matches!(&response,Ok(WorkerResponseOperation::CommitViewConserved {prepare_digest}) if prepare_digest==digest) {
+    let response = remote_worker_roundtrip(
+        state,
+        worker,
+        command,
+        WorkerRequestOperation::ConserveCommitView {
+            prepare_digest: digest.clone(),
+        },
+        Instant::now() + Duration::from_secs(5),
+    );
+    if !matches!(&response,Ok(WorkerResponseOperation::CommitViewConserved {prepare_digest}) if prepare_digest==digest)
+    {
         // Code fermé seulement. L'erreur métier d'origine n'est pas remplacée.
-        warn!("conservation de vue non confirmée : tâche={}, cause={:?}",snapshot.task_id,
-            response.err().unwrap_or(bridget_transport::protocol::WorkerRefusal::CommandMismatch));
+        warn!(
+            "conservation de vue non confirmée : tâche={}, cause={:?}",
+            snapshot.task_id,
+            response
+                .err()
+                .unwrap_or(bridget_transport::protocol::WorkerRefusal::CommandMismatch)
+        );
         return false;
     }
-    let st=state.lock().recover_poison();
-    let Ok(Some(mut current))=st.delegation_store.get(&snapshot.task_id) else {return false;};
-    if current.mission!=snapshot.mission || current.round_no()!=snapshot.round_no()
-        || current.workspace.as_ref().and_then(|w|w.commit_view.as_ref())!=reference
-            || current.commit_view_binding()!=Some(&binding)
-        || !super::commit_view_conservation_matches(&current,worker,command,digest)
-        || st.delegation_store.child_closure_pending(&current.task_id).unwrap_or(true) {
+    let st = state.lock().recover_poison();
+    let Ok(Some(mut current)) = st.delegation_store.get(&snapshot.task_id) else {
+        return false;
+    };
+    if current.mission != snapshot.mission
+        || current.round_no() != snapshot.round_no()
+        || current
+            .workspace
+            .as_ref()
+            .and_then(|w| w.commit_view.as_ref())
+            != reference
+        || current.commit_view_binding() != Some(&binding)
+        || !super::commit_view_conservation_matches(&current, worker, command, digest)
+        || st
+            .delegation_store
+            .child_closure_pending(&current.task_id)
+            .unwrap_or(true)
+    {
         return false;
     }
-    if let Some(workspace)=current.workspace.as_mut() {workspace.state=crate::delegation::WorkspaceState::Kept;}
-    current.cleanup_done=true;
+    if let Some(workspace) = current.workspace.as_mut() {
+        workspace.state = crate::delegation::WorkspaceState::Kept;
+    }
+    current.cleanup_done = true;
     st.delegation_store.save(&current).is_ok()
 }
 
@@ -14102,7 +16480,12 @@ fn cancel_tree(state: &Arc<Mutex<DaemonState>>, task: &Task) {
                 root.error = Some(match &outcome {
                     bridget_transport::protocol::StopOutcome::Timeout { state }
                         if cancel_fence_cause(state).is_some() =>
-                        format!("native_cancel_unverifiable:{name}:{}", cancel_fence_cause(state).unwrap()),
+                    {
+                        format!(
+                            "native_cancel_unverifiable:{name}:{}",
+                            cancel_fence_cause(state).unwrap()
+                        )
+                    }
                     _ => format!("native_cancel_unverifiable:{name}"),
                 });
                 if st.delegation_store.save(&root).is_err() {
@@ -14190,7 +16573,7 @@ fn cancel_tree(state: &Arc<Mutex<DaemonState>>, task: &Task) {
         for job in reports {
             complete_workspace_report(state, job);
         }
-        let mut views=Vec::new();
+        let mut views = Vec::new();
         {
             let st = state.lock().recover_poison();
             for id in closed {
@@ -14198,10 +16581,16 @@ fn cancel_tree(state: &Arc<Mutex<DaemonState>>, task: &Task) {
                     && entry.terminal()
                     && workspace_report_ready(&entry)
                     && (!entry.guarded || entry.guard_released)
-                    && !st.delegation_store.child_closure_pending(&id).unwrap_or(true)
+                    && !st
+                        .delegation_store
+                        .child_closure_pending(&id)
+                        .unwrap_or(true)
                 {
-                    if entry.commit_view_prepare.is_some() || entry.workspace.as_ref().is_some_and(|w|
-                        matches!(w.strategy,crate::delegation::WorkspaceStrategy::CommitView)) {
+                    if entry.commit_view_prepare.is_some()
+                        || entry.workspace.as_ref().is_some_and(|w| {
+                            matches!(w.strategy, crate::delegation::WorkspaceStrategy::CommitView)
+                        })
+                    {
                         // Ne publier cleanup_done qu'après l'ACK de la liaison
                         // originale. Les espaces Git gardent leur contrat.
                         views.push(entry);
@@ -14212,7 +16601,9 @@ fn cancel_tree(state: &Arc<Mutex<DaemonState>>, task: &Task) {
                 }
             }
         }
-        for view in views {let _=complete_commit_view_conservation(state,&view);}
+        for view in views {
+            let _ = complete_commit_view_conservation(state, &view);
+        }
     }
 }
 
@@ -14244,12 +16635,24 @@ fn align_request_deadline(st: &DaemonState, task: &Task) {
 
 /// Une annulation native confirmée clôt aussi le suivi logique de la mission.
 /// La preuve d’arrêt, les fichiers et les accusés de livraison restent séparés.
-fn settle_cancelled_tracked_request247(st: &mut DaemonState, task: &Task) -> Result<bool,String> {
-    if task.state != "cancelled" {return Ok(false);}
-    let Some(request)=st.store.get_request(&task.mission).map_err(|e|e.to_string())? else {return Ok(false);};
-    if request.state != "open" || request.sender != task.owner || request.target != task.child {return Ok(false);}
-    st.store.cancel_request(&task.mission,&task.owner,Some("mission_native_cancelled"))
-        .map(|closed|closed.is_some_and(|r|r.state=="cancelled")).map_err(|e|e.to_string())
+fn settle_cancelled_tracked_request247(st: &mut DaemonState, task: &Task) -> Result<bool, String> {
+    if task.state != "cancelled" {
+        return Ok(false);
+    }
+    let Some(request) = st
+        .store
+        .get_request(&task.mission)
+        .map_err(|e| e.to_string())?
+    else {
+        return Ok(false);
+    };
+    if request.state != "open" || request.sender != task.owner || request.target != task.child {
+        return Ok(false);
+    }
+    st.store
+        .cancel_request(&task.mission, &task.owner, Some("mission_native_cancelled"))
+        .map(|closed| closed.is_some_and(|r| r.state == "cancelled"))
+        .map_err(|e| e.to_string())
 }
 
 /// Clôture le suivi de la mission avec la transition canonique du guichet.
@@ -14522,11 +16925,9 @@ pub(super) mod native_delegation_permissions149_tests;
 #[path = "native_workspace154_tests.rs"]
 mod native_workspace154_tests;
 
-
 #[cfg(test)]
 #[path = "native_delegation_permission_projection214_tests.rs"]
 mod permission_projection214_tests;
-
 
 #[cfg(test)]
 #[path = "native_delegation_commit_view_reader221_tests.rs"]
@@ -14536,52 +16937,143 @@ mod commit_view_reader221_tests;
 #[test]
 fn spec241_tool_requirements_follow_commands_not_mentions() {
     use bridget_transport::protocol::WorkloadTool as T;
-    assert_eq!(identified_workload_requirements("Exécute `docker compose build` puis `cargo test`.").0,vec![T::Cargo,T::Docker,T::DockerCompose]);
-    for task in ["Compiler sans Docker", "Pas de Docker : `docker build .`", "Docker est facultatif", "Analyse du Dockerfile"] {
-        assert!(identified_workload_requirements(task).0.is_empty(),"{task}");
+    assert_eq!(
+        identified_workload_requirements("Exécute `docker compose build` puis `cargo test`.").0,
+        vec![T::Cargo, T::Docker, T::DockerCompose]
+    );
+    for task in [
+        "Compiler sans Docker",
+        "Pas de Docker : `docker build .`",
+        "Docker est facultatif",
+        "Analyse du Dockerfile",
+    ] {
+        assert!(
+            identified_workload_requirements(task).0.is_empty(),
+            "{task}"
+        );
     }
-    assert_eq!(identified_workload_requirements("Lance `cargo test` ; ne pas toucher au Dockerfile").0,vec![T::Cargo]);
-    assert_eq!(identified_workload_requirements("`cargo test` ; Docker facultatif : `docker build .`").0,vec![T::Cargo]);
-    assert_eq!(identified_workload_requirements("```sh\ncargo build --release\n```").0,vec![T::Cargo]);
-    for task in ["Sans Docker, lance `cargo test`", "Build sans cache : `cargo build`", "Sans Docker lance `cargo test`"] {
-        assert_eq!(identified_workload_requirements(task),(vec![T::Cargo],true));
+    assert_eq!(
+        identified_workload_requirements("Lance `cargo test` ; ne pas toucher au Dockerfile").0,
+        vec![T::Cargo]
+    );
+    assert_eq!(
+        identified_workload_requirements("`cargo test` ; Docker facultatif : `docker build .`").0,
+        vec![T::Cargo]
+    );
+    assert_eq!(
+        identified_workload_requirements("```sh\ncargo build --release\n```").0,
+        vec![T::Cargo]
+    );
+    for task in [
+        "Sans Docker, lance `cargo test`",
+        "Build sans cache : `cargo build`",
+        "Sans Docker lance `cargo test`",
+    ] {
+        assert_eq!(
+            identified_workload_requirements(task),
+            (vec![T::Cargo], true)
+        );
     }
-    assert_eq!(identified_workload_requirements("Lis `git status`"),(vec![T::Git],false));
-    assert_eq!(identified_workload_requirements("Lis `cargo --version`"),(vec![T::Cargo],false));
-
+    assert_eq!(
+        identified_workload_requirements("Lis `git status`"),
+        (vec![T::Git], false)
+    );
+    assert_eq!(
+        identified_workload_requirements("Lis `cargo --version`"),
+        (vec![T::Cargo], false)
+    );
 }
 
 #[cfg(test)]
 #[test]
 fn spec241_chained_commands_and_tool_specific_reserves() {
     use bridget_transport::protocol::WorkloadTool as T;
-    for task in ["Docker est facultatif et lance `cargo test`", "Lance `cd crate && cargo test`",
-        "`env RUST_LOG=info cargo test`", "`MODE=test cargo test`", "`git status; cargo test | cat`"] {
+    for task in [
+        "Docker est facultatif et lance `cargo test`",
+        "Lance `cd crate && cargo test`",
+        "`env RUST_LOG=info cargo test`",
+        "`MODE=test cargo test`",
+        "`git status; cargo test | cat`",
+    ] {
         let (tools, writes) = identified_workload_requirements(task);
-        assert!(tools.contains(&T::Cargo) && writes, "{task}: {tools:?}, {writes}");
+        assert!(
+            tools.contains(&T::Cargo) && writes,
+            "{task}: {tools:?}, {writes}"
+        );
     }
-    for task in ["`echo \"x; cargo test\"`", "`printf 'cargo test && docker build .'`", "Facultatif : `cargo test`",
-        "Ne pas lancer `cargo test`", "`echo cargo test`", "`echo \"x\" cargo test`"] {
-        assert_eq!(identified_workload_requirements(task), (vec![], false), "{task}");
+    for task in [
+        "`echo \"x; cargo test\"`",
+        "`printf 'cargo test && docker build .'`",
+        "Facultatif : `cargo test`",
+        "Ne pas lancer `cargo test`",
+        "`echo cargo test`",
+        "`echo \"x\" cargo test`",
+    ] {
+        assert_eq!(
+            identified_workload_requirements(task),
+            (vec![], false),
+            "{task}"
+        );
     }
-    assert_eq!(identified_workload_requirements("`git -C \"repo path\" status && docker compose ps`"),
-        (vec![T::Git, T::Docker, T::DockerCompose], false));
+    assert_eq!(
+        identified_workload_requirements("`git -C \"repo path\" status && docker compose ps`"),
+        (vec![T::Git, T::Docker, T::DockerCompose], false)
+    );
 }
 
 #[cfg(test)]
 #[test]
 fn spec241_known_mutations_do_not_enter_read_only_profiles() {
-    for command in ["git stash", "git restore file", "git rm file", "git mv a b", "git tag v1", "git init",
-        "git apply change.patch", "git revert HEAD", "git -C repo restore file", "cargo doc", "cargo fetch",
-        "cargo bench", "cargo +stable test", "npm start", "npm lint", "pnpm lint", "npm version patch",
-        "docker build .", "docker compose up", "docker compose run app", "docker compose config --output out.yml",
-        "git diff --output=result.patch", "git log -o result"] {
-        assert!(identified_workload_requirements(&format!("`{command}`")).1, "{command}");
+    for command in [
+        "git stash",
+        "git restore file",
+        "git rm file",
+        "git mv a b",
+        "git tag v1",
+        "git init",
+        "git apply change.patch",
+        "git revert HEAD",
+        "git -C repo restore file",
+        "cargo doc",
+        "cargo fetch",
+        "cargo bench",
+        "cargo +stable test",
+        "npm start",
+        "npm lint",
+        "pnpm lint",
+        "npm version patch",
+        "docker build .",
+        "docker compose up",
+        "docker compose run app",
+        "docker compose config --output out.yml",
+        "git diff --output=result.patch",
+        "git log -o result",
+    ] {
+        assert!(
+            identified_workload_requirements(&format!("`{command}`")).1,
+            "{command}"
+        );
     }
-    for command in ["git --no-pager log", "git -C repo -c core.pager=cat status", "git worktree list",
-        "git stash list", "git tag --list", "git branch --show-current", "cargo fmt -- --check", "cargo +stable --version",
-        "cargo metadata --locked", "npm --version", "pnpm help", "make --dry-run", "docker version", "docker compose config"] {
-        assert!(!identified_workload_requirements(&format!("`{command}`")).1, "{command}");
+    for command in [
+        "git --no-pager log",
+        "git -C repo -c core.pager=cat status",
+        "git worktree list",
+        "git stash list",
+        "git tag --list",
+        "git branch --show-current",
+        "cargo fmt -- --check",
+        "cargo +stable --version",
+        "cargo metadata --locked",
+        "npm --version",
+        "pnpm help",
+        "make --dry-run",
+        "docker version",
+        "docker compose config",
+    ] {
+        assert!(
+            !identified_workload_requirements(&format!("`{command}`")).1,
+            "{command}"
+        );
     }
 }
 
@@ -14590,37 +17082,84 @@ fn spec241_known_mutations_do_not_enter_read_only_profiles() {
 fn spec241_unanalysed_program_is_not_a_read_only_certificate() {
     use bridget_transport::protocol::WorkloadTool as T;
     // false signifie aucune écriture identifiée, pas absence d'effets du programme.
-    assert_eq!(identified_workload_requirements("`python3 scripts/gen.py`"), (vec![T::Python], false));
-    assert_eq!(identified_workload_requirements("`node generator.js`"), (vec![T::Node], false));
-    for command in ["bash -c 'cargo build'", "env -i cargo test", "npx prettier --write ."] {
-        assert_eq!(identified_workload_requirements(&format!("`{command}`")), (vec![], false));
+    assert_eq!(
+        identified_workload_requirements("`python3 scripts/gen.py`"),
+        (vec![T::Python], false)
+    );
+    assert_eq!(
+        identified_workload_requirements("`node generator.js`"),
+        (vec![T::Node], false)
+    );
+    for command in [
+        "bash -c 'cargo build'",
+        "env -i cargo test",
+        "npx prettier --write .",
+    ] {
+        assert_eq!(
+            identified_workload_requirements(&format!("`{command}`")),
+            (vec![], false)
+        );
     }
     // La sélection ne réécrit jamais les permissions pour un besoin non analysé.
     let policy = serde_json::json!({"kind":"codex","sandbox_policy":{"type":"readOnly"}});
-    assert!(crate::native_permissions::permits_command_execution(&policy, false));
-    assert!(!crate::native_permissions::permits_command_execution(&policy, true));
+    assert!(crate::native_permissions::permits_command_execution(
+        &policy, false
+    ));
+    assert!(!crate::native_permissions::permits_command_execution(
+        &policy, true
+    ));
     assert_eq!(policy["sandbox_policy"]["type"], "readOnly");
 }
 
 #[cfg(test)]
 #[test]
 fn spec241_real_admission_marks_only_the_authenticated_turn_snapshot() {
-    for source in ["provider_turn","native_wrapper"] {
-        let (state,config,rx,_reader,auto,_root)=tests::routing168_fixture(1);
-        let mut st=state.lock().unwrap();
-        let mut parent=st.native_permission_facts["conn-1"].0.clone();parent.source=source.into();
-        st.native_permission_facts.insert("conn-1".into(),(parent.clone(),None));
-        let plan=routing_admission_plan(&st.registry,"local",&auto).unwrap();
-        let request=routing_delegate(&auto,&plan.candidates[0],Some("high".into()),"local",None);
-        let view=admit_delegate("conn-1",&request,None,Some(&parent),&mut st,WorkspacePass::Shared,None).unwrap();
-        let WorkspaceAdmission::View(view)=view else {panic!("admission durable attendue")};
-        let task=st.delegation_store.get(view["task_id"].as_str().unwrap()).unwrap().unwrap();
-        if source=="provider_turn" {
-            assert_eq!(task.admission_authority_version,Some(1));
-            assert_eq!(task.admitted_parent().unwrap(),Some(&parent));
-        } else {assert_eq!(task.admission_authority_version,None);}
-        assert!(rx.try_recv().is_err(),"aucun lancement de modèle dans l'admission seule");
-        drop(st);drop(state);tests::cleanup(&config);
+    for source in ["provider_turn", "native_wrapper"] {
+        let (state, config, rx, _reader, auto, _root) = tests::routing168_fixture(1);
+        let mut st = state.lock().unwrap();
+        let mut parent = st.native_permission_facts["conn-1"].0.clone();
+        parent.source = source.into();
+        st.native_permission_facts
+            .insert("conn-1".into(), (parent.clone(), None));
+        let plan = routing_admission_plan(&st.registry, "local", &auto).unwrap();
+        let request = routing_delegate(
+            &auto,
+            &plan.candidates[0],
+            Some("high".into()),
+            "local",
+            None,
+        );
+        let view = admit_delegate(
+            "conn-1",
+            &request,
+            None,
+            Some(&parent),
+            &mut st,
+            WorkspacePass::Shared,
+            None,
+        )
+        .unwrap();
+        let WorkspaceAdmission::View(view) = view else {
+            panic!("admission durable attendue")
+        };
+        let task = st
+            .delegation_store
+            .get(view["task_id"].as_str().unwrap())
+            .unwrap()
+            .unwrap();
+        if source == "provider_turn" {
+            assert_eq!(task.admission_authority_version, Some(1));
+            assert_eq!(task.admitted_parent().unwrap(), Some(&parent));
+        } else {
+            assert_eq!(task.admission_authority_version, None);
+        }
+        assert!(
+            rx.try_recv().is_err(),
+            "aucun lancement de modèle dans l'admission seule"
+        );
+        drop(st);
+        drop(state);
+        tests::cleanup(&config);
     }
 }
 
@@ -14628,32 +17167,79 @@ fn spec241_real_admission_marks_only_the_authenticated_turn_snapshot() {
 #[test]
 fn spec241_routing_qualifies_required_host_tool_before_selection_without_admission() {
     use std::os::unix::fs::PermissionsExt;
-    let (state,config,rx,_reader,mut request,root)=tests::routing168_fixture(1);
-    let tools=root.join("qualified-tools");std::fs::create_dir(&tools).unwrap();
-    state.lock().unwrap().source_env.insert("PATH".into(),tools.clone().into_os_string());
-    request.task="Exécute `docker compose build`.".into();
-    request.machine_id=Some("local".into());
-    let registry=state.lock().unwrap().registry.clone();
-    let mut unavailable=routing_admission_plan(&registry,"local",&request).unwrap();
-    let axes=unavailable.candidates.clone();
-    assert_eq!(observe_routing_candidates("conn-1",&request,&mut unavailable,None,&state).unwrap_err(),"routing_candidate_unavailable");
+    let (state, config, rx, _reader, mut request, root) = tests::routing168_fixture(1);
+    let tools = root.join("qualified-tools");
+    std::fs::create_dir(&tools).unwrap();
+    state
+        .lock()
+        .unwrap()
+        .source_env
+        .insert("PATH".into(), tools.clone().into_os_string());
+    request.task = "Exécute `docker compose build`.".into();
+    request.machine_id = Some("local".into());
+    let registry = state.lock().unwrap().registry.clone();
+    let mut unavailable = routing_admission_plan(&registry, "local", &request).unwrap();
+    let axes = unavailable.candidates.clone();
+    assert_eq!(
+        observe_routing_candidates("conn-1", &request, &mut unavailable, None, &state).unwrap_err(),
+        "routing_candidate_unavailable"
+    );
     assert!(unavailable.observations.is_empty());
-    assert!(unavailable.decision_notes.iter().any(|note|note.contains("tool_absent")&&note.contains("docker")));
-    assert!(unavailable.candidates.is_empty(),"la cible incompatible est écartée");
-    assert_eq!(request.machine_id.as_deref(),Some("local"));
-    let executable=tools.join("docker");std::fs::write(&executable,"#!/bin/sh\nexit 0\n").unwrap();
-    std::fs::set_permissions(&executable,std::fs::Permissions::from_mode(0o700)).unwrap();
-    let mut read_only=routing_admission_plan(&registry,"local",&request).unwrap();
-    assert_eq!(observe_routing_candidates("conn-1",&request,&mut read_only,None,&state).unwrap_err(),"routing_candidate_unavailable");
-    assert!(read_only.decision_notes.iter().any(|note|note.contains("command_execution_unavailable")),
-        "Docker présent ne rend pas une compilation admissible en lecture seule");
-    request.task="Lis `docker compose ps`.".into();
-    let mut available=routing_admission_plan(&registry,"local",&request).unwrap();
-    let observed=observe_routing_candidates("conn-1",&request,&mut available,None,&state);
-    assert!(observed.is_ok(),"{observed:?} ; faits={:?}",available.decision_notes);
-    assert!(available.candidates.iter().all(|candidate|candidate.machine_id==axes[0].machine_id));
-    assert_eq!(available.observations.len(),1,"outil hôte confirmé et profil Codex capable de commandes");
-    assert!(state.lock().unwrap().delegation_store.tasks().unwrap().is_empty());
+    assert!(
+        unavailable
+            .decision_notes
+            .iter()
+            .any(|note| note.contains("tool_absent") && note.contains("docker"))
+    );
+    assert!(
+        unavailable.candidates.is_empty(),
+        "la cible incompatible est écartée"
+    );
+    assert_eq!(request.machine_id.as_deref(), Some("local"));
+    let executable = tools.join("docker");
+    std::fs::write(&executable, "#!/bin/sh\nexit 0\n").unwrap();
+    std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let mut read_only = routing_admission_plan(&registry, "local", &request).unwrap();
+    assert_eq!(
+        observe_routing_candidates("conn-1", &request, &mut read_only, None, &state).unwrap_err(),
+        "routing_candidate_unavailable"
+    );
+    assert!(
+        read_only
+            .decision_notes
+            .iter()
+            .any(|note| note.contains("command_execution_unavailable")),
+        "Docker présent ne rend pas une compilation admissible en lecture seule"
+    );
+    request.task = "Lis `docker compose ps`.".into();
+    let mut available = routing_admission_plan(&registry, "local", &request).unwrap();
+    let observed = observe_routing_candidates("conn-1", &request, &mut available, None, &state);
+    assert!(
+        observed.is_ok(),
+        "{observed:?} ; faits={:?}",
+        available.decision_notes
+    );
+    assert!(
+        available
+            .candidates
+            .iter()
+            .all(|candidate| candidate.machine_id == axes[0].machine_id)
+    );
+    assert_eq!(
+        available.observations.len(),
+        1,
+        "outil hôte confirmé et profil Codex capable de commandes"
+    );
+    assert!(
+        state
+            .lock()
+            .unwrap()
+            .delegation_store
+            .tasks()
+            .unwrap()
+            .is_empty()
+    );
     assert!(rx.try_recv().is_err());
-    drop(state);tests::cleanup(&config);
+    drop(state);
+    tests::cleanup(&config);
 }

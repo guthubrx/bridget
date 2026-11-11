@@ -1,8 +1,8 @@
 //! État désiré durable des équipiers gérés par le daemon.
 
-use bridget_transport::poison::RecoverPoison;
 use bridget_transport::ResolvedAgentDefinition;
 use bridget_transport::fsutil::{AtomicWritePhase, write_private_file_atomic_observed};
+use bridget_transport::poison::RecoverPoison;
 use bridget_transport::protocol::ProjectReference;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -268,19 +268,13 @@ impl DesiredStateStore {
     /// Charge et valide le fichier en O(n), n étant le nombre d'équipiers.
     /// L'absence du fichier au premier démarrage représente une flotte vide.
     pub fn load(&self) -> Result<DesiredFleet, DesiredStateError> {
-        let _transition = self
-            .transition_lock
-            .lock()
-            .recover_poison();
+        let _transition = self.transition_lock.lock().recover_poison();
         self.load_unlocked()
     }
 
     /// Remplace durablement l'état complet en O(n).
     pub fn persist(&self, fleet: &DesiredFleet) -> Result<(), DesiredStateError> {
-        let _transition = self
-            .transition_lock
-            .lock()
-            .recover_poison();
+        let _transition = self.transition_lock.lock().recover_poison();
         self.persist_unlocked(fleet)
     }
 
@@ -291,10 +285,7 @@ impl DesiredStateStore {
         fleet: &DesiredFleet,
         observer: impl FnMut(AtomicWritePhase) -> io::Result<()>,
     ) -> Result<(), DesiredStateError> {
-        let _transition = self
-            .transition_lock
-            .lock()
-            .recover_poison();
+        let _transition = self.transition_lock.lock().recover_poison();
         self.persist_unlocked_observed(fleet, observer)
     }
 
@@ -304,10 +295,7 @@ impl DesiredStateStore {
         &self,
         mapping: &std::collections::BTreeMap<String, String>,
     ) -> Result<(), DesiredStateError> {
-        let _transition = self
-            .transition_lock
-            .lock()
-            .recover_poison();
+        let _transition = self.transition_lock.lock().recover_poison();
         let mut fleet = self.load_unlocked()?;
         let mut migrated = BTreeMap::new();
         for (legacy, entry) in std::mem::take(&mut fleet.equipiers) {
@@ -330,10 +318,7 @@ impl DesiredStateStore {
         name: String,
         equipier: DesiredEquipier,
     ) -> Result<Option<DesiredEquipier>, DesiredStateError> {
-        let _transition = self
-            .transition_lock
-            .lock()
-            .recover_poison();
+        let _transition = self.transition_lock.lock().recover_poison();
         let mut fleet = self.load_unlocked()?;
         let previous = fleet.equipiers.insert(name, equipier);
         self.persist_unlocked(&fleet)?;
@@ -342,10 +327,7 @@ impl DesiredStateStore {
 
     /// Retire une entrée avant de confirmer l'arrêt à l'appelant.
     pub fn remove(&self, name: &str) -> Result<Option<DesiredEquipier>, DesiredStateError> {
-        let _transition = self
-            .transition_lock
-            .lock()
-            .recover_poison();
+        let _transition = self.transition_lock.lock().recover_poison();
         let mut fleet = self.load_unlocked()?;
         let removed = fleet.equipiers.remove(name);
         if removed.is_some() {
@@ -361,10 +343,7 @@ impl DesiredStateStore {
         name: &str,
         lifecycle_state: DesiredLifecycleState,
     ) -> Result<Option<DesiredEquipier>, DesiredStateError> {
-        let _transition = self
-            .transition_lock
-            .lock()
-            .recover_poison();
+        let _transition = self.transition_lock.lock().recover_poison();
         let mut fleet = self.load_unlocked()?;
         let Some(entry) = fleet.equipiers.get_mut(name) else {
             return Ok(None);
@@ -386,10 +365,7 @@ impl DesiredStateStore {
         names: &[&str],
         lifecycle_state: DesiredLifecycleState,
     ) -> Result<Vec<String>, DesiredStateError> {
-        let _transition = self
-            .transition_lock
-            .lock()
-            .recover_poison();
+        let _transition = self.transition_lock.lock().recover_poison();
         let mut fleet = self.load_unlocked()?;
         let mut present = Vec::new();
         let mut changed = false;
@@ -415,10 +391,7 @@ impl DesiredStateStore {
         command_id: &str,
         generation: u64,
     ) -> Result<bool, DesiredStateError> {
-        let _transition = self
-            .transition_lock
-            .lock()
-            .recover_poison();
+        let _transition = self.transition_lock.lock().recover_poison();
         let mut fleet = self.load_unlocked()?;
         let Some(entry) = fleet.equipiers.get_mut(name) else {
             return Ok(false);
@@ -439,10 +412,7 @@ impl DesiredStateStore {
     /// Les agents non persistants ne sont pas repris après un redémarrage,
     /// mais leur identité logique demeure consultable comme arrêtée.
     pub fn stop_non_persistent_running(&self) -> Result<Vec<String>, DesiredStateError> {
-        let _transition = self
-            .transition_lock
-            .lock()
-            .recover_poison();
+        let _transition = self.transition_lock.lock().recover_poison();
         let mut fleet = self.load_unlocked()?;
         let mut changed = Vec::new();
         for (name, entry) in &mut fleet.equipiers {
@@ -464,10 +434,7 @@ impl DesiredStateStore {
     /// `upsert`/`remove`. Un load+persist disjoint écraserait les insertions
     /// concurrentes.
     pub fn set_domain(&self, name: &str, domain: Option<&str>) -> Result<bool, DesiredStateError> {
-        let _transition = self
-            .transition_lock
-            .lock()
-            .recover_poison();
+        let _transition = self.transition_lock.lock().recover_poison();
         let mut fleet = self.load_unlocked()?;
         let Some(entry) = fleet.equipiers.get_mut(name) else {
             return Ok(false);
@@ -724,7 +691,11 @@ mod tests {
                 {
                     return Err(io::Error::last_os_error());
                 }
-                for fd in ready_pipe.into_iter().chain(release_pipe).chain([ready, release]) {
+                for fd in ready_pipe
+                    .into_iter()
+                    .chain(release_pipe)
+                    .chain([ready, release])
+                {
                     if fd != BARRIER_READY_FD && fd != BARRIER_RELEASE_FD {
                         libc::close(fd);
                     }

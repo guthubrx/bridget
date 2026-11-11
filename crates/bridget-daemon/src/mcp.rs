@@ -1,6 +1,5 @@
 //! Façade MCP stdio. Le protocole daemon reste le seul transport métier.
 
-use bridget_transport::poison::RecoverPoison;
 use crate::artifact_types::{ARTIFACT_CONTRACT_VERSION, ArtifactPublicationV1, ArtifactReceiptV1};
 #[cfg(test)]
 use crate::communication::client::connect_nonblocking;
@@ -9,6 +8,7 @@ use crate::communication::client::{
 };
 use crate::communication::issuer_scope;
 use bridget_core::BridgetMessage;
+use bridget_transport::poison::RecoverPoison;
 use bridget_transport::protocol::{
     CLIENT_CONTRACT_VERSION, ClientCapability, ConnectionRole, GuichetDelegateMutationStatus,
     GuichetDurationClass, GuichetRegistreAddStatus, GuichetReplyPayload, IdempotencyIssue,
@@ -163,7 +163,9 @@ impl ToolCallGuard {
     fn new(id: String, registry: Arc<Mutex<ToolCallRegistry>>) -> Self {
         let context = ToolCallContext { id, registry };
         TOOL_CALL_CONTEXT.with(|slot| *slot.borrow_mut() = Some(context.clone()));
-        USER_INPUT_RECEIPT.with(|slot| {slot.borrow_mut().take();});
+        USER_INPUT_RECEIPT.with(|slot| {
+            slot.borrow_mut().take();
+        });
         Self {
             context,
             finished: false,
@@ -323,10 +325,7 @@ where
                 }
             };
             if let Some(cancelled_id) = cancellation_id(&request) {
-                registry
-                    .lock()
-                    .recover_poison()
-                    .cancel(&cancelled_id);
+                registry.lock().recover_poison().cancel(&cancelled_id);
                 continue;
             }
             let call_id = asynchronous_tool_call_id(&request, &session);
@@ -337,9 +336,12 @@ where
                         .and_then(|params| params.get("name"))
                         .and_then(Value::as_str),
                     Some("bridget_task_wait" | "bridget_request_wait")
-                ) || (request["params"]["name"]=="bridget_ask_user"
-                    && matches!(request["params"]["arguments"]["action"].as_str(),None|Some("create"|"wait"))
-                    && request["params"]["arguments"]["wait_timeout"].as_u64()!=Some(0));
+                ) || (request["params"]["name"] == "bridget_ask_user"
+                    && matches!(
+                        request["params"]["arguments"]["action"].as_str(),
+                        None | Some("create" | "wait")
+                    )
+                    && request["params"]["arguments"]["wait_timeout"].as_u64() != Some(0));
                 let reservation = registry
                     .lock()
                     .recover_poison()
@@ -377,8 +379,13 @@ where
                     );
                     let cancelled_call = call.finish();
                     if !cancelled_call && let Some(response) = response {
-                        if write_shared_response(&output, &response).is_ok() { acknowledge_user_input_receipt(); }
-                        else { USER_INPUT_RECEIPT.with(|s| {s.borrow_mut().take();}); }
+                        if write_shared_response(&output, &response).is_ok() {
+                            acknowledge_user_input_receipt();
+                        } else {
+                            USER_INPUT_RECEIPT.with(|s| {
+                                s.borrow_mut().take();
+                            });
+                        }
                     }
                 });
                 continue;
@@ -391,10 +398,7 @@ where
         }
         Ok(())
     })?;
-    output
-        .lock()
-        .recover_poison()
-        .flush()
+    output.lock().recover_poison().flush()
 }
 
 /// Lance la façade MCP depuis la sous-commande `bridget mcp`.
@@ -638,21 +642,24 @@ fn caller_scope_refusal_message(result: &Value) -> String {
         Some("current_session_binding") => "current_session_binding",
         _ => "unknown",
     };
-    if result["detail"]["cause"]=="origin_project_preparation_busy" {
+    if result["detail"]["cause"] == "origin_project_preparation_busy" {
         return json!({"status":"refused","code":code,"stage":"caller_scope",
             "verification":verification,"cause":"origin_project_preparation_busy","scope":"this_call",
             "message":"Attendez la fin des préparations de projet en cours, puis vérifiez l’admission avec la même clé. La capacité de préparation est occupée ; ce refus concerne cet appel, pas les droits. Les autres travaux autorisés suivent leur propre état.",
             "recovery":"Conserver request_id, task_id éventuel et enveloppe. Vérifier l’admission durable avant tout rejeu strict. Ne créer aucun remplacement d’issue inconnue. Le verrou source attend au plus 30 s dans le délai original.",
             "human_action":"Si l’occupation persiste, demander au responsable de vérifier la préparation détentrice du verrou et son délai. Ne supprimer ni verrou ni dossier et ne changer ni compte ni droits."}).to_string();
     }
-    if result["detail"]["cause"]=="origin_proof_busy" {
+    if result["detail"]["cause"] == "origin_proof_busy" {
         return json!({"status":"refused","code":code,"stage":"caller_scope",
             "verification":verification,"cause":"origin_proof_busy","scope":"this_call",
             "message":"Attendez la fin des contrôles d’origine en cours, puis relisez les mêmes task_id. La capacité de contrôle est occupée ; ce refus concerne cet appel, pas un changement de droits. Les autres travaux autorisés suivent leur propre état.",
             "recovery":"Conserver task_id, request_id et enveloppe. Pour une lecture, reprendre les mêmes task_id après la fin des contrôles. Pour une opération mutante, vérifier son admission durable avant tout rejeu strict ; ne créer aucune mission ou clé de remplacement.",
             "human_action":"Si la capacité reste occupée après la fin des contrôles, demander au responsable de vérifier les contrôles d’origine en cours et leurs délais. Ne modifier ni compte, ni droits, ni rattachement pour contourner la saturation."}).to_string();
     }
-    if matches!(result["detail"]["cause"].as_str(),Some("origin_worker_unavailable"|"origin_proof_unavailable")) {
+    if matches!(
+        result["detail"]["cause"].as_str(),
+        Some("origin_worker_unavailable" | "origin_proof_unavailable")
+    ) {
         return json!({"status":"refused","code":code,"stage":"caller_scope","verification":verification,
             "cause":result["detail"]["cause"],"scope":"this_attestation",
             "message":"Le lien de preuve de l'hôte d'origine est indisponible pour ce contrôle ; aucun changement de droits n'est établi.",
@@ -723,7 +730,7 @@ fn execute_tool_at_with_identity_once(
         .ok_or_else(|| ToolError::InvalidParams("outil inconnu".into()))?;
     // Contrat156 : une preuve enfant est refusée avant toute connexion.
     // execute_queue conserve aussi sa garde pour les appels CLI/directs.
-    if matches!(name,"bridget_queue"|"bridget_ask_user") && identity.delegated_origin.is_some() {
+    if matches!(name, "bridget_queue" | "bridget_ask_user") && identity.delegated_origin.is_some() {
         return Err(ToolError::Technical {
             code: "delegated_tool_forbidden",
             message: "une preuve enfant ne peut pas consulter la file".into(),
@@ -806,22 +813,25 @@ fn execute_tool_at_with_identity_once(
     }
     // Un échange authentifié par credential+instance lit la tâche sur le daemon.
     // for_child utilise l'index149 mesuré en T017, sans stockage ou cache client.
-    let mut scope_connection = registered_connection(principal, instance_id, socket).map_err(|error| {
-        crate::delegation_mcp::pre_dispatch_failure(
-            error,
-            "raccordement préalable au plafond MCP",
-            &Value::Object(arguments.clone()),
-        )
-    })?;
-    let caller_read_only = match scope_connection.exchange(&WrapperToDaemon::NativeDelegation {
-        request: bridget_transport::protocol::NativeDelegationRequest::CallerScope {},
-    }).map_err(|error| {
-        crate::delegation_mcp::pre_dispatch_failure(
-            error,
-            "lecture préalable du plafond MCP",
-            &Value::Object(arguments.clone()),
-        )
-    })? {
+    let mut scope_connection =
+        registered_connection(principal, instance_id, socket).map_err(|error| {
+            crate::delegation_mcp::pre_dispatch_failure(
+                error,
+                "raccordement préalable au plafond MCP",
+                &Value::Object(arguments.clone()),
+            )
+        })?;
+    let caller_read_only = match scope_connection
+        .exchange(&WrapperToDaemon::NativeDelegation {
+            request: bridget_transport::protocol::NativeDelegationRequest::CallerScope {},
+        })
+        .map_err(|error| {
+            crate::delegation_mcp::pre_dispatch_failure(
+                error,
+                "lecture préalable du plafond MCP",
+                &Value::Object(arguments.clone()),
+            )
+        })? {
         DaemonToWrapper::NativeDelegationResult { result }
             if result.as_object().is_some_and(|object| object.len() == 2)
                 && result["version"].as_u64() == Some(1)
@@ -1255,7 +1265,12 @@ fn execute_send(
     let reply = optional_bool(arguments, "reply")?.unwrap_or(false);
     let requested_intent = match arguments.get("intent") {
         None => None,
-        Some(Value::String(value)) if matches!(value.as_str(), "queue" | "steer" | "interrupt" | "information") => {
+        Some(Value::String(value))
+            if matches!(
+                value.as_str(),
+                "queue" | "steer" | "interrupt" | "information"
+            ) =>
+        {
             Some(value.as_str())
         }
         _ => {
@@ -1303,7 +1318,8 @@ fn execute_send(
         ));
     }
     if requested_intent == Some("information")
-        && (reply || reply_timeout.is_some() || in_reply_to.is_some()) {
+        && (reply || reply_timeout.is_some() || in_reply_to.is_some())
+    {
         return Err(ToolError::Technical { code: "information_requires_uncorrelated_message",
             message: "information conserve un avis sans réveil : reply=false, sans in_reply_to ni reply_timeout. Pour une demande ou un résultat, gardez l'envoi normal.".into() });
     }
@@ -1360,16 +1376,25 @@ fn execute_send(
     )?;
     let issuer_scope = issuer_scope(instance_id);
     let mut requested_capabilities = vec![ClientCapability::SendIdempotent];
-    if message.cross_project_reason.is_some() { requested_capabilities.push(ClientCapability::CommunicationProjectsV1); }
-    if requested_intent == Some("information") { requested_capabilities.push(ClientCapability::SendInformationV1); }
+    if message.cross_project_reason.is_some() {
+        requested_capabilities.push(ClientCapability::CommunicationProjectsV1);
+    }
+    if requested_intent == Some("information") {
+        requested_capabilities.push(ClientCapability::SendInformationV1);
+    }
     match connection.exchange(&WrapperToDaemon::ClientHello {
         contract_version: CLIENT_CONTRACT_VERSION,
         issuer_scope,
         capabilities: requested_capabilities,
     })? {
-        DaemonToWrapper::ClientWelcome { capabilities, build_id, .. }
-            if capabilities.contains(&ClientCapability::SendIdempotent) => {
-            if requested_intent == Some("information") && !capabilities.contains(&ClientCapability::SendInformationV1) {
+        DaemonToWrapper::ClientWelcome {
+            capabilities,
+            build_id,
+            ..
+        } if capabilities.contains(&ClientCapability::SendIdempotent) => {
+            if requested_intent == Some("information")
+                && !capabilities.contains(&ClientCapability::SendInformationV1)
+            {
                 return Err(ToolError::Technical { code: "information_unsupported", message:
                     "Le daemon ne prend pas en charge le dépôt silencieux ; aucun envoi effectué, aucun remplacement par un message normal. Chargez une version compatible pour cet avis.".into() });
             }
@@ -1783,8 +1808,11 @@ fn execute_who(
     arguments: &serde_json::Map<String, Value>,
     socket: &Path,
 ) -> Result<Value, ToolError> {
-    reject_unknown_arguments(arguments, &["domain", "scope", "limit", "cursor", "include_stopped"])?;
-    let options=directory211::Options::parse(arguments)?;
+    reject_unknown_arguments(
+        arguments,
+        &["domain", "scope", "limit", "cursor", "include_stopped"],
+    )?;
+    let options = directory211::Options::parse(arguments)?;
     let scope = match arguments.get("scope") {
         None => bridget_transport::protocol::CommunicationDirectoryScope::SameProject,
         Some(Value::String(scope)) if scope == "same_project" => {
@@ -1818,8 +1846,13 @@ fn execute_who(
             agents,
             project,
             project_warnings,
-        } => directory211::page(agents, &options, domain.as_deref(), scope,
-            json!({"project":project,"project_warnings":project_warnings,"scope":scope})),
+        } => directory211::page(
+            agents,
+            &options,
+            domain.as_deref(),
+            scope,
+            json!({"project":project,"project_warnings":project_warnings,"scope":scope}),
+        ),
         other => unexpected_response(other),
     }
 }
@@ -2634,15 +2667,27 @@ fn discovery_tools() -> Vec<Value> {
     let mut catalogue = tools();
     for tool in &mut catalogue {
         let schema = tool["inputSchema"].as_object_mut().expect("schéma objet");
-        if !["allOf", "anyOf", "oneOf"].iter().any(|key| schema.contains_key(*key)) { continue; }
+        if !["allOf", "anyOf", "oneOf"]
+            .iter()
+            .any(|key| schema.contains_key(*key))
+        {
+            continue;
+        }
         // Le schéma COMPLET reste dans la référence : les anciens validateurs
         // qui ignorent les voisins de $ref gardent aussi champs requis et fermeture.
         let original = Value::Object(schema.clone());
-        for key in ["allOf", "anyOf", "oneOf"] { schema.remove(key); }
-        let definitions = schema.entry("$defs").or_insert_with(|| json!({}))
-            .as_object_mut().expect("définitions objet");
+        for key in ["allOf", "anyOf", "oneOf"] {
+            schema.remove(key);
+        }
+        let definitions = schema
+            .entry("$defs")
+            .or_insert_with(|| json!({}))
+            .as_object_mut()
+            .expect("définitions objet");
         let mut key = "bridget_constraints".to_owned();
-        while definitions.contains_key(&key) { key.push('_'); }
+        while definitions.contains_key(&key) {
+            key.push('_');
+        }
         definitions.insert(key.clone(), original);
         schema.insert("$ref".into(), json!(format!("#/$defs/{key}")));
     }
@@ -2653,12 +2698,18 @@ fn discovery_tools() -> Vec<Value> {
 pub(crate) fn tools() -> Vec<Value> {
     // maxLength est en caractères JSON Schema ; le contrat natif compte les
     // octets UTF-8. Publier aussi cette unité, sans changer le validateur.
-    let text = |limit| json!({"type":"string","minLength":1,"maxLength":limit,
-        "x-maxUtf8Bytes":limit,"description":"Longueur maximale en octets UTF-8, pas en caractères ; le validateur natif fait foi."});
-    let mut host=text(crate::handoff::MAX_LABEL_BYTES);
-    host["description"]=json!("Obligatoire pour kind=file : machine portant cette référence ; au plus256octetsUTF-8.");
-    let mut path=text(crate::handoff::MAX_ITEM_BYTES);
-    path["description"]=json!("Avec kind=file : chemin absolu d'un fichier ou dossier sur host ; au plus2048octetsUTF-8, aucune ouverture automatique.");
+    let text = |limit| {
+        json!({"type":"string","minLength":1,"maxLength":limit,
+        "x-maxUtf8Bytes":limit,"description":"Longueur maximale en octets UTF-8, pas en caractères ; le validateur natif fait foi."})
+    };
+    let mut host = text(crate::handoff::MAX_LABEL_BYTES);
+    host["description"] = json!(
+        "Obligatoire pour kind=file : machine portant cette référence ; au plus256octetsUTF-8."
+    );
+    let mut path = text(crate::handoff::MAX_ITEM_BYTES);
+    path["description"] = json!(
+        "Avec kind=file : chemin absolu d'un fichier ou dossier sur host ; au plus2048octetsUTF-8, aucune ouverture automatique."
+    );
     // Chaque variante est un objet complet : les façades peuvent exposer les
     // champs sans devoir interpréter un if/then imbriqué dans allOf.
     let reference_fields = json!({"host":host,"path":path,
@@ -2671,11 +2722,18 @@ pub(crate) fn tools() -> Vec<Value> {
         let mut properties = serde_json::Map::new();
         properties.insert("kind".into(), json!({"type":"string","enum":[kind]}));
         properties.insert("label".into(), text(crate::handoff::MAX_LABEL_BYTES));
-        for field in fields { properties.insert((*field).into(), reference_fields[*field].clone()); }
-        if kind == "thread" {
-            for field in ["from_seq", "to_seq"] { properties.get_mut(field).unwrap()["minimum"] = json!(1); }
+        for field in fields {
+            properties.insert((*field).into(), reference_fields[*field].clone());
         }
-        let required: Vec<_> = ["kind", "label"].into_iter().chain(fields.iter().copied()).collect();
+        if kind == "thread" {
+            for field in ["from_seq", "to_seq"] {
+                properties.get_mut(field).unwrap()["minimum"] = json!(1);
+            }
+        }
+        let required: Vec<_> = ["kind", "label"]
+            .into_iter()
+            .chain(fields.iter().copied())
+            .collect();
         json!({"type":"object","properties":properties,"required":required,"additionalProperties":false})
     };
     let reference_items = json!({"description":"Chaque référence exige kind et label. file exige aussi host et path absolu. Tous les champs de la variante choisie sont obligatoires ; limites en octets UTF-8, aucune source ouverte.",
@@ -2700,7 +2758,6 @@ pub(crate) fn tools() -> Vec<Value> {
     },"required":["objective","summary"],"additionalProperties":false});
     let mut catalogue = vec![
         json!({"name":"bridget_ask_user","description":"Pose une question humaine native Bridget, utilisable en terminal et sur Android sans T3. Préserver le texte du modèle. Préparer request_id UUID et rejouer le même contenu après coupure. create attend la réponse (3600s par défaut), wait reprend l’attente sans republier. Texte libre et complément sont renvoyés sans interprétation. status lit, cancel ferme. acknowledge confirme la réception de la réponse submitted si le client ne la confirme pas automatiquement.","inputSchema":{"type":"object","properties":{"action":{"enum":["create","status","wait","cancel","acknowledge"],"default":"create"},"request_id":{"type":"string","format":"uuid"},"questions":{"type":"array","minItems":1,"maxItems":16,"items":{"type":"object","properties":{"id":{"type":"string","minLength":1,"maxLength":4096},"header":{"type":"string","minLength":1,"maxLength":1024},"question":{"type":"string","minLength":1,"maxLength":16384},"options":{"type":"array","maxItems":32,"items":{"type":"object","properties":{"label":{"type":"string","minLength":1,"maxLength":4096},"description":{"type":"string","maxLength":8192},"value":{"type":"string","minLength":1,"maxLength":4096}},"required":["label"],"additionalProperties":false}},"multiSelect":{"type":"boolean","default":false},"allowCustomAnswer":{"type":"boolean","default":true}},"required":["id","header","question","options"],"additionalProperties":false}},"wait_timeout":{"type":"integer","minimum":0,"maximum":3600,"default":3600},"command_id":{"type":"string","format":"uuid"}},"required":["request_id"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":false,"idempotentHint":true}}),
-
         json!({"name":"bridget_request_wait","description":"Attend la réponse de sa demande suivie sans la renvoyer ni modifier son état. wait_timeout borne cet appel, pas la demande. Si l'attente expire avec une demande encore open, reprendre avec le même request_id ; ne pas clôturer sa garde. Seul l'état natif answered ou timed_out tranche. La réponse peut aussi arriver par le message normal.","inputSchema":{"type":"object","properties":{"request_id":{"type":"string","minLength":1},"wait_timeout":{"type":"integer","minimum":1,"maximum":crate::delegation_mcp::WAIT_TIMEOUT_MAX_SECS,"default":crate::delegation_mcp::WAIT_TIMEOUT_DEFAULT_SECS}},"required":["request_id"],"additionalProperties":false},"annotations":{"readOnlyHint":true,"destructiveHint":false,"idempotentHint":true}}),
         json!({
             "name": "bridget_read_artifact",
@@ -3128,36 +3185,106 @@ mod spec172_wait_probe_tests {
 }
 
 #[derive(Clone)]
-struct UserInputReceipt { identity:crate::mcp_identity::ResolvedIdentity, socket:std::path::PathBuf, request_id:String, command_id:String }
+struct UserInputReceipt {
+    identity: crate::mcp_identity::ResolvedIdentity,
+    socket: std::path::PathBuf,
+    request_id: String,
+    command_id: String,
+}
 thread_local! { static USER_INPUT_RECEIPT:RefCell<Option<UserInputReceipt>>=const{RefCell::new(None)}; }
 fn acknowledge_user_input_receipt() {
-    let pending=USER_INPUT_RECEIPT.with(|s|s.borrow_mut().take());
-    if let Some(p)=pending {
-        let _=crate::communication::client::user_input_request(&p.socket,Some((&p.identity.name,&p.identity.instance_id)),json!({"action":"ack","request_id":p.request_id,"command_id":p.command_id,"applied":true}));
+    let pending = USER_INPUT_RECEIPT.with(|s| s.borrow_mut().take());
+    if let Some(p) = pending {
+        let _ = crate::communication::client::user_input_request(
+            &p.socket,
+            Some((&p.identity.name, &p.identity.instance_id)),
+            json!({"action":"ack","request_id":p.request_id,"command_id":p.command_id,"applied":true}),
+        );
     }
 }
-fn execute_ask_user(identity:&crate::mcp_identity::ResolvedIdentity,args:&serde_json::Map<String,Value>,socket:&Path)->Result<Value,ToolError> {
-    let action=match args.get("action"){None=>"create",Some(Value::String(s))=>s.as_str(),_=>return Err(ToolError::InvalidParams("action de question invalide".into()))};
-    let allowed=match action {
-        "create"=>vec!["action","request_id","questions","wait_timeout"],"wait"=>vec!["action","request_id","wait_timeout"],
-        "status"|"cancel"=>vec!["action","request_id"],"acknowledge"=>vec!["action","request_id","command_id"],
-        _=>return Err(ToolError::InvalidParams("action de question invalide".into()))};
-    reject_unknown_arguments(args,&allowed)?;
-    let id=required_non_empty_string(args,"request_id")?;
-    let timeout=match args.get("wait_timeout"){None=>3600,Some(v)=>v.as_u64().filter(|n|*n<=3600).ok_or_else(||ToolError::InvalidParams("wait_timeout attendu de0à3600".into()))?};
-    if action=="wait" && timeout==0 {return Err(ToolError::InvalidParams("wait_timeout doit être positif pour wait".into()));}
-    if action=="create" {crate::user_input::validate_questions(args.get("questions").unwrap_or(&Value::Null)).map_err(ToolError::InvalidParams)?;}
-    let mut request=Value::Object(args.clone());request["action"]=json!(action);request.as_object_mut().unwrap().remove("wait_timeout");
-    if action=="wait" {request["wait_timeout"]=json!(timeout);}
-    if action=="acknowledge"{request["action"]=json!("ack");request["applied"]=json!(true);}
-    let mut result=crate::communication::client::user_input_request(socket,Some((&identity.name,&identity.instance_id)),request)?;
-    if action=="create" && result["status"]=="ok" && result["item"]["state"]=="pending" && timeout>0 {
-        result=crate::communication::client::user_input_request(socket,Some((&identity.name,&identity.instance_id)),json!({"action":"wait","request_id":id,"wait_timeout":timeout}))?;
-    }
-    if result["status"]=="ok" && result["item"]["state"]=="submitted" && TOOL_CALL_CONTEXT.with(|s|s.borrow().is_some())
-        && let Some(command)=result["item"]["command_id"].as_str() {
-            USER_INPUT_RECEIPT.with(|s|*s.borrow_mut()=Some(UserInputReceipt{identity:identity.clone(),socket:socket.to_owned(),request_id:id,command_id:command.into()}));
+fn execute_ask_user(
+    identity: &crate::mcp_identity::ResolvedIdentity,
+    args: &serde_json::Map<String, Value>,
+    socket: &Path,
+) -> Result<Value, ToolError> {
+    let action = match args.get("action") {
+        None => "create",
+        Some(Value::String(s)) => s.as_str(),
+        _ => {
+            return Err(ToolError::InvalidParams(
+                "action de question invalide".into(),
+            ));
         }
+    };
+    let allowed = match action {
+        "create" => vec!["action", "request_id", "questions", "wait_timeout"],
+        "wait" => vec!["action", "request_id", "wait_timeout"],
+        "status" | "cancel" => vec!["action", "request_id"],
+        "acknowledge" => vec!["action", "request_id", "command_id"],
+        _ => {
+            return Err(ToolError::InvalidParams(
+                "action de question invalide".into(),
+            ));
+        }
+    };
+    reject_unknown_arguments(args, &allowed)?;
+    let id = required_non_empty_string(args, "request_id")?;
+    let timeout = match args.get("wait_timeout") {
+        None => 3600,
+        Some(v) => v
+            .as_u64()
+            .filter(|n| *n <= 3600)
+            .ok_or_else(|| ToolError::InvalidParams("wait_timeout attendu de0à3600".into()))?,
+    };
+    if action == "wait" && timeout == 0 {
+        return Err(ToolError::InvalidParams(
+            "wait_timeout doit être positif pour wait".into(),
+        ));
+    }
+    if action == "create" {
+        crate::user_input::validate_questions(args.get("questions").unwrap_or(&Value::Null))
+            .map_err(ToolError::InvalidParams)?;
+    }
+    let mut request = Value::Object(args.clone());
+    request["action"] = json!(action);
+    request.as_object_mut().unwrap().remove("wait_timeout");
+    if action == "wait" {
+        request["wait_timeout"] = json!(timeout);
+    }
+    if action == "acknowledge" {
+        request["action"] = json!("ack");
+        request["applied"] = json!(true);
+    }
+    let mut result = crate::communication::client::user_input_request(
+        socket,
+        Some((&identity.name, &identity.instance_id)),
+        request,
+    )?;
+    if action == "create"
+        && result["status"] == "ok"
+        && result["item"]["state"] == "pending"
+        && timeout > 0
+    {
+        result = crate::communication::client::user_input_request(
+            socket,
+            Some((&identity.name, &identity.instance_id)),
+            json!({"action":"wait","request_id":id,"wait_timeout":timeout}),
+        )?;
+    }
+    if result["status"] == "ok"
+        && result["item"]["state"] == "submitted"
+        && TOOL_CALL_CONTEXT.with(|s| s.borrow().is_some())
+        && let Some(command) = result["item"]["command_id"].as_str()
+    {
+        USER_INPUT_RECEIPT.with(|s| {
+            *s.borrow_mut() = Some(UserInputReceipt {
+                identity: identity.clone(),
+                socket: socket.to_owned(),
+                request_id: id,
+                command_id: command.into(),
+            })
+        });
+    }
     Ok(result)
 }
 
@@ -3166,98 +3293,182 @@ mod user_input181_mcp_tests {
     use super::*;
     #[test]
     fn user_input181_catalogue_has_no_human_response_action() {
-        let t=tools().into_iter().find(|t|t["name"]=="bridget_ask_user").unwrap();
-        let actions=t["inputSchema"]["properties"]["action"]["enum"].as_array().unwrap();
-        assert!(!actions.iter().any(|v|v=="respond"));assert!(actions.iter().any(|v|v=="acknowledge"));
-        assert_eq!(crate::mcp_scopes::scope_of("bridget_ask_user",&serde_json::from_value(json!({"action":"wait"})).unwrap()),Some(crate::mcp_scopes::Scope::Reads));
+        let t = tools()
+            .into_iter()
+            .find(|t| t["name"] == "bridget_ask_user")
+            .unwrap();
+        let actions = t["inputSchema"]["properties"]["action"]["enum"]
+            .as_array()
+            .unwrap();
+        assert!(!actions.iter().any(|v| v == "respond"));
+        assert!(actions.iter().any(|v| v == "acknowledge"));
+        assert_eq!(
+            crate::mcp_scopes::scope_of(
+                "bridget_ask_user",
+                &serde_json::from_value(json!({"action":"wait"})).unwrap()
+            ),
+            Some(crate::mcp_scopes::Scope::Reads)
+        );
     }
     #[test]
     fn user_input181_malformed_actions_fail_before_connecting() {
-        let identity=crate::mcp_identity::ResolvedIdentity{name:"agent".into(),instance_id:"instance".into(),delegated_origin:None};
-        for args in [json!({"action":true,"request_id":uuid::Uuid::new_v4().to_string()}),json!({"action":"respond","request_id":uuid::Uuid::new_v4().to_string()}),json!({"action":"wait","request_id":uuid::Uuid::new_v4().to_string(),"wait_timeout":0})] {
-            assert!(matches!(execute_ask_user(&identity,args.as_object().unwrap(),Path::new("/missing181.sock")),Err(ToolError::InvalidParams(_))));
+        let identity = crate::mcp_identity::ResolvedIdentity {
+            name: "agent".into(),
+            instance_id: "instance".into(),
+            delegated_origin: None,
+        };
+        for args in [
+            json!({"action":true,"request_id":uuid::Uuid::new_v4().to_string()}),
+            json!({"action":"respond","request_id":uuid::Uuid::new_v4().to_string()}),
+            json!({"action":"wait","request_id":uuid::Uuid::new_v4().to_string(),"wait_timeout":0}),
+        ] {
+            assert!(matches!(
+                execute_ask_user(
+                    &identity,
+                    args.as_object().unwrap(),
+                    Path::new("/missing181.sock")
+                ),
+                Err(ToolError::InvalidParams(_))
+            ));
         }
     }
-
 }
 
 #[cfg(test)]
 mod capacity189_mcp_tests {
+    use super::tests::{reply_caller_scope, test_socket};
     use super::*;
-    use super::tests::{test_socket,reply_caller_scope};
-    use std::{thread,os::{fd::AsRawFd,unix::net::UnixListener}};
+    use std::{
+        os::{fd::AsRawFd, unix::net::UnixListener},
+        thread,
+    };
     #[test]
     fn spec221_origin_busy_mcp_projection_is_closed() {
-        for code in ["origin_worker_unavailable","origin_proof_unavailable"] {
-            let text=caller_scope_refusal_message(&json!({"code":"permission_attestation_unavailable",
-                "detail":{"verification":"origin_session_reattest","cause":code,"secret":"PRIVATE"}}));
-            let projected:Value=serde_json::from_str(&text).unwrap();
-            assert_eq!(projected["cause"],code);
-            assert_eq!(projected["scope"],"this_attestation");
-            assert!(projected["recovery"].as_str().unwrap().contains("admission antérieure"));
+        for code in ["origin_worker_unavailable", "origin_proof_unavailable"] {
+            let text = caller_scope_refusal_message(
+                &json!({"code":"permission_attestation_unavailable",
+                "detail":{"verification":"origin_session_reattest","cause":code,"secret":"PRIVATE"}}),
+            );
+            let projected: Value = serde_json::from_str(&text).unwrap();
+            assert_eq!(projected["cause"], code);
+            assert_eq!(projected["scope"], "this_attestation");
+            assert!(
+                projected["recovery"]
+                    .as_str()
+                    .unwrap()
+                    .contains("admission antérieure")
+            );
             assert!(!text.contains("PRIVATE"));
         }
-        let busy=json!({"code":"permission_attestation_unavailable","detail":{
+        let busy = json!({"code":"permission_attestation_unavailable","detail":{
             "verification":"origin_session_reattest","cause":"origin_proof_busy","secret":"PRIVATE"}});
-        let text=caller_scope_refusal_message(&busy);
-        let view:Value=serde_json::from_str(&text).unwrap();
-        assert_eq!(view["cause"],"origin_proof_busy");
-        assert_eq!(view["scope"],"this_call");
-        let prep=caller_scope_refusal_message(&json!({"code":"permission_attestation_unavailable",
-            "detail":{"verification":"origin_project_preparation","cause":"origin_project_preparation_busy"}}));
-        let prep:Value=serde_json::from_str(&prep).unwrap();
-        assert_eq!(prep["cause"],"origin_project_preparation_busy");
-        assert_eq!(prep["verification"],"origin_project_preparation");
+        let text = caller_scope_refusal_message(&busy);
+        let view: Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(view["cause"], "origin_proof_busy");
+        assert_eq!(view["scope"], "this_call");
+        let prep = caller_scope_refusal_message(
+            &json!({"code":"permission_attestation_unavailable",
+            "detail":{"verification":"origin_project_preparation","cause":"origin_project_preparation_busy"}}),
+        );
+        let prep: Value = serde_json::from_str(&prep).unwrap();
+        assert_eq!(prep["cause"], "origin_project_preparation_busy");
+        assert_eq!(prep["verification"], "origin_project_preparation");
 
         assert!(view["recovery"].as_str().unwrap().contains("mêmes task_id"));
         assert!(!text.contains("PRIVATE"));
-        let mut unknown=busy;unknown["detail"]["cause"]=json!("PRIVATE");
+        let mut unknown = busy;
+        unknown["detail"]["cause"] = json!("PRIVATE");
         assert!(!caller_scope_refusal_message(&unknown).contains("PRIVATE"));
     }
 
     #[test]
     fn spec189_caller_scope_attestation_refusal_is_explicit_and_stops_dispatch() {
-        for verification in ["origin_session_reattest","current_session_binding","private189"] {
-            let socket=test_socket("scope189");
-            let listener=UnixListener::bind(&socket).unwrap();
-            let refused=json!({"status":"refused","code":"permission_attestation_unavailable",
+        for verification in [
+            "origin_session_reattest",
+            "current_session_binding",
+            "private189",
+        ] {
+            let socket = test_socket("scope189");
+            let listener = UnixListener::bind(&socket).unwrap();
+            let refused = json!({"status":"refused","code":"permission_attestation_unavailable",
                 "detail":{"verification":verification,"secret":"private189"}});
-            let backend=thread::spawn(move || {
-                reply_caller_scope(&listener,refused);
-                let mut pollfd=libc::pollfd {fd:listener.as_raw_fd(),events:libc::POLLIN,revents:0};
+            let backend = thread::spawn(move || {
+                reply_caller_scope(&listener, refused);
+                let mut pollfd = libc::pollfd {
+                    fd: listener.as_raw_fd(),
+                    events: libc::POLLIN,
+                    revents: 0,
+                };
                 // SAFETY: `pollfd` est une structure pollfd locale valide ; le nombre d'éléments passé vaut 1.
-                unsafe {libc::poll(&mut pollfd,1,150)}
+                unsafe { libc::poll(&mut pollfd, 1, 150) }
             });
-            let args=json!({"task_id":"task189"});
-            let error=execute_tool_at("owner","bridget_task_status",args.as_object().unwrap(),&socket).unwrap_err();
-            let ToolError::Technical {code,message}=error else {panic!("erreur technique attendue")};
-            assert_eq!(code,"native_delegation_refused");
-            let result:Value=serde_json::from_str(&message).unwrap();
-            assert_eq!(result["code"],"permission_attestation_unavailable");
-            assert_eq!(result["stage"],"caller_scope");
-            assert_eq!(result["verification"],if verification=="private189" {"unknown"} else {verification});
+            let args = json!({"task_id":"task189"});
+            let error = execute_tool_at(
+                "owner",
+                "bridget_task_status",
+                args.as_object().unwrap(),
+                &socket,
+            )
+            .unwrap_err();
+            let ToolError::Technical { code, message } = error else {
+                panic!("erreur technique attendue")
+            };
+            assert_eq!(code, "native_delegation_refused");
+            let result: Value = serde_json::from_str(&message).unwrap();
+            assert_eq!(result["code"], "permission_attestation_unavailable");
+            assert_eq!(result["stage"], "caller_scope");
+            assert_eq!(
+                result["verification"],
+                if verification == "private189" {
+                    "unknown"
+                } else {
+                    verification
+                }
+            );
             assert!(!message.contains("private189"));
-            assert!(!message.contains("task189"),"pas de contexte tâche avant attestation");
-            assert!(result["recovery"].as_str().unwrap().contains("même task_id"));
-            assert_eq!(backend.join().unwrap(),0,"aucune deuxième connexion ni opération tâche");
-            let _=std::fs::remove_file(socket);
+            assert!(
+                !message.contains("task189"),
+                "pas de contexte tâche avant attestation"
+            );
+            assert!(
+                result["recovery"]
+                    .as_str()
+                    .unwrap()
+                    .contains("même task_id")
+            );
+            assert_eq!(
+                backend.join().unwrap(),
+                0,
+                "aucune deuxième connexion ni opération tâche"
+            );
+            let _ = std::fs::remove_file(socket);
         }
     }
-
 }
 
 #[cfg(test)]
 mod schema211_tests {
     use super::*;
     #[test]
-    fn spec211_send_and_who_schemas_expose_real_contract(){
-        let list=tools();
-        let send=list.iter().find(|t|t["name"]=="bridget_send").unwrap();
-        assert_eq!(send["inputSchema"]["allOf"].as_array().unwrap().len(),2);
-        assert!(send["inputSchema"]["properties"]["id"]["description"].as_str().unwrap().contains("Premier envoi"));
-        let who=list.iter().find(|t|t["name"]=="bridget_who").unwrap();
-        assert_eq!(who["inputSchema"]["properties"]["limit"]["default"],20);
-        assert_eq!(who["inputSchema"]["properties"]["include_stopped"]["default"],false);
-        assert_eq!(who["inputSchema"]["properties"]["cursor"]["maxLength"],1024);
+    fn spec211_send_and_who_schemas_expose_real_contract() {
+        let list = tools();
+        let send = list.iter().find(|t| t["name"] == "bridget_send").unwrap();
+        assert_eq!(send["inputSchema"]["allOf"].as_array().unwrap().len(), 2);
+        assert!(
+            send["inputSchema"]["properties"]["id"]["description"]
+                .as_str()
+                .unwrap()
+                .contains("Premier envoi")
+        );
+        let who = list.iter().find(|t| t["name"] == "bridget_who").unwrap();
+        assert_eq!(who["inputSchema"]["properties"]["limit"]["default"], 20);
+        assert_eq!(
+            who["inputSchema"]["properties"]["include_stopped"]["default"],
+            false
+        );
+        assert_eq!(
+            who["inputSchema"]["properties"]["cursor"]["maxLength"],
+            1024
+        );
     }
 }

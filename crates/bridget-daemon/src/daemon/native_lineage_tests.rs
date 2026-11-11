@@ -39,11 +39,13 @@ fn definition() -> bridget_transport::protocol::ResolvedAgentDefinition {
 /// Tâche native : racine portée par le propriétaire, enfant UUID stable pour
 /// que journal_directory accepte de résoudre sessions/<child>.
 fn lineage_task(task_id: &str, owner: &str, state: &str) -> crate::delegation::Task {
-    crate::delegation::Task { service_tier: None, admission_authority_version: None,
+    crate::delegation::Task {
+        service_tier: None,
+        admission_authority_version: None,
         substitution: None,
         remote_placement: None,
         remote_prepared: false,
-        commit_view_prepare:None,
+        commit_view_prepare: None,
         start_recovery: None,
         workspace_repairs: Vec::new(),
         remote_result_slots: Vec::new(),
@@ -848,7 +850,8 @@ fn spec258_revoque_libere_ou_deconnecte_ne_remet_aucune_commande() {
             !state
                 .lock()
                 .unwrap()
-                .pending_post_response_controls.contains_key("human")
+                .pending_post_response_controls
+                .contains_key("human")
         );
     }
 }
@@ -2191,8 +2194,10 @@ fn reserve_remote_lineage_fixture(
     let peer = spec094_live_test_connection(st, "worker162-journal");
     st.connection_roles
         .insert("worker162-journal".into(), ConnectionRole::Worker);
-    st.peer_uids
-        .insert("worker162-journal".into(), bridget_transport::fsutil::effective_uid());
+    st.peer_uids.insert(
+        "worker162-journal".into(),
+        bridget_transport::fsutil::effective_uid(),
+    );
     peer
 }
 
@@ -2201,9 +2206,8 @@ fn reserve_remote_lineage_fixture(
 #[test]
 fn native162_journal_distant_froid_gap_perte_et_gardes_sans_repli_local() {
     use bridget_transport::protocol::{
-        ClientCapability, IdentityCredential, RemotePlacement, WorkerHello,
-        WorkerIdentity, WorkerJournalFragment, WorkerRequestOperation, WorkerResponse,
-        WorkerResponseOperation,
+        ClientCapability, IdentityCredential, RemotePlacement, WorkerHello, WorkerIdentity,
+        WorkerJournalFragment, WorkerRequestOperation, WorkerResponse, WorkerResponseOperation,
     };
 
     for case in ["cold", "gap", "lost", "placement", "permissions", "human"] {
@@ -2226,9 +2230,16 @@ fn native162_journal_distant_froid_gap_perte_et_gardes_sans_repli_local() {
             definition_digest: "a".repeat(64),
             permission_digest: "b".repeat(64),
         });
-        let worker_peer={let mut st=state.lock().unwrap();
-            let peer=reserve_remote_lineage_fixture(&mut st,&mut task,&format!("journal162-{case}"));
-            assert!(st.router.get_agent(&task.child).is_none(),"aucun fournisseur local");peer};
+        let worker_peer = {
+            let mut st = state.lock().unwrap();
+            let peer =
+                reserve_remote_lineage_fixture(&mut st, &mut task, &format!("journal162-{case}"));
+            assert!(
+                st.router.get_agent(&task.child).is_none(),
+                "aucun fournisseur local"
+            );
+            peer
+        };
         let hello = WorkerHello {
             version: 1,
             identity: WorkerIdentity {

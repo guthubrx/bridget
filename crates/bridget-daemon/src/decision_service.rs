@@ -5,8 +5,8 @@
 //! client HTTP historique du daemon et rend visibles les limites d'un appel
 //! bloqué sans introduire de runtime, file ou fournisseur supplémentaire.
 
-use bridget_transport::poison::RecoverPoison;
 use crate::registry::DecisionService;
+use bridget_transport::poison::RecoverPoison;
 use bridget_transport::protocol::{is_auto_candidate_id, is_routing_candidate_id};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};

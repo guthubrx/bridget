@@ -36,8 +36,8 @@ struct Gateway {
     socket: PathBuf,
     store: Arc<Mutex<Store>>,
     workers: Arc<Semaphore>,
-    bootstrap_rate: Arc<Mutex<BTreeMap<String,(Instant,u16)>>>,
-    renewal_rate: Arc<Mutex<BTreeMap<String,(Instant,u16)>>>,
+    bootstrap_rate: Arc<Mutex<BTreeMap<String, (Instant, u16)>>>,
+    renewal_rate: Arc<Mutex<BTreeMap<String, (Instant, u16)>>>,
     followers: Arc<Mutex<BTreeMap<String, Arc<Semaphore>>>>,
     follow_slots: Arc<Semaphore>,
     uploads: Arc<Semaphore>,
@@ -274,17 +274,29 @@ impl Gateway {
     fn bootstrap_allowed(&self, source: &str) -> bool {
         rate_allowed(&self.bootstrap_rate, source, 1024)
     }
-
 }
 
 // O(S), S borné ; aucune adresse ni empreinte n’est conservée au-delà d’une minute.
-fn rate_allowed(rates:&Mutex<BTreeMap<String,(Instant,u16)>>,subject:&str,capacity:usize)->bool {
-    let Ok(mut rates)=rates.lock() else {return false;};
-    rates.retain(|_,(start,_)|start.elapsed()<Duration::from_secs(60));
-    if !rates.contains_key(subject) && rates.len()>=capacity {return false;}
-    let rate=rates.entry(subject.to_owned()).or_insert((Instant::now(),0));
-    if rate.1>=30 {return false;}
-    rate.1+=1;true
+fn rate_allowed(
+    rates: &Mutex<BTreeMap<String, (Instant, u16)>>,
+    subject: &str,
+    capacity: usize,
+) -> bool {
+    let Ok(mut rates) = rates.lock() else {
+        return false;
+    };
+    rates.retain(|_, (start, _)| start.elapsed() < Duration::from_secs(60));
+    if !rates.contains_key(subject) && rates.len() >= capacity {
+        return false;
+    }
+    let rate = rates
+        .entry(subject.to_owned())
+        .or_insert((Instant::now(), 0));
+    if rate.1 >= 30 {
+        return false;
+    }
+    rate.1 += 1;
+    true
 }
 
 async fn handle(State(gateway): State<Gateway>, request: Request) -> Response {
@@ -350,13 +362,17 @@ async fn dispatch(gateway: Gateway, request: Request) -> Response {
     if method == Method::GET && path == "/v1/status" {
         return result(json!({"protocol_version":1,"minimum_client_version":1}));
     }
-    if method==Method::POST && path=="/v1/pair" {
+    if method == Method::POST && path == "/v1/pair" {
         // Seul le proxy loopback installé écrit ce champ ; il remplace toute valeur cliente.
-        let source=match single_header(request.headers(),"x-bridget-client-ip")
-            .and_then(|v|v.parse::<std::net::IpAddr>().ok()) {
-            Some(value)=>value.to_string(),None=>return failure("invalid_request")
+        let source = match single_header(request.headers(), "x-bridget-client-ip")
+            .and_then(|v| v.parse::<std::net::IpAddr>().ok())
+        {
+            Some(value) => value.to_string(),
+            None => return failure("invalid_request"),
         };
-        if !gateway.bootstrap_allowed(&source) {return failure("busy");}
+        if !gateway.bootstrap_allowed(&source) {
+            return failure("busy");
+        }
     }
     let credential = if path == "/v1/pair" && method == Method::POST {
         None
@@ -366,13 +382,19 @@ async fn dispatch(gateway: Gateway, request: Request) -> Response {
             Err(response) => return response,
         }
     };
-    if method==Method::POST && path=="/v1/session/renew" {
-        let subject=match gateway.store.lock() {
-            Ok(store)=>match store.renewal_subject(credential.as_deref().unwrap_or(""),unix_now()) {
-                Ok(device)=>device.device_id,Err(error)=>return failure(error.code())
-            },Err(_)=>return failure("storage_unavailable")
+    if method == Method::POST && path == "/v1/session/renew" {
+        let subject = match gateway.store.lock() {
+            Ok(store) => {
+                match store.renewal_subject(credential.as_deref().unwrap_or(""), unix_now()) {
+                    Ok(device) => device.device_id,
+                    Err(error) => return failure(error.code()),
+                }
+            }
+            Err(_) => return failure("storage_unavailable"),
         };
-        if !rate_allowed(&gateway.renewal_rate,&subject,256) {return failure("busy");}
+        if !rate_allowed(&gateway.renewal_rate, &subject, 256) {
+            return failure("busy");
+        }
     }
     let permit = match gateway.workers.clone().try_acquire_owned() {
         Ok(permit) => permit,
@@ -463,7 +485,13 @@ enum CommandRequest {
         command_id: String,
         task_id: String,
     },
-    UserInputRespond { device_id:String, command_id:String, request_id:String, revision:String, answers:Value },
+    UserInputRespond {
+        device_id: String,
+        command_id: String,
+        request_id: String,
+        revision: String,
+        answers: Value,
+    },
     QuestionRespond {
         device_id: String,
         command_id: String,
@@ -523,15 +551,19 @@ fn execute(
                 || query.agent_id.is_some()
                 || query.offset.is_some()
                 || query.after_seq.is_some()))
-        || ((path.starts_with("/v1/questions/") || path.starts_with("/v1/user-inputs/")) && (query.after.is_some() || query.limit.is_some()))
+        || ((path.starts_with("/v1/questions/") || path.starts_with("/v1/user-inputs/"))
+            && (query.after.is_some() || query.limit.is_some()))
         || query.validate().is_err()
         || (!matches!(path, "/v1/events" | "/v1/tasks") && query.agent_id.is_some())
         || (matches!(path, "/v1/federation" | "/v1/devices" | "/v1/events")
             && (query.machine.is_some()
                 || query.project_host.is_some()
                 || query.project_root.is_some()))
-        || (query.tail.is_some() && !(method==Method::GET && path.starts_with("/v1/agents/") && path.ends_with("/events")))
-        || (query.tail==Some(true) && (query.after_seq.is_some() || query.after.is_some()))
+        || (query.tail.is_some()
+            && !(method == Method::GET
+                && path.starts_with("/v1/agents/")
+                && path.ends_with("/events")))
+        || (query.tail == Some(true) && (query.after_seq.is_some() || query.after.is_some()))
         || (!path.ends_with("/events") && query.after_seq.is_some())
         || (!path.starts_with("/v1/tasks/") && query.offset.is_some())
         || (path.starts_with("/v1/tasks/")
@@ -586,10 +618,13 @@ fn execute(
         return result(json!(device));
     }
     if method == Method::GET && path == "/v1/sentinel" {
-        if !device.scope.permits_federation(Operation::Read) { return failure("forbidden_scope"); }
+        if !device.scope.permits_federation(Operation::Read) {
+            return failure("forbidden_scope");
+        }
         drop(store);
         return match crate::sentinel244::read_remote(&gateway.socket) {
-            Ok(report)=>result(report),Err(_)=>failure("endpoint_unavailable"),
+            Ok(report) => result(report),
+            Err(_) => failure("endpoint_unavailable"),
         };
     }
     if path == "/v1/notifications" && matches!(method, Method::GET | Method::PUT) {
@@ -665,20 +700,36 @@ fn execute(
     }
     drop(store);
     if method == Method::POST && path == "/v1/agents/tracking" {
-        let command:bridget_transport::agent_tracking::AgentTrackingRequest=match serde_json::from_slice(bytes) {
-            Ok(command)=>command,Err(_)=>return failure("invalid_request"),
-        };
-        return match super::client::mobile_operation(&gateway.socket,key,bridget_transport::protocol::MobileOperation::AgentTracking{request:command}) {
-            Ok(value)=>result(value),Err(code)=>failure(code),
+        let command: bridget_transport::agent_tracking::AgentTrackingRequest =
+            match serde_json::from_slice(bytes) {
+                Ok(command) => command,
+                Err(_) => return failure("invalid_request"),
+            };
+        return match super::client::mobile_operation(
+            &gateway.socket,
+            key,
+            bridget_transport::protocol::MobileOperation::AgentTracking { request: command },
+        ) {
+            Ok(value) => result(value),
+            Err(code) => failure(code),
         };
     }
     if method == Method::POST && path == "/v1/specialists" {
-        let command:bridget_transport::specialists::SpecialistRequest=match serde_json::from_slice(bytes) {
-            Ok(command)=>command,Err(_)=>return failure("invalid_request"),
-        };
-        if command.validate().is_err(){return failure("invalid_request");}
-        return match super::client::mobile_operation(&gateway.socket,key,bridget_transport::protocol::MobileOperation::Specialists{request:command}) {
-            Ok(value)=>result(value),Err(code)=>failure(code),
+        let command: bridget_transport::specialists::SpecialistRequest =
+            match serde_json::from_slice(bytes) {
+                Ok(command) => command,
+                Err(_) => return failure("invalid_request"),
+            };
+        if command.validate().is_err() {
+            return failure("invalid_request");
+        }
+        return match super::client::mobile_operation(
+            &gateway.socket,
+            key,
+            bridget_transport::protocol::MobileOperation::Specialists { request: command },
+        ) {
+            Ok(value) => result(value),
+            Err(code) => failure(code),
         };
     }
     if method == Method::GET && path == "/v1/events" {
@@ -794,12 +845,30 @@ fn execute(
             },
         )
     } else if path == "/v1/user-inputs" && method == Method::GET {
-        Some(bridget_transport::protocol::MobileOperation::UserInputs {after:query.after.clone(),limit:query.limit.unwrap_or(50) as u32})
+        Some(bridget_transport::protocol::MobileOperation::UserInputs {
+            after: query.after.clone(),
+            limit: query.limit.unwrap_or(50) as u32,
+        })
     } else if path.starts_with("/v1/user-inputs/") && method == Method::GET {
-        match path.trim_start_matches("/v1/user-inputs/").split('/').collect::<Vec<_>>().as_slice() {
-            [id]=>Some(bridget_transport::protocol::MobileOperation::UserInputShow{request_id:(*id).into()}),
-            [id,"responses",command]=>Some(bridget_transport::protocol::MobileOperation::UserInputReceipt{device_id:device.device_id.clone(),request_id:(*id).into(),command_id:(*command).into()}),
-            _=>return failure("invalid_request"),
+        match path
+            .trim_start_matches("/v1/user-inputs/")
+            .split('/')
+            .collect::<Vec<_>>()
+            .as_slice()
+        {
+            [id] => Some(
+                bridget_transport::protocol::MobileOperation::UserInputShow {
+                    request_id: (*id).into(),
+                },
+            ),
+            [id, "responses", command] => Some(
+                bridget_transport::protocol::MobileOperation::UserInputReceipt {
+                    device_id: device.device_id.clone(),
+                    request_id: (*id).into(),
+                    command_id: (*command).into(),
+                },
+            ),
+            _ => return failure("invalid_request"),
         }
     } else if path == "/v1/questions" && method == Method::GET {
         Some(bridget_transport::protocol::MobileOperation::Questions {
@@ -871,18 +940,28 @@ fn execute(
         })
     } else if path.starts_with("/v1/message-queue/") {
         let agent_id = path.trim_start_matches("/v1/message-queue/").to_string();
-        if agent_id.contains('/') { return failure("invalid_request"); }
+        if agent_id.contains('/') {
+            return failure("invalid_request");
+        }
         if method == Method::GET {
             Some(bridget_transport::protocol::MobileOperation::MessageQueue { agent_id })
         } else if method == Method::POST {
             match strict::<QueueChangeRequest>(bytes) {
-                Ok(q) => Some(bridget_transport::protocol::MobileOperation::MessageQueueChange {
-                    agent_id, command_id:q.command_id, request_id:q.request_id, change:q.action,
-                    expected_body:q.expected_body, body:q.body,
-                }),
+                Ok(q) => Some(
+                    bridget_transport::protocol::MobileOperation::MessageQueueChange {
+                        agent_id,
+                        command_id: q.command_id,
+                        request_id: q.request_id,
+                        change: q.action,
+                        expected_body: q.expected_body,
+                        body: q.body,
+                    },
+                ),
                 Err(response) => return response,
             }
-        } else { return failure("invalid_request"); }
+        } else {
+            return failure("invalid_request");
+        }
     } else if path == "/v1/commands" && method == Method::POST {
         match strict::<CommandRequest>(bytes) {
             Ok(CommandRequest::Message {
@@ -909,7 +988,21 @@ fn execute(
                 command_id,
                 task_id,
             }),
-            Ok(CommandRequest::UserInputRespond {device_id,command_id,request_id,revision,answers})=>Some(bridget_transport::protocol::MobileOperation::UserInputRespond {device_id,command_id,request_id,revision,answers}),
+            Ok(CommandRequest::UserInputRespond {
+                device_id,
+                command_id,
+                request_id,
+                revision,
+                answers,
+            }) => Some(
+                bridget_transport::protocol::MobileOperation::UserInputRespond {
+                    device_id,
+                    command_id,
+                    request_id,
+                    revision,
+                    answers,
+                },
+            ),
             Ok(CommandRequest::QuestionRespond {
                 device_id,
                 command_id,
@@ -1006,7 +1099,7 @@ fn follow(
         && page["caught_up"] == true
         && Instant::now() < deadline
     {
-        let agent_state=page["agent_state"].clone();
+        let agent_state = page["agent_state"].clone();
         let mut received = None;
         let mut stop = None;
         let mut timer = None;
@@ -1074,7 +1167,7 @@ fn follow(
         }
         if let Some(received) = received {
             page = received;
-            page["agent_state"]=agent_state;
+            page["agent_state"] = agent_state;
         } else if Instant::now() >= deadline {
             idle = true;
         } else if native.is_err() {

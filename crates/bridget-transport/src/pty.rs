@@ -138,10 +138,7 @@ impl Transport for PtyTransport {
         let envelope = wrap_envelope(msg);
         validate_injection_content(&envelope)?;
 
-        let master = self
-            .master
-            .lock()
-            .recover_poison();
+        let master = self.master.lock().recover_poison();
         let fd = master.as_raw_fd();
         let deadline = Instant::now() + WRITE_DEADLINE;
         Self::write_all_bounded(fd, BRACKETED_PASTE_START, deadline)?;

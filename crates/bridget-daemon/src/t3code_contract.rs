@@ -44,7 +44,14 @@ fn http_read_error(error: std::io::Error) -> ContractError {
 
 fn http_request_error(error: minreq::Error) -> ContractError {
     match error {
-        minreq::Error::IoError(error) if matches!(error.kind(), std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock) => http_read_error(error),
+        minreq::Error::IoError(error)
+            if matches!(
+                error.kind(),
+                std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
+            ) =>
+        {
+            http_read_error(error)
+        }
         _ => ContractError::Transport("http_request_unavailable".into()),
     }
 }
@@ -72,7 +79,9 @@ pub enum ContractError {
     },
     Transport(String),
     /// Preuve RPC typée d'un refus enregistré pour CETTE commande de classement.
-    CommandRejected { command_id:String },
+    CommandRejected {
+        command_id: String,
+    },
     /// La commande `t3` est absente ou a échoué.
     Cli(String),
 }
@@ -89,7 +98,10 @@ impl fmt::Display for ContractError {
             Self::Unauthorized => write!(f, "t3code : jeton refusé (401)"),
             Self::Http { status, body } => write!(f, "t3code HTTP {status} : {body}"),
             Self::Transport(detail) => write!(f, "t3code injoignable : {detail}"),
-            Self::CommandRejected {command_id}=>write!(f,"t3code a confirmé le refus de la commande de classement {command_id} ; son motif détaillé n'est pas exposé par ce reçu"),
+            Self::CommandRejected { command_id } => write!(
+                f,
+                "t3code a confirmé le refus de la commande de classement {command_id} ; son motif détaillé n'est pas exposé par ce reçu"
+            ),
             Self::Cli(detail) => write!(f, "commande t3 : {detail}"),
         }
     }
@@ -260,7 +272,8 @@ pub(crate) fn is_native_projection(thread: &Value) -> Result<bool, ContractError
             !s.is_empty() && s.len() <= 2048 && !s.chars().any(bridget_core::is_disallowed_control)
         })
         || marker["seq"]
-            .as_u64().is_none_or(|n| n > bridget_transport::protocol::HUMAN_LINEAGE_MAX_SEQ)
+            .as_u64()
+            .is_none_or(|n| n > bridget_transport::protocol::HUMAN_LINEAGE_MAX_SEQ)
         || !marker["status"].as_str().is_some_and(|s| {
             matches!(
                 s,
@@ -628,9 +641,7 @@ impl Client {
                 .with_header("Content-Type", "application/json")
                 .with_body(body.to_string());
         }
-        let response = request
-            .send_lazy()
-            .map_err(http_request_error)?;
+        let response = request.send_lazy().map_err(http_request_error)?;
         let status = response.status_code;
         let text = read_response_body(response, limit)?;
         match status {
@@ -755,7 +766,11 @@ impl Client {
             self.snapshot()?;
         }
         if self.uses_v2() {
-            let suffix = if turn_limit <= 20 { "/bounded?compactTurnItems=1" } else { "" };
+            let suffix = if turn_limit <= 20 {
+                "/bounded?compactTurnItems=1"
+            } else {
+                ""
+            };
             let path = format!("/api/orchestration/threads/{segment}{suffix}");
             let text = if turn_limit <= 20 {
                 self.request_with_limit("GET", &path, None, MAX_BOUNDED_THREAD_RESPONSE_BYTES)?
@@ -768,24 +783,64 @@ impl Client {
         parse_thread_detail(&self.request("GET", &path, None)?)
     }
 
-    pub(crate) fn tool_detail(&self, thread: &str, id: &str, run: &str, node: &Value) -> Result<Value, ContractError> {
-        if !self.uses_v2() {return Err(shape("tool_detail","protocol"));}
-        let value=v2::rpc(&self.base_url,&self.token,"orchestration.getTurnItem",&serde_json::json!({"threadId":thread,"itemId":id}))?;
-        v2::tool_detail(value,thread,id,run,node)
+    pub(crate) fn tool_detail(
+        &self,
+        thread: &str,
+        id: &str,
+        run: &str,
+        node: &Value,
+    ) -> Result<Value, ContractError> {
+        if !self.uses_v2() {
+            return Err(shape("tool_detail", "protocol"));
+        }
+        let value = v2::rpc(
+            &self.base_url,
+            &self.token,
+            "orchestration.getTurnItem",
+            &serde_json::json!({"threadId":thread,"itemId":id}),
+        )?;
+        v2::tool_detail(value, thread, id, run, node)
     }
 
-    pub(crate) fn answer_user_input(&self, thread: &str, request: &str, command: &str, answers: &Value) -> Result<(),ContractError> {
-        if !self.uses_v2() {return Err(shape("user_input","protocol_unavailable"));}
-        let result=v2::rpc(&self.base_url,&self.token,"orchestration.dispatchCommand",&serde_json::json!({"type":"runtime-request.respond","commandId":command,"threadId":thread,"requestId":request,"answers":answers}))?;
-        result["sequence"].as_u64().ok_or_else(||shape("runtime-request.respond","sequence"))?; Ok(())
+    pub(crate) fn answer_user_input(
+        &self,
+        thread: &str,
+        request: &str,
+        command: &str,
+        answers: &Value,
+    ) -> Result<(), ContractError> {
+        if !self.uses_v2() {
+            return Err(shape("user_input", "protocol_unavailable"));
+        }
+        let result = v2::rpc(
+            &self.base_url,
+            &self.token,
+            "orchestration.dispatchCommand",
+            &serde_json::json!({"type":"runtime-request.respond","commandId":command,"threadId":thread,"requestId":request,"answers":answers}),
+        )?;
+        result["sequence"]
+            .as_u64()
+            .ok_or_else(|| shape("runtime-request.respond", "sequence"))?;
+        Ok(())
     }
 
-    pub(crate) fn organize_thread(&self, thread:&str, operation:&str, dormant:bool)->Result<u64,ContractError> {
-        if !self.uses_v2() {return Err(shape("agent_tracking","protocol_unavailable"));}
-        let mut command=serde_json::json!({"type":if dormant{"thread.settle"}else{"thread.unsettle"},"commandId":operation,"threadId":thread});
-        if !dormant {command["reason"]=serde_json::json!("user");}
-        let value=v2::rpc_agent_tracking(&self.base_url,&self.token,&command)?;
-        value["sequence"].as_u64().ok_or_else(||shape("agent_tracking","sequence"))
+    pub(crate) fn organize_thread(
+        &self,
+        thread: &str,
+        operation: &str,
+        dormant: bool,
+    ) -> Result<u64, ContractError> {
+        if !self.uses_v2() {
+            return Err(shape("agent_tracking", "protocol_unavailable"));
+        }
+        let mut command = serde_json::json!({"type":if dormant{"thread.settle"}else{"thread.unsettle"},"commandId":operation,"threadId":thread});
+        if !dormant {
+            command["reason"] = serde_json::json!("user");
+        }
+        let value = v2::rpc_agent_tracking(&self.base_url, &self.token, &command)?;
+        value["sequence"]
+            .as_u64()
+            .ok_or_else(|| shape("agent_tracking", "sequence"))
     }
 
     pub fn dispatch(

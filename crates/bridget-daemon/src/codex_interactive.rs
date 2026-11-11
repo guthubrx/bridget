@@ -378,11 +378,7 @@ impl NativeTui {
         let observed_exit = exit_code.clone();
         let monitor = thread::spawn(move || {
             while !watch_stop.load(Ordering::SeqCst) && alive.load(Ordering::SeqCst) {
-                match watch_child
-                    .lock()
-                    .recover_poison()
-                    .try_wait()
-                {
+                match watch_child.lock().recover_poison().try_wait() {
                     Ok(None) => thread::sleep(Duration::from_millis(25)),
                     Ok(Some(status)) => {
                         observed_exit.store(status.code().unwrap_or(1), Ordering::SeqCst);

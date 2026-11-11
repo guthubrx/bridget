@@ -2181,13 +2181,22 @@ pub enum NativeDelegationRequest {
     Catalogue,
     /// Inventaire public168 ; le daemon applique sa garde locale dédiée.
     RoutingCatalogueV1 {},
-    ProviderCatalogueV1 { refresh: bool, machine_id: Option<String> },
-    Specialists { request: crate::specialists::SpecialistRequest },
+    ProviderCatalogueV1 {
+        refresh: bool,
+        machine_id: Option<String>,
+    },
+    Specialists {
+        request: crate::specialists::SpecialistRequest,
+    },
     /// Copie d'un blob omis dans la vue privée de sa tâche active.
     ReadCommitFile {
-        #[serde(default,skip_serializing_if="Option::is_none",deserialize_with="deserialize_present_optional")]
-        task_id:Option<String>,
-        path:String,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "deserialize_present_optional"
+        )]
+        task_id: Option<String>,
+        path: String,
     },
     /// Lecture interne du plafond MCP de l'identité authentifiée ; aucun outil.
     CallerScope {},
@@ -2247,7 +2256,11 @@ pub enum NativeDelegationRequest {
         fallback: Vec<FallbackTarget>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         resume_on_limit: Option<bool>,
-        #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "deserialize_present_optional")]
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "deserialize_present_optional"
+        )]
         quota_fallback_authorized: Option<bool>,
     },
     Respond {
@@ -2355,7 +2368,11 @@ pub struct AutoDelegateV2 {
     pub request_id: String,
     /// Accord humain explicite déjà reçu pour cette mission seulement.
     /// Aucun droit de fichier, compte nouveau ou budget supplémentaire.
-    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "deserialize_present_optional")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_present_optional"
+    )]
     pub quota_fallback_authorized: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub machine_id: Option<String>,
@@ -2371,7 +2388,11 @@ pub struct AutoDelegateV2 {
     pub model: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub effort: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "deserialize_present_optional")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_present_optional"
+    )]
     pub service_tier: Option<String>,
     #[serde(default)]
     pub workload: AutoDelegateWorkload,
@@ -2558,15 +2579,21 @@ impl std::fmt::Debug for IdentityCredential {
     }
 }
 
-
 /// Administration des appareils par un client humain local négocié.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag="action",rename_all="snake_case",deny_unknown_fields)]
+#[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
 pub enum MobileAdministrationRequest {
     Status,
-    Configure { public_url:String, listen_addr:String },
-    ConfigureNotifications { account:IdentityCredential },
-    Pair { scope:serde_json::Value },
+    Configure {
+        public_url: String,
+        listen_addr: String,
+    },
+    ConfigureNotifications {
+        account: IdentityCredential,
+    },
+    Pair {
+        scope: serde_json::Value,
+    },
     Devices,
     Revoke {
         device_id: String,
@@ -2625,7 +2652,7 @@ pub enum UpdateStage {
 
 /// Le secret du QR reste un IdentityCredential pour être masqué dans Debug.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag="status",rename_all="snake_case",deny_unknown_fields)]
+#[serde(tag = "status", rename_all = "snake_case", deny_unknown_fields)]
 pub enum MobileAdministrationResult {
     Configuration {
         configured: bool,
@@ -2664,10 +2691,14 @@ pub struct MobileOperationRequest {
     pub operation: MobileOperation,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag="action",rename_all="snake_case",deny_unknown_fields)]
+#[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
 pub enum MobileOperation {
-    AgentTracking { request: crate::agent_tracking::AgentTrackingRequest },
-    Specialists { request: crate::specialists::SpecialistRequest },
+    AgentTracking {
+        request: crate::agent_tracking::AgentTrackingRequest,
+    },
+    Specialists {
+        request: crate::specialists::SpecialistRequest,
+    },
     UpdatesStatus,
     UpdatesCheck,
     UpdatesInstall {
@@ -2676,10 +2707,25 @@ pub enum MobileOperation {
     UpdatesConfigure {
         automatic: bool,
     },
-    UserInputs { after: Option<String>, limit: u32 },
-    UserInputShow { request_id: String },
-    UserInputRespond { device_id:String, command_id:String, request_id:String, revision:String, answers:serde_json::Value },
-    UserInputReceipt { device_id:String, command_id:String, request_id:String },
+    UserInputs {
+        after: Option<String>,
+        limit: u32,
+    },
+    UserInputShow {
+        request_id: String,
+    },
+    UserInputRespond {
+        device_id: String,
+        command_id: String,
+        request_id: String,
+        revision: String,
+        answers: serde_json::Value,
+    },
+    UserInputReceipt {
+        device_id: String,
+        command_id: String,
+        request_id: String,
+    },
     Questions {
         after: Option<String>,
         limit: u32,
@@ -2756,7 +2802,9 @@ pub enum MobileOperation {
         #[serde(default)]
         guide_now: bool,
     },
-    MessageQueue { agent_id: String },
+    MessageQueue {
+        agent_id: String,
+    },
     MessageQueueChange {
         agent_id: String,
         command_id: String,
@@ -2774,18 +2822,21 @@ pub enum MobileOperation {
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct MobileFileUpload {
-    pub device_id:String,
-    pub command_id:String,
-    pub agent_id:String,
-    pub file_name:String,
-    pub media_type:String,
-    pub expected_digest:String,
-    #[serde(with="base64_bytes")]
-    pub bytes:Vec<u8>,
+    pub device_id: String,
+    pub command_id: String,
+    pub agent_id: String,
+    pub file_name: String,
+    pub media_type: String,
+    pub expected_digest: String,
+    #[serde(with = "base64_bytes")]
+    pub bytes: Vec<u8>,
 }
 impl std::fmt::Debug for MobileFileUpload {
-    fn fmt(&self,f:&mut std::fmt::Formatter<'_>)->std::fmt::Result {
-        f.debug_struct("MobileFileUpload").field("command_id",&self.command_id).field("byte_length",&self.bytes.len()).finish_non_exhaustive()
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MobileFileUpload")
+            .field("command_id", &self.command_id)
+            .field("byte_length", &self.bytes.len())
+            .finish_non_exhaustive()
     }
 }
 
@@ -2939,7 +2990,11 @@ pub enum CommitViewFailure {
     UnsupportedPath,
     IntegrityFailed,
     ByteLimit,
-    MeasuredLimit { kind: CommitViewLimitKind, observed: u64, maximum: u64 },
+    MeasuredLimit {
+        kind: CommitViewLimitKind,
+        observed: u64,
+        maximum: u64,
+    },
     DiskFull,
     AccessDenied,
     SourceUnavailable,
@@ -2957,16 +3012,36 @@ pub enum CommitViewFailure {
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum CommitViewLimitKind { SelectedBytes, TreeBytes, ManifestBytes, LinkBytes, Entries, PlanBytes, NoticeBytes }
+pub enum CommitViewLimitKind {
+    SelectedBytes,
+    TreeBytes,
+    ManifestBytes,
+    LinkBytes,
+    Entries,
+    PlanBytes,
+    NoticeBytes,
+}
 impl CommitViewFailure {
-    pub fn validate(self,reason:WorkerRefusal)->Result<(),WorkerRefusal> {
-        if let Self::MeasuredLimit { observed, maximum, .. } = self {
+    pub fn validate(self, reason: WorkerRefusal) -> Result<(), WorkerRefusal> {
+        if let Self::MeasuredLimit {
+            observed, maximum, ..
+        } = self
+        {
             worker_require(maximum > 0 && observed > maximum)?;
         }
-        worker_require(self==Self::Unknown || matches!(reason,
-            WorkerRefusal::WorkspacePrepareFailed|WorkerRefusal::WorkspacePrepareIncomplete|
-            WorkerRefusal::PrepareExpired|WorkerRefusal::UnknownExecution|WorkerRefusal::ResourceLimit|
-            WorkerRefusal::DiskFull|WorkerRefusal::FilesystemAccessDenied))
+        worker_require(
+            self == Self::Unknown
+                || matches!(
+                    reason,
+                    WorkerRefusal::WorkspacePrepareFailed
+                        | WorkerRefusal::WorkspacePrepareIncomplete
+                        | WorkerRefusal::PrepareExpired
+                        | WorkerRefusal::UnknownExecution
+                        | WorkerRefusal::ResourceLimit
+                        | WorkerRefusal::DiskFull
+                        | WorkerRefusal::FilesystemAccessDenied
+                ),
+        )
     }
 }
 
@@ -2974,14 +3049,28 @@ impl CommitViewFailure {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum WorkspacePrepareStage {
-    Import, Preflight, CompactPlan, Create, CompactApply, Report, Unknown,
+    Import,
+    Preflight,
+    CompactPlan,
+    Create,
+    CompactApply,
+    Report,
+    Unknown,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum WorkspacePrepareCause {
-    GitTimeout, GitOutputTruncated, GitCommandFailed, GitUnavailable,
-    RepoUnsupported, BranchExists, PathUnsafe, WorktreeLimit,
-    DiskFull, AccessDenied, Unknown,
+    GitTimeout,
+    GitOutputTruncated,
+    GitCommandFailed,
+    GitUnavailable,
+    RepoUnsupported,
+    BranchExists,
+    PathUnsafe,
+    WorktreeLimit,
+    DiskFull,
+    AccessDenied,
+    Unknown,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -3041,131 +3130,227 @@ pub struct WorkerAcceptedWithCapabilities {
 
 /// Lecture d'origine, hors de l'identité et du cycle de vie d'une Task.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all="camelCase",deny_unknown_fields)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct OriginSessionProof {
-    pub version:u8,
-    pub environment_id:String,
-    pub thread_id:String,
-    pub provider_session_id:String,
-    pub provider_instance_id:String,
+    pub version: u8,
+    pub environment_id: String,
+    pub thread_id: String,
+    pub provider_session_id: String,
+    pub provider_instance_id: String,
     #[serde(default)]
-    pub permissions:Option<ProviderPermissions>,
+    pub permissions: Option<ProviderPermissions>,
 }
 impl OriginSessionProof {
     /// Contrat identique pour l’attestation locale et son relais authentifié.
-    pub fn validate(&self)->Result<(),WorkerRefusal>{
-        worker_require(matches!(self.version,1|2)
-            && (self.version!=1 || self.permissions.is_none())
-            && !self.thread_id.is_empty() && self.thread_id.len()<=2048 && !self.thread_id.chars().any(char::is_control)
-            && [&self.environment_id,&self.provider_session_id,&self.provider_instance_id].iter().all(|s| !s.is_empty() && s.len()<=256 && !s.chars().any(char::is_control)))?;
-        if self.version==2 {
-            let parent=self.permissions.as_ref().ok_or(WorkerRefusal::PermissionsChanged)?;
-            validate_permissions(parent,true).map_err(|_|WorkerRefusal::PermissionsChanged)?;
-            worker_require(parent.provider_session_id==self.provider_session_id && parent.provider_instance_id==self.provider_instance_id)?;
+    pub fn validate(&self) -> Result<(), WorkerRefusal> {
+        worker_require(
+            matches!(self.version, 1 | 2)
+                && (self.version != 1 || self.permissions.is_none())
+                && !self.thread_id.is_empty()
+                && self.thread_id.len() <= 2048
+                && !self.thread_id.chars().any(char::is_control)
+                && [
+                    &self.environment_id,
+                    &self.provider_session_id,
+                    &self.provider_instance_id,
+                ]
+                .iter()
+                .all(|s| !s.is_empty() && s.len() <= 256 && !s.chars().any(char::is_control)),
+        )?;
+        if self.version == 2 {
+            let parent = self
+                .permissions
+                .as_ref()
+                .ok_or(WorkerRefusal::PermissionsChanged)?;
+            validate_permissions(parent, true).map_err(|_| WorkerRefusal::PermissionsChanged)?;
+            worker_require(
+                parent.provider_session_id == self.provider_session_id
+                    && parent.provider_instance_id == self.provider_instance_id,
+            )?;
         }
         Ok(())
     }
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag="operation",rename_all="snake_case",deny_unknown_fields)]
+#[serde(tag = "operation", rename_all = "snake_case", deny_unknown_fields)]
 pub enum OriginProofOperation {
-    Catalogue {parent:ProviderPermissions,blocked:Vec<String>},
-    CommunicationProject {root:String,source:CommunicationProjectSource,worktree:Option<String>},
-    Attest {expected_thread:String, proof:NativePermissionProof},
-    Sources {parent:ProviderPermissions, source:Option<WorkerSourceBase>},
-    PrepareProject {parent:ProviderPermissions, source:WorkerSourceBase, target_machine:String, project_id:Option<String>,
-        #[serde(default,skip_serializing_if="worker_is_false")]
-        return_context:bool},
+    Catalogue {
+        parent: ProviderPermissions,
+        blocked: Vec<String>,
+    },
+    CommunicationProject {
+        root: String,
+        source: CommunicationProjectSource,
+        worktree: Option<String>,
+    },
+    Attest {
+        expected_thread: String,
+        proof: NativePermissionProof,
+    },
+    Sources {
+        parent: ProviderPermissions,
+        source: Option<WorkerSourceBase>,
+    },
+    PrepareProject {
+        parent: ProviderPermissions,
+        source: WorkerSourceBase,
+        target_machine: String,
+        project_id: Option<String>,
+        #[serde(default, skip_serializing_if = "worker_is_false")]
+        return_context: bool,
+    },
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct OriginProofRequest {
-    pub version:u16,
-    pub correlation_id:String,
-    pub connection_epoch:String,
-    pub worker:WorkerIdentity,
-    pub expires_at_ms:i64,
-    pub request:OriginProofOperation,
+    pub version: u16,
+    pub correlation_id: String,
+    pub connection_epoch: String,
+    pub worker: WorkerIdentity,
+    pub expires_at_ms: i64,
+    pub request: OriginProofOperation,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag="operation",rename_all="snake_case",deny_unknown_fields)]
+#[serde(tag = "operation", rename_all = "snake_case", deny_unknown_fields)]
 pub enum OriginProofResult {
-    Catalogue {permission_digest:String,entries:Vec<serde_json::Value>},
-    CommunicationProject {project:Option<CommunicationProject>},
-    Attested {proof:OriginSessionProof},
-    Sources {permission_digest:String, source_error:Option<String>},
-    ProjectPrepared {permission_digest:String, preparation_error:Option<String>,
-        #[serde(default,skip_serializing_if="Option::is_none")]
-        project:Option<PreparedOriginProject>},
-    Rejected {reason:WorkerRefusal},
+    Catalogue {
+        permission_digest: String,
+        entries: Vec<serde_json::Value>,
+    },
+    CommunicationProject {
+        project: Option<CommunicationProject>,
+    },
+    Attested {
+        proof: OriginSessionProof,
+    },
+    Sources {
+        permission_digest: String,
+        source_error: Option<String>,
+    },
+    ProjectPrepared {
+        permission_digest: String,
+        preparation_error: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        project: Option<PreparedOriginProject>,
+    },
+    Rejected {
+        reason: WorkerRefusal,
+    },
 }
 /// Contexte retourné par le worker d'origine après sa préparation authentifiée.
 /// Aucun de ces champs ne vient des arguments d'une mission.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PreparedOriginProject {
-    pub target:WorkerIdentity,
-    pub credential_fingerprint:String,
-    pub project_id:String,
-    pub mapping:serde_json::Value,
+    pub target: WorkerIdentity,
+    pub credential_fingerprint: String,
+    pub project_id: String,
+    pub mapping: serde_json::Value,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct OriginProofResponse {
-    pub version:u16,
-    pub correlation_id:String,
-    pub connection_epoch:String,
-    pub worker:WorkerIdentity,
-    pub response:OriginProofResult,
+    pub version: u16,
+    pub correlation_id: String,
+    pub connection_epoch: String,
+    pub worker: WorkerIdentity,
+    pub response: OriginProofResult,
 }
 impl OriginProofRequest {
-    pub fn validate_shape(&self)->Result<(),WorkerRefusal>{
-        self.validate_shape_detailed().map_err(|(_,reason)|reason)
+    pub fn validate_shape(&self) -> Result<(), WorkerRefusal> {
+        self.validate_shape_detailed().map_err(|(_, reason)| reason)
     }
 
     /// Même validation ; le nom fermé du contrôle ne contient aucune valeur reçue.
-    pub fn validate_shape_detailed(&self)->Result<(),(&'static str,WorkerRefusal)>{
-        let require=|valid:bool,field:&'static str|worker_require(valid).map_err(|reason|(field,reason));
-        self.worker.validate().map_err(|reason|("worker",reason))?;
-        require(self.version==1,"version")?;
-        require(worker_atom(&self.correlation_id,128),"correlation_id")?;
-        require(worker_atom(&self.connection_epoch,128),"connection_epoch")?;
-        require(self.expires_at_ms>0,"expires_at_ms")?;
-        worker_serialized_size(self,128*1024).map_err(|reason|("envelope",reason))?;
+    pub fn validate_shape_detailed(&self) -> Result<(), (&'static str, WorkerRefusal)> {
+        let require = |valid: bool, field: &'static str| {
+            worker_require(valid).map_err(|reason| (field, reason))
+        };
+        self.worker
+            .validate()
+            .map_err(|reason| ("worker", reason))?;
+        require(self.version == 1, "version")?;
+        require(worker_atom(&self.correlation_id, 128), "correlation_id")?;
+        require(worker_atom(&self.connection_epoch, 128), "connection_epoch")?;
+        require(self.expires_at_ms > 0, "expires_at_ms")?;
+        worker_serialized_size(self, 128 * 1024).map_err(|reason| ("envelope", reason))?;
         match &self.request {
-            OriginProofOperation::Catalogue {parent,blocked} => {
-                validate_permissions(parent,parent.source=="provider_turn").map_err(|_|("parent",WorkerRefusal::PermissionsChanged))?;
-                require(blocked.len()<=128 && blocked.iter().all(|name|worker_atom(name,128)),"blocked")
+            OriginProofOperation::Catalogue { parent, blocked } => {
+                validate_permissions(parent, parent.source == "provider_turn")
+                    .map_err(|_| ("parent", WorkerRefusal::PermissionsChanged))?;
+                require(
+                    blocked.len() <= 128 && blocked.iter().all(|name| worker_atom(name, 128)),
+                    "blocked",
+                )
             }
-            OriginProofOperation::CommunicationProject {root,worktree,..} => {
-                require(worker_absolute_path(root),"root")?;
-                require(worktree.as_ref().is_none_or(|p|worker_absolute_path(p)),"worktree")
+            OriginProofOperation::CommunicationProject { root, worktree, .. } => {
+                require(worker_absolute_path(root), "root")?;
+                require(
+                    worktree.as_ref().is_none_or(|p| worker_absolute_path(p)),
+                    "worktree",
+                )
             }
-            OriginProofOperation::Attest {expected_thread,proof} => {
-                require(worker_atom(expected_thread,2048),"expected_thread")?;
-                require(proof.endpoint.len()<=512 && proof.authorization.expose_for_attestation().len()<=300,"proof")
+            OriginProofOperation::Attest {
+                expected_thread,
+                proof,
+            } => {
+                require(worker_atom(expected_thread, 2048), "expected_thread")?;
+                require(
+                    proof.endpoint.len() <= 512
+                        && proof.authorization.expose_for_attestation().len() <= 300,
+                    "proof",
+                )
             }
-            OriginProofOperation::PrepareProject {parent,source,target_machine,project_id,..} => {
-                validate_permissions(parent,parent.source=="provider_turn").map_err(|_|("parent",WorkerRefusal::PermissionsChanged))?;
-                require(worker_atom(target_machine,128),"target_machine")?;
+            OriginProofOperation::PrepareProject {
+                parent,
+                source,
+                target_machine,
+                project_id,
+                ..
+            } => {
+                validate_permissions(parent, parent.source == "provider_turn")
+                    .map_err(|_| ("parent", WorkerRefusal::PermissionsChanged))?;
+                require(worker_atom(target_machine, 128), "target_machine")?;
                 // Le helper objects_only sait préparer une vue sur sa propre machine.
                 // Le helper sait aussi rattacher un dossier partagé local hors Git.
-                require(target_machine!=&self.worker.machine_id
-                    || matches!(source.workspace,Some(WorkspaceRequest::CommitView {}))
-                    || source.is_local_shared_directory(&self.worker.machine_id,target_machine),"target_machine")?;
-                require(project_id.as_ref().is_none_or(|id|worker_atom(id,128)),"project_id")?;
-                require(worker_absolute_path(&source.cwd)
-                    && provider_allows_source(parent,&source.cwd),"cwd")?;
-                require(worker_base_commit(source.expected_base_commit.as_deref()),"expected_base_commit")?;
-                worker_serialized_size(&source.workspace,4096).map_err(|reason|("workspace",reason))
+                require(
+                    target_machine != &self.worker.machine_id
+                        || matches!(source.workspace, Some(WorkspaceRequest::CommitView {}))
+                        || source
+                            .is_local_shared_directory(&self.worker.machine_id, target_machine),
+                    "target_machine",
+                )?;
+                require(
+                    project_id.as_ref().is_none_or(|id| worker_atom(id, 128)),
+                    "project_id",
+                )?;
+                require(
+                    worker_absolute_path(&source.cwd)
+                        && provider_allows_source(parent, &source.cwd),
+                    "cwd",
+                )?;
+                require(
+                    worker_base_commit(source.expected_base_commit.as_deref()),
+                    "expected_base_commit",
+                )?;
+                worker_serialized_size(&source.workspace, 4096)
+                    .map_err(|reason| ("workspace", reason))
             }
-            OriginProofOperation::Sources {parent,source} => {
-                validate_permissions(parent,parent.source=="provider_turn").map_err(|_|("parent",WorkerRefusal::PermissionsChanged))?;
-                if let Some(source)=source {
-                    require(worker_absolute_path(&source.cwd)
-                        && provider_allows_source(parent,&source.cwd),"cwd")?;
-                    require(worker_base_commit(source.expected_base_commit.as_deref()),"expected_base_commit")?;
-                    worker_serialized_size(&source.workspace,4096).map_err(|reason|("workspace",reason))?;
+            OriginProofOperation::Sources { parent, source } => {
+                validate_permissions(parent, parent.source == "provider_turn")
+                    .map_err(|_| ("parent", WorkerRefusal::PermissionsChanged))?;
+                if let Some(source) = source {
+                    require(
+                        worker_absolute_path(&source.cwd)
+                            && provider_allows_source(parent, &source.cwd),
+                        "cwd",
+                    )?;
+                    require(
+                        worker_base_commit(source.expected_base_commit.as_deref()),
+                        "expected_base_commit",
+                    )?;
+                    worker_serialized_size(&source.workspace, 4096)
+                        .map_err(|reason| ("workspace", reason))?;
                 }
                 Ok(())
             }
@@ -3173,31 +3358,71 @@ impl OriginProofRequest {
     }
 }
 impl OriginProofResponse {
-    pub fn validate_shape(&self)->Result<(),WorkerRefusal>{
+    pub fn validate_shape(&self) -> Result<(), WorkerRefusal> {
         self.worker.validate()?;
-        worker_require(self.version==1 && worker_atom(&self.correlation_id,128) && worker_atom(&self.connection_epoch,128))?;
-        worker_serialized_size(self,128*1024)?;
+        worker_require(
+            self.version == 1
+                && worker_atom(&self.correlation_id, 128)
+                && worker_atom(&self.connection_epoch, 128),
+        )?;
+        worker_serialized_size(self, 128 * 1024)?;
         match &self.response {
-            OriginProofResult::Catalogue {permission_digest,entries} => worker_require(worker_digest(permission_digest)
-                && entries.len()<=128 && entries.iter().all(|entry|entry.get("agent_type").and_then(|v|v.as_str()).is_some_and(|name|worker_atom(name,128)))),
-            OriginProofResult::CommunicationProject {project} => worker_require(project.as_ref().is_none_or(|p|
-                p.host==self.worker.machine_id && worker_absolute_path(&p.root))),
-            OriginProofResult::Attested {proof} => proof.validate(),
-            OriginProofResult::Sources {permission_digest,source_error} => worker_require(worker_digest(permission_digest)
-                && source_error.as_ref().is_none_or(|s| !s.is_empty() && s.len()<=128 && s.bytes().all(|b|b.is_ascii_lowercase()||b==b'_'))),
-            OriginProofResult::ProjectPrepared {permission_digest,preparation_error,project} => {
-                worker_require(worker_digest(permission_digest)
-                    && preparation_error.as_ref().is_none_or(|s| !s.is_empty() && s.len()<=128 && s.bytes().all(|b|b.is_ascii_lowercase()||b==b'_'))
-                    && (preparation_error.is_none() || project.is_none()))?;
-                if let Some(project)=project {
+            OriginProofResult::Catalogue {
+                permission_digest,
+                entries,
+            } => worker_require(
+                worker_digest(permission_digest)
+                    && entries.len() <= 128
+                    && entries.iter().all(|entry| {
+                        entry
+                            .get("agent_type")
+                            .and_then(|v| v.as_str())
+                            .is_some_and(|name| worker_atom(name, 128))
+                    }),
+            ),
+            OriginProofResult::CommunicationProject { project } => {
+                worker_require(project.as_ref().is_none_or(|p| {
+                    p.host == self.worker.machine_id && worker_absolute_path(&p.root)
+                }))
+            }
+            OriginProofResult::Attested { proof } => proof.validate(),
+            OriginProofResult::Sources {
+                permission_digest,
+                source_error,
+            } => worker_require(
+                worker_digest(permission_digest)
+                    && source_error.as_ref().is_none_or(|s| {
+                        !s.is_empty()
+                            && s.len() <= 128
+                            && s.bytes().all(|b| b.is_ascii_lowercase() || b == b'_')
+                    }),
+            ),
+            OriginProofResult::ProjectPrepared {
+                permission_digest,
+                preparation_error,
+                project,
+            } => {
+                worker_require(
+                    worker_digest(permission_digest)
+                        && preparation_error.as_ref().is_none_or(|s| {
+                            !s.is_empty()
+                                && s.len() <= 128
+                                && s.bytes().all(|b| b.is_ascii_lowercase() || b == b'_')
+                        })
+                        && (preparation_error.is_none() || project.is_none()),
+                )?;
+                if let Some(project) = project {
                     project.target.validate()?;
-                    worker_require(worker_digest(&project.credential_fingerprint)
-                        && worker_atom(&project.project_id,128) && project.mapping.is_object())?;
-                    worker_serialized_size(project,16384)?;
+                    worker_require(
+                        worker_digest(&project.credential_fingerprint)
+                            && worker_atom(&project.project_id, 128)
+                            && project.mapping.is_object(),
+                    )?;
+                    worker_serialized_size(project, 16384)?;
                 }
                 Ok(())
-            },
-            OriginProofResult::Rejected {..} => Ok(())
+            }
+            OriginProofResult::Rejected { .. } => Ok(()),
         }
     }
 }
@@ -3321,7 +3546,11 @@ pub struct CandidateProbeV2Candidate {
     pub agent_type: String,
     pub model: String,
     pub effort: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "deserialize_present_optional")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_present_optional"
+    )]
     pub service_tier: Option<String>,
     #[serde(default)]
     pub workload: AutoDelegateWorkload,
@@ -3333,14 +3562,32 @@ pub struct CandidateProbeV2Candidate {
 
 /// Commandes identifiables ; aucun nom ou argument libre n'atteint le worker.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-#[serde(rename_all="snake_case")]
-pub enum WorkloadTool { Git, Cargo, Node, Python, Npm, Pnpm, Make, Docker, DockerCompose }
+#[serde(rename_all = "snake_case")]
+pub enum WorkloadTool {
+    Git,
+    Cargo,
+    Node,
+    Python,
+    Npm,
+    Pnpm,
+    Make,
+    Docker,
+    DockerCompose,
+}
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all="snake_case")]
-pub enum WorkloadToolState { Available, Absent, Unusable, Unknown }
+#[serde(rename_all = "snake_case")]
+pub enum WorkloadToolState {
+    Available,
+    Absent,
+    Unusable,
+    Unknown,
+}
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct WorkloadToolObservation { pub tool:WorkloadTool, pub state:WorkloadToolState }
+pub struct WorkloadToolObservation {
+    pub tool: WorkloadTool,
+    pub state: WorkloadToolState,
+}
 
 /// Sonde168 groupée : elle porte les mêmes corrélations que v1 et un seul
 /// relevé par machine. Elle ne constitue pas une réservation de capacité.
@@ -3348,10 +3595,10 @@ pub struct WorkloadToolObservation { pub tool:WorkloadTool, pub state:WorkloadTo
 #[serde(deny_unknown_fields)]
 pub struct CandidateProbeV2 {
     /// Écriture identifiée : false ne certifie pas la lecture seule d’un programme inconnu.
-    #[serde(default,skip_serializing_if="std::ops::Not::not")]
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub requires_workspace_write: bool,
-    #[serde(default,skip_serializing_if="Vec::is_empty")]
-    pub required_tools:Vec<WorkloadTool>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub required_tools: Vec<WorkloadTool>,
     pub version: u16,
     pub correlation_id: String,
     pub connection_epoch: String,
@@ -3381,8 +3628,8 @@ pub enum CandidateProbeV2Verdict {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CandidateProbeV2Result {
-    #[serde(default,skip_serializing_if="Vec::is_empty")]
-    pub tool_observations:Vec<WorkloadToolObservation>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tool_observations: Vec<WorkloadToolObservation>,
     pub version: u16,
     pub correlation_id: String,
     pub connection_epoch: String,
@@ -3440,8 +3687,14 @@ impl CandidateProbeResult {
 
 impl CandidateProbeV2 {
     pub fn validate_shape(&self) -> Result<(), WorkerRefusal> {
-        if (self.requires_workspace_write && self.required_tools.is_empty()) || self.required_tools.len()>9 || self.required_tools.iter().enumerate()
-            .any(|(i,tool)|self.required_tools[..i].contains(tool)) {
+        if (self.requires_workspace_write && self.required_tools.is_empty())
+            || self.required_tools.len() > 9
+            || self
+                .required_tools
+                .iter()
+                .enumerate()
+                .any(|(i, tool)| self.required_tools[..i].contains(tool))
+        {
             return Err(WorkerRefusal::InvalidEnvelope);
         }
         if self.version != WORKER_CANDIDATE_PROBE_V2_VERSION
@@ -3453,7 +3706,10 @@ impl CandidateProbeV2 {
         let mut ids = std::collections::BTreeSet::new();
         if self.candidates.iter().any(|candidate| {
             !is_routing_candidate_id(&candidate.candidate_id)
-                || candidate.service_tier.as_deref().is_some_and(|tier|!crate::provider_catalogue::catalogue_token(tier))
+                || candidate
+                    .service_tier
+                    .as_deref()
+                    .is_some_and(|tier| !crate::provider_catalogue::catalogue_token(tier))
                 || !ids.insert(&candidate.candidate_id)
         }) {
             return Err(WorkerRefusal::InvalidEnvelope);
@@ -3464,8 +3720,13 @@ impl CandidateProbeV2 {
 
 impl CandidateProbeV2Result {
     pub fn validate_shape(&self) -> Result<(), WorkerRefusal> {
-        if self.tool_observations.len()>9 || self.tool_observations.iter().enumerate()
-            .any(|(i,fact)|self.tool_observations[..i].iter().any(|old|old.tool==fact.tool)) {
+        if self.tool_observations.len() > 9
+            || self.tool_observations.iter().enumerate().any(|(i, fact)| {
+                self.tool_observations[..i]
+                    .iter()
+                    .any(|old| old.tool == fact.tool)
+            })
+        {
             return Err(WorkerRefusal::InvalidEnvelope);
         }
         if self.version != WORKER_CANDIDATE_PROBE_V2_VERSION
@@ -3543,7 +3804,11 @@ pub struct WorkerPrepare {
     pub agent_type: String,
     pub model: String,
     pub effort: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "deserialize_present_optional")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_present_optional"
+    )]
     pub service_tier: Option<String>,
     #[serde(
         default,
@@ -3771,16 +4036,22 @@ pub struct WorkerSourceBase {
 impl WorkerSourceBase {
     /// Forme déjà prise en charge par le helper local, sans copie ni dépôt créé.
     pub fn is_local_shared_directory(&self, origin: &str, target: &str) -> bool {
-        origin==target && self.expected_base_commit.is_none()
-            && self.workload==AutoDelegateWorkload::General
-            && matches!(self.workspace,None|Some(WorkspaceRequest::Shared {}))
+        origin == target
+            && self.expected_base_commit.is_none()
+            && self.workload == AutoDelegateWorkload::General
+            && matches!(self.workspace, None | Some(WorkspaceRequest::Shared {}))
     }
 }
 
 /// Réparation explicite185 : aucun identifiant d'enfant ou de fournisseur libre.
-#[derive(Debug,Clone,Copy,PartialEq,Eq,Serialize,Deserialize)]
-#[serde(rename_all="snake_case")]
-pub enum WorkspaceRepairActionV1 {Observe,Prepare,Commit,Publish}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkspaceRepairActionV1 {
+    Observe,
+    Prepare,
+    Commit,
+    Publish,
+}
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct WorkspaceRepairRequestV1 {
@@ -3791,14 +4062,19 @@ pub struct WorkspaceRepairRequestV1 {
 impl WorkspaceRepairRequestV1 {
     pub fn validate(&self) -> Result<(), WorkerRefusal> {
         let path = std::path::Path::new(&self.target_cwd);
-        worker_require(!self.request_id.is_empty() && self.request_id.len() <= 128
-            && !self.request_id.chars().any(char::is_control)
-            && self.target_cwd.len() <= 4096 && !self.target_cwd.chars().any(char::is_control)
-            && path.is_absolute()
-            && !path.components().any(|c| matches!(c, std::path::Component::ParentDir))
-            && self.expected_head.len() == 40
-            && self.expected_head.bytes().all(|b| b.is_ascii_hexdigit())
-)
+        worker_require(
+            !self.request_id.is_empty()
+                && self.request_id.len() <= 128
+                && !self.request_id.chars().any(char::is_control)
+                && self.target_cwd.len() <= 4096
+                && !self.target_cwd.chars().any(char::is_control)
+                && path.is_absolute()
+                && !path
+                    .components()
+                    .any(|c| matches!(c, std::path::Component::ParentDir))
+                && self.expected_head.len() == 40
+                && self.expected_head.bytes().all(|b| b.is_ascii_hexdigit()),
+        )
     }
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -3834,10 +4110,17 @@ pub struct WorkerFencedRouting {
 #[serde(tag = "operation", rename_all = "snake_case", deny_unknown_fields)]
 pub enum WorkerRequestOperation {
     /// Clôture propriétaire, jamais retrait de fichiers ou lancement.
-    ConserveCommitView { prepare_digest: String },
-    ReadCommitViewFile {execution:WorkerResultIdentity,path:String},
+    ConserveCommitView {
+        prepare_digest: String,
+    },
+    ReadCommitViewFile {
+        execution: WorkerResultIdentity,
+        path: String,
+    },
     /// Une enveloppe de diagnostic seulement, jamais une nouvelle autorité.
-    PrepareDiagnosed { prepare: Box<WorkerRequestOperation> },
+    PrepareDiagnosed {
+        prepare: Box<WorkerRequestOperation>,
+    },
     RepairWorkspace {
         repair: WorkspaceRepairRequestV1,
         action: WorkspaceRepairActionV1,
@@ -3915,11 +4198,24 @@ pub enum WorkerRequestOperation {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "operation", rename_all = "snake_case", deny_unknown_fields)]
 pub enum WorkerResponseOperation {
-    CommitViewFile {execution:WorkerResultIdentity,path:String,available:bool,
-        reason:Option<WorkerRefusal>,failure:Option<CommitViewFailure>},
-    CommitViewRejected {reason:WorkerRefusal,failure:CommitViewFailure},
-    CommitViewConserved { prepare_digest: String },
-    WorkspaceRejected { reason: WorkerRefusal, failure: WorkspacePrepareFailure },
+    CommitViewFile {
+        execution: WorkerResultIdentity,
+        path: String,
+        available: bool,
+        reason: Option<WorkerRefusal>,
+        failure: Option<CommitViewFailure>,
+    },
+    CommitViewRejected {
+        reason: WorkerRefusal,
+        failure: CommitViewFailure,
+    },
+    CommitViewConserved {
+        prepare_digest: String,
+    },
+    WorkspaceRejected {
+        reason: WorkerRefusal,
+        failure: WorkspacePrepareFailure,
+    },
     WorkspaceRepair {
         status: WorkspaceRepairStatusV1,
     },
@@ -4026,9 +4322,12 @@ fn worker_relative_path(value: &str) -> bool {
 }
 
 /// Chemin littéral de manifeste : pas de dossier courant, parent ni préfixe.
-pub fn commit_view_file_path(value:&str)->bool {
-    worker_relative_path(value) && !value.contains('\\')
-        && value.split('/').all(|part|!part.is_empty() && part!="." && part!="..")
+pub fn commit_view_file_path(value: &str) -> bool {
+    worker_relative_path(value)
+        && !value.contains('\\')
+        && value
+            .split('/')
+            .all(|part| !part.is_empty() && part != "." && part != "..")
 }
 
 fn worker_base_commit(value: Option<&str>) -> bool {
@@ -4202,7 +4501,11 @@ impl WorkerResultDisposition {
 
 impl WorkerPrepare {
     pub fn validate(&self) -> Result<(), WorkerRefusal> {
-        worker_require(self.service_tier.as_deref().is_none_or(crate::provider_catalogue::catalogue_token))?;
+        worker_require(
+            self.service_tier
+                .as_deref()
+                .is_none_or(crate::provider_catalogue::catalogue_token),
+        )?;
         worker_require(
             [
                 &self.machine_id,
@@ -4225,12 +4528,12 @@ impl WorkerPrepare {
                     .all(|s| worker_absolute_path(s))
                 && worker_relative_path(&self.relative_cwd)
                 && worker_base_commit(self.base_commit.as_deref())
-                && (provider_allows_source(&self.parent,&self.origin_cwd)
-                    || (matches!(self.workspace,Some(WorkspaceRequest::CommitView {}))
-                        && self.posture==Some(SpawnPosture::Discovery)
+                && (provider_allows_source(&self.parent, &self.origin_cwd)
+                    || (matches!(self.workspace, Some(WorkspaceRequest::CommitView {}))
+                        && self.posture == Some(SpawnPosture::Discovery)
                         && self.base_commit.is_some()
-                        && self.relative_cwd=="."
-                        && self.origin_cwd==self.source_root
+                        && self.relative_cwd == "."
+                        && self.origin_cwd == self.source_root
                         && worker_absolute_path(&self.parent.cwd)
                         && std::path::Path::new(&self.parent.cwd).starts_with(&self.source_root))),
         )?;
@@ -4302,14 +4605,19 @@ impl WorkerRequest {
         )?;
         worker_serialized_size(self, MAX_WORKER_FRAME_BYTES - WORKER_FRAME_ENVELOPE_RESERVE)?;
         match &self.request {
-            WorkerRequestOperation::ReadCommitViewFile{execution,path}=>{
+            WorkerRequestOperation::ReadCommitViewFile { execution, path } => {
                 execution.validate()?;
-                worker_require(execution.command==self.command && commit_view_file_path(path))
-            },
-            WorkerRequestOperation::ConserveCommitView { prepare_digest } => worker_require(worker_digest(prepare_digest)),
+                worker_require(execution.command == self.command && commit_view_file_path(path))
+            }
+            WorkerRequestOperation::ConserveCommitView { prepare_digest } => {
+                worker_require(worker_digest(prepare_digest))
+            }
             WorkerRequestOperation::PrepareDiagnosed { prepare } => {
-                worker_require(matches!(prepare.as_ref(),
-                    WorkerRequestOperation::Prepare { .. } | WorkerRequestOperation::PrepareV2 { .. }))?;
+                worker_require(matches!(
+                    prepare.as_ref(),
+                    WorkerRequestOperation::Prepare { .. }
+                        | WorkerRequestOperation::PrepareV2 { .. }
+                ))?;
                 let mut inner = self.clone();
                 inner.request = *prepare.clone();
                 inner.validate()
@@ -4337,7 +4645,10 @@ impl WorkerRequest {
                         && (!*inspect_only
                             || matches!(
                                 prepare.workspace,
-                                Some(WorkspaceRequest::Worktree { .. }|WorkspaceRequest::CommitView {})
+                                Some(
+                                    WorkspaceRequest::Worktree { .. }
+                                        | WorkspaceRequest::CommitView {}
+                                )
                             ))
                         && worker_atom(connection_id, MAX_WORKER_ATOM_BYTES)
                         && matches!(engine.as_str(), "codex" | "claude")
@@ -4345,25 +4656,37 @@ impl WorkerRequest {
                         && worker_digest(expected_permission_digest),
                 )
             }
-            WorkerRequestOperation::PrepareFenced { previous, prepare, placement, workspace, routing } => {
+            WorkerRequestOperation::PrepareFenced {
+                previous,
+                prepare,
+                placement,
+                workspace,
+                routing,
+            } => {
                 previous.validate()?;
                 if let Some(routing) = routing {
-                    worker_require(worker_atom(&routing.connection_id, MAX_WORKER_ATOM_BYTES)
-                        && matches!(routing.engine.as_str(), "codex" | "claude")
-                        && worker_digest(&routing.expected_definition_digest)
-                        && worker_digest(&routing.expected_permission_digest))?;
+                    worker_require(
+                        worker_atom(&routing.connection_id, MAX_WORKER_ATOM_BYTES)
+                            && matches!(routing.engine.as_str(), "codex" | "claude")
+                            && worker_digest(&routing.expected_definition_digest)
+                            && worker_digest(&routing.expected_permission_digest),
+                    )?;
                 }
                 prepare.validate()?;
                 placement.validate()?;
-                worker_require(previous.task_id == self.command.task_id
-                    && previous.command_id != self.command.command_id
-                    && prepare.machine_id == self.worker.machine_id
-                    && prepare.provisioning_revision == self.worker.provisioning_revision
-                    && placement.matches_worker(&self.worker)
-                    && (matches!((&prepare.workspace, workspace),
+                worker_require(
+                    previous.task_id == self.command.task_id
+                        && previous.command_id != self.command.command_id
+                        && prepare.machine_id == self.worker.machine_id
+                        && prepare.provisioning_revision == self.worker.provisioning_revision
+                        && placement.matches_worker(&self.worker)
+                        && (matches!((&prepare.workspace, workspace),
                         (Some(WorkspaceRequest::Worktree { .. }|WorkspaceRequest::CommitView {}), Some(value)) if value.is_object())
-                        || matches!((&prepare.workspace, workspace),
-                            (Some(WorkspaceRequest::Shared {}), None))))?;
+                            || matches!(
+                                (&prepare.workspace, workspace),
+                                (Some(WorkspaceRequest::Shared {}), None)
+                            )),
+                )?;
                 worker_serialized_size(workspace, 64 * 1024)
             }
             WorkerRequestOperation::ParentProof {
@@ -4377,27 +4700,42 @@ impl WorkerRequest {
             WorkerRequestOperation::ParentSourceProof { parent, source } => {
                 validate_permissions(parent, parent.source == "provider_turn")
                     .map_err(|_| WorkerRefusal::PermissionsChanged)?;
-                worker_require(worker_absolute_path(&source.cwd)
-                    && provider_allows_source(parent,&source.cwd)
-                    && worker_base_commit(source.expected_base_commit.as_deref()))?;
+                worker_require(
+                    worker_absolute_path(&source.cwd)
+                        && provider_allows_source(parent, &source.cwd)
+                        && worker_base_commit(source.expected_base_commit.as_deref()),
+                )?;
                 worker_serialized_size(&source.workspace, 4096)
             }
-            WorkerRequestOperation::RepairWorkspace { repair, action, expires_at } => {
+            WorkerRequestOperation::RepairWorkspace {
+                repair,
+                action,
+                expires_at,
+            } => {
                 repair.validate()?;
-                worker_require(if *action==WorkspaceRepairActionV1::Observe {*expires_at==0} else {*expires_at>0})
-            },
+                worker_require(if *action == WorkspaceRepairActionV1::Observe {
+                    *expires_at == 0
+                } else {
+                    *expires_at > 0
+                })
+            }
             WorkerRequestOperation::Start { start }
             | WorkerRequestOperation::StartDetailed { start } => {
                 start.validate()?;
                 worker_require(start.placement.matches_worker(&self.worker))
             }
-            WorkerRequestOperation::FenceUnstarted { placement, deadline_at } => {
+            WorkerRequestOperation::FenceUnstarted {
+                placement,
+                deadline_at,
+            } => {
                 placement.validate()?;
                 worker_require(placement.matches_worker(&self.worker) && *deadline_at > 0)
             }
             WorkerRequestOperation::ReserveResultSlot { slot }
             | WorkerRequestOperation::ReserveResultSlotUntil { slot, .. } => {
-                if let WorkerRequestOperation::ReserveResultSlotUntil { expires_at_ms, .. } = &self.request {
+                if let WorkerRequestOperation::ReserveResultSlotUntil { expires_at_ms, .. } =
+                    &self.request
+                {
                     worker_require(*expires_at_ms > 0)?;
                 }
                 slot.validate()?;
@@ -4422,7 +4760,9 @@ impl WorkerRequest {
                 result.validate()?;
                 worker_require(result.identity.command == self.command)
             }
-            WorkerRequestOperation::Reconcile {} | WorkerRequestOperation::ExecutionStatus {} | WorkerRequestOperation::Cancel { .. } => Ok(()),
+            WorkerRequestOperation::Reconcile {}
+            | WorkerRequestOperation::ExecutionStatus {}
+            | WorkerRequestOperation::Cancel { .. } => Ok(()),
         }
     }
 }
@@ -4430,31 +4770,38 @@ impl WorkerRequest {
 impl WorkerRequestOperation {
     pub fn requires_provider_accounts(&self) -> bool {
         match self {
-            Self::Start{start} | Self::StartDetailed{start} => start.definition.codex_home.is_some() || start.definition.capabilities.account_profiles,
+            Self::Start { start } | Self::StartDetailed { start } => {
+                start.definition.codex_home.is_some()
+                    || start.definition.capabilities.account_profiles
+            }
             _ => false,
         }
     }
-    pub fn requires_model_options(&self)->bool {
+    pub fn requires_model_options(&self) -> bool {
         match self {
-            Self::Prepare{prepare}|Self::PrepareV2{prepare,..}|Self::PrepareFenced{prepare,..}
-                =>prepare.service_tier.is_some(),
-            Self::PrepareDiagnosed{prepare}=>prepare.requires_model_options(),
-            _=>false,
+            Self::Prepare { prepare }
+            | Self::PrepareV2 { prepare, .. }
+            | Self::PrepareFenced { prepare, .. } => prepare.service_tier.is_some(),
+            Self::PrepareDiagnosed { prepare } => prepare.requires_model_options(),
+            _ => false,
         }
     }
 
-    pub fn requires_commit_view_reader(&self)->bool {
-        matches!(self,Self::ConserveCommitView{..}|Self::ReadCommitViewFile{..})
-            || matches!(self,Self::PrepareFenced{prepare,..}
+    pub fn requires_commit_view_reader(&self) -> bool {
+        matches!(
+            self,
+            Self::ConserveCommitView { .. } | Self::ReadCommitViewFile { .. }
+        ) || matches!(self,Self::PrepareFenced{prepare,..}
                 if matches!(prepare.workspace,Some(WorkspaceRequest::CommitView{})))
     }
 
-    pub fn requires_commit_view_creation(&self)->bool {
+    pub fn requires_commit_view_creation(&self) -> bool {
         match self {
-            Self::Prepare{prepare}|Self::PrepareV2{prepare,..} =>
-                matches!(prepare.workspace,Some(WorkspaceRequest::CommitView{})),
-            Self::PrepareDiagnosed{prepare}=>prepare.requires_commit_view_creation(),
-            _=>false,
+            Self::Prepare { prepare } | Self::PrepareV2 { prepare, .. } => {
+                matches!(prepare.workspace, Some(WorkspaceRequest::CommitView {}))
+            }
+            Self::PrepareDiagnosed { prepare } => prepare.requires_commit_view_creation(),
+            _ => false,
         }
     }
 }
@@ -4465,11 +4812,15 @@ impl WorkerResponse {
             return Err(WorkerRefusal::UnsupportedVersion);
         }
         self.worker.validate()?;
-        if matches!(&self.response, WorkerResponseOperation::Prepared { .. } | WorkerResponseOperation::WorkspaceRejected {..}
-            | WorkerResponseOperation::CommitViewConserved { .. } | WorkerResponseOperation::CommitViewRejected {..})
-            || (matches!(&self.response, WorkerResponseOperation::Rejected { .. })
-                && self.command.instance_id.is_empty()
-                && self.command.generation == 0)
+        if matches!(
+            &self.response,
+            WorkerResponseOperation::Prepared { .. }
+                | WorkerResponseOperation::WorkspaceRejected { .. }
+                | WorkerResponseOperation::CommitViewConserved { .. }
+                | WorkerResponseOperation::CommitViewRejected { .. }
+        ) || (matches!(&self.response, WorkerResponseOperation::Rejected { .. })
+            && self.command.instance_id.is_empty()
+            && self.command.generation == 0)
         {
             self.command.validate_preparation()?;
         } else {
@@ -4481,21 +4832,43 @@ impl WorkerResponse {
         )?;
         worker_serialized_size(self, MAX_WORKER_FRAME_BYTES - WORKER_FRAME_ENVELOPE_RESERVE)?;
         match &self.response {
-            WorkerResponseOperation::CommitViewFile{execution,path,available,reason,failure}=>{
+            WorkerResponseOperation::CommitViewFile {
+                execution,
+                path,
+                available,
+                reason,
+                failure,
+            } => {
                 execution.validate()?;
-                worker_require(execution.command==self.command && commit_view_file_path(path))?;
-                if *available {worker_require(reason.is_none() && failure.is_none())}
-                else {
-                    let reason=reason.ok_or(WorkerRefusal::InvalidEnvelope)?;
-                    failure.ok_or(WorkerRefusal::InvalidEnvelope)?.validate(reason)
+                worker_require(execution.command == self.command && commit_view_file_path(path))?;
+                if *available {
+                    worker_require(reason.is_none() && failure.is_none())
+                } else {
+                    let reason = reason.ok_or(WorkerRefusal::InvalidEnvelope)?;
+                    failure
+                        .ok_or(WorkerRefusal::InvalidEnvelope)?
+                        .validate(reason)
                 }
-            },
-            WorkerResponseOperation::CommitViewRejected{reason,failure}=>failure.validate(*reason),
-            WorkerResponseOperation::CommitViewConserved { prepare_digest } => worker_require(worker_digest(prepare_digest)),
+            }
+            WorkerResponseOperation::CommitViewRejected { reason, failure } => {
+                failure.validate(*reason)
+            }
+            WorkerResponseOperation::CommitViewConserved { prepare_digest } => {
+                worker_require(worker_digest(prepare_digest))
+            }
             WorkerResponseOperation::WorkspaceRepair { status } => {
                 status.request.validate()?;
-                worker_require(matches!(status.phase.as_str(),
-                    "requested"|"prepared"|"stopped"|"resumed"|"committed"|"publishing"|"published"|"refused"))
+                worker_require(matches!(
+                    status.phase.as_str(),
+                    "requested"
+                        | "prepared"
+                        | "stopped"
+                        | "resumed"
+                        | "committed"
+                        | "publishing"
+                        | "published"
+                        | "refused"
+                ))
             }
 
             WorkerResponseOperation::Prepared { prepared } => {
@@ -4518,10 +4891,15 @@ impl WorkerResponse {
                 validate_permissions(parent, parent.source == "provider_turn")
                     .map_err(|_| WorkerRefusal::PermissionsChanged)
             }
-            WorkerResponseOperation::ParentSourceProof { permission_digest, source_error } => {
-                worker_require(worker_digest(permission_digest)
-                    && source_error.as_ref().is_none_or(|code| !code.is_empty() && code.len() <= 1024))
-            }
+            WorkerResponseOperation::ParentSourceProof {
+                permission_digest,
+                source_error,
+            } => worker_require(
+                worker_digest(permission_digest)
+                    && source_error
+                        .as_ref()
+                        .is_none_or(|code| !code.is_empty() && code.len() <= 1024),
+            ),
             WorkerResponseOperation::ReadyToRelease { ready_at } => worker_require(*ready_at >= 0),
             WorkerResponseOperation::ResultSlotReserved { slot, slot_id } => {
                 slot.validate()?;
@@ -4569,16 +4947,16 @@ impl WorkerResponse {
                 result.validate()?;
                 worker_require(result.identity.command == self.command)
             }
-            WorkerResponseOperation::WorkspaceRejected { reason, failure } => failure.validate(*reason),
-            WorkerResponseOperation::StartRejected { reason, cause } => {
-                worker_require(*reason == WorkerRefusal::ResourceLimit
-                    || *cause == WorkerStartCapacityCause::Unknown)
+            WorkerResponseOperation::WorkspaceRejected { reason, failure } => {
+                failure.validate(*reason)
             }
+            WorkerResponseOperation::StartRejected { reason, cause } => worker_require(
+                *reason == WorkerRefusal::ResourceLimit
+                    || *cause == WorkerStartCapacityCause::Unknown,
+            ),
             WorkerResponseOperation::Released {}
             | WorkerResponseOperation::Rejected { .. }
-            | WorkerResponseOperation::StartFenced {} => {
-                Ok(())
-            }
+            | WorkerResponseOperation::StartFenced {} => Ok(()),
         }
     }
 }
@@ -5314,14 +5692,22 @@ pub struct ThreadResult {
 #[serde(tag = "type")]
 #[allow(clippy::large_enum_variant)]
 pub enum WrapperToDaemon {
-    AgentTracking { request: crate::agent_tracking::AgentTrackingRequest },
+    AgentTracking {
+        request: crate::agent_tracking::AgentTrackingRequest,
+    },
     WorkspaceRepairResult {
         task_id: String,
         status: WorkspaceRepairStatusV1,
     },
-    Specialists { request: crate::specialists::SpecialistRequest },
-    MobileAdministration { request:MobileAdministrationRequest },
-    MobileOperation { request:MobileOperationRequest },
+    Specialists {
+        request: crate::specialists::SpecialistRequest,
+    },
+    MobileAdministration {
+        request: MobileAdministrationRequest,
+    },
+    MobileOperation {
+        request: MobileOperationRequest,
+    },
     /// Authentification worker distincte du rôle Service et du Register agent.
     WorkerHello {
         hello: WorkerHello,
@@ -5333,8 +5719,12 @@ pub enum WrapperToDaemon {
     WorkerResponse {
         response: WorkerResponse,
     },
-    ProviderCatalogueUpdate { update: crate::provider_catalogue::WorkerCatalogueUpdate },
-    OriginProofResponse { response:OriginProofResponse },
+    ProviderCatalogueUpdate {
+        update: crate::provider_catalogue::WorkerCatalogueUpdate,
+    },
+    OriginProofResponse {
+        response: OriginProofResponse,
+    },
     /// Verdicts groupés, lecture seule et liés à l'époque négociée du worker.
     CandidateProbeResult {
         result: CandidateProbeResult,
@@ -5360,7 +5750,9 @@ pub enum WrapperToDaemon {
         state: ChildRequestClosedState,
     },
     /// Délégation native : le propriétaire est toujours déduit de la connexion.
-    UserInput { request: serde_json::Value },
+    UserInput {
+        request: serde_json::Value,
+    },
     NativeDelegation {
         request: NativeDelegationRequest,
     },
@@ -5922,8 +6314,8 @@ pub enum WrapperToDaemon {
         outcome: RuntimeSelectionOutcome,
     },
     RuntimeCatalogueReported {
-        token:String,
-        outcome:RuntimeCatalogueOutcome,
+        token: String,
+        outcome: RuntimeCatalogueOutcome,
     },
     /// Rapporter le modèle et le niveau d'effort courants d'un agent.
     ///
@@ -6371,14 +6763,24 @@ pub struct ResolvedAgentDefinition {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum DaemonToWrapper {
-    AgentTrackingResult { result: serde_json::Value },
-    ProviderCatalogueRefresh { worker: WorkerIdentity, connection_epoch: String, refresh_id: String },
+    AgentTrackingResult {
+        result: serde_json::Value,
+    },
+    ProviderCatalogueRefresh {
+        worker: WorkerIdentity,
+        connection_epoch: String,
+        refresh_id: String,
+    },
     WorkspaceRepairControl {
         task_id: String,
         status: WorkspaceRepairStatusV1,
     },
-    MobileAdministrationResult { result:MobileAdministrationResult },
-    MobileOperationResult { result:serde_json::Value },
+    MobileAdministrationResult {
+        result: MobileAdministrationResult,
+    },
+    MobileOperationResult {
+        result: serde_json::Value,
+    },
     WorkerAccepted {
         accepted: WorkerAccepted,
     },
@@ -6400,7 +6802,9 @@ pub enum DaemonToWrapper {
     WorkerRequest {
         request: WorkerRequest,
     },
-    OriginProofRequest { request:OriginProofRequest },
+    OriginProofRequest {
+        request: OriginProofRequest,
+    },
     WakeResult {
         result: WakeResult,
     },
@@ -6432,7 +6836,9 @@ pub enum DaemonToWrapper {
         observation_id: String,
         accepted: bool,
     },
-    UserInputResult { result: serde_json::Value },
+    UserInputResult {
+        result: serde_json::Value,
+    },
     NativeDelegationResult {
         result: serde_json::Value,
     },
@@ -6706,7 +7112,9 @@ pub enum DaemonToWrapper {
         token: String,
         selection: RuntimeSelection,
     },
-    ReadRuntimeCatalogue { token:String },
+    ReadRuntimeCatalogue {
+        token: String,
+    },
     RuntimeSelectionResult {
         outcome: RuntimeSelectionOutcome,
     },
@@ -6868,7 +7276,9 @@ pub enum DaemonToWrapper {
     },
     /// Recherche d'une preuve déjà persistée. Ne donne jamais l'ordre
     /// d'injecter, ni celui de transformer Seen en Acked.
-    SentinelStatus { report: serde_json::Value },
+    SentinelStatus {
+        report: serde_json::Value,
+    },
     DeliveryReceiptQuery {
         delivery_id: String,
         recipient_instance_id: String,
@@ -7266,11 +7676,15 @@ pub enum RuntimeSelectionRefusal {
     AttachRequired,
     Busy,
 }
-#[derive(Debug,Clone,PartialEq,Eq,Serialize,Deserialize)]
-#[serde(tag="status",rename_all="snake_case",deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "status", rename_all = "snake_case", deny_unknown_fields)]
 pub enum RuntimeCatalogueOutcome {
-    Observed { models:Vec<crate::provider_catalogue::CatalogueModel> },
-    Refused { reason:RuntimeSelectionRefusal },
+    Observed {
+        models: Vec<crate::provider_catalogue::CatalogueModel>,
+    },
+    Refused {
+        reason: RuntimeSelectionRefusal,
+    },
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "status", rename_all = "snake_case", deny_unknown_fields)]
@@ -7985,36 +8399,63 @@ mod routing168_protocol_tests {
     #[test]
     fn routing172_result_slot_deadline_wire_preserves_legacy() {
         let command = WorkerCommandIdentity {
-            command_id: "command".into(), task_id: "task".into(), instance_id: "instance".into(), generation: 1,
+            command_id: "command".into(),
+            task_id: "task".into(),
+            instance_id: "instance".into(),
+            generation: 1,
         };
         let slot = WorkerResultSlot {
             identity: WorkerResultIdentity {
-                command: command.clone(), mission_id: "mission".into(), round: 1,
-                execution_id: "execution".into(), execution_generation: 1,
+                command: command.clone(),
+                mission_id: "mission".into(),
+                round: 1,
+                execution_id: "execution".into(),
+                execution_generation: 1,
             },
             admission_digest: "c".repeat(64),
         };
         let legacy = WorkerRequest {
-            version: REMOTE_WORKER_VERSION, correlation_id: "correlation".into(),
+            version: REMOTE_WORKER_VERSION,
+            correlation_id: "correlation".into(),
             connection_epoch: "epoch".into(),
-            worker: WorkerIdentity { machine_id: "cartae".into(), worker_id: "worker-cartae".into(), provisioning_revision: 1 },
-            command, request: WorkerRequestOperation::ReserveResultSlot { slot: slot.clone() },
+            worker: WorkerIdentity {
+                machine_id: "cartae".into(),
+                worker_id: "worker-cartae".into(),
+                provisioning_revision: 1,
+            },
+            command,
+            request: WorkerRequestOperation::ReserveResultSlot { slot: slot.clone() },
         };
         legacy.validate().unwrap();
         let old_wire = serde_json::to_value(&legacy).unwrap();
         assert_eq!(old_wire["request"]["operation"], "reserve_result_slot");
         assert!(old_wire["request"].get("expires_at_ms").is_none());
         let mut bounded = legacy.clone();
-        bounded.request = WorkerRequestOperation::ReserveResultSlotUntil { slot: slot.clone(), expires_at_ms: 1234 };
+        bounded.request = WorkerRequestOperation::ReserveResultSlotUntil {
+            slot: slot.clone(),
+            expires_at_ms: 1234,
+        };
         bounded.validate().unwrap();
         let wire = serde_json::to_value(&bounded).unwrap();
         assert_eq!(wire["request"]["operation"], "reserve_result_slot_until");
         assert_eq!(wire["request"]["expires_at_ms"], 1234);
-        assert_eq!(serde_json::from_value::<WorkerRequest>(wire).unwrap(), bounded);
-        bounded.request = WorkerRequestOperation::ReserveResultSlotUntil { slot, expires_at_ms: 0 };
+        assert_eq!(
+            serde_json::from_value::<WorkerRequest>(wire).unwrap(),
+            bounded
+        );
+        bounded.request = WorkerRequestOperation::ReserveResultSlotUntil {
+            slot,
+            expires_at_ms: 0,
+        };
         assert_eq!(bounded.validate(), Err(WorkerRefusal::InvalidEnvelope));
-        assert_eq!(serde_json::to_value(WorkerCapability::ResultSlotDeadlineV1).unwrap(), "result_slot_deadline_v1");
-        assert_eq!(serde_json::to_value(WorkerRefusal::ResultSlotExpired).unwrap(), "result_slot_expired");
+        assert_eq!(
+            serde_json::to_value(WorkerCapability::ResultSlotDeadlineV1).unwrap(),
+            "result_slot_deadline_v1"
+        );
+        assert_eq!(
+            serde_json::to_value(WorkerRefusal::ResultSlotExpired).unwrap(),
+            "result_slot_expired"
+        );
         assert_eq!(serde_json::to_value(&legacy).unwrap(), old_wire);
     }
 
@@ -8024,7 +8465,9 @@ mod routing168_protocol_tests {
         assert!(is_routing_candidate_id("c128"));
         assert!(!is_routing_candidate_id("c01"));
         assert!(!is_routing_candidate_id("c129"));
-        let probe = CandidateProbeV2 { requires_workspace_write:false, required_tools:Vec::new(),
+        let probe = CandidateProbeV2 {
+            requires_workspace_write: false,
+            required_tools: Vec::new(),
             version: WORKER_CANDIDATE_PROBE_V2_VERSION,
             correlation_id: "r".into(),
             connection_epoch: "e".into(),
@@ -8049,7 +8492,8 @@ mod routing168_protocol_tests {
                 provider_policy: serde_json::json!({}),
             },
             candidates: (1..=128)
-                .map(|n| CandidateProbeV2Candidate { service_tier: None,
+                .map(|n| CandidateProbeV2Candidate {
+                    service_tier: None,
                     candidate_id: format!("c{n:03}"),
                     project_id: "p".into(),
                     origin_host: "o".into(),
@@ -8071,20 +8515,35 @@ mod routing168_protocol_tests {
                 .collect(),
         };
         assert!(probe.validate_shape().is_ok());
-        let old=serde_json::to_value(&probe).unwrap();
+        let old = serde_json::to_value(&probe).unwrap();
         assert!(old.get("required_tools").is_none());
         assert!(old.get("requires_workspace_write").is_none());
-        assert_eq!(serde_json::from_value::<CandidateProbeV2>(old).unwrap(),probe);
-        let mut tools=probe.clone();tools.required_tools=vec![WorkloadTool::Docker];
+        assert_eq!(
+            serde_json::from_value::<CandidateProbeV2>(old).unwrap(),
+            probe
+        );
+        let mut tools = probe.clone();
+        tools.required_tools = vec![WorkloadTool::Docker];
         assert!(tools.validate_shape().is_ok());
-        assert_eq!(serde_json::from_value::<CandidateProbeV2>(serde_json::to_value(&tools).unwrap()).unwrap(),tools);
-        tools.requires_workspace_write=true;
-        assert_eq!(serde_json::from_value::<CandidateProbeV2>(serde_json::to_value(&tools).unwrap()).unwrap(),tools);
-        let mut invalid_write=probe.clone();invalid_write.requires_workspace_write=true;
+        assert_eq!(
+            serde_json::from_value::<CandidateProbeV2>(serde_json::to_value(&tools).unwrap())
+                .unwrap(),
+            tools
+        );
+        tools.requires_workspace_write = true;
+        assert_eq!(
+            serde_json::from_value::<CandidateProbeV2>(serde_json::to_value(&tools).unwrap())
+                .unwrap(),
+            tools
+        );
+        let mut invalid_write = probe.clone();
+        invalid_write.requires_workspace_write = true;
         assert!(invalid_write.validate_shape().is_err());
         tools.required_tools.push(WorkloadTool::Docker);
         assert!(tools.validate_shape().is_err());
-        assert!(serde_json::from_value::<WorkloadTool>(serde_json::json!("arbitrary_command")).is_err());
+        assert!(
+            serde_json::from_value::<WorkloadTool>(serde_json::json!("arbitrary_command")).is_err()
+        );
         let mut too_many = probe.clone();
         too_many.candidates.push(probe.candidates[0].clone());
         assert_eq!(
@@ -8110,175 +8569,333 @@ mod workspace_repair185_tests {
     use super::*;
     #[test]
     fn spec185_workspace_repair_contract_is_closed_and_paths_bounded() {
-        let valid=WorkspaceRepairRequestV1 {request_id:"repair185".into(),
-            target_cwd:"/mnt/storage/project/worktrees/task185".into(),expected_head:"1".repeat(40)};
+        let valid = WorkspaceRepairRequestV1 {
+            request_id: "repair185".into(),
+            target_cwd: "/mnt/storage/project/worktrees/task185".into(),
+            expected_head: "1".repeat(40),
+        };
         valid.validate().unwrap();
-        for path in ["relative","/project/../other","/project/\nfile",""] {
-            let mut request=valid.clone();request.target_cwd=path.into();
+        for path in ["relative", "/project/../other", "/project/\nfile", ""] {
+            let mut request = valid.clone();
+            request.target_cwd = path.into();
             assert!(request.validate().is_err());
         }
-        let native=NativeDelegationRequest::RepairWorkspace {task_id:"task185".into(),repair:valid};
-        let mut value=serde_json::to_value(native).unwrap();
-        value["force"]=serde_json::json!(true);
+        let native = NativeDelegationRequest::RepairWorkspace {
+            task_id: "task185".into(),
+            repair: valid,
+        };
+        let mut value = serde_json::to_value(native).unwrap();
+        value["force"] = serde_json::json!(true);
         assert!(serde_json::from_value::<NativeDelegationRequest>(value).is_err());
     }
     #[test]
     fn spec185_repair_wire_accepts_commit_and_rejects_unknown_phase() {
-        let request=WorkspaceRepairRequestV1 {request_id:"repair185".into(),
-            target_cwd:"/srv/project185/task".into(),expected_head:"1".repeat(40)};
-        let mut response=WorkerResponse {version:REMOTE_WORKER_VERSION,correlation_id:"reply185".into(),
-            connection_epoch:"epoch185".into(),worker:WorkerIdentity {machine_id:"machine185".into(),
-                worker_id:"worker185".into(),provisioning_revision:1},
-            command:WorkerCommandIdentity {command_id:"command185".into(),task_id:"task185".into(),
-                instance_id:"instance185".into(),generation:1},
-            response:WorkerResponseOperation::WorkspaceRepair {status:WorkspaceRepairStatusV1 {
-                request,phase:"committed".into(),prepared:None,proof:None,code:None}}};
+        let request = WorkspaceRepairRequestV1 {
+            request_id: "repair185".into(),
+            target_cwd: "/srv/project185/task".into(),
+            expected_head: "1".repeat(40),
+        };
+        let mut response = WorkerResponse {
+            version: REMOTE_WORKER_VERSION,
+            correlation_id: "reply185".into(),
+            connection_epoch: "epoch185".into(),
+            worker: WorkerIdentity {
+                machine_id: "machine185".into(),
+                worker_id: "worker185".into(),
+                provisioning_revision: 1,
+            },
+            command: WorkerCommandIdentity {
+                command_id: "command185".into(),
+                task_id: "task185".into(),
+                instance_id: "instance185".into(),
+                generation: 1,
+            },
+            response: WorkerResponseOperation::WorkspaceRepair {
+                status: WorkspaceRepairStatusV1 {
+                    request,
+                    phase: "committed".into(),
+                    prepared: None,
+                    proof: None,
+                    code: None,
+                },
+            },
+        };
         response.validate().unwrap();
-        if let WorkerResponseOperation::WorkspaceRepair {status}=&mut response.response {
-            status.phase="unverified185".into();
+        if let WorkerResponseOperation::WorkspaceRepair { status } = &mut response.response {
+            status.phase = "unverified185".into();
         }
         assert!(response.validate().is_err());
     }
-
 }
-
 
 #[cfg(test)]
 mod commit_view_reader221_tests {
     use super::*;
     #[test]
     fn spec221_c19_origin_root_is_a_narrow_view_only_envelope_not_a_parent_permission() {
-        let request=WorkerPrepare { service_tier: None,
-            machine_id:"cartae".into(),project_id:"project".into(),provisioning_revision:1,mapping_revision:1,
-            origin_host:"origin".into(),origin_cwd:"/source".into(),source_root:"/source".into(),
-            remote_root:"/mirror".into(),source_root_identity:"git:source".into(),relative_cwd:".".into(),
-            base_commit:Some("a".repeat(40)),agent_type:"codex".into(),model:"fixture".into(),effort:None,
-            posture:Some(SpawnPosture::Discovery),workspace:Some(WorkspaceRequest::CommitView {}),
-            parent:ProviderPermissions {version:1,source:"provider_turn".into(),run_id:"run".into(),
-                provider_session_id:"session".into(),provider_instance_id:"instance".into(),revision:1,
-                cwd:"/source/.worktrees/parent".into(),driver:"codex_app_server".into(),
-                runtime_mode:"full-access".into(),interaction_mode:"default".into(),
-                provider_policy:serde_json::json!({"kind":"codex","approval_policy":"never",
-                    "approvals_reviewer":"user","sandbox_policy":{"type":"dangerFullAccess"}})},
+        let request = WorkerPrepare {
+            service_tier: None,
+            machine_id: "cartae".into(),
+            project_id: "project".into(),
+            provisioning_revision: 1,
+            mapping_revision: 1,
+            origin_host: "origin".into(),
+            origin_cwd: "/source".into(),
+            source_root: "/source".into(),
+            remote_root: "/mirror".into(),
+            source_root_identity: "git:source".into(),
+            relative_cwd: ".".into(),
+            base_commit: Some("a".repeat(40)),
+            agent_type: "codex".into(),
+            model: "fixture".into(),
+            effort: None,
+            posture: Some(SpawnPosture::Discovery),
+            workspace: Some(WorkspaceRequest::CommitView {}),
+            parent: ProviderPermissions {
+                version: 1,
+                source: "provider_turn".into(),
+                run_id: "run".into(),
+                provider_session_id: "session".into(),
+                provider_instance_id: "instance".into(),
+                revision: 1,
+                cwd: "/source/.worktrees/parent".into(),
+                driver: "codex_app_server".into(),
+                runtime_mode: "full-access".into(),
+                interaction_mode: "default".into(),
+                provider_policy: serde_json::json!({"kind":"codex","approval_policy":"never",
+                    "approvals_reviewer":"user","sandbox_policy":{"type":"dangerFullAccess"}}),
+            },
         };
         request.validate().unwrap();
-        let serialized=serde_json::to_vec(&request).unwrap();
-        let decoded:WorkerPrepare=serde_json::from_slice(&serialized).unwrap();
+        let serialized = serde_json::to_vec(&request).unwrap();
+        let decoded: WorkerPrepare = serde_json::from_slice(&serialized).unwrap();
         decoded.validate().unwrap();
-        for workspace in [None,Some(WorkspaceRequest::Shared {}),
-            Some(WorkspaceRequest::Worktree {base_ref:None,branch:None})] {
-            let mut wrong=request.clone();wrong.workspace=workspace;
-            assert_eq!(wrong.validate(),Err(WorkerRefusal::InvalidEnvelope));
+        for workspace in [
+            None,
+            Some(WorkspaceRequest::Shared {}),
+            Some(WorkspaceRequest::Worktree {
+                base_ref: None,
+                branch: None,
+            }),
+        ] {
+            let mut wrong = request.clone();
+            wrong.workspace = workspace;
+            assert_eq!(wrong.validate(), Err(WorkerRefusal::InvalidEnvelope));
         }
-        let mut wrong=request.clone();wrong.posture=Some(SpawnPosture::Development);
-        assert_eq!(wrong.validate(),Err(WorkerRefusal::InvalidEnvelope));
-        wrong=request.clone();wrong.relative_cwd=".worktrees/other".into();
-        assert_eq!(wrong.validate(),Err(WorkerRefusal::InvalidEnvelope));
-        wrong=request.clone();wrong.base_commit=None;
-        assert_eq!(wrong.validate(),Err(WorkerRefusal::InvalidEnvelope));
-        wrong=request.clone();wrong.origin_cwd="/source/other".into();
-        assert_eq!(wrong.validate(),Err(WorkerRefusal::InvalidEnvelope));
-        wrong=request.clone();wrong.parent.cwd="/source-elsewhere/parent".into();
-        assert_eq!(wrong.validate(),Err(WorkerRefusal::InvalidEnvelope));
-        wrong=request.clone();wrong.parent.cwd="/source/.worktrees/../parent".into();
-        assert_eq!(wrong.validate(),Err(WorkerRefusal::InvalidEnvelope));
-        assert_eq!(serde_json::to_vec(&request).unwrap(),serialized);
+        let mut wrong = request.clone();
+        wrong.posture = Some(SpawnPosture::Development);
+        assert_eq!(wrong.validate(), Err(WorkerRefusal::InvalidEnvelope));
+        wrong = request.clone();
+        wrong.relative_cwd = ".worktrees/other".into();
+        assert_eq!(wrong.validate(), Err(WorkerRefusal::InvalidEnvelope));
+        wrong = request.clone();
+        wrong.base_commit = None;
+        assert_eq!(wrong.validate(), Err(WorkerRefusal::InvalidEnvelope));
+        wrong = request.clone();
+        wrong.origin_cwd = "/source/other".into();
+        assert_eq!(wrong.validate(), Err(WorkerRefusal::InvalidEnvelope));
+        wrong = request.clone();
+        wrong.parent.cwd = "/source-elsewhere/parent".into();
+        assert_eq!(wrong.validate(), Err(WorkerRefusal::InvalidEnvelope));
+        wrong = request.clone();
+        wrong.parent.cwd = "/source/.worktrees/../parent".into();
+        assert_eq!(wrong.validate(), Err(WorkerRefusal::InvalidEnvelope));
+        assert_eq!(serde_json::to_vec(&request).unwrap(), serialized);
     }
 
     #[test]
     fn spec221_c19_conservation_wire_is_closed_and_bound_to_a_preparation_identity() {
-        let request=WorkerRequest {
-            version:REMOTE_WORKER_VERSION,correlation_id:"c19-close".into(),connection_epoch:"c19-epoch".into(),
-            worker:WorkerIdentity {machine_id:"local".into(),worker_id:"worker221".into(),provisioning_revision:1},
-            command:WorkerCommandIdentity {command_id:"command221".into(),task_id:"task221".into(),instance_id:String::new(),generation:0},
-            request:WorkerRequestOperation::ConserveCommitView {prepare_digest:"a".repeat(64)},
+        let request = WorkerRequest {
+            version: REMOTE_WORKER_VERSION,
+            correlation_id: "c19-close".into(),
+            connection_epoch: "c19-epoch".into(),
+            worker: WorkerIdentity {
+                machine_id: "local".into(),
+                worker_id: "worker221".into(),
+                provisioning_revision: 1,
+            },
+            command: WorkerCommandIdentity {
+                command_id: "command221".into(),
+                task_id: "task221".into(),
+                instance_id: String::new(),
+                generation: 0,
+            },
+            request: WorkerRequestOperation::ConserveCommitView {
+                prepare_digest: "a".repeat(64),
+            },
         };
         request.validate().unwrap();
-        let value=serde_json::to_value(&request).unwrap();
-        assert_eq!(value["request"],serde_json::json!({"operation":"conserve_commit_view","prepare_digest":"a".repeat(64)}));
-        let mut extra=value.clone();extra["request"]["path"]=serde_json::json!("/untrusted");
+        let value = serde_json::to_value(&request).unwrap();
+        assert_eq!(
+            value["request"],
+            serde_json::json!({"operation":"conserve_commit_view","prepare_digest":"a".repeat(64)})
+        );
+        let mut extra = value.clone();
+        extra["request"]["path"] = serde_json::json!("/untrusted");
         assert!(serde_json::from_value::<WorkerRequest>(extra).is_err());
-        let mut wrong=request.clone();wrong.command.instance_id="active-instance".into();wrong.command.generation=1;
-        assert_eq!(wrong.validate(),Err(WorkerRefusal::InvalidEnvelope));
-        wrong=request.clone();wrong.request=WorkerRequestOperation::ConserveCommitView {prepare_digest:"not-a-digest".into()};
-        assert_eq!(wrong.validate(),Err(WorkerRefusal::InvalidEnvelope));
-        let mut response=WorkerResponse {version:request.version,correlation_id:request.correlation_id,
-            connection_epoch:request.connection_epoch,worker:request.worker,command:request.command,
-            response:WorkerResponseOperation::CommitViewConserved {prepare_digest:"a".repeat(64)}};
+        let mut wrong = request.clone();
+        wrong.command.instance_id = "active-instance".into();
+        wrong.command.generation = 1;
+        assert_eq!(wrong.validate(), Err(WorkerRefusal::InvalidEnvelope));
+        wrong = request.clone();
+        wrong.request = WorkerRequestOperation::ConserveCommitView {
+            prepare_digest: "not-a-digest".into(),
+        };
+        assert_eq!(wrong.validate(), Err(WorkerRefusal::InvalidEnvelope));
+        let mut response = WorkerResponse {
+            version: request.version,
+            correlation_id: request.correlation_id,
+            connection_epoch: request.connection_epoch,
+            worker: request.worker,
+            command: request.command,
+            response: WorkerResponseOperation::CommitViewConserved {
+                prepare_digest: "a".repeat(64),
+            },
+        };
         response.validate().unwrap();
-        response.response=WorkerResponseOperation::CommitViewConserved {prepare_digest:String::new()};
-        assert_eq!(response.validate(),Err(WorkerRefusal::InvalidEnvelope));
-        assert_eq!(serde_json::to_value(WorkerCapability::WorkspaceViewV1).unwrap(),"workspace_view_v1");
+        response.response = WorkerResponseOperation::CommitViewConserved {
+            prepare_digest: String::new(),
+        };
+        assert_eq!(response.validate(), Err(WorkerRefusal::InvalidEnvelope));
+        assert_eq!(
+            serde_json::to_value(WorkerCapability::WorkspaceViewV1).unwrap(),
+            "workspace_view_v1"
+        );
     }
 
     #[test]
     fn spec221_c19_file_wire_binds_execution_and_rejects_paths_and_extra_authority() {
-        let value=serde_json::json!({"version":REMOTE_WORKER_VERSION,"correlation_id":"view-file-read","connection_epoch":"view-epoch",
+        let value = serde_json::json!({"version":REMOTE_WORKER_VERSION,"correlation_id":"view-file-read","connection_epoch":"view-epoch",
             "worker":{"machine_id":"cartae","worker_id":"worker-view","provisioning_revision":1},
             "command":{"command_id":"view-command","task_id":"view-task","instance_id":"view-instance","generation":1},
             "request":{"operation":"read_commit_view_file","path":"sub/file.js","execution":{
                 "command":{"command_id":"view-command","task_id":"view-task","instance_id":"view-instance","generation":1},
                 "mission_id":"view-mission","round":1,"execution_id":"view-execution","execution_generation":1}}});
-        let request:WorkerRequest=serde_json::from_value(value.clone()).unwrap();request.validate().unwrap();
-        assert!(request.request.requires_commit_view_reader() && !request.request.requires_commit_view_creation());
-        for path in ["","/etc/passwd","../file","sub/../file","./file","sub//file","sub\\file","sub/","sub/\nfile"] {
-            let mut wrong=value.clone();wrong["request"]["path"]=serde_json::json!(path);
-            assert!(serde_json::from_value::<WorkerRequest>(wrong).unwrap().validate().is_err(),"{path:?}");
+        let request: WorkerRequest = serde_json::from_value(value.clone()).unwrap();
+        request.validate().unwrap();
+        assert!(
+            request.request.requires_commit_view_reader()
+                && !request.request.requires_commit_view_creation()
+        );
+        for path in [
+            "",
+            "/etc/passwd",
+            "../file",
+            "sub/../file",
+            "./file",
+            "sub//file",
+            "sub\\file",
+            "sub/",
+            "sub/\nfile",
+        ] {
+            let mut wrong = value.clone();
+            wrong["request"]["path"] = serde_json::json!(path);
+            assert!(
+                serde_json::from_value::<WorkerRequest>(wrong)
+                    .unwrap()
+                    .validate()
+                    .is_err(),
+                "{path:?}"
+            );
         }
-        let mut wrong=value.clone();wrong["request"]["execution"]["command"]["generation"]=serde_json::json!(2);
-        assert!(serde_json::from_value::<WorkerRequest>(wrong).unwrap().validate().is_err());
-        wrong=value.clone();wrong["request"]["proof_root"]=serde_json::json!("/PRIVATE");
+        let mut wrong = value.clone();
+        wrong["request"]["execution"]["command"]["generation"] = serde_json::json!(2);
+        assert!(
+            serde_json::from_value::<WorkerRequest>(wrong)
+                .unwrap()
+                .validate()
+                .is_err()
+        );
+        wrong = value.clone();
+        wrong["request"]["proof_root"] = serde_json::json!("/PRIVATE");
         assert!(serde_json::from_value::<WorkerRequest>(wrong).is_err());
-        let WorkerRequestOperation::ReadCommitViewFile{execution,path}=request.request else{unreachable!()};
-        let mut response=WorkerResponse{version:request.version,worker:request.worker,command:request.command,
-            correlation_id:request.correlation_id,connection_epoch:request.connection_epoch,
-            response:WorkerResponseOperation::CommitViewFile{execution,path,available:true,reason:None,failure:None}};
+        let WorkerRequestOperation::ReadCommitViewFile { execution, path } = request.request else {
+            unreachable!()
+        };
+        let mut response = WorkerResponse {
+            version: request.version,
+            worker: request.worker,
+            command: request.command,
+            correlation_id: request.correlation_id,
+            connection_epoch: request.connection_epoch,
+            response: WorkerResponseOperation::CommitViewFile {
+                execution,
+                path,
+                available: true,
+                reason: None,
+                failure: None,
+            },
+        };
         response.validate().unwrap();
-        if let WorkerResponseOperation::CommitViewFile{available,..}=&mut response.response {*available=false;}
-        assert!(response.validate().is_err(),"un refus sans cause ni code n'est pas complet");
-        if let WorkerResponseOperation::CommitViewFile{reason,failure,..}=&mut response.response {
-            *reason=Some(WorkerRefusal::ResourceLimit);*failure=Some(CommitViewFailure::OperationCapacity);
+        if let WorkerResponseOperation::CommitViewFile { available, .. } = &mut response.response {
+            *available = false;
+        }
+        assert!(
+            response.validate().is_err(),
+            "un refus sans cause ni code n'est pas complet"
+        );
+        if let WorkerResponseOperation::CommitViewFile {
+            reason, failure, ..
+        } = &mut response.response
+        {
+            *reason = Some(WorkerRefusal::ResourceLimit);
+            *failure = Some(CommitViewFailure::OperationCapacity);
         }
         response.validate().unwrap();
     }
 
     #[test]
     fn spec221_c19_creation_refusal_is_closed_and_requires_preparation_identity() {
-        let value=serde_json::json!({"version":REMOTE_WORKER_VERSION,"correlation_id":"reply221",
+        let value = serde_json::json!({"version":REMOTE_WORKER_VERSION,"correlation_id":"reply221",
             "connection_epoch":"epoch221","worker":{"machine_id":"cartae","worker_id":"worker221","provisioning_revision":1},
             "command":{"command_id":"task221","task_id":"task221","instance_id":"","generation":0},
             "response":{"operation":"commit_view_rejected","reason":"workspace_prepare_failed","failure":"destination_volume_mismatch"}});
-        let response:WorkerResponse=serde_json::from_value(value.clone()).unwrap();response.validate().unwrap();
-        assert_eq!(serde_json::to_value(&response).unwrap(),value);
-        for field in ["message","stderr","path"] {
-            let mut extra=value.clone();extra["response"][field]=serde_json::json!("PRIVATE");
+        let response: WorkerResponse = serde_json::from_value(value.clone()).unwrap();
+        response.validate().unwrap();
+        assert_eq!(serde_json::to_value(&response).unwrap(), value);
+        for field in ["message", "stderr", "path"] {
+            let mut extra = value.clone();
+            extra["response"][field] = serde_json::json!("PRIVATE");
             assert!(serde_json::from_value::<WorkerResponse>(extra).is_err());
         }
-        let mut wrong=response.clone();wrong.command.instance_id="active".into();wrong.command.generation=1;
-        assert_eq!(wrong.validate(),Err(WorkerRefusal::InvalidEnvelope));
-        wrong=response.clone();wrong.response=WorkerResponseOperation::CommitViewRejected{
-            reason:WorkerRefusal::PermissionsChanged,failure:CommitViewFailure::DiskFull};
-        assert_eq!(wrong.validate(),Err(WorkerRefusal::InvalidEnvelope));
-        wrong.response=WorkerResponseOperation::CommitViewRejected{
-            reason:WorkerRefusal::PermissionsChanged,failure:CommitViewFailure::Unknown};
+        let mut wrong = response.clone();
+        wrong.command.instance_id = "active".into();
+        wrong.command.generation = 1;
+        assert_eq!(wrong.validate(), Err(WorkerRefusal::InvalidEnvelope));
+        wrong = response.clone();
+        wrong.response = WorkerResponseOperation::CommitViewRejected {
+            reason: WorkerRefusal::PermissionsChanged,
+            failure: CommitViewFailure::DiskFull,
+        };
+        assert_eq!(wrong.validate(), Err(WorkerRefusal::InvalidEnvelope));
+        wrong.response = WorkerResponseOperation::CommitViewRejected {
+            reason: WorkerRefusal::PermissionsChanged,
+            failure: CommitViewFailure::Unknown,
+        };
         wrong.validate().unwrap();
-        assert_eq!(serde_json::to_value(WorkerCapability::WorkspaceViewCreateV1).unwrap(),"workspace_view_create_v1");
+        assert_eq!(
+            serde_json::to_value(WorkerCapability::WorkspaceViewCreateV1).unwrap(),
+            "workspace_view_create_v1"
+        );
     }
 
     #[test]
     fn spec221_c19_reader_preserves_closed_workspace_shape_without_advertising_a_launch() {
-        let value=serde_json::json!({"strategy":"commit_view"});
-        let workspace=serde_json::from_value::<WorkspaceRequest>(value.clone()).unwrap();
-        assert_eq!(serde_json::to_value(&workspace).unwrap(),value);
-        for extra in ["branch","base_ref","private"] {
-            let mut invalid=value.clone();invalid[extra]=serde_json::json!("untrusted");
+        let value = serde_json::json!({"strategy":"commit_view"});
+        let workspace = serde_json::from_value::<WorkspaceRequest>(value.clone()).unwrap();
+        assert_eq!(serde_json::to_value(&workspace).unwrap(), value);
+        for extra in ["branch", "base_ref", "private"] {
+            let mut invalid = value.clone();
+            invalid[extra] = serde_json::json!("untrusted");
             assert!(serde_json::from_value::<WorkspaceRequest>(invalid).is_err());
         }
         // Aucun champ optionnel n'a été ajouté aux formes historiques.
-        for value in [serde_json::json!({"strategy":"shared"}),
-            serde_json::json!({"strategy":"worktree","base_ref":"a".repeat(40)})] {
-            let decoded=serde_json::from_value::<WorkspaceRequest>(value.clone()).unwrap();
-            assert_eq!(serde_json::to_value(decoded).unwrap(),value);
+        for value in [
+            serde_json::json!({"strategy":"shared"}),
+            serde_json::json!({"strategy":"worktree","base_ref":"a".repeat(40)}),
+        ] {
+            let decoded = serde_json::from_value::<WorkspaceRequest>(value.clone()).unwrap();
+            assert_eq!(serde_json::to_value(decoded).unwrap(), value);
         }
     }
 }
@@ -8289,15 +8906,25 @@ mod quota_authorization246_tests {
     use serde_json::json;
     #[test]
     fn spec246_accord_quota_canonique_rejouable_et_absence_compatible() {
-        for operation in ["delegate","auto_delegate_v2"] {
-            let mut value=json!({"operation":operation,"request_id":"quota246","agent_type":"a","model":"m","task":"lecture","cwd":"/source"});
-            if operation=="auto_delegate_v2" {value.as_object_mut().unwrap().remove("agent_type");}
-            let baseline:NativeDelegationRequest=serde_json::from_value(value.clone()).unwrap();
-            assert!(serde_json::to_value(&baseline).unwrap().get("quota_fallback_authorized").is_none());
-            value["quota_fallback_authorized"]=json!(true);
-            let explicit:NativeDelegationRequest=serde_json::from_value(value.clone()).unwrap();
-            assert_eq!(serde_json::to_value(explicit).unwrap()["quota_fallback_authorized"],true);
-            value["quota_fallback_authorized"]=serde_json::Value::Null;
+        for operation in ["delegate", "auto_delegate_v2"] {
+            let mut value = json!({"operation":operation,"request_id":"quota246","agent_type":"a","model":"m","task":"lecture","cwd":"/source"});
+            if operation == "auto_delegate_v2" {
+                value.as_object_mut().unwrap().remove("agent_type");
+            }
+            let baseline: NativeDelegationRequest = serde_json::from_value(value.clone()).unwrap();
+            assert!(
+                serde_json::to_value(&baseline)
+                    .unwrap()
+                    .get("quota_fallback_authorized")
+                    .is_none()
+            );
+            value["quota_fallback_authorized"] = json!(true);
+            let explicit: NativeDelegationRequest = serde_json::from_value(value.clone()).unwrap();
+            assert_eq!(
+                serde_json::to_value(explicit).unwrap()["quota_fallback_authorized"],
+                true
+            );
+            value["quota_fallback_authorized"] = serde_json::Value::Null;
             assert!(serde_json::from_value::<NativeDelegationRequest>(value).is_err());
         }
     }

@@ -1,6 +1,6 @@
 //! Coordination185 : même tâche et mêmes canons de naissance.
-use bridget_transport::poison::RecoverPoison;
 use super::*;
+use bridget_transport::poison::RecoverPoison;
 use bridget_transport::protocol::{
     WorkspaceRepairActionV1, WorkspaceRepairRequestV1, WorkspaceRepairStatusV1,
 };
@@ -373,7 +373,12 @@ pub(super) fn repair(
         .permission_snapshot
         .as_ref()
         .ok_or("permission_attestation_unavailable")?;
-    remote_parent_proof(state, &saved.owner, &snapshot.parent, saved.admitted_parent()?.map(|_| &saved))?;
+    remote_parent_proof(
+        state,
+        &saved.owner,
+        &snapshot.parent,
+        saved.admitted_parent()?.map(|_| &saved),
+    )?;
     let prepared = remote_worker_roundtrip(
         state,
         &worker,
@@ -510,15 +515,16 @@ pub(super) fn repair(
                 .clone()
                 .unwrap_or_else(|| "workspace_repair_resume_unconfirmed".into());
             // Après arrêt, un échec reste fermé et conservé.
-            save_status(
-                &mut state.lock().recover_poison(),
-                task_id,
-                result,
-            )?;
+            save_status(&mut state.lock().recover_poison(), task_id, result)?;
             return Err(code);
         }
     }
-    remote_parent_proof(state, &saved.owner, &snapshot.parent, saved.admitted_parent()?.map(|_| &saved))?;
+    remote_parent_proof(
+        state,
+        &saved.owner,
+        &snapshot.parent,
+        saved.admitted_parent()?.map(|_| &saved),
+    )?;
     {
         let st = state.lock().recover_poison();
         let current = st

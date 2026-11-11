@@ -52,9 +52,9 @@ impl WaitEpoch {
 
 #[path = "delegation_lineage.rs"]
 mod lineage;
-pub(crate) use lineage::{MAX_RETAINED_TASKS, ProjectionMutation};
 #[cfg(test)]
 pub(crate) use lineage::delegation_lineage_tests::task as lineage_test_task;
+pub(crate) use lineage::{MAX_RETAINED_TASKS, ProjectionMutation};
 
 pub(crate) struct DelegationStore {
     conn: Connection,
@@ -1002,9 +1002,9 @@ pub(crate) struct StartAttemptRecord {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct StartLocalRefusal {
-    pub command_id:String,
-    pub issued_at:i64,
-    pub code:String,
+    pub command_id: String,
+    pub issued_at: i64,
+    pub code: String,
 }
 
 /// Plan stable : un rejeu, un restart ou un ACK perdu retrouvent exactement
@@ -1021,7 +1021,7 @@ pub(crate) struct StartRecovery {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub history: Vec<StartAttemptRecord>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub local_refusals:Vec<StartLocalRefusal>,
+    pub local_refusals: Vec<StartLocalRefusal>,
 }
 
 pub(crate) const MAX_START_RECOVERIES: usize = 3;
@@ -1082,8 +1082,8 @@ pub(crate) struct Task {
     #[serde(default)]
     pub remote_prepared: bool,
     /// Liaison C19 durcie avant création distante, aussi sans publication.
-    #[serde(default,skip_serializing_if="Option::is_none")]
-    pub commit_view_prepare:Option<ViewBinding>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub commit_view_prepare: Option<ViewBinding>,
 
     /// Reprise198 après refus de Start ; absente pour toute tâche historique.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1159,17 +1159,25 @@ pub(crate) struct Task {
 }
 
 impl Task {
-    pub(crate) fn admitted_parent(&self) -> Result<Option<&bridget_transport::protocol::ProviderPermissions>, String> {
+    pub(crate) fn admitted_parent(
+        &self,
+    ) -> Result<Option<&bridget_transport::protocol::ProviderPermissions>, String> {
         match self.admission_authority_version {
             None => Ok(None),
             Some(1) => {
-                let snapshot = self.permission_snapshot.as_ref().ok_or("admission_authority_invalid")?;
-                if snapshot.version != 1 || snapshot.source != "provider_turn"
+                let snapshot = self
+                    .permission_snapshot
+                    .as_ref()
+                    .ok_or("admission_authority_invalid")?;
+                if snapshot.version != 1
+                    || snapshot.source != "provider_turn"
                     || snapshot.owner_agent_id != self.owner
                     || (snapshot.owner_instance_id != self.owner_instance
                         && snapshot.owner_instance_id != self.origin_owner_instance)
                     || snapshot.project_cwd != self.cwd
-                { return Err("admission_authority_invalid".into()); }
+                {
+                    return Err("admission_authority_invalid".into());
+                }
                 bridget_transport::protocol::validate_permissions(&snapshot.parent, true)?;
                 Ok(Some(&snapshot.parent))
             }
@@ -1177,15 +1185,22 @@ impl Task {
         }
     }
 
-    pub(crate) fn commit_view_binding(&self)->Option<&ViewBinding> {
+    pub(crate) fn commit_view_binding(&self) -> Option<&ViewBinding> {
         match self.workspace.as_ref() {
-            Some(record) if matches!(record.strategy,WorkspaceStrategy::CommitView)=>{
-                let binding=&record.commit_view.as_ref()?.binding;
-                if self.commit_view_prepare.as_ref().is_some_and(|expected|expected!=binding) {None}
-                else {Some(binding)}
+            Some(record) if matches!(record.strategy, WorkspaceStrategy::CommitView) => {
+                let binding = &record.commit_view.as_ref()?.binding;
+                if self
+                    .commit_view_prepare
+                    .as_ref()
+                    .is_some_and(|expected| expected != binding)
+                {
+                    None
+                } else {
+                    Some(binding)
+                }
             }
-            None=>self.commit_view_prepare.as_ref(),
-            _=>None,
+            None => self.commit_view_prepare.as_ref(),
+            _ => None,
         }
     }
 
@@ -1218,16 +1233,26 @@ impl Task {
     /// Le lieu de naissance reste dans le canon et la flotte. Cette projection
     /// donne le dossier physique uniquement après publication de la réparation.
     pub fn effective_execution_cwd(&self) -> &str {
-        self.workspace_repairs.last().filter(|v|v.phase=="published")
-            .and_then(|v|v.prepared.as_ref()).map(|v|v.placement.execution_cwd.as_str())
-            .or_else(||self.remote_placement.as_ref().map(|v|v.execution_cwd.as_str()))
+        self.workspace_repairs
+            .last()
+            .filter(|v| v.phase == "published")
+            .and_then(|v| v.prepared.as_ref())
+            .map(|v| v.placement.execution_cwd.as_str())
+            .or_else(|| {
+                self.remote_placement
+                    .as_ref()
+                    .map(|v| v.execution_cwd.as_str())
+            })
             .unwrap_or(&self.cwd)
     }
 
-    pub fn effective_child_policy(&self)->Option<&serde_json::Value> {
-        self.workspace_repairs.last().filter(|v|v.phase=="published")
-            .and_then(|v|v.prepared.as_ref()).map(|v|&v.child_policy)
-            .or_else(||self.permission_snapshot.as_ref().map(|v|&v.child_policy))
+    pub fn effective_child_policy(&self) -> Option<&serde_json::Value> {
+        self.workspace_repairs
+            .last()
+            .filter(|v| v.phase == "published")
+            .and_then(|v| v.prepared.as_ref())
+            .map(|v| &v.child_policy)
+            .or_else(|| self.permission_snapshot.as_ref().map(|v| &v.child_policy))
     }
 
     pub fn terminal(&self) -> bool {
@@ -1273,7 +1298,10 @@ impl Task {
     /// ni délai valide. Une inéligibilité de reprise n'autorise aucun retrait.
     pub fn continuation_guard_open(&self) -> bool {
         self.state == "result_available"
-            && !self.workspace_repairs.last().is_some_and(|v|v.blocks_dispatch())
+            && !self
+                .workspace_repairs
+                .last()
+                .is_some_and(|v| v.blocks_dispatch())
             && self.result_sent
             && self.idle_deadline_at.is_some()
             && !self.guard_released
@@ -1283,9 +1311,8 @@ impl Task {
         self.continuation_guard_open()
             && self.guarded
             && self.round_no() < 8
-            && self.idle_deadline_at.is_some_and(|deadline|deadline>now)
+            && self.idle_deadline_at.is_some_and(|deadline| deadline > now)
     }
-
 }
 
 impl DelegationStore {
@@ -2268,14 +2295,20 @@ WHERE state='refused' AND task_id IS NULL;
         {
             return Err("admission_pending".into());
         }
-        if let Some(proof)=proof {
-            let mut metadata:serde_json::Value=serde_json::from_slice(&current.metadata)
-                .map_err(|_|"auto_admission_invalid")?;
-            metadata["capacity_refusal189"]=serde_json::json!(proof.encoded());
-            let updated=serde_json::to_vec(&metadata).map_err(|_|"auto_admission_invalid")?;
-            let limit=if current.metadata_version==2 {MAX_AUTO_ADMISSION_METADATA_V2_BYTES} else {MAX_AUTO_ADMISSION_METADATA_V1_BYTES};
-            if updated.len()>limit {return Err("admission_diagnostic_capacity_unavailable".into());}
-            current.metadata=updated;
+        if let Some(proof) = proof {
+            let mut metadata: serde_json::Value =
+                serde_json::from_slice(&current.metadata).map_err(|_| "auto_admission_invalid")?;
+            metadata["capacity_refusal189"] = serde_json::json!(proof.encoded());
+            let updated = serde_json::to_vec(&metadata).map_err(|_| "auto_admission_invalid")?;
+            let limit = if current.metadata_version == 2 {
+                MAX_AUTO_ADMISSION_METADATA_V2_BYTES
+            } else {
+                MAX_AUTO_ADMISSION_METADATA_V1_BYTES
+            };
+            if updated.len() > limit {
+                return Err("admission_diagnostic_capacity_unavailable".into());
+            }
+            current.metadata = updated;
         }
         current.state = AutoAdmissionState::Refused;
         current.refusal_code = Some(code.into());
@@ -2595,8 +2628,13 @@ WHERE state='refused' AND task_id IS NULL;
 
     /// Pistes de lecture seulement, bornées à129 métadonnées de la même
     /// identité native. Ne charge ni résultat, ni brief, ni historique de tours.
-    pub(crate) fn workspace_task_hints(&self, owner: &str, instance: &str) -> Result<Vec<serde_json::Value>, String> {
-        let sql=format!("SELECT json_object(
+    pub(crate) fn workspace_task_hints(
+        &self,
+        owner: &str,
+        instance: &str,
+    ) -> Result<Vec<serde_json::Value>, String> {
+        let sql = format!(
+            "SELECT json_object(
             'task_id',task_id,'owner',json_extract(payload,'$.owner'),
             'state',json_extract(payload,'$.state'),
             'guarded',coalesce(json_extract(payload,'$.guarded'),0),
@@ -2606,12 +2644,17 @@ WHERE state='refused' AND task_id IS NULL;
             'execution_cwd',json_extract(payload,'$.remote_placement.execution_cwd'))
             FROM native_delegations WHERE json_extract(payload,'$.owner')=?1
             AND owner_instance=?2 AND ({NATIVE_HOLDS_SLOT_SQL})
-            ORDER BY task_id LIMIT 129");
-        let mut query=self.conn.prepare(&sql).map_err(|error|error.to_string())?;
-        query.query_map(params![owner,instance],|row|row.get::<_,String>(0))
-            .map_err(|error|error.to_string())?.map(|row|
-                row.map_err(|error|error.to_string()).and_then(|raw|
-                    serde_json::from_str(&raw).map_err(|error|error.to_string()))).collect()
+            ORDER BY task_id LIMIT 129"
+        );
+        let mut query = self.conn.prepare(&sql).map_err(|error| error.to_string())?;
+        query
+            .query_map(params![owner, instance], |row| row.get::<_, String>(0))
+            .map_err(|error| error.to_string())?
+            .map(|row| {
+                row.map_err(|error| error.to_string())
+                    .and_then(|raw| serde_json::from_str(&raw).map_err(|error| error.to_string()))
+            })
+            .collect()
     }
 
     pub fn tasks(&self) -> Result<Vec<Task>, String> {

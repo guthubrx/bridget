@@ -11,7 +11,7 @@ impl Fixture {
             .unwrap()
             .join(format!("bridget-c19-{}", uuid::Uuid::new_v4()));
         fs::create_dir(&root).unwrap();
-        fs::set_permissions(&root,fs::Permissions::from_mode(0o700)).unwrap();
+        fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
         let repo = root.join("repo");
         fs::create_dir(&repo).unwrap();
         let this = Self { root, repo };
@@ -80,28 +80,48 @@ impl Drop for Fixture {
 
 #[test]
 fn spec232_export_streams_more_than_512_mib_and_preserves_source() {
-    let f=Fixture::new();
-    let bytes=vec![b'x';8*1024*1024];
-    let source=f.repo.join("large-00.rs");
-    fs::write(&source,&bytes).unwrap();
-    for index in 1..80 {fs::hard_link(&source,f.repo.join(format!("large-{index:02}.rs"))).unwrap();}
-    f.git(&["add","."]);f.git(&["commit","-qm","large source fixture"]);
-    let before=f.snapshot();
-    let manifest=plan(&f.repo,&f.git(&["rev-parse","HEAD"])).unwrap();
-    assert!(manifest.entries.iter().filter(|e|e.selected).map(|e|e.bytes).sum::<u64>()>512*1024*1024);
-    let root=f.root.join("large-view");export(&f.repo,&manifest,&root).unwrap();audit(&manifest,&root).unwrap();
-    assert_eq!(fs::metadata(root.join("large-79.rs")).unwrap().len(),bytes.len() as u64);
-    assert_eq!(f.snapshot(),before);
-
+    let f = Fixture::new();
+    let bytes = vec![b'x'; 8 * 1024 * 1024];
+    let source = f.repo.join("large-00.rs");
+    fs::write(&source, &bytes).unwrap();
+    for index in 1..80 {
+        fs::hard_link(&source, f.repo.join(format!("large-{index:02}.rs"))).unwrap();
+    }
+    f.git(&["add", "."]);
+    f.git(&["commit", "-qm", "large source fixture"]);
+    let before = f.snapshot();
+    let manifest = plan(&f.repo, &f.git(&["rev-parse", "HEAD"])).unwrap();
+    assert!(
+        manifest
+            .entries
+            .iter()
+            .filter(|e| e.selected)
+            .map(|e| e.bytes)
+            .sum::<u64>()
+            > 512 * 1024 * 1024
+    );
+    let root = f.root.join("large-view");
+    export(&f.repo, &manifest, &root).unwrap();
+    audit(&manifest, &root).unwrap();
+    assert_eq!(
+        fs::metadata(root.join("large-79.rs")).unwrap().len(),
+        bytes.len() as u64
+    );
+    assert_eq!(f.snapshot(), before);
 }
 
 #[test]
 fn spec221_c19_exact_commit_export_preserves_dirty_shared_and_linked_checkout() {
     let f = Fixture::new();
     for index in 0..65 {
-        fs::write(f.repo.join(format!("batch-{index:03}.rs")),format!("source-{index}\n")).unwrap();
+        fs::write(
+            f.repo.join(format!("batch-{index:03}.rs")),
+            format!("source-{index}\n"),
+        )
+        .unwrap();
     }
-    f.git(&["add","."]);f.git(&["commit","-qm","many source files"]);
+    f.git(&["add", "."]);
+    f.git(&["commit", "-qm", "many source files"]);
     let base = f.git(&["rev-parse", "HEAD"]);
     fs::write(f.repo.join("sub/tracked"), b"next").unwrap();
     f.git(&["add", "."]);
@@ -143,11 +163,17 @@ fn spec221_c19_exact_commit_export_preserves_dirty_shared_and_linked_checkout() 
     );
     assert!(!destination.join(".git").exists());
     for index in 0..65 {
-        let path=destination.join(format!("batch-{index:03}.rs"));
-        assert_eq!(fs::read_to_string(&path).unwrap(),format!("source-{index}\n"));
-        assert_eq!(fs::metadata(&path).unwrap().permissions().mode()&0o777,0o400);
+        let path = destination.join(format!("batch-{index:03}.rs"));
+        assert_eq!(
+            fs::read_to_string(&path).unwrap(),
+            format!("source-{index}\n")
+        );
+        assert_eq!(
+            fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o400
+        );
     }
-    audit(&manifest,&destination).unwrap();
+    audit(&manifest, &destination).unwrap();
     let public = fs::read_to_string(destination.join(NOTICE)).unwrap();
     assert!(public.contains("large.bin") && public.contains(&base));
     assert_eq!(f.snapshot(), before);
@@ -170,30 +196,36 @@ fn spec221_c19_exact_commit_export_preserves_dirty_shared_and_linked_checkout() 
 }
 #[test]
 fn spec221_c19_sync_batch_keeps_errors_and_expiry_without_publication() {
-    use std::os::fd::{FromRawFd,IntoRawFd};
-    let f=Fixture::new();
-    let path=f.root.join("written");
-    fs::write(&path,b"conserved").unwrap();
-    let mut files=vec![fs::File::open(&path).unwrap()];
-    assert!(sync_written_files(&mut files,Instant::now()-Duration::from_millis(1))
-        .unwrap_err().contains("view_sync_timeout"));
+    use std::os::fd::{FromRawFd, IntoRawFd};
+    let f = Fixture::new();
+    let path = f.root.join("written");
+    fs::write(&path, b"conserved").unwrap();
+    let mut files = vec![fs::File::open(&path).unwrap()];
+    assert!(
+        sync_written_files(&mut files, Instant::now() - Duration::from_millis(1))
+            .unwrap_err()
+            .contains("view_sync_timeout")
+    );
     assert!(files.is_empty());
-    assert_eq!(fs::read(&path).unwrap(),b"conserved");
+    assert_eq!(fs::read(&path).unwrap(), b"conserved");
     // fsync sur une socket doit échouer. Tous les autres jobs sont joints
     // avant le retour, même quand l'un d'eux refuse la barrière.
-    let (socket,mut peer)=std::os::unix::net::UnixStream::pair().unwrap();
+    let (socket, mut peer) = std::os::unix::net::UnixStream::pair().unwrap();
     // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
-    let socket_file=unsafe {fs::File::from_raw_fd(socket.into_raw_fd())};
-    let mut files=vec![fs::File::open(&path).unwrap(),socket_file];
-    assert!(sync_written_files(&mut files,Instant::now()+DEADLINE).is_err());
+    let socket_file = unsafe { fs::File::from_raw_fd(socket.into_raw_fd()) };
+    let mut files = vec![fs::File::open(&path).unwrap(), socket_file];
+    assert!(sync_written_files(&mut files, Instant::now() + DEADLINE).is_err());
     assert!(files.is_empty());
-    assert_eq!(peer.read(&mut [0u8;1]).unwrap(),0);
+    assert_eq!(peer.read(&mut [0u8; 1]).unwrap(), 0);
     assert!(!f.root.join(NOTICE).exists());
-    assert_eq!(fs::read(&path).unwrap(),b"conserved");
-    let mut files=(0..9).map(|_|fs::File::open(&path).unwrap()).collect();
-    assert!(sync_written_files(&mut files,Instant::now()+DEADLINE)
-        .unwrap_err().contains("view_sync_limit"));
-    assert_eq!(files.len(),9);
+    assert_eq!(fs::read(&path).unwrap(), b"conserved");
+    let mut files = (0..9).map(|_| fs::File::open(&path).unwrap()).collect();
+    assert!(
+        sync_written_files(&mut files, Instant::now() + DEADLINE)
+            .unwrap_err()
+            .contains("view_sync_limit")
+    );
+    assert_eq!(files.len(), 9);
 }
 
 #[test]
@@ -325,9 +357,9 @@ fn spec221_c19_manifest_never_reads_an_unbounded_materialized_omission() {
     entry.bytes = 33 * 1024 * 1024 * 1024;
     let file = fs::File::create(root.join(&entry.path)).unwrap();
     file.set_len(entry.bytes).unwrap();
-    let started=std::time::Instant::now();
+    let started = std::time::Instant::now();
     let error = audit(&altered, &root).unwrap_err();
-    assert!(started.elapsed()<std::time::Duration::from_secs(1));
+    assert!(started.elapsed() < std::time::Duration::from_secs(1));
     // La carte publique peut refuser d'abord ; aucun gros fichier n'est lu.
     assert!(error.contains("measured_limit") || error.contains("view_integrity_failed"));
 }
@@ -539,8 +571,18 @@ fn spec221_c19_notice_names_unresolved_links_and_keeps_initial_selection_after_m
     export(&f.repo, &manifest, &root).unwrap();
     let notice_bytes = fs::read(root.join(NOTICE)).unwrap();
     let value: serde_json::Value = serde_json::from_slice(&notice_bytes).unwrap();
-    assert!(value["next_action"].as_str().unwrap().contains("bridget_read_commit_file"));
-    assert!(value["next_action"].as_str().unwrap().contains("sans task_id"));
+    assert!(
+        value["next_action"]
+            .as_str()
+            .unwrap()
+            .contains("bridget_read_commit_file")
+    );
+    assert!(
+        value["next_action"]
+            .as_str()
+            .unwrap()
+            .contains("sans task_id")
+    );
     let dangling = value["links"]
         .as_array()
         .unwrap()
@@ -579,8 +621,11 @@ fn spec221_c19_implicit_directories_count_towards_entry_budget_before_writes() {
         })
         .collect();
     let root = f.root.join("view");
-    let error=export(&f.repo,&manifest,&root).unwrap_err();
-    assert!(error.contains("measured_limit") && error.contains("entries"),"{error}");
+    let error = export(&f.repo, &manifest, &root).unwrap_err();
+    assert!(
+        error.contains("measured_limit") && error.contains("entries"),
+        "{error}"
+    );
     assert!(!root.exists());
 }
 
@@ -590,7 +635,7 @@ fn private_intent(f: &Fixture) -> (ViewProofs, ViewIntent, PathBuf) {
     fs::set_permissions(&private, fs::Permissions::from_mode(0o700)).unwrap();
     let data = f.root.join("views");
     fs::create_dir(&data).unwrap();
-    fs::set_permissions(&data,fs::Permissions::from_mode(0o700)).unwrap();
+    fs::set_permissions(&data, fs::Permissions::from_mode(0o700)).unwrap();
     let binding = ViewBinding {
         worker: bridget_transport::protocol::WorkerIdentity {
             machine_id: "fixture".into(),
@@ -1054,7 +1099,7 @@ fn c19_export_child() {
     let request: super::job::ViewJobRequest =
         serde_json::from_str(&std::env::var("B221_VIEW_REQUEST").unwrap()).unwrap();
     let result = if std::env::var_os("B221_VIEW_PLAN").is_some() {
-        super::job::run_commit_view_plan(&[root.to_str().unwrap().into(),key])
+        super::job::run_commit_view_plan(&[root.to_str().unwrap().into(), key])
     } else if matches!(request, super::job::ViewJobRequest::Export) {
         super::job::run_commit_view_export(&[root.to_str().unwrap().into(), key])
     } else {
@@ -1661,203 +1706,400 @@ fn spec221_c19_stopped_job_repeats_the_same_outcome_until_controller_persists_it
     assert_eq!(job.poll().unwrap(), completed);
 }
 
-
 #[test]
 fn spec221_c19_managed_plan_persists_small_seed_before_git_and_exports_exact_base() {
-    use super::job::{ViewJob,JobPoll};
-    let f=Fixture::new();let (proofs,intent,_)=private_intent(&f);
-    f.git(&["config","remote.origin.url","fixture:c19"]);
-    let seed=ViewPlan::new(intent.binding.clone(),&intent.source,&intent.data_root,intent.base_commit(),&f.repo,"fixture:c19").unwrap();
-    let key=seed.binding.key().unwrap();
-    let before=f.snapshot();
+    use super::job::{JobPoll, ViewJob};
+    let f = Fixture::new();
+    let (proofs, intent, _) = private_intent(&f);
+    f.git(&["config", "remote.origin.url", "fixture:c19"]);
+    let seed = ViewPlan::new(
+        intent.binding.clone(),
+        &intent.source,
+        &intent.data_root,
+        intent.base_commit(),
+        &f.repo,
+        "fixture:c19",
+    )
+    .unwrap();
+    let key = seed.binding.key().unwrap();
+    let before = f.snapshot();
     proofs.write_plan(&seed).unwrap();
-    assert!(seed.encoded().unwrap().len()<4096);
+    assert!(seed.encoded().unwrap().len() < 4096);
     assert!(!proofs.path.join(format!("{key}.intent.json")).exists());
-    let attempted=std::cell::Cell::new(false);
-    let mut job=ViewJob::start_plan_registered(&proofs,&seed,&std::env::current_exe().unwrap(),&view_environment(),
-        ||{
+    let attempted = std::cell::Cell::new(false);
+    let mut job = ViewJob::start_plan_registered(
+        &proofs,
+        &seed,
+        &std::env::current_exe().unwrap(),
+        &view_environment(),
+        || {
             assert!(!intent.destination().unwrap().exists());
             assert!(!proofs.path.join(format!("{key}.intent.json")).exists());
-            attempted.set(true);Ok(())
-        },|marker|{
+            attempted.set(true);
+            Ok(())
+        },
+        |marker| {
             assert!(attempted.get());
-            assert_eq!(proofs.source_marker(&seed.binding).unwrap().as_ref(),Some(marker));
+            assert_eq!(
+                proofs.source_marker(&seed.binding).unwrap().as_ref(),
+                Some(marker)
+            );
             assert!(!proofs.path.join(format!("{key}.intent.json")).exists());
             Ok(())
-        }).unwrap_or_else(|(cause,_)|panic!("plan refused: {cause:?}"));
-    assert_eq!(wait_view_job(&mut job),JobPoll::Stopped(Ok(())));
-    let planned=proofs.load(&key).unwrap();seed.matches(&planned).unwrap();
-    assert_eq!(planned.proof_digest().unwrap(),intent.proof_digest().unwrap());
-    assert_eq!(proofs.load_plan(&key).unwrap(),seed);
-    assert_eq!(f.snapshot(),before);
-    assert_eq!(fs::read(planned.destination().unwrap().join("sub/tracked")).unwrap(),b"initial\n\0binary\xff");
+        },
+    )
+    .unwrap_or_else(|(cause, _)| panic!("plan refused: {cause:?}"));
+    assert_eq!(wait_view_job(&mut job), JobPoll::Stopped(Ok(())));
+    let planned = proofs.load(&key).unwrap();
+    seed.matches(&planned).unwrap();
+    assert_eq!(
+        planned.proof_digest().unwrap(),
+        intent.proof_digest().unwrap()
+    );
+    assert_eq!(proofs.load_plan(&key).unwrap(), seed);
+    assert_eq!(f.snapshot(), before);
+    assert_eq!(
+        fs::read(planned.destination().unwrap().join("sub/tracked")).unwrap(),
+        b"initial\n\0binary\xff"
+    );
     assert!(!planned.destination().unwrap().join(".git").exists());
     // Même après fin du helper, aucun second export n'est permis.
-    assert!(ViewJob::start_plan_registered(&proofs,&seed,&std::env::current_exe().unwrap(),&view_environment(),
-        ||panic!("must not fork twice"),|_|panic!("must not release twice")).is_err());
+    assert!(
+        ViewJob::start_plan_registered(
+            &proofs,
+            &seed,
+            &std::env::current_exe().unwrap(),
+            &view_environment(),
+            || panic!("must not fork twice"),
+            |_| panic!("must not release twice")
+        )
+        .is_err()
+    );
 }
 
 #[test]
 fn spec221_c19_plan_seed_never_renews_deadline_or_accepts_other_roots() {
-    let f=Fixture::new();let (proofs,intent,_)=private_intent(&f);
-    f.git(&["config","remote.origin.url","fixture:c19"]);
-    let mut seed=ViewPlan::new(intent.binding.clone(),&intent.source,&intent.data_root,intent.base_commit(),&f.repo,"fixture:c19").unwrap();
+    let f = Fixture::new();
+    let (proofs, intent, _) = private_intent(&f);
+    f.git(&["config", "remote.origin.url", "fixture:c19"]);
+    let mut seed = ViewPlan::new(
+        intent.binding.clone(),
+        &intent.source,
+        &intent.data_root,
+        intent.base_commit(),
+        &f.repo,
+        "fixture:c19",
+    )
+    .unwrap();
     proofs.write_plan(&seed).unwrap();
-    seed.created_at-=1;seed.expires_at-=1;
-    assert!(proofs.write_plan(&seed).unwrap_err().contains("proof_binding_mismatch"));
-    let mut changed=intent.clone();changed.source=f.root.join("other");
+    seed.created_at -= 1;
+    seed.expires_at -= 1;
+    assert!(
+        proofs
+            .write_plan(&seed)
+            .unwrap_err()
+            .contains("proof_binding_mismatch")
+    );
+    let mut changed = intent.clone();
+    changed.source = f.root.join("other");
     assert!(seed.matches(&changed).is_err());
-    seed.created_at=1;seed.expires_at=121;
+    seed.created_at = 1;
+    seed.expires_at = 121;
     assert!(seed.live().unwrap_err().contains("preparation_expired"));
-    assert!(super::job::ViewJob::start_plan_registered(&proofs,&seed,&std::env::current_exe().unwrap(),&view_environment(),
-        ||panic!("expired seed must not fork"),|_|panic!("expired seed must not release")).is_err());
-    assert!(super::job::run_commit_view_plan(&[]).unwrap_err().contains("managed_context_required"));
+    assert!(
+        super::job::ViewJob::start_plan_registered(
+            &proofs,
+            &seed,
+            &std::env::current_exe().unwrap(),
+            &view_environment(),
+            || panic!("expired seed must not fork"),
+            |_| panic!("expired seed must not release")
+        )
+        .is_err()
+    );
+    assert!(
+        super::job::run_commit_view_plan(&[])
+            .unwrap_err()
+            .contains("managed_context_required")
+    );
 }
-
 
 #[test]
 #[ignore = "Recette privée : BRIDGET_C19_BINARY doit désigner le binaire natif construit depuis ce snapshot."]
 fn spec221_c19_native_binary_plans_exports_and_reports_without_provider_or_git_workspace() {
-    let binary=PathBuf::from(std::env::var_os("BRIDGET_C19_BINARY").expect("BRIDGET_C19_BINARY requis"));
+    let binary =
+        PathBuf::from(std::env::var_os("BRIDGET_C19_BINARY").expect("BRIDGET_C19_BINARY requis"));
     assert!(binary.is_absolute() && binary.is_file());
-    let f=Fixture::new();let (proofs,intent,_)=private_intent(&f);
-    f.git(&["config","remote.origin.url","fixture:c19"]);
-    let before=f.snapshot();
-    let seed=ViewPlan::new(intent.binding.clone(),&intent.source,&intent.data_root,intent.base_commit(),&f.repo,"fixture:c19").unwrap();
+    let f = Fixture::new();
+    let (proofs, intent, _) = private_intent(&f);
+    f.git(&["config", "remote.origin.url", "fixture:c19"]);
+    let before = f.snapshot();
+    let seed = ViewPlan::new(
+        intent.binding.clone(),
+        &intent.source,
+        &intent.data_root,
+        intent.base_commit(),
+        &f.repo,
+        "fixture:c19",
+    )
+    .unwrap();
     proofs.write_plan(&seed).unwrap();
-    let mut env=view_environment();env.insert("B221_VIEW_NATIVE_BINARY".into(),"1".into());
-    let mut job=match super::job::ViewJob::start_plan_registered(&proofs,&seed,&binary,&env,
-        ||Ok(()),|marker|{
-            assert_eq!(proofs.source_marker(&seed.binding).unwrap().as_ref(),Some(marker));Ok(())
-        }) {
-        Ok(job)=>job,
-        Err((cause,mut retained))=>{
-            if let Some(job)=retained.as_mut(){assert!(job.stop(Duration::from_secs(2)).unwrap());}
+    let mut env = view_environment();
+    env.insert("B221_VIEW_NATIVE_BINARY".into(), "1".into());
+    let mut job = match super::job::ViewJob::start_plan_registered(
+        &proofs,
+        &seed,
+        &binary,
+        &env,
+        || Ok(()),
+        |marker| {
+            assert_eq!(
+                proofs.source_marker(&seed.binding).unwrap().as_ref(),
+                Some(marker)
+            );
+            Ok(())
+        },
+    ) {
+        Ok(job) => job,
+        Err((cause, mut retained)) => {
+            if let Some(job) = retained.as_mut() {
+                assert!(job.stop(Duration::from_secs(2)).unwrap());
+            }
             panic!("native recipe failed: {cause:?}");
         }
     };
-    assert_eq!(wait_view_job(&mut job),super::job::JobPoll::Stopped(Ok(())));
-    let planned=proofs.load(&seed.binding.key().unwrap()).unwrap();
+    assert_eq!(
+        wait_view_job(&mut job),
+        super::job::JobPoll::Stopped(Ok(()))
+    );
+    let planned = proofs.load(&seed.binding.key().unwrap()).unwrap();
     seed.matches(&planned).unwrap();
-    let record=proofs.workspace(&planned).unwrap();
-    assert_eq!(record.base_commit,intent.base_commit());
-    assert_eq!(record.dirty,Some(false));
-    assert_eq!(fs::read(planned.destination().unwrap().join("sub/tracked")).unwrap(),b"initial\n\0binary\xff");
-    assert_eq!(f.snapshot(),before);
+    let record = proofs.workspace(&planned).unwrap();
+    assert_eq!(record.base_commit, intent.base_commit());
+    assert_eq!(record.dirty, Some(false));
+    assert_eq!(
+        fs::read(planned.destination().unwrap().join("sub/tracked")).unwrap(),
+        b"initial\n\0binary\xff"
+    );
+    assert_eq!(f.snapshot(), before);
     assert!(!planned.destination().unwrap().join(".git").exists());
     assert!(!planned.destination().unwrap().join("large.bin").exists());
     // Même image réelle, sans fournisseur : le fichier omis passe lui aussi
     // par le bootstrap géré de production et sa corrélation exacte.
-    let mut command=planned.binding.command.clone();command.instance_id="native-file-reader".into();command.generation=1;
-    let request=super::job::ViewJobRequest::Materialize{command,sequence:1,path:"large.bin".into()};
-    let expected=request.identity(&planned).unwrap();
+    let mut command = planned.binding.command.clone();
+    command.instance_id = "native-file-reader".into();
+    command.generation = 1;
+    let request = super::job::ViewJobRequest::Materialize {
+        command,
+        sequence: 1,
+        path: "large.bin".into(),
+    };
+    let expected = request.identity(&planned).unwrap();
     // La possession de l'export garde son verrou jusqu'à son retrait du runtime.
     // Le conflit est attesté avant fork ; ne pas déduire un arrêt du seul résultat.
-    assert!(matches!(super::job::ViewJob::start_registered(&proofs,&planned,&request,&binary,&env,
-        ||panic!("lease busy must refuse before fork"),|_|panic!("lease busy must not release")),
-        Err((super::job::ExportFailure::OperationCapacity,None))));
+    assert!(matches!(
+        super::job::ViewJob::start_registered(
+            &proofs,
+            &planned,
+            &request,
+            &binary,
+            &env,
+            || panic!("lease busy must refuse before fork"),
+            |_| panic!("lease busy must not release")
+        ),
+        Err((super::job::ExportFailure::OperationCapacity, None))
+    ));
     drop(job);
-    let mut file=match super::job::ViewJob::start_registered(&proofs,&planned,&request,&binary,&env,
-        ||Ok(()),|marker|{
-            assert_eq!(proofs.operation_marker(&planned.binding,&expected).unwrap().as_ref(),Some(marker));Ok(())
-        }) {
-        Ok(file)=>file,
-        Err((cause,mut retained))=>{
-            if let Some(file)=retained.as_mut(){assert!(file.stop(Duration::from_secs(2)).unwrap());}
+    let mut file = match super::job::ViewJob::start_registered(
+        &proofs,
+        &planned,
+        &request,
+        &binary,
+        &env,
+        || Ok(()),
+        |marker| {
+            assert_eq!(
+                proofs
+                    .operation_marker(&planned.binding, &expected)
+                    .unwrap()
+                    .as_ref(),
+                Some(marker)
+            );
+            Ok(())
+        },
+    ) {
+        Ok(file) => file,
+        Err((cause, mut retained)) => {
+            if let Some(file) = retained.as_mut() {
+                assert!(file.stop(Duration::from_secs(2)).unwrap());
+            }
             panic!("native file recipe failed: {cause:?}");
         }
     };
-    assert_eq!(wait_view_job(&mut file),super::job::JobPoll::Stopped(Ok(())));
-    assert!(proofs.file_available(&planned,"large.bin").unwrap());
-    assert_eq!(fs::read(planned.destination().unwrap().join("large.bin")).unwrap(),vec![b'x';200000]);
-    assert_eq!(f.snapshot(),before);
-    eprintln!("C19_NATIVE_RECIPE {}",serde_json::json!({
-        "binary_sha256":view_digest(&fs::read(&binary).unwrap()),
-        "base":record.base_commit,"dirty":record.dirty,"source_unchanged":true,
-        "native_bootstrap":true,"native_file_materialized":true,"provider_started":false,"git_workspace_created":false,
-        "group_stopped":job::source_group_stopped(&proofs,&planned).unwrap()
-    }));
+    assert_eq!(
+        wait_view_job(&mut file),
+        super::job::JobPoll::Stopped(Ok(()))
+    );
+    assert!(proofs.file_available(&planned, "large.bin").unwrap());
+    assert_eq!(
+        fs::read(planned.destination().unwrap().join("large.bin")).unwrap(),
+        vec![b'x'; 200000]
+    );
+    assert_eq!(f.snapshot(), before);
+    eprintln!(
+        "C19_NATIVE_RECIPE {}",
+        serde_json::json!({
+            "binary_sha256":view_digest(&fs::read(&binary).unwrap()),
+            "base":record.base_commit,"dirty":record.dirty,"source_unchanged":true,
+            "native_bootstrap":true,"native_file_materialized":true,"provider_started":false,"git_workspace_created":false,
+            "group_stopped":job::source_group_stopped(&proofs,&planned).unwrap()
+        })
+    );
 }
-
 
 #[test]
 fn spec221_c19_native_placement_creates_private_sibling_only_after_base_is_known() {
-    let f=Fixture::new();let (_,intent,_)=private_intent(&f);
-    f.git(&["config","remote.origin.url","fixture:c19"]);
-    let data=ViewPlan::native_data_root(&f.repo).unwrap();
-    let seed=ViewPlan::new(intent.binding.clone(),&f.repo,&data,intent.base_commit(),&f.repo,"fixture:c19").unwrap();
-    let before=f.snapshot();
+    let f = Fixture::new();
+    let (_, intent, _) = private_intent(&f);
+    f.git(&["config", "remote.origin.url", "fixture:c19"]);
+    let data = ViewPlan::native_data_root(&f.repo).unwrap();
+    let seed = ViewPlan::new(
+        intent.binding.clone(),
+        &f.repo,
+        &data,
+        intent.base_commit(),
+        &f.repo,
+        "fixture:c19",
+    )
+    .unwrap();
+    let before = f.snapshot();
     assert!(!data.exists());
-    let mut missing=seed.clone();missing.base="f".repeat(40);
-    assert!(missing.planned_intent().unwrap_err().contains("commit_unavailable"));
+    let mut missing = seed.clone();
+    missing.base = "f".repeat(40);
+    assert!(
+        missing
+            .planned_intent()
+            .unwrap_err()
+            .contains("commit_unavailable")
+    );
     assert!(!data.exists());
-    eprintln!("C19_PLACEMENT_OBSERVED {}",serde_json::json!({
-        "uid":bridget_transport::fsutil::effective_uid(),
-        "parent_mode":fs::metadata(&f.root).unwrap().mode()&0o777,
-        "parent_uid":fs::metadata(&f.root).unwrap().uid(),
-        "parent_dev":fs::metadata(&f.root).unwrap().dev(),
-        "source_dev":fs::metadata(&f.repo).unwrap().dev(),
-        "reserve_exists":data.exists()
-    }));
-    let planned=seed.planned_intent().unwrap();
-    assert_eq!(planned.data_root,data);
-    assert_eq!(fs::symlink_metadata(&data).unwrap().mode()&0o777,0o700);
+    eprintln!(
+        "C19_PLACEMENT_OBSERVED {}",
+        serde_json::json!({
+            "uid":bridget_transport::fsutil::effective_uid(),
+            "parent_mode":fs::metadata(&f.root).unwrap().mode()&0o777,
+            "parent_uid":fs::metadata(&f.root).unwrap().uid(),
+            "parent_dev":fs::metadata(&f.root).unwrap().dev(),
+            "source_dev":fs::metadata(&f.repo).unwrap().dev(),
+            "reserve_exists":data.exists()
+        })
+    );
+    let planned = seed.planned_intent().unwrap();
+    assert_eq!(planned.data_root, data);
+    assert_eq!(fs::symlink_metadata(&data).unwrap().mode() & 0o777, 0o700);
     assert!(!planned.destination().unwrap().exists()); // plan ne publie ni vue ni record
-    assert_eq!(f.snapshot(),before);
+    assert_eq!(f.snapshot(), before);
 }
 
 #[test]
 fn spec221_c19_native_placement_refuses_submapping_inside_git_without_effects() {
-    let f=Fixture::new();let (_,intent,_)=private_intent(&f);
-    f.git(&["config","remote.origin.url","fixture:c19"]);
-    let source=f.repo.join("sub");let data=ViewPlan::native_data_root(&source).unwrap();
-    let seed=ViewPlan::new(intent.binding.clone(),&source,&data,intent.base_commit(),&source,"fixture:c19").unwrap();
-    let before=f.snapshot();
-    assert!(seed.planned_intent().unwrap_err().contains("destination_inside_source"));
+    let f = Fixture::new();
+    let (_, intent, _) = private_intent(&f);
+    f.git(&["config", "remote.origin.url", "fixture:c19"]);
+    let source = f.repo.join("sub");
+    let data = ViewPlan::native_data_root(&source).unwrap();
+    let seed = ViewPlan::new(
+        intent.binding.clone(),
+        &source,
+        &data,
+        intent.base_commit(),
+        &source,
+        "fixture:c19",
+    )
+    .unwrap();
+    let before = f.snapshot();
+    assert!(
+        seed.planned_intent()
+            .unwrap_err()
+            .contains("destination_inside_source")
+    );
     assert!(!data.exists());
-    assert_eq!(f.snapshot(),before);
+    assert_eq!(f.snapshot(), before);
 }
 
 #[test]
 fn spec221_c19_native_placement_never_changes_existing_permissions_or_follows_reserve_link() {
-    let f=Fixture::new();let (_,intent,_)=private_intent(&f);
-    f.git(&["config","remote.origin.url","fixture:c19"]);
-    let data=ViewPlan::native_data_root(&f.repo).unwrap();
+    let f = Fixture::new();
+    let (_, intent, _) = private_intent(&f);
+    f.git(&["config", "remote.origin.url", "fixture:c19"]);
+    let data = ViewPlan::native_data_root(&f.repo).unwrap();
     fs::create_dir(&data).unwrap();
-    fs::set_permissions(&data,fs::Permissions::from_mode(0o755)).unwrap();
-    fs::write(data.join("kept"),b"kept").unwrap();
-    let seed=ViewPlan::new(intent.binding.clone(),&f.repo,&data,intent.base_commit(),&f.repo,"fixture:c19").unwrap();
-    assert!(seed.planned_intent().unwrap_err().contains("destination_invalid"));
-    assert_eq!(fs::symlink_metadata(&data).unwrap().mode()&0o777,0o755);
-    assert_eq!(fs::read(data.join("kept")).unwrap(),b"kept");
-    let outside=f.root.join("outside");
-    fs::rename(&data,&outside).unwrap();
-    std::os::unix::fs::symlink(&outside,&data).unwrap();
-    assert!(seed.planned_intent().unwrap_err().contains("destination_invalid"));
-    assert!(fs::symlink_metadata(&data).unwrap().file_type().is_symlink());
-    assert_eq!(fs::read(outside.join("kept")).unwrap(),b"kept");
+    fs::set_permissions(&data, fs::Permissions::from_mode(0o755)).unwrap();
+    fs::write(data.join("kept"), b"kept").unwrap();
+    let seed = ViewPlan::new(
+        intent.binding.clone(),
+        &f.repo,
+        &data,
+        intent.base_commit(),
+        &f.repo,
+        "fixture:c19",
+    )
+    .unwrap();
+    assert!(
+        seed.planned_intent()
+            .unwrap_err()
+            .contains("destination_invalid")
+    );
+    assert_eq!(fs::symlink_metadata(&data).unwrap().mode() & 0o777, 0o755);
+    assert_eq!(fs::read(data.join("kept")).unwrap(), b"kept");
+    let outside = f.root.join("outside");
+    fs::rename(&data, &outside).unwrap();
+    std::os::unix::fs::symlink(&outside, &data).unwrap();
+    assert!(
+        seed.planned_intent()
+            .unwrap_err()
+            .contains("destination_invalid")
+    );
+    assert!(
+        fs::symlink_metadata(&data)
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+    assert_eq!(fs::read(outside.join("kept")).unwrap(), b"kept");
 }
-
 
 #[test]
 fn spec221_c19_native_placement_resolves_submapping_outside_git_without_changing_shared() {
-    let f=Fixture::new();let (_,intent,_)=private_intent(&f);
-    f.git(&["config","remote.origin.url","fixture:c19"]);
-    let source=f.repo.join("sub");
-    let seed=ViewPlan::new_native(intent.binding.clone(),&source,intent.base_commit(),&source,"fixture:c19").unwrap();
-    let before=f.snapshot();
-    let planned=seed.planned_intent().unwrap();
-    assert_eq!(planned.data_root,f.root.join(".bridget-commit-views"));
+    let f = Fixture::new();
+    let (_, intent, _) = private_intent(&f);
+    f.git(&["config", "remote.origin.url", "fixture:c19"]);
+    let source = f.repo.join("sub");
+    let seed = ViewPlan::new_native(
+        intent.binding.clone(),
+        &source,
+        intent.base_commit(),
+        &source,
+        "fixture:c19",
+    )
+    .unwrap();
+    let before = f.snapshot();
+    let planned = seed.planned_intent().unwrap();
+    assert_eq!(planned.data_root, f.root.join(".bridget-commit-views"));
     assert!(!f.repo.join(".bridget-commit-views").exists());
     seed.matches(&planned).unwrap();
-    let mut wrong=planned.clone();wrong.data_root=f.root.join("unapproved");
+    let mut wrong = planned.clone();
+    wrong.data_root = f.root.join("unapproved");
     assert!(seed.matches(&wrong).is_err());
-    wrong=planned.clone();wrong.data_root=f.repo.join(".bridget-commit-views");
-    assert!(seed.matches(&wrong).is_err(),"un ancêtre du sous-mapping situé dans Git n'est jamais une destination");
+    wrong = planned.clone();
+    wrong.data_root = f.repo.join(".bridget-commit-views");
+    assert!(
+        seed.matches(&wrong).is_err(),
+        "un ancêtre du sous-mapping situé dans Git n'est jamais une destination"
+    );
     assert!(!wrong.data_root.exists());
-    assert_eq!(f.snapshot(),before);
+    assert_eq!(f.snapshot(), before);
 }
-
 
 // Recette privée du corpus qui a dépassé le délai sur SYS. Aucun fournisseur,
 // aucune Task, aucun import ni modification du dépôt ; conserver en cas d'échec.
@@ -1867,13 +2109,17 @@ fn spec221_c19_real_corpus_native_export() {
     use super::job::{JobPoll, ViewJob};
     let configured = |name| PathBuf::from(std::env::var_os(name).expect(name));
     let binary = configured("BRIDGET_C19_BINARY");
-    let source = configured("BRIDGET_C19_REAL_SOURCE").canonicalize().unwrap();
+    let source = configured("BRIDGET_C19_REAL_SOURCE")
+        .canonicalize()
+        .unwrap();
     let root = configured("BRIDGET_C19_REAL_OUTPUT");
     let base = std::env::var("BRIDGET_C19_REAL_BASE").unwrap();
     assert!(binary.is_absolute() && binary.is_file());
     assert!(root.is_absolute() && !root.exists());
-    assert_eq!(fs::metadata(root.parent().unwrap()).unwrap().dev(),
-               fs::metadata(&source).unwrap().dev());
+    assert_eq!(
+        fs::metadata(root.parent().unwrap()).unwrap().dev(),
+        fs::metadata(&source).unwrap().dev()
+    );
     fs::create_dir(&root).unwrap();
     fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
     let private = root.join("proofs");
@@ -1887,36 +2133,63 @@ fn spec221_c19_real_corpus_native_export() {
             vec!["rev-parse", "HEAD"],
             vec!["status", "--porcelain=v1", "--untracked-files=all"],
             vec!["worktree", "list", "--porcelain"],
-        ].into_iter().map(|args| {
-            let output = Command::new("git").arg("-C").arg(&source).args(args).output().unwrap();
+        ]
+        .into_iter()
+        .map(|args| {
+            let output = Command::new("git")
+                .arg("-C")
+                .arg(&source)
+                .args(args)
+                .output()
+                .unwrap();
             assert!(output.status.success());
             output.stdout
-        }).collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>()
     };
     let before = snapshot();
     let binding = ViewBinding {
         worker: bridget_transport::protocol::WorkerIdentity {
-            machine_id: "qualification".into(), worker_id: "private".into(), provisioning_revision: 1,
+            machine_id: "qualification".into(),
+            worker_id: "private".into(),
+            provisioning_revision: 1,
         },
         command: bridget_transport::protocol::WorkerCommandIdentity {
-            command_id: uuid::Uuid::new_v4().to_string(), task_id: uuid::Uuid::new_v4().to_string(),
-            instance_id: String::new(), generation: 0,
+            command_id: uuid::Uuid::new_v4().to_string(),
+            task_id: uuid::Uuid::new_v4().to_string(),
+            instance_id: String::new(),
+            generation: 0,
         },
         prepare_digest: "a".repeat(64),
     };
-    let identity = run_git(&source, &["config", "--local", "--no-includes", "--get", "remote.origin.url"], READ_TIMEOUT)
-        .unwrap().complete().unwrap();
+    let identity = run_git(
+        &source,
+        &[
+            "config",
+            "--local",
+            "--no-includes",
+            "--get",
+            "remote.origin.url",
+        ],
+        READ_TIMEOUT,
+    )
+    .unwrap()
+    .complete()
+    .unwrap();
     let seed = ViewPlan::new_native(binding, &source, &base, &source, identity.trim()).unwrap();
     let proofs = ViewProofs::open(&private).unwrap();
     proofs.write_plan(&seed).unwrap();
     let started = Instant::now();
     let mut env = view_environment();
     env.insert("B221_VIEW_NATIVE_BINARY".into(), "1".into());
-    let mut job = ViewJob::start_plan_registered(&proofs, &seed, &binary, &env,
-        || Ok(()), |_| Ok(())).unwrap_or_else(|(cause, _)| panic!("{cause:?}"));
+    let mut job =
+        ViewJob::start_plan_registered(&proofs, &seed, &binary, &env, || Ok(()), |_| Ok(()))
+            .unwrap_or_else(|(cause, _)| panic!("{cause:?}"));
     let result = loop {
         let result = job.poll().unwrap();
-        if result != JobPoll::Running { break result; }
+        if result != JobPoll::Running {
+            break result;
+        }
         if started.elapsed() > Duration::from_secs(130) {
             let stopped = job.stop(Duration::from_secs(2)).unwrap();
             panic!("helper hors délai ; arrêt confirmé={stopped}");
@@ -1939,35 +2212,76 @@ fn spec221_c19_real_corpus_native_export() {
         "source_unchanged":true, "group_stopped":true, "dirty":false,
         "provider_started":false, "git_workspace_created":false
     });
-    fs::write(root.join("receipt.json"), serde_json::to_vec_pretty(&receipt).unwrap()).unwrap();
+    fs::write(
+        root.join("receipt.json"),
+        serde_json::to_vec_pretty(&receipt).unwrap(),
+    )
+    .unwrap();
     println!("{receipt}");
 }
 
 #[test]
 fn spec234_large_notice_roundtrip_keeps_only_manifest_and_rejects_duplicate_binding() {
-    let manifest = Manifest { version:1, base:"a".repeat(40), cwd:".".into(),
-        entries:(0..30_000).map(|index| Entry { path:format!("item-{index:05}-{}.bin", "x".repeat(100)),
-            mode:"100644".into(), oid:"b".repeat(40), bytes:200_000, selected:false }).collect() };
+    let manifest = Manifest {
+        version: 1,
+        base: "a".repeat(40),
+        cwd: ".".into(),
+        entries: (0..30_000)
+            .map(|index| Entry {
+                path: format!("item-{index:05}-{}.bin", "x".repeat(100)),
+                mode: "100644".into(),
+                oid: "b".repeat(40),
+                bytes: 200_000,
+                selected: false,
+            })
+            .collect(),
+    };
     validate_manifest(&manifest).unwrap();
-    let card=notice(&manifest,&BTreeMap::new()).unwrap();
-    assert!(card.len()>8*MAX_OUTPUT && card.len()<MAX_NOTICE);
-    let restored=notice_manifest(card.as_slice()).unwrap();
-    assert_eq!(serde_json::to_vec(&restored).unwrap(),serde_json::to_vec(&manifest).unwrap());
-    let encoded=serde_json::to_string(&manifest).unwrap();
-    let duplicate=format!("{{\"manifest\":{encoded},\"manifest\":{encoded}}}");
+    let card = notice(&manifest, &BTreeMap::new()).unwrap();
+    assert!(card.len() > 8 * MAX_OUTPUT && card.len() < MAX_NOTICE);
+    let restored = notice_manifest(card.as_slice()).unwrap();
+    assert_eq!(
+        serde_json::to_vec(&restored).unwrap(),
+        serde_json::to_vec(&manifest).unwrap()
+    );
+    let encoded = serde_json::to_string(&manifest).unwrap();
+    let duplicate = format!("{{\"manifest\":{encoded},\"manifest\":{encoded}}}");
     assert!(notice_manifest(duplicate.as_bytes()).is_err());
-    eprintln!("public notice roundtrip: {} bytes, {} entries",card.len(),restored.entries.len());
+    eprintln!(
+        "public notice roundtrip: {} bytes, {} entries",
+        card.len(),
+        restored.entries.len()
+    );
 }
 
 #[test]
 fn spec241_selected_volume_is_not_a_fixed_quota_but_overflow_still_refuses() {
-    let mut manifest=Manifest { version:1,base:"a".repeat(40),cwd:".".into(),entries:vec![
-        Entry {path:"source.rs".into(),mode:"100644".into(),oid:"b".repeat(40),
-            bytes:33*1024*1024*1024,selected:true}
-    ]};
-    validate_manifest(&manifest).expect("le disque et le flux bornent les données, pas un quota de 32 Gio");
-    manifest.entries[0].bytes=u64::MAX;
-    manifest.entries.push(Entry {path:"second.rs".into(),mode:"100644".into(),oid:"c".repeat(40),bytes:1,selected:true});
-    let overflow=validate_manifest(&manifest).unwrap_err();
-    assert_eq!(job::failure(&overflow),ExportFailure::ByteLimit,"le compteur reste fermé et sa cause reste classée");
+    let mut manifest = Manifest {
+        version: 1,
+        base: "a".repeat(40),
+        cwd: ".".into(),
+        entries: vec![Entry {
+            path: "source.rs".into(),
+            mode: "100644".into(),
+            oid: "b".repeat(40),
+            bytes: 33 * 1024 * 1024 * 1024,
+            selected: true,
+        }],
+    };
+    validate_manifest(&manifest)
+        .expect("le disque et le flux bornent les données, pas un quota de 32 Gio");
+    manifest.entries[0].bytes = u64::MAX;
+    manifest.entries.push(Entry {
+        path: "second.rs".into(),
+        mode: "100644".into(),
+        oid: "c".repeat(40),
+        bytes: 1,
+        selected: true,
+    });
+    let overflow = validate_manifest(&manifest).unwrap_err();
+    assert_eq!(
+        job::failure(&overflow),
+        ExportFailure::ByteLimit,
+        "le compteur reste fermé et sa cause reste classée"
+    );
 }

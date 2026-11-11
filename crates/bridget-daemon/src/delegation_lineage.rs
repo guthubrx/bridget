@@ -495,8 +495,11 @@ impl DelegationStore {
                 [&task.task_id],
             )
             .map_err(|e| e.to_string())?;
-            tx.execute("DELETE FROM native_delegation_compose_receipts WHERE task_id=?1", [&task.task_id])
-                .map_err(|e| e.to_string())?;
+            tx.execute(
+                "DELETE FROM native_delegation_compose_receipts WHERE task_id=?1",
+                [&task.task_id],
+            )
+            .map_err(|e| e.to_string())?;
             tx.execute(
                 "DELETE FROM native_delegation_past_missions WHERE task_id=?1",
                 [&task.task_id],
@@ -1076,32 +1079,57 @@ impl DelegationStore {
 
     /// Réserve avant tout effet. Une ligne inconnue est un reçu conservé, jamais
     /// une permission de rejouer une commande après une panne.
-    pub(crate) fn human_compose_reserve(&self, root:&str, task_id:&str, request_id:&str,
-        canonical:&str, initial:&Value) -> Result<Option<Value>,E> {
-        let tx=Transaction::new_unchecked(&self.conn,rusqlite::TransactionBehavior::Immediate)
-            .map_err(|_|E::StoreUnavailable)?;
+    pub(crate) fn human_compose_reserve(
+        &self,
+        root: &str,
+        task_id: &str,
+        request_id: &str,
+        canonical: &str,
+        initial: &Value,
+    ) -> Result<Option<Value>, E> {
+        let tx = Transaction::new_unchecked(&self.conn, rusqlite::TransactionBehavior::Immediate)
+            .map_err(|_| E::StoreUnavailable)?;
         let previous:Option<(String,String,String,String)>=tx.query_row(
             "SELECT root,task_id,canonical,receipt FROM native_delegation_compose_receipts WHERE request_id=?1",
             [request_id],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?)))
             .optional().map_err(|_|E::StoreUnavailable)?;
-        if let Some((old_root,old_task,old_canonical,receipt))=previous {
-            if old_root!=root || old_task!=task_id || old_canonical!=canonical {return Err(E::EnvelopeMismatch);}
-            return serde_json::from_str(&receipt).map(Some).map_err(|_|E::StoreUnavailable);
+        if let Some((old_root, old_task, old_canonical, receipt)) = previous {
+            if old_root != root || old_task != task_id || old_canonical != canonical {
+                return Err(E::EnvelopeMismatch);
+            }
+            return serde_json::from_str(&receipt)
+                .map(Some)
+                .map_err(|_| E::StoreUnavailable);
         }
-        let count:u32=tx.query_row("SELECT count(*) FROM native_delegation_compose_receipts",[],|r|r.get(0))
-            .map_err(|_|E::StoreUnavailable)?;
-        if count>=4096 {return Err(E::ResourceLimit);}
+        let count: u32 = tx
+            .query_row(
+                "SELECT count(*) FROM native_delegation_compose_receipts",
+                [],
+                |r| r.get(0),
+            )
+            .map_err(|_| E::StoreUnavailable)?;
+        if count >= 4096 {
+            return Err(E::ResourceLimit);
+        }
         tx.execute("INSERT INTO native_delegation_compose_receipts(request_id,root,task_id,canonical,receipt) VALUES(?1,?2,?3,?4,?5)",
             params![request_id,root,task_id,canonical,initial.to_string()]).map_err(|_|E::StoreUnavailable)?;
-        tx.commit().map_err(|_|E::StoreUnavailable)?;
+        tx.commit().map_err(|_| E::StoreUnavailable)?;
         Ok(None)
     }
 
-    pub(crate) fn human_compose_complete(&self, root:&str, task_id:&str, request_id:&str,
-        canonical:&str, receipt:&Value)->Result<(),E> {
+    pub(crate) fn human_compose_complete(
+        &self,
+        root: &str,
+        task_id: &str,
+        request_id: &str,
+        canonical: &str,
+        receipt: &Value,
+    ) -> Result<(), E> {
         let changed=self.conn.execute("UPDATE native_delegation_compose_receipts SET receipt=?5 WHERE root=?1 AND task_id=?2 AND request_id=?3 AND canonical=?4",
             params![root,task_id,request_id,canonical,receipt.to_string()]).map_err(|_|E::StoreUnavailable)?;
-        if changed!=1 {return Err(E::EnvelopeMismatch);}
+        if changed != 1 {
+            return Err(E::EnvelopeMismatch);
+        }
         Ok(())
     }
 

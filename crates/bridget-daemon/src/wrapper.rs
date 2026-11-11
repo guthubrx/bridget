@@ -5,11 +5,11 @@
 #[path = "wrapper_workspace_repair.rs"]
 mod workspace_repair;
 
-use bridget_transport::poison::RecoverPoison;
 use bridget_transport::journal::{
     IncrementalJournalReader, JournalLiveFeed, JournalReadItem, JournalSourceIdentity,
     JournalWindowError, JournalWriter, current_host_date, resolve_window,
 };
+use bridget_transport::poison::RecoverPoison;
 use bridget_transport::protocol::{
     CommunicationProjectSource, DelegatedRuntimeEventFrame, DelegatedRuntimeEventKind,
     DiskSpaceFact, ExecutionControlCommand, ExecutionControlOperation, ExecutionDeliveryContext,
@@ -479,7 +479,8 @@ fn remote_result_for_delivery(
     // Un message ordinaire corrélé n'est pas une nouvelle ronde de la tâche.
     // Les missions natives portent TriggerTurn et leur contexte d'exécution ;
     // leur réservation de résultat reste obligatoire, y compris après reprise.
-    if execution.is_none() && ordinary_queue_message(message) && !bindings.contains_key(&message.id) {
+    if execution.is_none() && ordinary_queue_message(message) && !bindings.contains_key(&message.id)
+    {
         return Ok(None);
     }
     let (execution_id, generation) = execution.ok_or("remote_result_slot_required")?;
@@ -612,13 +613,18 @@ impl RemoteDrainGuard {
 
     fn set_journal(&self, root: &Path, agent: &str, session: &str, writer: Option<JournalWriter>) {
         *self.journal.lock().recover_poison() = Some(RemoteDrainJournal {
-            root: root.to_path_buf(), agent: agent.into(), session: session.into(), writer,
+            root: root.to_path_buf(),
+            agent: agent.into(),
+            session: session.into(),
+            writer,
         });
     }
 
     fn begin_stop(&self) {
         let mut signaler = self.signaler.lock().recover_poison();
-        if signaler.is_some() { return; }
+        if signaler.is_some() {
+            return;
+        }
         let stopped = Arc::new(AtomicBool::new(false));
         let flag = stopped.clone();
         let journal = self.journal.lock().recover_poison().clone();
@@ -664,12 +670,7 @@ impl RemoteDrainGuard {
 #[cfg(target_os = "linux")]
 impl Drop for RemoteDrainGuard {
     fn drop(&mut self) {
-        if let Some((stopped, handle)) = self
-            .signaler
-            .get_mut()
-            .recover_poison()
-            .take()
-        {
+        if let Some((stopped, handle)) = self.signaler.get_mut().recover_poison().take() {
             stopped.store(true, Ordering::SeqCst);
             let _ = handle.join();
         }
@@ -683,7 +684,13 @@ impl Drop for RemoteDrainGuard {
             let reaped = crate::managed_process::remote_drain::reap_pass_after_owners();
             let cause = match reaped {
                 Ok(true) => {
-                    if crate::remote_worker::publish_drain_proof(&self.root, &self.command, &self.proof).is_ok() {
+                    if crate::remote_worker::publish_drain_proof(
+                        &self.root,
+                        &self.command,
+                        &self.proof,
+                    )
+                    .is_ok()
+                    {
                         break;
                     }
                     "proof_store_unavailable"
@@ -697,10 +704,19 @@ impl Drop for RemoteDrainGuard {
                 // natif, sans second canal de preuve ni fausse fin de tâche.
                 let journal = self.journal.get_mut().recover_poison();
                 if let Some(journal) = journal.as_ref() {
-                    let _ = record_remote_drain_wait(&journal.root, &journal.agent, &journal.session, &self.command, &self.machine, cause);
+                    let _ = record_remote_drain_wait(
+                        &journal.root,
+                        &journal.agent,
+                        &journal.session,
+                        &self.command,
+                        &self.machine,
+                        cause,
+                    );
                 }
-                eprintln!("bridget_remote_drain221 task={} command={} generation={} cause={cause}",
-                    self.command.task_id, self.command.command_id, self.command.generation);
+                eprintln!(
+                    "bridget_remote_drain221 task={} command={} generation={} cause={cause}",
+                    self.command.task_id, self.command.command_id, self.command.generation
+                );
                 reported = true;
             }
             // Garder la filiation des survivants : aucun abandon, aucun SIGKILL.
@@ -717,18 +733,39 @@ fn remote_drain_wait_payload(
     cause: &str,
 ) -> std::io::Result<serde_json::Value> {
     if !matches!(phase, "closing_transport" | "draining_descendants") {
-        return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "invalid_drain_cause"));
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "invalid_drain_cause",
+        ));
     }
     let action = match cause {
-        "signal_refused" => "Faites vérifier les identités et les droits de signalisation des descendants de cette commande.",
-        "descendants_alive" => "Faites inspecter les descendants encore présents avant de décider leur arrêt ciblé.",
-        "reap_unavailable" => "Faites vérifier la filiation, les identités de processus et la disponibilité de la récolte native.",
-        "proof_store_unavailable" => "Faites vérifier le reçu et le stockage de la preuve de clôture de cette commande ; aucun manque de disque n’est déduit.",
-        "owners_waiting" => "Faites vérifier la fermeture du transport, de ses lecteurs et du journal de cette commande.",
-        "signaler_unavailable" => "Faites vérifier pourquoi le thread de signalisation n’a pas pu démarrer ; la sous-cause reste inconnue.",
-        _ => return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "invalid_drain_cause")),
+        "signal_refused" => {
+            "Faites vérifier les identités et les droits de signalisation des descendants de cette commande."
+        }
+        "descendants_alive" => {
+            "Faites inspecter les descendants encore présents avant de décider leur arrêt ciblé."
+        }
+        "reap_unavailable" => {
+            "Faites vérifier la filiation, les identités de processus et la disponibilité de la récolte native."
+        }
+        "proof_store_unavailable" => {
+            "Faites vérifier le reçu et le stockage de la preuve de clôture de cette commande ; aucun manque de disque n’est déduit."
+        }
+        "owners_waiting" => {
+            "Faites vérifier la fermeture du transport, de ses lecteurs et du journal de cette commande."
+        }
+        "signaler_unavailable" => {
+            "Faites vérifier pourquoi le thread de signalisation n’a pas pu démarrer ; la sous-cause reste inconnue."
+        }
+        _ => {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "invalid_drain_cause",
+            ));
+        }
     };
-    let guidance = format!("{action} Conservez la tâche et son dossier ; ne créez pas de remplacement.");
+    let guidance =
+        format!("{action} Conservez la tâche et son dossier ; ne créez pas de remplacement.");
     Ok(serde_json::json!({
         "code":"native_drain_stop_unconfirmed", "scope":"task", "cause":cause, "phase":phase,
         "task_id":command.task_id, "command_id":command.command_id, "generation":command.generation,
@@ -851,7 +888,10 @@ fn defer_ordinary_delivery(frame: &DaemonToWrapper, busy: bool) -> bool {
 }
 
 fn ordinary_queue_message(message: &bridget_core::BridgetMessage) -> bool {
-    matches!(message.intent,None|Some(bridget_core::MessageIntent::QueueOnly))
+    matches!(
+        message.intent,
+        None | Some(bridget_core::MessageIntent::QueueOnly)
+    )
 }
 
 fn deliver_provider_message<S: Transport + ?Sized>(
@@ -1057,7 +1097,7 @@ pub(crate) struct IdempotentDeliveryTracker {
     instance_id: String,
     receipts: ReceiptStore,
     pending: BTreeMap<String, VecDeque<PendingAcpDispatch>>,
-    ordinary: BTreeMap<String,usize>,
+    ordinary: BTreeMap<String, usize>,
     reply_outbox: Option<crate::reply_outbox244::ReplyOutbox>,
     reply_state_home: std::path::PathBuf,
     modern_reply_core: bool,
@@ -1076,9 +1116,18 @@ enum IdempotentDeliveryAction {
 }
 
 impl IdempotentDeliveryTracker {
-    pub(crate) fn receipt_report(&self, delivery_id: String, instance: &str, generation: u64, now: i64) -> Option<WrapperToDaemon> {
-        (instance == self.instance_id && self.receipts.is_acknowledged(&delivery_id,now))
-            .then_some(WrapperToDaemon::DeliverAcked { delivery_id, delivery_generation:generation })
+    pub(crate) fn receipt_report(
+        &self,
+        delivery_id: String,
+        instance: &str,
+        generation: u64,
+        now: i64,
+    ) -> Option<WrapperToDaemon> {
+        (instance == self.instance_id && self.receipts.is_acknowledged(&delivery_id, now))
+            .then_some(WrapperToDaemon::DeliverAcked {
+                delivery_id,
+                delivery_generation: generation,
+            })
     }
     pub(crate) fn open(home: &std::path::Path, instance_id: &str) -> Result<Self, String> {
         let state_home = crate::environment::root_for_home(home)?.join("state");
@@ -1094,37 +1143,72 @@ impl IdempotentDeliveryTracker {
             receipts,
             pending: BTreeMap::new(),
             ordinary: BTreeMap::new(),
-            reply_outbox: if state_home.join("native-replies244").exists() {Some(crate::reply_outbox244::ReplyOutbox::open(state_home,instance_id)?)} else {None},
+            reply_outbox: if state_home.join("native-replies244").exists() {
+                Some(crate::reply_outbox244::ReplyOutbox::open(
+                    state_home,
+                    instance_id,
+                )?)
+            } else {
+                None
+            },
             reply_state_home: state_home.to_owned(),
-            modern_reply_core:false,
-            requires_binding:false,
-            last_reply_retry:Instant::now(),
+            modern_reply_core: false,
+            requires_binding: false,
+            last_reply_retry: Instant::now(),
         })
     }
 
-    fn retain_reply(&mut self,original:&bridget_core::BridgetMessage,reply:bridget_core::BridgetMessage)->Result<bridget_core::BridgetMessage,String> {
-        if self.reply_outbox.is_none(){self.reply_outbox=Some(crate::reply_outbox244::ReplyOutbox::open(&self.reply_state_home,&self.instance_id)?);}
-        self.reply_outbox.as_ref().unwrap().retain(original,reply,unix_now_secs())
+    fn retain_reply(
+        &mut self,
+        original: &bridget_core::BridgetMessage,
+        reply: bridget_core::BridgetMessage,
+    ) -> Result<bridget_core::BridgetMessage, String> {
+        if self.reply_outbox.is_none() {
+            self.reply_outbox = Some(crate::reply_outbox244::ReplyOutbox::open(
+                &self.reply_state_home,
+                &self.instance_id,
+            )?);
+        }
+        self.reply_outbox
+            .as_ref()
+            .unwrap()
+            .retain(original, reply, unix_now_secs())
     }
-    fn acknowledge_reply(&self,id:&str)->Result<(),String> {
-        if let Some(outbox)=&self.reply_outbox {outbox.acknowledged(id)?;} Ok(())
+    fn acknowledge_reply(&self, id: &str) -> Result<(), String> {
+        if let Some(outbox) = &self.reply_outbox {
+            outbox.acknowledged(id)?;
+        }
+        Ok(())
     }
-    fn retry_reply(&mut self,writer:&Arc<Mutex<Option<BufWriter<UnixStream>>>>)->Result<(),String> {
-        if !self.modern_reply_core || self.last_reply_retry.elapsed()<Duration::from_secs(5){return Ok(());}
-        self.last_reply_retry=Instant::now();
-        if let Some(outbox)=&self.reply_outbox && let Some(message)=outbox.pending(unix_now_secs())? {
-            send_wrapper_message(writer,WrapperToDaemon::Send(message));
+    fn retry_reply(
+        &mut self,
+        writer: &Arc<Mutex<Option<BufWriter<UnixStream>>>>,
+    ) -> Result<(), String> {
+        if !self.modern_reply_core || self.last_reply_retry.elapsed() < Duration::from_secs(5) {
+            return Ok(());
+        }
+        self.last_reply_retry = Instant::now();
+        if let Some(outbox) = &self.reply_outbox
+            && let Some(message) = outbox.pending(unix_now_secs())?
+        {
+            send_wrapper_message(writer, WrapperToDaemon::Send(message));
         }
         Ok(())
     }
 
-    fn admit_ordinary(&mut self,message: &bridget_core::BridgetMessage) {
-        *self.ordinary.entry(message.id.clone()).or_default()+=1;
+    fn admit_ordinary(&mut self, message: &bridget_core::BridgetMessage) {
+        *self.ordinary.entry(message.id.clone()).or_default() += 1;
     }
-    fn ordinary_active(&self,id: &str) -> bool { self.ordinary.get(id).is_some_and(|n|*n>0) }
-    fn finish_ordinary(&mut self,id: &str) {
-        if let Some(count)=self.ordinary.get_mut(id) {
-            if *count>1 {*count-=1;}else{self.ordinary.remove(id);}
+    fn ordinary_active(&self, id: &str) -> bool {
+        self.ordinary.get(id).is_some_and(|n| *n > 0)
+    }
+    fn finish_ordinary(&mut self, id: &str) {
+        if let Some(count) = self.ordinary.get_mut(id) {
+            if *count > 1 {
+                *count -= 1;
+            } else {
+                self.ordinary.remove(id);
+            }
         }
     }
 
@@ -1353,7 +1437,7 @@ pub(crate) fn deliver_batch_to_interactive(
                 message,
                 now,
             ) {
-                IdempotentDeliveryAction::Pending => {},
+                IdempotentDeliveryAction::Pending => {}
                 IdempotentDeliveryAction::Report(report) => reports.push(report),
                 IdempotentDeliveryAction::Inject {
                     message,
@@ -2074,19 +2158,19 @@ fn connect_and_register(
     turn_in_progress: bool,
 ) -> Result<(BufReader<UnixStream>, BufWriter<UnixStream>, String), String> {
     connect_and_register_with_domain_at(ConnectAndRegisterWithDomainAtArgs {
-socket: &socket_path(),
-agent_type,
-agent_id,
-host,
-protocol,
-channel,
-mode,
-location,
-os,
-instance_id,
-turn_in_progress,
-turn_attest: false,
-})
+        socket: &socket_path(),
+        agent_type,
+        agent_id,
+        host,
+        protocol,
+        channel,
+        mode,
+        location,
+        os,
+        instance_id,
+        turn_in_progress,
+        turn_attest: false,
+    })
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2105,27 +2189,42 @@ pub(crate) struct ConnectAndRegisterWithDomainAtArgs<'a> {
     pub turn_attest: bool,
 }
 
-pub(crate) fn connect_and_register_with_domain_at(args: ConnectAndRegisterWithDomainAtArgs<'_>) -> Result<(BufReader<UnixStream>, BufWriter<UnixStream>, String), String> {
-    let ConnectAndRegisterWithDomainAtArgs { socket, agent_type, agent_id, host, protocol, channel, mode, location, os, instance_id, turn_in_progress, turn_attest } = args;
+pub(crate) fn connect_and_register_with_domain_at(
+    args: ConnectAndRegisterWithDomainAtArgs<'_>,
+) -> Result<(BufReader<UnixStream>, BufWriter<UnixStream>, String), String> {
+    let ConnectAndRegisterWithDomainAtArgs {
+        socket,
+        agent_type,
+        agent_id,
+        host,
+        protocol,
+        channel,
+        mode,
+        location,
+        os,
+        instance_id,
+        turn_in_progress,
+        turn_attest,
+    } = args;
     let derived_domain = derive_domain();
     let Some(identity) =
         agent_id.filter(|value| bridget_core::router::validate_agent_id(value).is_ok())
     else {
         let mut connection = connect_and_register_at(ConnectAndRegisterAtArgs {
-socket,
-agent_type,
-agent_id,
-host,
-protocol,
-channel,
-mode,
-location,
-os,
-instance_id,
-domain: derived_domain.as_deref(),
-turn_in_progress,
-turn_attest,
-})?;
+            socket,
+            agent_type,
+            agent_id,
+            host,
+            protocol,
+            channel,
+            mode,
+            location,
+            os,
+            instance_id,
+            domain: derived_domain.as_deref(),
+            turn_in_progress,
+            turn_attest,
+        })?;
         announce_wrapper_project(&mut connection.1, host)?;
         return Ok(connection);
     };
@@ -2138,20 +2237,20 @@ turn_attest,
     let domain_override = crate::communication::client::read_domain_override(&domain_lock)
         .map_err(|error| error.to_string())?;
     let mut connection = connect_and_register_at(ConnectAndRegisterAtArgs {
-socket,
-agent_type,
-agent_id: Some(identity),
-host,
-protocol,
-channel,
-mode,
-location,
-os,
-instance_id,
-domain: derived_domain.as_deref(),
-turn_in_progress,
-turn_attest,
-})?;
+        socket,
+        agent_type,
+        agent_id: Some(identity),
+        host,
+        protocol,
+        channel,
+        mode,
+        location,
+        os,
+        instance_id,
+        domain: derived_domain.as_deref(),
+        turn_in_progress,
+        turn_attest,
+    })?;
     if connection.2 != identity {
         return Err("enregistrement sous une identité inattendue".to_string());
     }
@@ -2215,8 +2314,24 @@ pub(crate) struct ConnectAndRegisterAtArgs<'a> {
     pub turn_attest: bool,
 }
 
-pub(crate) fn connect_and_register_at(args: ConnectAndRegisterAtArgs<'_>) -> Result<(BufReader<UnixStream>, BufWriter<UnixStream>, String), String> {
-    let ConnectAndRegisterAtArgs { socket, agent_type, agent_id, host, protocol, channel, mode, location, os, instance_id, domain, turn_in_progress, turn_attest } = args;
+pub(crate) fn connect_and_register_at(
+    args: ConnectAndRegisterAtArgs<'_>,
+) -> Result<(BufReader<UnixStream>, BufWriter<UnixStream>, String), String> {
+    let ConnectAndRegisterAtArgs {
+        socket,
+        agent_type,
+        agent_id,
+        host,
+        protocol,
+        channel,
+        mode,
+        location,
+        os,
+        instance_id,
+        domain,
+        turn_in_progress,
+        turn_attest,
+    } = args;
     crate::environment::Namespace::from_environment()?;
     let stream = bridget_transport::jsonl::connect_nonblocking(
         socket,
@@ -2265,15 +2380,20 @@ pub(crate) fn connect_and_register_at(args: ConnectAndRegisterAtArgs<'_>) -> Res
     writer.flush().map_err(|e| e.to_string())?;
 
     let mut line = String::new();
-    let received=reader.read_line(&mut line)
-        .map_err(|e| format!("réponse d’enregistrement indisponible après attente bornée à 10 s: {e}"))?;
-    if received==0 {return Err("daemon fermé pendant l'enregistrement : aucune réponse reçue".into());}
+    let received = reader.read_line(&mut line).map_err(|e| {
+        format!("réponse d’enregistrement indisponible après attente bornée à 10 s: {e}")
+    })?;
+    if received == 0 {
+        return Err("daemon fermé pendant l'enregistrement : aucune réponse reçue".into());
+    }
     match decode(line.trim()).map_err(|_| "réponse d'enregistrement invalide".to_string())? {
         DaemonToWrapper::Registered {
             agent_id,
             credential,
         } => {
-            reader.get_ref().set_read_timeout(Some(Duration::from_secs(1)))
+            reader
+                .get_ref()
+                .set_read_timeout(Some(Duration::from_secs(1)))
                 .map_err(|e| e.to_string())?;
             if let Some(credential) = credential {
                 let root = socket.parent().ok_or("socket sans répertoire privé")?;
@@ -2568,7 +2688,12 @@ pub fn launch(
         )
         .map_err(|error| format!("activation du journal interactif impossible: {error}"))?,
     );
-    send_wrapper_message(&writer, WrapperToDaemon::JournalReady { receipt_probe: true });
+    send_wrapper_message(
+        &writer,
+        WrapperToDaemon::JournalReady {
+            receipt_probe: true,
+        },
+    );
     send_wrapper_message(&writer, WrapperToDaemon::DaemonIdentityRequest);
     let relay_writer = writer.clone();
     let mut relay = AttachRelayWorker::start(
@@ -2682,8 +2807,11 @@ pub fn launch(
 
     let mut command = Command::new(agent_binary);
     if definition.capabilities.account_profiles {
-        let isolated=crate::lifecycle::build_environment(&definition,&crate::lifecycle::source_environment())
-            .map_err(|error|format!("{error:?}"))?;
+        let isolated = crate::lifecycle::build_environment(
+            &definition,
+            &crate::lifecycle::source_environment(),
+        )
+        .map_err(|error| format!("{error:?}"))?;
         command.env_clear().envs(isolated);
     }
     command
@@ -2960,7 +3088,9 @@ pub fn launch(
                             relay.reset_generation();
                             send_wrapper_message(
                                 &writer_for_listener,
-                                WrapperToDaemon::JournalReady { receipt_probe: true },
+                                WrapperToDaemon::JournalReady {
+                                    receipt_probe: true,
+                                },
                             );
                             // La présence runtime a disparu avec le daemon :
                             // republier modèle/effort même s'ils n'ont pas changé.
@@ -3046,9 +3176,18 @@ pub fn launch(
                         warn!("livraison ignorée : aucun pane tmux pour {}", bm.id);
                     }
                 }
-                DaemonToWrapper::DeliveryReceiptQuery { delivery_id,recipient_instance_id,delivery_generation } => {
-                    if let Some(report)=idempotent_deliveries.receipt_report(delivery_id,&recipient_instance_id,delivery_generation,unix_now_secs()) {
-                        send_wrapper_message(&writer_for_listener,report);
+                DaemonToWrapper::DeliveryReceiptQuery {
+                    delivery_id,
+                    recipient_instance_id,
+                    delivery_generation,
+                } => {
+                    if let Some(report) = idempotent_deliveries.receipt_report(
+                        delivery_id,
+                        &recipient_instance_id,
+                        delivery_generation,
+                        unix_now_secs(),
+                    ) {
+                        send_wrapper_message(&writer_for_listener, report);
                     }
                 }
                 DaemonToWrapper::DeliverIdempotent {
@@ -3160,7 +3299,9 @@ pub fn launch(
                                 relay.reset_generation();
                                 send_wrapper_message(
                                     &writer_for_listener,
-                                    WrapperToDaemon::JournalReady { receipt_probe: true },
+                                    WrapperToDaemon::JournalReady {
+                                        receipt_probe: true,
+                                    },
                                 );
                                 if let Some(probe) = runtime_probe.as_mut() {
                                     probe.invalidate_after_reconnect();
@@ -3411,10 +3552,10 @@ impl Default for AttachRelayHooks {
 /// Les clones partagent les mêmes bornes, annulations et état de fermeture.
 #[derive(Clone)]
 pub(crate) struct AttachRelayControl {
-    commands:mpsc::SyncSender<AttachRelayCommand>,
-    control_state:Arc<Mutex<AttachRelayControlState>>,
-    control_observed:Arc<dyn Fn()+Send+Sync>,
-    wake:Arc<(Mutex<()>,Condvar)>,
+    commands: mpsc::SyncSender<AttachRelayCommand>,
+    control_state: Arc<Mutex<AttachRelayControlState>>,
+    control_observed: Arc<dyn Fn() + Send + Sync>,
+    wake: Arc<(Mutex<()>, Condvar)>,
 }
 
 impl AttachRelayControl {
@@ -3424,10 +3565,7 @@ impl AttachRelayControl {
         window: AttachWindow,
     ) -> Result<(), AttachRefusal> {
         {
-            let mut state = self
-                .control_state
-                .lock()
-                .recover_poison();
+            let mut state = self.control_state.lock().recover_poison();
             if state.pending.len().saturating_add(state.active.len())
                 >= ATTACH_RELAY_CONTROL_IDS_CAPACITY
             {
@@ -3458,10 +3596,7 @@ impl AttachRelayControl {
     }
 
     pub(crate) fn unsubscribe(&self, subscription_id: String) {
-        let mut state = self
-            .control_state
-            .lock()
-            .recover_poison();
+        let mut state = self.control_state.lock().recover_poison();
         if state.pending.contains(&subscription_id) || state.active.contains(&subscription_id) {
             state.cancelled.insert(subscription_id);
             drop(state);
@@ -3469,7 +3604,6 @@ impl AttachRelayControl {
             self.wake.1.notify_all();
         }
     }
-
 }
 
 /// Relais dédié du journal ACP : la boucle de lecture du wrapper ne fait que
@@ -3576,11 +3710,7 @@ impl AttachRelayWorker {
                     subscriptions.clear();
                     live_fanout = LiveFanout::default();
                     had_live_subscriptions = false;
-                    worker_control
-                        .lock()
-                        .recover_poison()
-                        .active
-                        .clear();
+                    worker_control.lock().recover_poison().active.clear();
                     seen_generation = current_generation;
                     let (ack, wake) = &*worker_generation_ack;
                     *ack.lock().recover_poison() = seen_generation;
@@ -3607,9 +3737,7 @@ impl AttachRelayWorker {
                 }) = command
                 {
                     let cancelled = {
-                        let mut state = worker_control
-                            .lock()
-                            .recover_poison();
+                        let mut state = worker_control.lock().recover_poison();
                         state.pending.remove(&subscription_id);
                         let cancelled = state.cancelled.remove(&subscription_id);
                         if !cancelled {
@@ -3708,7 +3836,7 @@ impl AttachRelayWorker {
                                 // Libérer l'identifiant avant la fin visible : un
                                 // désabonnement à réception de End ne laisse rien.
                                 {
-                                    let mut control=worker_control.lock().recover_poison();
+                                    let mut control = worker_control.lock().recover_poison();
                                     control.active.remove(&subscription_id);
                                     control.cancelled.remove(&subscription_id);
                                 }
@@ -3737,7 +3865,7 @@ impl AttachRelayWorker {
                             "source de journal indisponible"
                         };
                         {
-                            let mut control=worker_control.lock().recover_poison();
+                            let mut control = worker_control.lock().recover_poison();
                             control.active.remove(&subscription_id);
                             control.cancelled.remove(&subscription_id);
                         }
@@ -3929,24 +4057,28 @@ impl AttachRelayWorker {
     /// Même file et même état bornés ; aucun second relais.
     pub(crate) fn subscription_control(&self) -> AttachRelayControl {
         AttachRelayControl {
-            commands:self.commands.clone(),control_state:self.control_state.clone(),
-            control_observed:self.control_observed.clone(),wake:self.wake.clone(),
+            commands: self.commands.clone(),
+            control_state: self.control_state.clone(),
+            control_observed: self.control_observed.clone(),
+            wake: self.wake.clone(),
         }
     }
 
-    pub(crate) fn subscribe(&self, subscription_id:String, window:AttachWindow) -> Result<(),AttachRefusal> {
-        self.subscription_control().subscribe(subscription_id,window)
+    pub(crate) fn subscribe(
+        &self,
+        subscription_id: String,
+        window: AttachWindow,
+    ) -> Result<(), AttachRefusal> {
+        self.subscription_control()
+            .subscribe(subscription_id, window)
     }
 
-    pub(crate) fn unsubscribe(&self, subscription_id:String) {
+    pub(crate) fn unsubscribe(&self, subscription_id: String) {
         self.subscription_control().unsubscribe(subscription_id)
     }
 
     pub(crate) fn reset_generation(&self) {
-        let mut state = self
-            .control_state
-            .lock()
-            .recover_poison();
+        let mut state = self.control_state.lock().recover_poison();
         let pending = state.pending.iter().cloned().collect::<Vec<_>>();
         state.cancelled.extend(pending);
         state.active.clear();
@@ -3959,9 +4091,7 @@ impl AttachRelayWorker {
         let (ack, wake) = &*self.generation_ack;
         let mut acknowledged = ack.lock().recover_poison();
         while *acknowledged < generation {
-            acknowledged = wake
-                .wait(acknowledged)
-                .recover_poison();
+            acknowledged = wake.wait(acknowledged).recover_poison();
         }
     }
 
@@ -4233,19 +4363,26 @@ fn spawn_managed_session_transport(
     agent_name: Option<String>,
     instance_id: &str,
     socket: &Path,
-    repair: Option<(&serde_json::Value,&str)>,
+    repair: Option<(&serde_json::Value, &str)>,
 ) -> Result<Box<dyn ManagedSession>, Box<dyn std::error::Error>> {
-    if let Some(policy) = repair.map(|v|Ok(Some(v.0.clone()))).unwrap_or_else(|| std::env::var(crate::native_permissions::CHILD_POLICY_ENV)
-        .ok().map(|raw| serde_json::from_str::<serde_json::Value>(&raw)).transpose())
+    if let Some(policy) = repair
+        .map(|v| Ok(Some(v.0.clone())))
+        .unwrap_or_else(|| {
+            std::env::var(crate::native_permissions::CHILD_POLICY_ENV)
+                .ok()
+                .map(|raw| serde_json::from_str::<serde_json::Value>(&raw))
+                .transpose()
+        })
         .map_err(|_| "permission_attestation_unavailable")?
-        && let Some(context) = policy.get("launch_context") {
-            crate::native_permissions::recheck_context(
-                context,
-                definition,
-                &std::env::current_dir()?,
-                &crate::lifecycle::source_environment(),
-            )?;
-        }
+        && let Some(context) = policy.get("launch_context")
+    {
+        crate::native_permissions::recheck_context(
+            context,
+            definition,
+            &std::env::current_dir()?,
+            &crate::lifecycle::source_environment(),
+        )?;
+    }
     match definition.protocol.as_str() {
         "acp" => {
             let options = AcpOptions {
@@ -4329,16 +4466,26 @@ fn spawn_managed_session_transport(
                 notify_timeout_secs: definition.notify_timeout_secs,
                 model: codex_model_from_args(&definition.args),
                 permissions: definition.permissions.clone(),
-                provider_observation: crate::provider_program_compat::runtime_observation(definition, &crate::lifecycle::source_environment())?,
-                thread_bootstrap: repair.map_or(Default::default(),|v|
-                    bridget_transport::codex_app_server::CodexThreadBootstrap::Resume {thread_id:v.1.into()}),
+                provider_observation: crate::provider_program_compat::runtime_observation(
+                    definition,
+                    &crate::lifecycle::source_environment(),
+                )?,
+                thread_bootstrap: repair.map_or(Default::default(), |v| {
+                    bridget_transport::codex_app_server::CodexThreadBootstrap::Resume {
+                        thread_id: v.1.into(),
+                    }
+                }),
                 dynamic_tool_handler,
             };
             let environment = string_environment(mcp_environment);
             if repair.is_some() {
-                return Ok(Box::new(CodexAppServerTransport::spawn_repair_with_environment(
-                    options,&environment,inherit_stderr
-                )?));
+                return Ok(Box::new(
+                    CodexAppServerTransport::spawn_repair_with_environment(
+                        options,
+                        &environment,
+                        inherit_stderr,
+                    )?,
+                ));
             }
             if inherit_stderr {
                 Ok(Box::new(
@@ -4491,14 +4638,15 @@ fn launch_session_with_status(
             .transpose()
             .map_err(|_| "permission_attestation_unavailable")?;
     if let Some(policy) = &inherited_policy
-        && let Some(context) = policy.get("launch_context") {
-            crate::native_permissions::recheck_context(
-                context,
-                definition,
-                &std::env::current_dir()?,
-                &crate::lifecycle::source_environment(),
-            )?;
-        }
+        && let Some(context) = policy.get("launch_context")
+    {
+        crate::native_permissions::recheck_context(
+            context,
+            definition,
+            &std::env::current_dir()?,
+            &crate::lifecycle::source_environment(),
+        )?;
+    }
     if interactive.is_some() && definition.protocol != "codex_app_server" {
         return Err("Codex interactif requiert le pilote natif codex_app_server".into());
     }
@@ -4742,30 +4890,31 @@ fn launch_session_with_status(
     }
     let descriptor = transport.descriptor();
     let channel = connection_channel();
-    let (mut reader, initial_writer, mut my_name) = match connect_and_register_with_domain_at(ConnectAndRegisterWithDomainAtArgs {
-socket,
-agent_type,
-agent_id: effective_name.as_deref(),
-host: &host,
-protocol: &definition.protocol,
-channel: channel.as_deref(),
-mode: descriptor.mode,
-location: descriptor.location.as_deref(),
-os: &os,
-instance_id: &instance_id,
-turn_in_progress: false,
-turn_attest: true,
-}) {
-        Ok(connection) => connection,
-        Err(error) => {
-            #[cfg(target_os = "linux")]
-            if let Some(guard) = &remote_drain {
-                guard.begin_stop();
+    let (mut reader, initial_writer, mut my_name) =
+        match connect_and_register_with_domain_at(ConnectAndRegisterWithDomainAtArgs {
+            socket,
+            agent_type,
+            agent_id: effective_name.as_deref(),
+            host: &host,
+            protocol: &definition.protocol,
+            channel: channel.as_deref(),
+            mode: descriptor.mode,
+            location: descriptor.location.as_deref(),
+            os: &os,
+            instance_id: &instance_id,
+            turn_in_progress: false,
+            turn_attest: true,
+        }) {
+            Ok(connection) => connection,
+            Err(error) => {
+                #[cfg(target_os = "linux")]
+                if let Some(guard) = &remote_drain {
+                    guard.begin_stop();
+                }
+                transport.stop();
+                return Err(error.into());
             }
-            transport.stop();
-            return Err(error.into());
-        }
-    };
+        };
     let display_name = if let Some(name) = interactive
         .as_ref()
         .and_then(|launch| launch.display_name.as_deref())
@@ -4794,13 +4943,20 @@ turn_attest: true,
     };
     let writer = Arc::new(Mutex::new(Some(initial_writer)));
     let mut idempotent_deliveries = IdempotentDeliveryTracker::open(home, &instance_id)?;
-    idempotent_deliveries.requires_binding=native_bootstrap.is_some() || remote_result_context.is_some();
+    idempotent_deliveries.requires_binding =
+        native_bootstrap.is_some() || remote_result_context.is_some();
     let mut execution_bindings = HashMap::new();
-    let inbox_path=crate::environment::root_for_home(home)?.join("state")
+    let inbox_path = crate::environment::root_for_home(home)?
+        .join("state")
         .join(format!("native-inbox-{instance_id}.sqlite"));
-    let mut durable_inbox=if inbox_path.exists() {
-        Some(crate::delivery_spool244::DeliverySpool::open(&inbox_path,&instance_id)?)
-    } else { None };
+    let mut durable_inbox = if inbox_path.exists() {
+        Some(crate::delivery_spool244::DeliverySpool::open(
+            &inbox_path,
+            &instance_id,
+        )?)
+    } else {
+        None
+    };
     let child_requests = Mutex::new(ManagedChildRequests::default());
     let forward_child_requests =
         std::env::var(NATIVE_CHILD_REQUESTS_ENV).as_deref() == Ok("forward");
@@ -4824,7 +4980,12 @@ turn_attest: true,
         }
     }
     apply_pending_profile_instructions(socket, transport.as_mut(), &my_name, &instance_id);
-    send_wrapper_message(&writer, WrapperToDaemon::JournalReady { receipt_probe: true });
+    send_wrapper_message(
+        &writer,
+        WrapperToDaemon::JournalReady {
+            receipt_probe: true,
+        },
+    );
     send_wrapper_message(&writer, WrapperToDaemon::DaemonIdentityRequest);
     send_wrapper_message(
         &writer,
@@ -4878,15 +5039,23 @@ turn_attest: true,
     if let Some(reporter) = managed_reporter.as_mut() {
         reporter.startup_succeeded();
     }
-    if let Some(context)=remote_result_context.as_ref()
-        && cfg!(target_os="linux") && definition.protocol=="codex_app_server"
-            && let Some(identity)=transport.provider_identity()
-                && identity.provider_observation.as_ref().is_some_and(|v|
-                    v.supports(bridget_transport::protocol::ProviderOperation::Resume))
-                    && let Some(thread_id)=identity.provider_thread_id {
-                        crate::remote_worker::workspace_repair::publish_capability(
-                            &context.store_root,&context.worker,&context.command,&thread_id)?;
-                    }
+    if let Some(context) = remote_result_context.as_ref()
+        && cfg!(target_os = "linux")
+        && definition.protocol == "codex_app_server"
+        && let Some(identity) = transport.provider_identity()
+        && identity
+            .provider_observation
+            .as_ref()
+            .is_some_and(|v| v.supports(bridget_transport::protocol::ProviderOperation::Resume))
+        && let Some(thread_id) = identity.provider_thread_id
+    {
+        crate::remote_worker::workspace_repair::publish_capability(
+            &context.store_root,
+            &context.worker,
+            &context.command,
+            &thread_id,
+        )?;
+    }
     // Le retour thread/start ou thread/resume fournit déjà le fait effectif.
     // Le publier avant la TUI : son prompt initial peut lancer une délégation.
     let mut last_permission_fact = None;
@@ -4952,31 +5121,59 @@ turn_attest: true,
     let mut last_heartbeat = Instant::now();
     let mut last_provider_spawn = Instant::now();
     let mut consecutive_fast_failures = 0_u32;
-    let mut workspace_repair_barrier:Option<bridget_transport::protocol::WorkspaceRepairRequestV1>=None;
-    let mut workspace_repair_pending_receipt:Option<bridget_transport::protocol::WorkspaceRepairStatusV1>=None;
-    let mut last_repair_receipt_attempt=Instant::now();
+    let mut workspace_repair_barrier: Option<
+        bridget_transport::protocol::WorkspaceRepairRequestV1,
+    > = None;
+    let mut workspace_repair_pending_receipt: Option<
+        bridget_transport::protocol::WorkspaceRepairStatusV1,
+    > = None;
+    let mut last_repair_receipt_attempt = Instant::now();
 
     loop {
-        if last_repair_receipt_attempt.elapsed()>=Duration::from_millis(250) {
-            if let (Some(status),Some(context))=(&workspace_repair_pending_receipt,&remote_result_context)
-                && workspace_repair::persist_pending(context,status) {
-                    let status=status.clone();
-                    if status.phase=="refused" {workspace_repair_barrier=None;}
-                    send_wrapper_message(&writer,WrapperToDaemon::WorkspaceRepairResult {
-                        task_id:context.command.task_id.clone(),status});
-                    workspace_repair_pending_receipt=None;
+        if last_repair_receipt_attempt.elapsed() >= Duration::from_millis(250) {
+            if let (Some(status), Some(context)) =
+                (&workspace_repair_pending_receipt, &remote_result_context)
+                && workspace_repair::persist_pending(context, status)
+            {
+                let status = status.clone();
+                if status.phase == "refused" {
+                    workspace_repair_barrier = None;
                 }
-            last_repair_receipt_attempt=Instant::now();
+                send_wrapper_message(
+                    &writer,
+                    WrapperToDaemon::WorkspaceRepairResult {
+                        task_id: context.command.task_id.clone(),
+                        status,
+                    },
+                );
+                workspace_repair_pending_receipt = None;
+            }
+            last_repair_receipt_attempt = Instant::now();
         }
-        if let (Some(request),Some(context))=(&workspace_repair_barrier,&remote_result_context) {
-            if crate::remote_worker::workspace_repair::published(&context.store_root,&context.command,request) {
-                workspace_repair_barrier=None;
+        if let (Some(request), Some(context)) = (&workspace_repair_barrier, &remote_result_context)
+        {
+            if crate::remote_worker::workspace_repair::published(
+                &context.store_root,
+                &context.command,
+                request,
+            ) {
+                workspace_repair_barrier = None;
             } else {
                 // Aucun message (y compris les événements système) ne rejoint
                 // le fournisseur avant la publication. L'annulation native
                 // reste prioritaire via le signal détenu par le worker.
-                if native_termination.as_ref().is_some_and(NativeTerminationSignal::requested) {break;}
-                reattest_managed_turn_if_due(&writer,transport.as_ref(),&mut last_heartbeat,Instant::now());
+                if native_termination
+                    .as_ref()
+                    .is_some_and(NativeTerminationSignal::requested)
+                {
+                    break;
+                }
+                reattest_managed_turn_if_due(
+                    &writer,
+                    transport.as_ref(),
+                    &mut last_heartbeat,
+                    Instant::now(),
+                );
                 thread::sleep(Duration::from_millis(25));
                 continue;
             }
@@ -5023,8 +5220,9 @@ turn_attest: true,
             consecutive_fast_failures = 0;
         }
         let events = transport.drain_events();
-        if let Err(error)=idempotent_deliveries.retry_reply(&writer) {
-            error!("réponse conservée, reprise non confirmée : {error}");break;
+        if let Err(error) = idempotent_deliveries.retry_reply(&writer) {
+            error!("réponse conservée, reprise non confirmée : {error}");
+            break;
         }
         let journal_failed = forward_managed_events_with_redaction(
             &writer,
@@ -5042,23 +5240,28 @@ turn_attest: true,
             break;
         }
         let mut line = String::new();
-        let mut from_durable_inbox=false;
+        let mut from_durable_inbox = false;
         let mut read_result = reader.read_line(&mut line);
         // Les contrôles du socket passent avant la file différée. Une remise
         // ordinaire attend la fin du tour sans remplir la file du fournisseur.
         if matches!(&read_result,Err(e) if matches!(e.kind(),std::io::ErrorKind::WouldBlock|std::io::ErrorKind::TimedOut))
-            && !transport.is_busy() && workspace_repair_barrier.is_none()
-            && let Some(inbox)=durable_inbox.as_mut() {
-                match inbox.next() {
-                    Ok(Some(frame)) => {
-                        line=serde_json::to_string(&frame)?;
-                        from_durable_inbox=true;
-                        read_result=Ok(line.len());
-                    }
-                    Ok(None) => {},
-                    Err(error) => {error!("file native illisible : {error} ; copie maître conservée");break;}
+            && !transport.is_busy()
+            && workspace_repair_barrier.is_none()
+            && let Some(inbox) = durable_inbox.as_mut()
+        {
+            match inbox.next() {
+                Ok(Some(frame)) => {
+                    line = serde_json::to_string(&frame)?;
+                    from_durable_inbox = true;
+                    read_result = Ok(line.len());
+                }
+                Ok(None) => {}
+                Err(error) => {
+                    error!("file native illisible : {error} ; copie maître conservée");
+                    break;
                 }
             }
+        }
         if native_termination
             .as_ref()
             .is_some_and(NativeTerminationSignal::requested)
@@ -5077,26 +5280,30 @@ turn_attest: true,
                     break;
                 }
                 relay.reset_generation();
-                let Some((new_reader, registered_name)) = reconnect_managed_session(ReconnectManagedSessionArgs {
-socket,
-writer: &writer,
-transport: transport.as_ref(),
-descriptor: &descriptor,
-protocol: &definition.protocol,
-agent_type,
-name_state_path: &name_state_path,
-host: &host,
-channel: channel.as_deref(),
-os: &os,
-instance_id: &instance_id,
-fallback_name: &my_name,
-terminal_session: interactive.is_some(),
-termination: native_termination.as_ref(),
-deadline: remote_result_context.as_ref().map(|_| Instant::now() + REMOTE_MASTER_RECONNECT_GRACE),
-}) else {
+                let Some((new_reader, registered_name)) =
+                    reconnect_managed_session(ReconnectManagedSessionArgs {
+                        socket,
+                        writer: &writer,
+                        transport: transport.as_ref(),
+                        descriptor: &descriptor,
+                        protocol: &definition.protocol,
+                        agent_type,
+                        name_state_path: &name_state_path,
+                        host: &host,
+                        channel: channel.as_deref(),
+                        os: &os,
+                        instance_id: &instance_id,
+                        fallback_name: &my_name,
+                        terminal_session: interactive.is_some(),
+                        termination: native_termination.as_ref(),
+                        deadline: remote_result_context
+                            .as_ref()
+                            .map(|_| Instant::now() + REMOTE_MASTER_RECONNECT_GRACE),
+                    })
+                else {
                     break;
                 };
-                idempotent_deliveries.modern_reply_core=false;
+                idempotent_deliveries.modern_reply_core = false;
                 reader = new_reader;
                 my_name = registered_name;
                 last_permission_fact = None;
@@ -5107,7 +5314,9 @@ deadline: remote_result_context.as_ref().map(|_| Instant::now() + REMOTE_MASTER_
                 {
                     break;
                 }
-                if forward_child_requests || !child_requests.lock().recover_poison().waiting.is_empty() {
+                if forward_child_requests
+                    || !child_requests.lock().recover_poison().waiting.is_empty()
+                {
                     let pending: Vec<_> = child_requests
                         .lock()
                         .recover_poison()
@@ -5123,24 +5332,41 @@ deadline: remote_result_context.as_ref().map(|_| Instant::now() + REMOTE_MASTER_
                 continue;
             }
             Ok(_) => match decode(line.trim()) {
-                Ok(DaemonToWrapper::DaemonIdentityReport{features,..})=>{
-                    idempotent_deliveries.modern_reply_core=features.iter().any(|f|f=="native_reply_outbox_v1");
+                Ok(DaemonToWrapper::DaemonIdentityReport { features, .. }) => {
+                    idempotent_deliveries.modern_reply_core =
+                        features.iter().any(|f| f == "native_reply_outbox_v1");
                 }
-                Ok(DaemonToWrapper::Nack{id,reason}) if id.starts_with("reply244-")=>{
-                    if let Some(outbox)=&idempotent_deliveries.reply_outbox
-                        && let Err(error)=outbox.refused(&id){error!("refus de réponse non conservé : {error}");break;}
-                    warn!("réponse conservée sans nouvelle tentative : {}",reason.chars().take(256).collect::<String>());
+                Ok(DaemonToWrapper::Nack { id, reason }) if id.starts_with("reply244-") => {
+                    if let Some(outbox) = &idempotent_deliveries.reply_outbox
+                        && let Err(error) = outbox.refused(&id)
+                    {
+                        error!("refus de réponse non conservé : {error}");
+                        break;
+                    }
+                    warn!(
+                        "réponse conservée sans nouvelle tentative : {}",
+                        reason.chars().take(256).collect::<String>()
+                    );
                 }
-                Ok(DaemonToWrapper::Ack{id,..})=>{
-                    if let Err(error)=idempotent_deliveries.acknowledge_reply(&id){
-                        error!("accusé de réponse non conservé : {error}");break;
+                Ok(DaemonToWrapper::Ack { id, .. }) => {
+                    if let Err(error) = idempotent_deliveries.acknowledge_reply(&id) {
+                        error!("accusé de réponse non conservé : {error}");
+                        break;
                     }
                 }
-                Ok(DaemonToWrapper::Deliver {message,..}
-                    | DaemonToWrapper::DeliverExecution {message,..}
-                    | DaemonToWrapper::DeliverIdempotent {message,..}) if workspace_repair_barrier.is_some() => {
-                    send_wrapper_message(&writer,bound_delivery_rejection(
-                        &execution_bindings,message.id,"workspace_repair_pending".into()));
+                Ok(
+                    DaemonToWrapper::Deliver { message, .. }
+                    | DaemonToWrapper::DeliverExecution { message, .. }
+                    | DaemonToWrapper::DeliverIdempotent { message, .. },
+                ) if workspace_repair_barrier.is_some() => {
+                    send_wrapper_message(
+                        &writer,
+                        bound_delivery_rejection(
+                            &execution_bindings,
+                            message.id,
+                            "workspace_repair_pending".into(),
+                        ),
+                    );
                 }
                 Ok(DaemonToWrapper::Deliver { message, .. }) => {
                     if let Err(reason) = remote_result_for_delivery(
@@ -5156,15 +5382,20 @@ deadline: remote_result_context.as_ref().map(|_| Instant::now() + REMOTE_MASTER_
                         continue;
                     }
                     idempotent_deliveries.record_historic(&message.id);
-                    let ordinary=!execution_bindings.contains_key(&message.id) && ordinary_queue_message(&message);
-                    if ordinary { idempotent_deliveries.admit_ordinary(&message); }
+                    let ordinary = !execution_bindings.contains_key(&message.id)
+                        && ordinary_queue_message(&message);
+                    if ordinary {
+                        idempotent_deliveries.admit_ordinary(&message);
+                    }
                     if let Err(error) = deliver_provider_message(
                         transport.as_mut(),
                         &message,
                         &mut deferred_native_context,
                     ) {
                         idempotent_deliveries.historic_injection_failed(&message.id);
-                        if ordinary { idempotent_deliveries.finish_ordinary(&message.id); }
+                        if ordinary {
+                            idempotent_deliveries.finish_ordinary(&message.id);
+                        }
                         send_wrapper_message(
                             &writer,
                             bound_delivery_rejection(
@@ -5240,22 +5471,48 @@ deadline: remote_result_context.as_ref().map(|_| Instant::now() + REMOTE_MASTER_
                         send_wrapper_message(&writer, rejection);
                     }
                 }
-                Ok(DaemonToWrapper::DeliveryReceiptQuery { delivery_id,recipient_instance_id,delivery_generation }) => {
-                    if let Some(report)=idempotent_deliveries.receipt_report(delivery_id,&recipient_instance_id,delivery_generation,unix_now_secs()) {
-                        send_wrapper_message(&writer,report);
+                Ok(DaemonToWrapper::DeliveryReceiptQuery {
+                    delivery_id,
+                    recipient_instance_id,
+                    delivery_generation,
+                }) => {
+                    if let Some(report) = idempotent_deliveries.receipt_report(
+                        delivery_id,
+                        &recipient_instance_id,
+                        delivery_generation,
+                        unix_now_secs(),
+                    ) {
+                        send_wrapper_message(&writer, report);
                     }
                 }
                 Ok(frame @ DaemonToWrapper::DeliverIdempotent { .. })
-                    if !from_durable_inbox && defer_ordinary_delivery(&frame,
-                        transport.is_busy() || durable_inbox.as_ref().is_some_and(|inbox|inbox.has_pending())) => {
+                    if !from_durable_inbox
+                        && defer_ordinary_delivery(
+                            &frame,
+                            transport.is_busy()
+                                || durable_inbox
+                                    .as_ref()
+                                    .is_some_and(|inbox| inbox.has_pending()),
+                        ) =>
+                {
                     if durable_inbox.is_none() {
-                        match crate::delivery_spool244::DeliverySpool::open(&inbox_path,&instance_id) {
-                            Ok(inbox)=>durable_inbox=Some(inbox),
-                            Err(error)=>{error!("file native indisponible : {error} ; copie maître conservée");break;}
+                        match crate::delivery_spool244::DeliverySpool::open(
+                            &inbox_path,
+                            &instance_id,
+                        ) {
+                            Ok(inbox) => durable_inbox = Some(inbox),
+                            Err(error) => {
+                                error!(
+                                    "file native indisponible : {error} ; copie maître conservée"
+                                );
+                                break;
+                            }
                         }
                     }
-                    if let Err(error)=durable_inbox.as_ref().unwrap().defer(&frame) {
-                        error!("remise différée refusée : {error} ; copie maître et tour fournisseur conservés");
+                    if let Err(error) = durable_inbox.as_ref().unwrap().defer(&frame) {
+                        error!(
+                            "remise différée refusée : {error} ; copie maître et tour fournisseur conservés"
+                        );
                         // Un conflit de remise ne ferme pas le fournisseur.
                         // Aucun ACK ni injection : le maître conserve l'issue.
                         continue;
@@ -5310,9 +5567,10 @@ deadline: remote_result_context.as_ref().map(|_| Instant::now() + REMOTE_MASTER_
                                 old.execution_id != next.execution_id
                                     || old.generation != next.generation
                             })
-                        }) {
-                            execution_bindings.remove(&message_id);
-                        }
+                        })
+                    {
+                        execution_bindings.remove(&message_id);
+                    }
                     if bind_idempotent_delivery_execution(
                         &mut execution_bindings,
                         &message_id,
@@ -5324,9 +5582,10 @@ deadline: remote_result_context.as_ref().map(|_| Instant::now() + REMOTE_MASTER_
                         publish_provider_context(&writer, &execution_bindings, &identity);
                     }
                     if let Some(binding) = execution_bindings.get_mut(&message_id)
-                        && remote_result.is_some() {
-                            binding.remote_result = remote_result;
-                        }
+                        && remote_result.is_some()
+                    {
+                        binding.remote_result = remote_result;
+                    }
                     match idempotent_deliveries.receive(
                         delivery_id,
                         recipient_instance_id,
@@ -5335,7 +5594,7 @@ deadline: remote_result_context.as_ref().map(|_| Instant::now() + REMOTE_MASTER_
                         message,
                         unix_now_secs(),
                     ) {
-                        IdempotentDeliveryAction::Pending => {},
+                        IdempotentDeliveryAction::Pending => {}
                         IdempotentDeliveryAction::Report(report) => {
                             send_wrapper_message(&writer, report);
                         }
@@ -5344,8 +5603,11 @@ deadline: remote_result_context.as_ref().map(|_| Instant::now() + REMOTE_MASTER_
                             delivery_id,
                         } => {
                             let message_id = message.id.clone();
-                            let ordinary=!execution_bindings.contains_key(&message_id) && ordinary_queue_message(&message);
-                            if ordinary {idempotent_deliveries.admit_ordinary(&message);}
+                            let ordinary = !execution_bindings.contains_key(&message_id)
+                                && ordinary_queue_message(&message);
+                            if ordinary {
+                                idempotent_deliveries.admit_ordinary(&message);
+                            }
                             // Seen est durable ; aucun PromptDispatched/ACK d’injection encore.
                             #[cfg(feature = "test-support")]
                             crate::test_sync::checkpoint("after_receipt_seen_before_injection");
@@ -5354,7 +5616,9 @@ deadline: remote_result_context.as_ref().map(|_| Instant::now() + REMOTE_MASTER_
                                 &message,
                                 &mut deferred_native_context,
                             ) {
-                                if ordinary {idempotent_deliveries.finish_ordinary(&message_id);}
+                                if ordinary {
+                                    idempotent_deliveries.finish_ordinary(&message_id);
+                                }
                                 send_wrapper_message(
                                     &writer,
                                     bound_delivery_rejection(
@@ -5380,35 +5644,72 @@ deadline: remote_result_context.as_ref().map(|_| Instant::now() + REMOTE_MASTER_
                         warn!("remise de l'incident délégué différée: {error}");
                     }
                 }
-                Ok(DaemonToWrapper::WorkspaceRepairControl {task_id,status}) => {
-                    let outcome=workspace_repair::apply(&task_id,status,remote_result_context.as_ref(),
-                        &mut transport,agent_type,definition,&native_args,&mcp_environment,
-                        mcp_servers.clone(),home,&my_name,&instance_id,socket,native_termination.as_ref());
-                    let status=outcome.status;
-                    workspace_repair_pending_receipt=outcome.pending_receipt;
-                    if status.phase!="refused" {workspace_repair_barrier=Some(status.request.clone());}
-                    if status.phase=="resumed" {
-                        permission_cwd=std::env::current_dir().unwrap_or(permission_cwd);
-                        last_permission_fact=None;
-                        let pid=transport.process_id();
-                        if let Ok(birth)=crate::managed_process::process_birth(pid) {
-                            let _=crate::mcp_identity::write_marker(&marker_directory,pid,birth,&instance_id,&name_state_path);
+                Ok(DaemonToWrapper::WorkspaceRepairControl { task_id, status }) => {
+                    let outcome = workspace_repair::apply(
+                        &task_id,
+                        status,
+                        remote_result_context.as_ref(),
+                        &mut transport,
+                        agent_type,
+                        definition,
+                        &native_args,
+                        &mcp_environment,
+                        mcp_servers.clone(),
+                        home,
+                        &my_name,
+                        &instance_id,
+                        socket,
+                        native_termination.as_ref(),
+                    );
+                    let status = outcome.status;
+                    workspace_repair_pending_receipt = outcome.pending_receipt;
+                    if status.phase != "refused" {
+                        workspace_repair_barrier = Some(status.request.clone());
+                    }
+                    if status.phase == "resumed" {
+                        permission_cwd = std::env::current_dir().unwrap_or(permission_cwd);
+                        last_permission_fact = None;
+                        let pid = transport.process_id();
+                        if let Ok(birth) = crate::managed_process::process_birth(pid) {
+                            let _ = crate::mcp_identity::write_marker(
+                                &marker_directory,
+                                pid,
+                                birth,
+                                &instance_id,
+                                &name_state_path,
+                            );
                         }
-                        let feed=JournalLiveFeed::default();
-                        if transport.activate_journal(&journal_root,&my_name,Some(feed.clone())).is_ok() {
+                        let feed = JournalLiveFeed::default();
+                        if transport
+                            .activate_journal(&journal_root, &my_name, Some(feed.clone()))
+                            .is_ok()
+                        {
                             #[cfg(target_os = "linux")]
                             if let Some(guard) = &remote_drain {
                                 if let Some((writer, session)) = transport.journal_writer() {
-                                    guard.set_journal(&journal_root, &my_name, &session, Some(writer));
+                                    guard.set_journal(
+                                        &journal_root,
+                                        &my_name,
+                                        &session,
+                                        Some(writer),
+                                    );
                                 }
                             }
                             relay.shutdown();
-                            let relay_writer=writer.clone();
-                            relay=AttachRelayWorker::start(journal_root.join(&my_name),feed,
-                                Arc::new(move |message|send_wrapper_message(&relay_writer,message)));
+                            let relay_writer = writer.clone();
+                            relay = AttachRelayWorker::start(
+                                journal_root.join(&my_name),
+                                feed,
+                                Arc::new(move |message| {
+                                    send_wrapper_message(&relay_writer, message)
+                                }),
+                            );
                         }
                     }
-                    send_wrapper_message(&writer,WrapperToDaemon::WorkspaceRepairResult {task_id,status});
+                    send_wrapper_message(
+                        &writer,
+                        WrapperToDaemon::WorkspaceRepairResult { task_id, status },
+                    );
                 }
                 Ok(DaemonToWrapper::ControlExecutionDispatch {
                     issuer_scope,
@@ -5423,7 +5724,7 @@ deadline: remote_result_context.as_ref().map(|_| Instant::now() + REMOTE_MASTER_
                     );
                 }
                 Ok(DaemonToWrapper::UserInputResult { result }) => {
-                    observe_user_input_receipt(&writer,&child_requests,&result);
+                    observe_user_input_receipt(&writer, &child_requests, &result);
                 }
                 Ok(message @ DaemonToWrapper::ChildRequestAnswer { .. })
                 | Ok(message @ DaemonToWrapper::ChildRequestCancel { .. }) => {
@@ -5444,19 +5745,24 @@ deadline: remote_result_context.as_ref().map(|_| Instant::now() + REMOTE_MASTER_
                         WrapperToDaemon::RuntimeSelectionReported { token, outcome },
                     );
                 }
-                Ok(DaemonToWrapper::ReadRuntimeCatalogue{token})=>{
-                    let outcome=transport.runtime_catalogue();
-                    send_wrapper_message(&writer,WrapperToDaemon::RuntimeCatalogueReported{token,outcome});
+                Ok(DaemonToWrapper::ReadRuntimeCatalogue { token }) => {
+                    let outcome = transport.runtime_catalogue();
+                    send_wrapper_message(
+                        &writer,
+                        WrapperToDaemon::RuntimeCatalogueReported { token, outcome },
+                    );
                 }
                 Ok(DaemonToWrapper::CancelDelivery {
                     id,
                     reason,
                     interrupt_active,
                 }) => {
-                    if let Some(inbox)=durable_inbox.as_ref()
-                        && let Err(error)=inbox.cancel(&id) {
-                            error!("annulation en file native impossible : {error}");break;
-                        }
+                    if let Some(inbox) = durable_inbox.as_ref()
+                        && let Err(error) = inbox.cancel(&id)
+                    {
+                        error!("annulation en file native impossible : {error}");
+                        break;
+                    }
                     if interrupt_active.unwrap_or(false) {
                         transport.cancel_delivery(&id, &reason);
                     } else {
@@ -5511,26 +5817,30 @@ deadline: remote_result_context.as_ref().map(|_| Instant::now() + REMOTE_MASTER_
                     break;
                 }
                 relay.reset_generation();
-                let Some((new_reader, registered_name)) = reconnect_managed_session(ReconnectManagedSessionArgs {
-socket,
-writer: &writer,
-transport: transport.as_ref(),
-descriptor: &descriptor,
-protocol: &definition.protocol,
-agent_type,
-name_state_path: &name_state_path,
-host: &host,
-channel: channel.as_deref(),
-os: &os,
-instance_id: &instance_id,
-fallback_name: &my_name,
-terminal_session: interactive.is_some(),
-termination: native_termination.as_ref(),
-deadline: remote_result_context.as_ref().map(|_| Instant::now() + REMOTE_MASTER_RECONNECT_GRACE),
-}) else {
+                let Some((new_reader, registered_name)) =
+                    reconnect_managed_session(ReconnectManagedSessionArgs {
+                        socket,
+                        writer: &writer,
+                        transport: transport.as_ref(),
+                        descriptor: &descriptor,
+                        protocol: &definition.protocol,
+                        agent_type,
+                        name_state_path: &name_state_path,
+                        host: &host,
+                        channel: channel.as_deref(),
+                        os: &os,
+                        instance_id: &instance_id,
+                        fallback_name: &my_name,
+                        terminal_session: interactive.is_some(),
+                        termination: native_termination.as_ref(),
+                        deadline: remote_result_context
+                            .as_ref()
+                            .map(|_| Instant::now() + REMOTE_MASTER_RECONNECT_GRACE),
+                    })
+                else {
                     break;
                 };
-                idempotent_deliveries.modern_reply_core=false;
+                idempotent_deliveries.modern_reply_core = false;
                 reader = new_reader;
                 my_name = registered_name;
                 last_permission_fact = None;
@@ -5541,7 +5851,9 @@ deadline: remote_result_context.as_ref().map(|_| Instant::now() + REMOTE_MASTER_
                 {
                     break;
                 }
-                if forward_child_requests || !child_requests.lock().recover_poison().waiting.is_empty() {
+                if forward_child_requests
+                    || !child_requests.lock().recover_poison().waiting.is_empty()
+                {
                     let pending: Vec<_> = child_requests
                         .lock()
                         .recover_poison()
@@ -6379,11 +6691,32 @@ struct ReconnectManagedSessionArgs<'a> {
     pub deadline: Option<Instant>,
 }
 
-fn reconnect_managed_session(args: ReconnectManagedSessionArgs<'_>) -> Option<(BufReader<UnixStream>, String)> {
-    let ReconnectManagedSessionArgs { socket, writer, transport, descriptor, protocol, agent_type, name_state_path, host, channel, os, instance_id, fallback_name, terminal_session, termination, deadline } = args;
+fn reconnect_managed_session(
+    args: ReconnectManagedSessionArgs<'_>,
+) -> Option<(BufReader<UnixStream>, String)> {
+    let ReconnectManagedSessionArgs {
+        socket,
+        writer,
+        transport,
+        descriptor,
+        protocol,
+        agent_type,
+        name_state_path,
+        host,
+        channel,
+        os,
+        instance_id,
+        fallback_name,
+        terminal_session,
+        termination,
+        deadline,
+    } = args;
     let expired = || deadline.is_some_and(|deadline| Instant::now() >= deadline);
     let mut attempts = 0_u32;
-    while transport.is_alive() && !termination.is_some_and(NativeTerminationSignal::requested) && !expired() {
+    while transport.is_alive()
+        && !termination.is_some_and(NativeTerminationSignal::requested)
+        && !expired()
+    {
         // Une TUI peut se fermer pendant une panne prolongée du daemon.
         // Le backoff réseau ne doit pas retenir son terminal jusqu'à 36 s.
         let retry_at = Instant::now() + reconnect_delay(attempts);
@@ -6398,26 +6731,29 @@ fn reconnect_managed_session(args: ReconnectManagedSessionArgs<'_>) -> Option<(B
                     .min(Duration::from_millis(50)),
             );
         }
-        if !transport.is_alive() || termination.is_some_and(NativeTerminationSignal::requested) || expired() {
+        if !transport.is_alive()
+            || termination.is_some_and(NativeTerminationSignal::requested)
+            || expired()
+        {
             return None;
         }
         attempts = attempts.saturating_add(1);
         let wanted_name = resolve_current_name(name_state_path, fallback_name);
         let busy = transport.is_busy();
         match connect_and_register_with_domain_at(ConnectAndRegisterWithDomainAtArgs {
-socket,
-agent_type,
-agent_id: Some(&wanted_name),
-host,
-protocol,
-channel,
-mode: descriptor.mode,
-location: descriptor.location.as_deref(),
-os,
-instance_id,
-turn_in_progress: busy,
-turn_attest: true,
-}) {
+            socket,
+            agent_type,
+            agent_id: Some(&wanted_name),
+            host,
+            protocol,
+            channel,
+            mode: descriptor.mode,
+            location: descriptor.location.as_deref(),
+            os,
+            instance_id,
+            turn_in_progress: busy,
+            turn_attest: true,
+        }) {
             Ok((reader, new_writer, registered_name)) if registered_name == wanted_name => {
                 if termination.is_some_and(NativeTerminationSignal::requested)
                     || !transport.is_alive()
@@ -6429,7 +6765,12 @@ turn_attest: true,
                 // Register réinitialise l'attestation au niveau du daemon : le
                 // même journal local reste actif, il doit donc être annoncé de
                 // nouveau sur la nouvelle connexion.
-                send_wrapper_message(writer, WrapperToDaemon::JournalReady { receipt_probe: true });
+                send_wrapper_message(
+                    writer,
+                    WrapperToDaemon::JournalReady {
+                        receipt_probe: true,
+                    },
+                );
                 send_wrapper_message(writer, WrapperToDaemon::DaemonIdentityRequest);
                 send_wrapper_message(
                     writer,
@@ -7394,7 +7735,10 @@ fn forward_managed_events_with_redaction(
                 send_wrapper_message(writer, WrapperToDaemon::TurnState { in_progress });
             }
             ManagedEventKind::TurnStarted { message_id } => {
-                if (!bindings.is_empty() || idempotent_deliveries.requires_binding) && !bindings.contains_key(&message_id) && !idempotent_deliveries.ordinary_active(&message_id) {
+                if (!bindings.is_empty() || idempotent_deliveries.requires_binding)
+                    && !bindings.contains_key(&message_id)
+                    && !idempotent_deliveries.ordinary_active(&message_id)
+                {
                     warn!("événement de tour ignoré: message hors exécution active");
                     continue;
                 }
@@ -7424,7 +7768,10 @@ fn forward_managed_events_with_redaction(
                         redact_managed_text(redaction, "provider_error", std::mem::take(detail));
                 }
                 let message_id = message.id.clone();
-                if (!bindings.is_empty() || idempotent_deliveries.requires_binding) && !bindings.contains_key(&message_id) && !idempotent_deliveries.ordinary_active(&message_id) {
+                if (!bindings.is_empty() || idempotent_deliveries.requires_binding)
+                    && !bindings.contains_key(&message_id)
+                    && !idempotent_deliveries.ordinary_active(&message_id)
+                {
                     warn!("terminal fournisseur ignoré: message hors exécution active");
                     continue;
                 }
@@ -7467,7 +7814,10 @@ fn forward_managed_events_with_redaction(
                         send_wrapper_message(writer,WrapperToDaemon::ChildRequestClosed {request_id,state:bridget_transport::protocol::ChildRequestClosedState::ClosedBeforeApply});
                     }
                 }
-                if (!bindings.is_empty() || idempotent_deliveries.requires_binding) && !bindings.contains_key(&message_id) && !idempotent_deliveries.ordinary_active(&message_id) {
+                if (!bindings.is_empty() || idempotent_deliveries.requires_binding)
+                    && !bindings.contains_key(&message_id)
+                    && !idempotent_deliveries.ordinary_active(&message_id)
+                {
                     warn!("terminal fournisseur ignoré: message hors exécution active");
                     continue;
                 }
@@ -7552,11 +7902,18 @@ fn forward_managed_events_with_redaction(
                             bridget_core::BridgetMessage::new(my_name, &message.from, response);
                         reply.in_reply_to = Some(message.id.clone());
                         if idempotent_deliveries.modern_reply_core {
-                            match idempotent_deliveries.retain_reply(&message,reply) {
-                                Ok(reply)=>send_wrapper_message(writer,WrapperToDaemon::Send(reply)),
-                                Err(error)=>{error!("réponse non déposée, conservation impossible : {error}");return true;}
+                            match idempotent_deliveries.retain_reply(&message, reply) {
+                                Ok(reply) => {
+                                    send_wrapper_message(writer, WrapperToDaemon::Send(reply))
+                                }
+                                Err(error) => {
+                                    error!(
+                                        "réponse non déposée, conservation impossible : {error}"
+                                    );
+                                    return true;
+                                }
                             }
-                        }else{
+                        } else {
                             send_wrapper_message(writer, WrapperToDaemon::Send(reply));
                         }
                     }
@@ -7569,7 +7926,10 @@ fn forward_managed_events_with_redaction(
             }
             ManagedEventKind::DeliveryRejected { message_id, reason } => {
                 let reason = redact_managed_text(redaction, "provider_rejection", reason);
-                if (!bindings.is_empty() || idempotent_deliveries.requires_binding) && !bindings.contains_key(&message_id) && !idempotent_deliveries.ordinary_active(&message_id) {
+                if (!bindings.is_empty() || idempotent_deliveries.requires_binding)
+                    && !bindings.contains_key(&message_id)
+                    && !idempotent_deliveries.ordinary_active(&message_id)
+                {
                     warn!("refus fournisseur ignoré: message hors exécution active");
                     continue;
                 }
@@ -7967,13 +8327,36 @@ mod native_child_requests155_tests;
 #[path = "wrapper_remote162_result_tests.rs"]
 mod remote162_result_tests;
 
-fn observe_user_input_receipt(writer:&Arc<Mutex<Option<BufWriter<UnixStream>>>>,requests:&Mutex<ManagedChildRequests>,result:&serde_json::Value) {
-    if result["status"]!="ok" || !matches!(result["item"]["origin"].as_str(),Some("codex"|"claude")){return;}
-    let Some(id)=result["item"]["request_id"].as_str()else{return;};
-    let Ok(request)=serde_json::from_value::<bridget_transport::protocol::ChildProviderRequest>(result["item"]["callback"].clone())else{return;};
-    let mut requests=requests.lock().recover_poison();
-    if let Some(waiting)=requests.waiting.iter_mut().find(|w|w.request==request){waiting.request_id=Some(id.into());return;}
-    if let Some(settled)=requests.settled.iter_mut().find(|w|w.request==request){
-        settled.request_id=Some(id.into());let frame=WrapperToDaemon::ChildRequestClosed{request_id:id.into(),state:settled.state};drop(requests);send_wrapper_message(writer,frame);
+fn observe_user_input_receipt(
+    writer: &Arc<Mutex<Option<BufWriter<UnixStream>>>>,
+    requests: &Mutex<ManagedChildRequests>,
+    result: &serde_json::Value,
+) {
+    if result["status"] != "ok"
+        || !matches!(result["item"]["origin"].as_str(), Some("codex" | "claude"))
+    {
+        return;
+    }
+    let Some(id) = result["item"]["request_id"].as_str() else {
+        return;
+    };
+    let Ok(request) = serde_json::from_value::<bridget_transport::protocol::ChildProviderRequest>(
+        result["item"]["callback"].clone(),
+    ) else {
+        return;
+    };
+    let mut requests = requests.lock().recover_poison();
+    if let Some(waiting) = requests.waiting.iter_mut().find(|w| w.request == request) {
+        waiting.request_id = Some(id.into());
+        return;
+    }
+    if let Some(settled) = requests.settled.iter_mut().find(|w| w.request == request) {
+        settled.request_id = Some(id.into());
+        let frame = WrapperToDaemon::ChildRequestClosed {
+            request_id: id.into(),
+            state: settled.state,
+        };
+        drop(requests);
+        send_wrapper_message(writer, frame);
     }
 }

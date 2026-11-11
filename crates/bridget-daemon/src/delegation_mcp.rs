@@ -16,8 +16,9 @@ use std::time::{Duration, Instant};
 
 /// Même schéma fermé pour les deux admissions ; aucune valeur JSON dans le refus.
 fn parse_workspace(value: &Value) -> Result<WorkspaceRequest, ClientError> {
-    if value.get("strategy").and_then(Value::as_str)==Some("commit_view")
-        && !crate::workspace_git::COMMIT_VIEW_LAUNCH_ENABLED {
+    if value.get("strategy").and_then(Value::as_str) == Some("commit_view")
+        && !crate::workspace_git::COMMIT_VIEW_LAUNCH_ENABLED
+    {
         return Err(ClientError::InvalidParams("La lecture de commit est en préparation sur ce client. Cet appel n'a pas été envoyé. Conserver toute clé ou tâche connue ; ne pas changer de mode pour forcer le passage. Faire qualifier et charger le parcours de vue et son retour compatible par le responsable Bridget. Les autres travaux autorisés suivent leur propre état.".into()));
     }
     serde_json::from_value(value.clone()).map_err(|_| {
@@ -31,19 +32,42 @@ pub(crate) const WAIT_TIMEOUT_DEFAULT_SECS: u64 = 600;
 pub(crate) const WAIT_TIMEOUT_MAX_SECS: u64 = 3600;
 
 /// Validation commune des deux outils d'attente : forme JSON puis bornes métier.
-pub(crate) fn pre_dispatch_failure(error:ClientError, stage:&str, args:&Value)->ClientError {
+pub(crate) fn pre_dispatch_failure(error: ClientError, stage: &str, args: &Value) -> ClientError {
     match error {
-        ClientError::Technical{code,message} if matches!(code,"daemon_unreachable"|"outcome_unknown") => {
-            let reference=args.get("task_id").and_then(Value::as_str).map(|id|format!("task_id={id}"))
-                .or_else(||args.get("request_id").and_then(Value::as_str).map(|id|format!("request_id={id}")))
-                .or_else(|| parse_task_ids(args).ok()
-                    .filter(|ids| ids.iter().all(|id| id.len() <= 128
-                        && id.bytes().all(|byte| byte.is_ascii_alphanumeric() || b"-_:.".contains(&byte))))
-                    .map(|ids| format!("task_ids={}", json!(ids))))
-                .unwrap_or_else(||"les identifiants des tâches de cet appel".into());
-            ClientError::Technical{code,message:format!("{message} Étape : {stage}. La commande de cet appel n'a pas été transmise. Conservez {reference} et tout reçu antérieur. Vérifiez le lien natif depuis cette machine avant de reprendre exactement cet appel ; si la lecture reste indisponible, le responsable Bridget doit mesurer cette liaison. La cause précise du retard reste inconnue. Ce refus concerne cet appel ; les autres travaux autorisés suivent leur propre état.")}
+        ClientError::Technical { code, message }
+            if matches!(code, "daemon_unreachable" | "outcome_unknown") =>
+        {
+            let reference = args
+                .get("task_id")
+                .and_then(Value::as_str)
+                .map(|id| format!("task_id={id}"))
+                .or_else(|| {
+                    args.get("request_id")
+                        .and_then(Value::as_str)
+                        .map(|id| format!("request_id={id}"))
+                })
+                .or_else(|| {
+                    parse_task_ids(args)
+                        .ok()
+                        .filter(|ids| {
+                            ids.iter().all(|id| {
+                                id.len() <= 128
+                                    && id.bytes().all(|byte| {
+                                        byte.is_ascii_alphanumeric() || b"-_:.".contains(&byte)
+                                    })
+                            })
+                        })
+                        .map(|ids| format!("task_ids={}", json!(ids)))
+                })
+                .unwrap_or_else(|| "les identifiants des tâches de cet appel".into());
+            ClientError::Technical {
+                code,
+                message: format!(
+                    "{message} Étape : {stage}. La commande de cet appel n'a pas été transmise. Conservez {reference} et tout reçu antérieur. Vérifiez le lien natif depuis cette machine avant de reprendre exactement cet appel ; si la lecture reste indisponible, le responsable Bridget doit mesurer cette liaison. La cause précise du retard reste inconnue. Ce refus concerne cet appel ; les autres travaux autorisés suivent leur propre état."
+                ),
+            }
         }
-        other=>other,
+        other => other,
     }
 }
 
@@ -99,7 +123,7 @@ pub(crate) fn tools(brief_schema: &Value) -> Vec<Value> {
         {"type":"object","properties":{"strategy":{"const":"shared","description":"Dossier partagé : strategy est le seul champ autorisé. Le SHA source appartient à expected_base_commit ; ne pas ajouter base_ref ou branch."}},"required":["strategy"],"additionalProperties":false},
         {"type":"object","properties":{"strategy":{"const":"worktree","description":"Dossier de travail isolé : seuls strategy et les chaînes facultatives base_ref et branch sont acceptés."},"base_ref":{"type":"string","description":"Référence Git disponible dans cwd sur la machine du parent. Pour une base figée, fournir le même SHA complet que expected_base_commit ; un nom de branche peut avancer. Un commit présent uniquement sur la destination doit d’abord être récupéré dans le dépôt source."},"branch":{"type":"string"}},"required":["strategy"],"additionalProperties":false}
     ]});
-    let mut definitions=vec![
+    let mut definitions = vec![
         json!({"name":"bridget_specialists","description":"Catalogue des spécialistes. Fournir version:1 à chaque appel. Lecture : action search (role_id facultatif), list ou get (specialist_agent_id requis). Exemple : {version:1,action:search,role_id:mainteneur-bridget}. L’action catalogue n’existe pas. Le schéma expose les autres actions de profils, rôles et mémoire sourcée. Déclarer ses rôles ne donne aucun droit. request_role choisit un responsable unique et conserve sa clé ; request_status relit la demande sans réveil. Une activation durable ou un mandat permanent exige l'administration humaine. Budget Bridget sans plafond par défaut ; restrictions techniques et fournisseur restent distinctes.","inputSchema":specialists_schema222(),"annotations":{"readOnlyHint":false,"destructiveHint":false,"idempotentHint":true}}),
         json!({"name":"bridget_read_commit_file","description":"Rend disponible un fichier omis dans la vue privée du commit exact de sa tâche active. path est le chemin relatif indiqué dans la carte de la vue, sans ../ ni chemin absolu. Sans task_id, l'enfant lit sa propre tâche ; avec task_id, le parent doit en être propriétaire. Copie privée contrôlée, aucun changement du dépôt source, de la base, des comptes ou des droits. Un fichier existant divergent n'est jamais écrasé. Après succès, lire le chemin de données renvoyé. Une ancienne tâche clôturée ne redémarre pas par cette lecture.",
             "inputSchema":{"type":"object","properties":{"task_id":{"type":"string","minLength":1,"maxLength":128},
@@ -118,23 +142,24 @@ pub(crate) fn tools(brief_schema: &Value) -> Vec<Value> {
         json!({"name":"bridget_task_cancel","description":"Annule sa mission native et sa descendance ; aucune mission d'un autre parent n'est accessible.","inputSchema":{"type":"object","properties":{"task_id":{"type":"string"}},"required":["task_id"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":true,"idempotentHint":true}}),
     ];
     for tool in &mut definitions {
-        if tool["name"]=="bridget_auto_delegate" {
+        if tool["name"] == "bridget_auto_delegate" {
             if crate::provider_catalogue220::MODEL_OPTIONS_LAUNCH_ENABLED {
-                tool["inputSchema"]["properties"]["service_tier"]=json!({
+                tool["inputSchema"]["properties"]["service_tier"] = json!({
                     "type":"string","minLength":1,"maxLength":256,
                     "description":"Niveau de service explicite du modèle, annoncé sur cette connexion et autorisé par son profil. Aucun défaut ni remplacement automatique ; peut consommer davantage de quota ou de crédits."});
             }
-            let mut sha_workspaces=vec!["worktree"];
+            let mut sha_workspaces = vec!["worktree"];
             if crate::workspace_git::COMMIT_VIEW_LAUNCH_ENABLED {
                 tool["inputSchema"]["properties"]["workspace"]["oneOf"].as_array_mut().unwrap().push(json!({
                     "type":"object","properties":{"strategy":{"const":"commit_view",
                         "description":"Vue partielle du commit exact, en lecture seule. Seul strategy est autorisé. Fournir posture=discovery et expected_base_commit. Aucun dépôt Git dans la vue ; les fichiers omis se lisent par bridget_read_commit_file."}},
                     "required":["strategy"],"additionalProperties":false}));
                 sha_workspaces.push("commit_view");
-                tool["inputSchema"]["properties"]["expected_base_commit"]["description"]=json!(
-                    "SHA source complet de 40 caractères hexadécimaux. Obligatoire en Git, worktree, commit_view ou compilation. En commit_view, lire ce commit exact même si HEAD a avancé ; ne pas fournir base_ref ou branch.");
+                tool["inputSchema"]["properties"]["expected_base_commit"]["description"] = json!(
+                    "SHA source complet de 40 caractères hexadécimaux. Obligatoire en Git, worktree, commit_view ou compilation. En commit_view, lire ce commit exact même si HEAD a avancé ; ne pas fournir base_ref ou branch."
+                );
             }
-            tool["inputSchema"]["allOf"]=json!([{
+            tool["inputSchema"]["allOf"] = json!([{
                 "if":{"anyOf":[
                     {"required":["workload"],"properties":{"workload":{"const":"compilation"}}},
                     {"required":["workspace"],"properties":{"workspace":{"required":["strategy"],"properties":{"strategy":{"enum":sha_workspaces}}}}}
@@ -149,15 +174,21 @@ pub(crate) fn tools(brief_schema: &Value) -> Vec<Value> {
             }
         }
     }
-    let automatic=definitions.iter().find(|d|d["name"]=="bridget_auto_delegate").map(|d|d["inputSchema"].clone());
-    if let Some(automatic)=automatic
-        && let Some(tool)=definitions.iter_mut().find(|d|d["name"]=="bridget_specialists")
-            && let Some(branches)=tool["inputSchema"]["oneOf"].as_array_mut(){
-                branches.push(json!({"type":"object","properties":{"version":{"const":1},"action":{"const":"request_temporary"},
+    let automatic = definitions
+        .iter()
+        .find(|d| d["name"] == "bridget_auto_delegate")
+        .map(|d| d["inputSchema"].clone());
+    if let Some(automatic) = automatic
+        && let Some(tool) = definitions
+            .iter_mut()
+            .find(|d| d["name"] == "bridget_specialists")
+        && let Some(branches) = tool["inputSchema"]["oneOf"].as_array_mut()
+    {
+        branches.push(json!({"type":"object","properties":{"version":{"const":1},"action":{"const":"request_temporary"},
                     "request_id":{"type":"string","minLength":1,"maxLength":128},"profile_id":{"type":"string"},
                     "profile_revision":{"type":"integer","minimum":1},"delegation":automatic},
                     "required":["version","action","request_id","profile_id","profile_revision","delegation"],"additionalProperties":false}));
-            }
+    }
     definitions
 }
 
@@ -167,7 +198,13 @@ pub(crate) fn execute(
     args: &Value,
     socket: &Path,
 ) -> Result<Value, ClientError> {
-    execute_with_proof(identity, name, args, socket, crate::t3code_mcp::private_proof())
+    execute_with_proof(
+        identity,
+        name,
+        args,
+        socket,
+        crate::t3code_mcp::private_proof(),
+    )
 }
 
 fn execute_with_proof(
@@ -184,13 +221,47 @@ fn execute_with_proof(
         return Err(ClientError::InvalidParams(
             "agent_type est interdit dans bridget_auto_delegate. Omettez ce champ ; utilisez engine pour le moteur (par exemple codex), et connection_id seulement pour une connexion précise du catalogue. La machine reste machine_id. Refus de forme avant connexion : cet appel n’a pas été envoyé. Si une demande antérieure a pu être enregistrée avec cette request_id, vérifiez son sort avant de corriger ses paramètres.".into()));
     }
-    if name=="bridget_auto_delegate" && object.contains_key("service_tier")
-        && !crate::provider_catalogue220::MODEL_OPTIONS_LAUNCH_ENABLED {
+    if name == "bridget_auto_delegate"
+        && object.contains_key("service_tier")
+        && !crate::provider_catalogue220::MODEL_OPTIONS_LAUNCH_ENABLED
+    {
         return Err(ClientError::InvalidParams(
             "service_tier : le choix d'un niveau de service n'est pas encore activé. Faire terminer son activation par le responsable Bridget avant de le demander pour une mission. Cet appel n'a pas été envoyé ; conserver la clé et vérifier toute demande antérieure avant un nouvel essai. Les autres travaux autorisés suivent leur propre état.".into()));
     }
     let allowed: &[&str] = match name {
-        "bridget_specialists" => &["version","action","request_id","specialist_agent_id","profile_id","role_id","project_id","memory_id","cursor","limit","expected_revision","revision","profile_revision","durable","auto_start","official","shared","task","text","query","kind","mandate","scope","budget","launch_policy","definition","roles","source","after_seq","operation","delegation"],
+        "bridget_specialists" => &[
+            "version",
+            "action",
+            "request_id",
+            "specialist_agent_id",
+            "profile_id",
+            "role_id",
+            "project_id",
+            "memory_id",
+            "cursor",
+            "limit",
+            "expected_revision",
+            "revision",
+            "profile_revision",
+            "durable",
+            "auto_start",
+            "official",
+            "shared",
+            "task",
+            "text",
+            "query",
+            "kind",
+            "mandate",
+            "scope",
+            "budget",
+            "launch_policy",
+            "definition",
+            "roles",
+            "source",
+            "after_seq",
+            "operation",
+            "delegation",
+        ],
         "bridget_capabilities" => &[],
         "bridget_delegate" => &[
             "request_id",
@@ -234,9 +305,11 @@ fn execute_with_proof(
             "urgent",
             "deliverable",
         ],
-        "bridget_read_commit_file" => &["task_id","path"],
+        "bridget_read_commit_file" => &["task_id", "path"],
         "bridget_refresh_models" => &["machine_id"],
-        "bridget_task_repair_workspace" => &["task_id", "request_id", "target_cwd", "expected_head"],
+        "bridget_task_repair_workspace" => {
+            &["task_id", "request_id", "target_cwd", "expected_head"]
+        }
         "bridget_task_continue" => &["task_id", "request_id", "task", "brief"],
         "bridget_task_respond" => &["task_id", "request_id", "decision", "answer"],
         "bridget_task_status" | "bridget_task_cancel" => &["task_id"],
@@ -257,10 +330,11 @@ fn execute_with_proof(
             })
     };
     if crate::workspace_git::COMMIT_VIEW_LAUNCH_ENABLED
-        && args.pointer("/workspace/strategy").and_then(Value::as_str)==Some("commit_view")
-        && (name!="bridget_auto_delegate"
+        && args.pointer("/workspace/strategy").and_then(Value::as_str) == Some("commit_view")
+        && (name != "bridget_auto_delegate"
             || args.get("expected_base_commit").is_none()
-            || args.get("posture").and_then(Value::as_str)!=Some("discovery")) {
+            || args.get("posture").and_then(Value::as_str) != Some("discovery"))
+    {
         return Err(ClientError::InvalidParams(
             "Une vue de commit exige bridget_auto_delegate, posture=discovery et expected_base_commit avec le SHA exact. Cet appel n'a pas été envoyé. Conservez la clé et vérifiez toute tâche ou reçu antérieur avant de modifier les paramètres ; aucun remplacement d'issue inconnue.".into()));
     }
@@ -515,7 +589,7 @@ fn execute_with_proof(
         },
         _ => unreachable!(),
     };
-    if let NativeDelegationRequest::RepairWorkspace {repair,..}=&request {
+    if let NativeDelegationRequest::RepairWorkspace { repair, .. } = &request {
         repair.validate().map_err(|_|ClientError::InvalidParams(
             "Réparation : request_id non vide, chemin absolu et SHA complet de 40 caractères requis.".into()))?;
     }
@@ -544,7 +618,8 @@ fn execute_with_proof(
     if matches!(
         &request,
         NativeDelegationRequest::Wait { .. } | NativeDelegationRequest::Ack { .. }
-    ) && !daemon_supports_wait(socket).map_err(|e|pre_dispatch_failure(e,"lecture des capacités d’attente",args))?
+    ) && !daemon_supports_wait(socket)
+        .map_err(|e| pre_dispatch_failure(e, "lecture des capacités d’attente", args))?
     {
         return Err(ClientError::Technical {
             code: "native_delegation_refused",
@@ -559,14 +634,16 @@ fn execute_with_proof(
             &identity.instance_id,
             socket,
             Instant::now() + Duration::from_secs(3),
-        ).map_err(|e| pre_dispatch_failure(e, "raccordement de cette session", args))?;
+        )
+        .map_err(|e| pre_dispatch_failure(e, "raccordement de cette session", args))?;
         connection.set_deadline(deadline);
         connection
     } else {
-        registered_connection(&identity.name, &identity.instance_id, socket).map_err(|e|pre_dispatch_failure(e,"raccordement de cette session",args))?
+        registered_connection(&identity.name, &identity.instance_id, socket)
+            .map_err(|e| pre_dispatch_failure(e, "raccordement de cette session", args))?
     };
-    if matches!(&request,NativeDelegationRequest::Specialists{..}) {
-        let cap=bridget_transport::protocol::ClientCapability::SpecialistsV1;
+    if matches!(&request, NativeDelegationRequest::Specialists { .. }) {
+        let cap = bridget_transport::protocol::ClientCapability::SpecialistsV1;
         match connection.exchange(&WrapperToDaemon::ClientHello{contract_version:bridget_transport::protocol::CLIENT_CONTRACT_VERSION,
             issuer_scope:crate::communication::issuer_scope("bridget-specialists-agent"),capabilities:vec![cap]})? {
             DaemonToWrapper::ClientWelcome{capabilities,..} if capabilities.contains(&cap)=>{},
@@ -574,10 +651,14 @@ fn execute_with_proof(
         }
     }
     let required_feature = match &request {
-        NativeDelegationRequest::ReadCommitFile{..}=>
-            Some(("commit_view_files_v1","commit_view_file_master_upgrade_required")),
-        NativeDelegationRequest::RepairWorkspace {..} =>
-            Some(("task_workspace_repair_v1","workspace_repair_master_upgrade_required")),
+        NativeDelegationRequest::ReadCommitFile { .. } => Some((
+            "commit_view_files_v1",
+            "commit_view_file_master_upgrade_required",
+        )),
+        NativeDelegationRequest::RepairWorkspace { .. } => Some((
+            "task_workspace_repair_v1",
+            "workspace_repair_master_upgrade_required",
+        )),
 
         NativeDelegationRequest::Delegate {
             machine_id: Some(_),
@@ -586,11 +667,14 @@ fn execute_with_proof(
         NativeDelegationRequest::AutoDelegate(_) => {
             Some(("auto_delegate_v1", "auto_delegate_unsupported"))
         }
-        NativeDelegationRequest::AutoDelegateV2(auto) if auto.service_tier.is_some() =>
-            Some(("auto_delegate_v2","model_options_master_upgrade_required")),
+        NativeDelegationRequest::AutoDelegateV2(auto) if auto.service_tier.is_some() => {
+            Some(("auto_delegate_v2", "model_options_master_upgrade_required"))
+        }
         NativeDelegationRequest::AutoDelegateV2(auto)
-            if matches!(auto.workspace,Some(WorkspaceRequest::CommitView {})) =>
-            Some(("auto_delegate_v2","commit_view_master_upgrade_required")),
+            if matches!(auto.workspace, Some(WorkspaceRequest::CommitView {})) =>
+        {
+            Some(("auto_delegate_v2", "commit_view_master_upgrade_required"))
+        }
         NativeDelegationRequest::AutoDelegateV2(_) => {
             Some(("auto_delegate_v2", "auto_delegate_v2_unsupported"))
         }
@@ -598,41 +682,63 @@ fn execute_with_proof(
     };
     if let Some((feature, refusal)) = required_feature {
         let supported = match connection.exchange(&WrapperToDaemon::DaemonIdentityRequest)? {
-            DaemonToWrapper::DaemonIdentityReport { features, .. } =>
+            DaemonToWrapper::DaemonIdentityReport { features, .. } => {
                 features.iter().any(|candidate| candidate == feature)
                     && (!matches!(&request,NativeDelegationRequest::AutoDelegateV2(auto)
                             if matches!(auto.workspace,Some(WorkspaceRequest::CommitView {})))
-                        || features.iter().any(|candidate|candidate=="worker_workspace_view_create_v1"))
+                        || features
+                            .iter()
+                            .any(|candidate| candidate == "worker_workspace_view_create_v1"))
                     && (!matches!(&request,NativeDelegationRequest::AutoDelegateV2(auto) if auto.service_tier.is_some())
-                        || features.iter().any(|candidate|candidate=="model_options_v1")),
+                        || features
+                            .iter()
+                            .any(|candidate| candidate == "model_options_v1"))
+            }
             other => return unexpected_response(other),
         };
         if !supported {
             return Err(ClientError::Technical {
                 code: "native_delegation_refused",
-                message: if refusal=="commit_view_master_upgrade_required" {
+                message: if refusal == "commit_view_master_upgrade_required" {
                     "commit_view_master_upgrade_required : Le maître ne déclare pas le parcours de création des vues. Demandez au responsable Bridget de charger et qualifier ce parcours et son retour compatible. Cette demande n'a pas été transmise pour admission ; conservez la clé et toute tâche ou reçu antérieur avant un rejeu strict après résolution. Ne créez pas de worktree pour contourner ce refus. Les autres travaux autorisés suivent leur propre état.".into()
-                } else if refusal=="model_options_master_upgrade_required" {
+                } else if refusal == "model_options_master_upgrade_required" {
                     "model_options_master_upgrade_required : Le maître n'a pas confirmé les capacités d'admission et de choix d'options requises pour cette demande. Faire charger et qualifier ce parcours par le responsable Bridget. Cet appel n'a pas été transmis pour admission ; conserver la clé et tout reçu antérieur. Ne pas changer le modèle, le compte, le niveau ou les droits. Les autres travaux autorisés suivent leur propre état.".into()
-                } else {refusal.into()},
+                } else {
+                    refusal.into()
+                },
             });
         }
     }
     // Une admission peut préparer un dépôt ou un worktree. Le délai métier
     // de la mission reste distinct ; les lectures gardent leur budget court.
     let continuation = match &request {
-        NativeDelegationRequest::Continue { task_id, request_id, .. } =>
-            Some((task_id.clone(), request_id.clone())),
+        NativeDelegationRequest::Continue {
+            task_id,
+            request_id,
+            ..
+        } => Some((task_id.clone(), request_id.clone())),
         _ => None,
     };
-    let commit_file=matches!(&request,NativeDelegationRequest::ReadCommitFile{..});
-    let admission = matches!(&request, NativeDelegationRequest::AutoDelegateV2(_)
-        | NativeDelegationRequest::AutoDelegate(_) | NativeDelegationRequest::Delegate { .. } | NativeDelegationRequest::RepairWorkspace { .. });
+    let commit_file = matches!(&request, NativeDelegationRequest::ReadCommitFile { .. });
+    let admission = matches!(
+        &request,
+        NativeDelegationRequest::AutoDelegateV2(_)
+            | NativeDelegationRequest::AutoDelegate(_)
+            | NativeDelegationRequest::Delegate { .. }
+            | NativeDelegationRequest::RepairWorkspace { .. }
+    );
     if admission {
         connection.set_deadline(Instant::now() + Duration::from_secs(600));
     } else if commit_file {
-        connection.set_deadline(Instant::now()+Duration::from_secs(125)
-            +if proof.is_some(){crate::t3code_mcp::ATTESTATION_MAX_BUDGET}else{Duration::ZERO});
+        connection.set_deadline(
+            Instant::now()
+                + Duration::from_secs(125)
+                + if proof.is_some() {
+                    crate::t3code_mcp::ATTESTATION_MAX_BUDGET
+                } else {
+                    Duration::ZERO
+                },
+        );
     }
     let recover_request_id = match &request {
         NativeDelegationRequest::AutoDelegateV2(auto) => Some(auto.request_id.clone()),
@@ -645,27 +751,40 @@ fn execute_with_proof(
     } else {
         Duration::ZERO
     };
-    if !attestation_budget.is_zero() && !admission && !commit_file
-    {
+    if !attestation_budget.is_zero() && !admission && !commit_file {
         let wait = match &request {
-            NativeDelegationRequest::Wait { wait_timeout, .. } =>
-                Duration::from_secs(wait_timeout.unwrap_or(WAIT_TIMEOUT_DEFAULT_SECS)),
+            NativeDelegationRequest::Wait { wait_timeout, .. } => {
+                Duration::from_secs(wait_timeout.unwrap_or(WAIT_TIMEOUT_DEFAULT_SECS))
+            }
             _ => Duration::ZERO,
         };
-        connection.set_deadline(Instant::now()
-            + crate::communication::client::DAEMON_BUDGET + attestation_budget + wait);
+        connection.set_deadline(
+            Instant::now()
+                + crate::communication::client::DAEMON_BUDGET
+                + attestation_budget
+                + wait,
+        );
     }
     if continuation.is_some() {
         // Sources d'origine (30 s), preuve worker (30 s), puis reçu durable.
         // Ajouter l'attestation sans étendre les budgets des lectures ordinaires.
-        connection.set_deadline(Instant::now() + crate::communication::client::DAEMON_BUDGET
-            + attestation_budget + Duration::from_secs(60));
+        connection.set_deadline(
+            Instant::now()
+                + crate::communication::client::DAEMON_BUDGET
+                + attestation_budget
+                + Duration::from_secs(60),
+        );
     }
-    let mutation = !matches!(&request,NativeDelegationRequest::Specialists{request} if request.is_read()) && !matches!(&request,
-        NativeDelegationRequest::Catalogue | NativeDelegationRequest::RoutingCatalogueV1 { .. }
-        | NativeDelegationRequest::ProviderCatalogueV1 {refresh:false,..}
-        | NativeDelegationRequest::CallerScope { .. } | NativeDelegationRequest::Status { .. }
-        | NativeDelegationRequest::Wait { .. });
+    let mutation = !matches!(&request,NativeDelegationRequest::Specialists{request} if request.is_read())
+        && !matches!(
+            &request,
+            NativeDelegationRequest::Catalogue
+                | NativeDelegationRequest::RoutingCatalogueV1 { .. }
+                | NativeDelegationRequest::ProviderCatalogueV1 { refresh: false, .. }
+                | NativeDelegationRequest::CallerScope { .. }
+                | NativeDelegationRequest::Status { .. }
+                | NativeDelegationRequest::Wait { .. }
+        );
     let message = match proof {
         Some(proof) => WrapperToDaemon::NativeDelegationT3 { request, proof },
         None => WrapperToDaemon::NativeDelegation { request },
@@ -740,16 +859,26 @@ fn execute_with_proof(
     }
 }
 
-fn admission_refusal_context232(result:&mut Value,request_id:Option<&str>) {
-    let Some(request_id)=request_id else {return;};
-    if result["code"]!="permission_attestation_unavailable" {return;}
-    if !result["detail"].is_object(){result["detail"]=json!({});}
-    if let Some(message)=result["detail"].get("message").cloned() {
-        result["detail"]["attestation_message"]=message;
+fn admission_refusal_context232(result: &mut Value, request_id: Option<&str>) {
+    let Some(request_id) = request_id else {
+        return;
+    };
+    if result["code"] != "permission_attestation_unavailable" {
+        return;
     }
-    result["detail"]["message"]=json!("Une mission peut déjà être admise avec cette clé. Le contrôle d'attestation de cet appel a échoué ; le sort de l'admission reste inconnu.");
-    result["detail"]["admission"]=json!({"request_id":request_id,"state":"outcome_unknown"});
-    result["detail"]["admission_recovery"]=json!("Le contrôle de cet appel a échoué ; cela ne prouve pas l'absence d'admission. La tâche peut déjà exister après une réponse perdue ou une relecture. Conserver cette même request_id et tous les paramètres ; vérifier son reçu après le retour du lien, sans appel manuel censé réparer les droits, sans nouvelle clé et sans mission de remplacement.");
+    if !result["detail"].is_object() {
+        result["detail"] = json!({});
+    }
+    if let Some(message) = result["detail"].get("message").cloned() {
+        result["detail"]["attestation_message"] = message;
+    }
+    result["detail"]["message"] = json!(
+        "Une mission peut déjà être admise avec cette clé. Le contrôle d'attestation de cet appel a échoué ; le sort de l'admission reste inconnu."
+    );
+    result["detail"]["admission"] = json!({"request_id":request_id,"state":"outcome_unknown"});
+    result["detail"]["admission_recovery"] = json!(
+        "Le contrôle de cet appel a échoué ; cela ne prouve pas l'absence d'admission. La tâche peut déjà exister après une réponse perdue ou une relecture. Conserver cette même request_id et tous les paramètres ; vérifier son reçu après le retour du lien, sans appel manuel censé réparer les droits, sans nouvelle clé et sans mission de remplacement."
+    );
 }
 
 fn recover_admission_reply171<T>(
@@ -757,8 +886,12 @@ fn recover_admission_reply171<T>(
     is_pending: impl Fn(&T) -> bool,
     exchange: impl FnMut(Option<Instant>) -> Result<T, ClientError>,
 ) -> Result<T, ClientError> {
-    recover_admission_with_budget171(request_id, is_pending, exchange,
-        crate::communication::client::DAEMON_BUDGET)
+    recover_admission_with_budget171(
+        request_id,
+        is_pending,
+        exchange,
+        crate::communication::client::DAEMON_BUDGET,
+    )
 }
 
 fn recover_admission_with_budget171<T>(
@@ -768,8 +901,13 @@ fn recover_admission_with_budget171<T>(
     recovery_budget: Duration,
 ) -> Result<T, ClientError> {
     let first = exchange(None);
-    if !matches!(&first, Err(ClientError::Technical { code: "outcome_unknown", .. }))
-        && !first.as_ref().is_ok_and(&is_pending)
+    if !matches!(
+        &first,
+        Err(ClientError::Technical {
+            code: "outcome_unknown",
+            ..
+        })
+    ) && !first.as_ref().is_ok_and(&is_pending)
     {
         return first;
     }
@@ -780,19 +918,28 @@ fn recover_admission_with_budget171<T>(
         if Instant::now() >= deadline {
             return Err(ClientError::Technical {
                 code: "outcome_unknown",
-                message: format!("Rétablissez le lien natif, puis relisez la demande {request_id} avec la même clé et les mêmes arguments. Son issue finale reste inconnue : elle peut être en attente, admise ou refusée. Aucun nouveau lancement n'est justifié par cette réponse. Ne créez pas de doublon. Ce constat concerne cette lecture ; les autres travaux autorisés suivent leur propre état. Si le lien reste indisponible, demandez au responsable de lire le reçu de cette clé."),
+                message: format!(
+                    "Rétablissez le lien natif, puis relisez la demande {request_id} avec la même clé et les mêmes arguments. Son issue finale reste inconnue : elle peut être en attente, admise ou refusée. Aucun nouveau lancement n'est justifié par cette réponse. Ne créez pas de doublon. Ce constat concerne cette lecture ; les autres travaux autorisés suivent leur propre état. Si le lien reste indisponible, demandez au responsable de lire le reçu de cette clé."
+                ),
             });
         }
         match exchange(Some(deadline)) {
             Ok(value) if is_pending(&value) => {
-                std::thread::sleep(Duration::from_millis(250).min(deadline.saturating_duration_since(Instant::now())));
+                std::thread::sleep(
+                    Duration::from_millis(250)
+                        .min(deadline.saturating_duration_since(Instant::now())),
+                );
             }
-            Err(ClientError::Technical { code: "outcome_unknown" | "daemon_unreachable", .. }) => {
+            Err(ClientError::Technical {
+                code: "outcome_unknown" | "daemon_unreachable",
+                ..
+            }) => {
                 // Une coupure de maintenance n'épuise pas à elle seule le budget.
                 // Relire le même reçu ; une réponse terminale sera rendue telle quelle.
-                std::thread::sleep(Duration::from_millis(250).min(
-                    deadline.saturating_duration_since(Instant::now())));
-
+                std::thread::sleep(
+                    Duration::from_millis(250)
+                        .min(deadline.saturating_duration_since(Instant::now())),
+                );
             }
             other => return other,
         }
@@ -814,23 +961,51 @@ mod spec172_transport_tests;
 #[cfg(test)]
 #[test]
 fn spec207_auto_duration_explains_default_and_replay() {
-    let tool=tools(&json!({})).into_iter().find(|t|t["name"]=="bridget_auto_delegate").unwrap();
-    let duration=&tool["inputSchema"]["properties"]["reply_timeout"];
-    assert_eq!(duration["default"],3600);assert_eq!(duration["maximum"],86400);
-    let help=duration["description"].as_str().unwrap();
-    for term in ["14400","parent","rejeu","keep_alive_secs","wait_timeout"] {assert!(help.contains(term));}
+    let tool = tools(&json!({}))
+        .into_iter()
+        .find(|t| t["name"] == "bridget_auto_delegate")
+        .unwrap();
+    let duration = &tool["inputSchema"]["properties"]["reply_timeout"];
+    assert_eq!(duration["default"], 3600);
+    assert_eq!(duration["maximum"], 86400);
+    let help = duration["description"].as_str().unwrap();
+    for term in [
+        "14400",
+        "parent",
+        "rejeu",
+        "keep_alive_secs",
+        "wait_timeout",
+    ] {
+        assert!(help.contains(term));
+    }
 }
 
 #[cfg(test)]
 mod schema211_tests {
     use super::*;
     #[test]
-    fn spec211_expected_base_schema_is_conditional_and_explicit(){
-        let list=tools(&json!({}));
-        let auto=list.iter().find(|t|t["name"]=="bridget_auto_delegate").unwrap();
-        assert!(!auto["inputSchema"]["required"].as_array().unwrap().contains(&json!("expected_base_commit")));
-        assert_eq!(auto["inputSchema"]["allOf"][0]["then"]["required"],json!(["expected_base_commit"]));
-        assert!(auto["inputSchema"]["properties"]["expected_base_commit"]["description"].as_str().unwrap().contains("Obligatoire"));
+    fn spec211_expected_base_schema_is_conditional_and_explicit() {
+        let list = tools(&json!({}));
+        let auto = list
+            .iter()
+            .find(|t| t["name"] == "bridget_auto_delegate")
+            .unwrap();
+        assert!(
+            !auto["inputSchema"]["required"]
+                .as_array()
+                .unwrap()
+                .contains(&json!("expected_base_commit"))
+        );
+        assert_eq!(
+            auto["inputSchema"]["allOf"][0]["then"]["required"],
+            json!(["expected_base_commit"])
+        );
+        assert!(
+            auto["inputSchema"]["properties"]["expected_base_commit"]["description"]
+                .as_str()
+                .unwrap()
+                .contains("Obligatoire")
+        );
         assert!(auto["description"].as_str().unwrap().contains("hors Git"));
     }
 }
@@ -847,13 +1022,24 @@ mod continuation_receipt221_tests {
         crate::mcp_identity::mock_private_identity(&socket, "owner", "instance");
         let backend = std::thread::spawn(move || {
             let (mut stream, _) = listener.accept().unwrap();
-            stream.set_read_timeout(Some(Duration::from_secs(15))).unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(15)))
+                .unwrap();
             let mut reader = BufReader::new(stream.try_clone().unwrap());
             let mut line = String::new();
             reader.read_line(&mut line).unwrap();
-            assert_eq!(serde_json::from_str::<Value>(&line).unwrap()["type"], "RegisterAuxiliary");
-            writeln!(stream, "{}", json!({"type":"Registered","agent_id":"owner","credential":null})).unwrap();
-            line.clear(); reader.read_line(&mut line).unwrap();
+            assert_eq!(
+                serde_json::from_str::<Value>(&line).unwrap()["type"],
+                "RegisterAuxiliary"
+            );
+            writeln!(
+                stream,
+                "{}",
+                json!({"type":"Registered","agent_id":"owner","credential":null})
+            )
+            .unwrap();
+            line.clear();
+            reader.read_line(&mut line).unwrap();
             let request: Value = serde_json::from_str(&line).unwrap();
             assert_eq!(request["request"]["operation"], "continue");
             assert_eq!(request["request"]["task_id"], "same-task");
@@ -867,36 +1053,56 @@ mod continuation_receipt221_tests {
                     "task_id":"same-task","status":"mission_pending","round":2,"message_id":"same-message"}})).unwrap();
             }
             line.clear();
-            assert_eq!(reader.read_line(&mut line).unwrap(), 0, "aucun rejeu automatique");
+            assert_eq!(
+                reader.read_line(&mut line).unwrap(),
+                0,
+                "aucun rejeu automatique"
+            );
         });
-        let identity = ResolvedIdentity {name:"owner".into(), instance_id:"instance".into(), delegated_origin:None};
-        let result = execute_with_proof(&identity, "bridget_task_continue", &json!({
-            "task_id":"same-task","request_id":"same-round-key","task":"suite"}), &socket, None);
+        let identity = ResolvedIdentity {
+            name: "owner".into(),
+            instance_id: "instance".into(),
+            delegated_origin: None,
+        };
+        let result = execute_with_proof(
+            &identity,
+            "bridget_task_continue",
+            &json!({
+            "task_id":"same-task","request_id":"same-round-key","task":"suite"}),
+            &socket,
+            None,
+        );
         backend.join().unwrap();
         let _ = std::fs::remove_dir_all(socket.parent().unwrap());
         if disconnect {
-            assert!(matches!(result, Err(ClientError::Technical {code:"outcome_unknown", message})
+            assert!(
+                matches!(result, Err(ClientError::Technical {code:"outcome_unknown", message})
                 if message.contains("task_id=same-task") && message.contains("request_id=same-round-key")
                     && message.contains("peut déjà être enregistrée") && message.contains("ne renvoyez pas")
-                    && message.contains("autres travaux autorisés")));
+                    && message.contains("autres travaux autorisés"))
+            );
         } else {
             let result = result.expect("le reçu tardif doit être lu intégralement");
-            assert_eq!(result["round"], 2); assert_eq!(result["message_id"], "same-message");
+            assert_eq!(result["round"], 2);
+            assert_eq!(result["message_id"], "same-message");
         }
     }
     #[test]
-    fn spec221_continuation_receipt_outlives_read_budget_without_resend() { continuation_response(false); }
+    fn spec221_continuation_receipt_outlives_read_budget_without_resend() {
+        continuation_response(false);
+    }
     #[test]
-    fn spec221_continuation_lost_response_preserves_identifiers_without_resend() { continuation_response(true); }
+    fn spec221_continuation_lost_response_preserves_identifiers_without_resend() {
+        continuation_response(true);
+    }
 }
 
-
-fn specialists_schema222()->Value {
-    let text=json!({"type":"string","minLength":1,"maxLength":256});
-    let scope=json!({"type":"object","properties":{"projects":{"type":"array","maxItems":64,"items":text},"transversal":{"type":"boolean"}},"additionalProperties":false});
-    let budget=json!({"type":["object","null"],"properties":{"max_duration_secs":{"type":["integer","null"],"minimum":0},"max_facturable_tokens":{"type":["integer","null"],"minimum":0},"max_descendants":{"type":["integer","null"],"minimum":0}},"additionalProperties":false});
-    let launch=json!({"type":["object","null"],"properties":{"agent_type":text,"cwd":{"type":"string","minLength":1,"maxLength":4096},"posture":{"enum":["discovery","development"]},"prepare_requirements":{"type":"boolean"}},"required":["agent_type","cwd","posture"],"additionalProperties":false});
-    let definition=json!({"type":"object","properties":{
+fn specialists_schema222() -> Value {
+    let text = json!({"type":"string","minLength":1,"maxLength":256});
+    let scope = json!({"type":"object","properties":{"projects":{"type":"array","maxItems":64,"items":text},"transversal":{"type":"boolean"}},"additionalProperties":false});
+    let budget = json!({"type":["object","null"],"properties":{"max_duration_secs":{"type":["integer","null"],"minimum":0},"max_facturable_tokens":{"type":["integer","null"],"minimum":0},"max_descendants":{"type":["integer","null"],"minimum":0}},"additionalProperties":false});
+    let launch = json!({"type":["object","null"],"properties":{"agent_type":text,"cwd":{"type":"string","minLength":1,"maxLength":4096},"posture":{"enum":["discovery","development"]},"prepare_requirements":{"type":"boolean"}},"required":["agent_type","cwd","posture"],"additionalProperties":false});
+    let definition = json!({"type":"object","properties":{
         "profile_id":text,"name":{"type":"string","minLength":1,"maxLength":80},"kind":{"enum":["profile","team"]},
         "instructions":{"type":"string","maxLength":8000},"roles":{"type":"array","maxItems":32,"items":text},
         "procedures":{"type":"array","maxItems":32,"items":{"type":"object","properties":{"name":text,"instructions":{"type":"string","maxLength":8000}},"required":["name","instructions"],"additionalProperties":false}},
@@ -905,18 +1111,53 @@ fn specialists_schema222()->Value {
         "members":{"type":"array","maxItems":32,"items":{"type":"object","properties":{"key":text,"role_id":text,"deliverable":{"type":"string","minLength":1,"maxLength":4000},"depends_on":{"type":"array","items":text,"maxItems":32}},"required":["key","role_id","deliverable"],"additionalProperties":false}},
         "provenance":{"type":["string","null"],"maxLength":4096}
     },"required":["profile_id","name","kind","instructions"],"additionalProperties":false});
-    let mut fields=serde_json::Map::new();
-    for name in ["request_id","specialist_agent_id","profile_id","role_id","project_id","memory_id","cursor"] {fields.insert(name.into(),text.clone());}
-    fields.insert("limit".into(),json!({"type":"integer","minimum":1,"maximum":100}));
-    fields.insert("expected_revision".into(),json!({"type":"integer","minimum":0}));
-    for name in ["revision","profile_revision"] {fields.insert(name.into(),json!({"type":"integer","minimum":1}));}
-    for name in ["durable","auto_start","official","shared"] {fields.insert(name.into(),json!({"type":"boolean"}));}
-    fields.insert("task".into(),json!({"type":"string","minLength":1,"maxLength":32000}));
-    fields.insert("text".into(),json!({"type":"string","minLength":1,"maxLength":16000}));
-    fields.insert("query".into(),json!({"type":"string","maxLength":4096}));
-    fields.insert("kind".into(),json!({"enum":["fact","decision","hypothesis","reported_result"]}));
-    fields.insert("mandate".into(),json!({"type":["string","null"],"maxLength":16000}));
-    fields.insert("scope".into(),scope.clone());fields.insert("budget".into(),budget);fields.insert("launch_policy".into(),launch);fields.insert("definition".into(),definition);
+    let mut fields = serde_json::Map::new();
+    for name in [
+        "request_id",
+        "specialist_agent_id",
+        "profile_id",
+        "role_id",
+        "project_id",
+        "memory_id",
+        "cursor",
+    ] {
+        fields.insert(name.into(), text.clone());
+    }
+    fields.insert(
+        "limit".into(),
+        json!({"type":"integer","minimum":1,"maximum":100}),
+    );
+    fields.insert(
+        "expected_revision".into(),
+        json!({"type":"integer","minimum":0}),
+    );
+    for name in ["revision", "profile_revision"] {
+        fields.insert(name.into(), json!({"type":"integer","minimum":1}));
+    }
+    for name in ["durable", "auto_start", "official", "shared"] {
+        fields.insert(name.into(), json!({"type":"boolean"}));
+    }
+    fields.insert(
+        "task".into(),
+        json!({"type":"string","minLength":1,"maxLength":32000}),
+    );
+    fields.insert(
+        "text".into(),
+        json!({"type":"string","minLength":1,"maxLength":16000}),
+    );
+    fields.insert("query".into(), json!({"type":"string","maxLength":4096}));
+    fields.insert(
+        "kind".into(),
+        json!({"enum":["fact","decision","hypothesis","reported_result"]}),
+    );
+    fields.insert(
+        "mandate".into(),
+        json!({"type":["string","null"],"maxLength":16000}),
+    );
+    fields.insert("scope".into(), scope.clone());
+    fields.insert("budget".into(), budget);
+    fields.insert("launch_policy".into(), launch);
+    fields.insert("definition".into(), definition);
     fields.insert("roles".into(),json!({"type":"array","maxItems":32,"items":{"type":"object","properties":{"role_id":text,"label":{"type":"string","minLength":1,"maxLength":160},"scope":scope},"required":["role_id","label","scope"],"additionalProperties":false}}));
     fields.insert("source".into(),json!({"oneOf":[
         {"type":"object","properties":{"kind":{"const":"statement"},"request_id":text},"required":["kind","request_id"],"additionalProperties":false},
@@ -924,46 +1165,192 @@ fn specialists_schema222()->Value {
         {"type":"object","properties":{"kind":{"const":"message"},"message_id":text,"in_reply_to":text,"part":{"type":"integer","minimum":0},"digest":{"type":"string","pattern":"^[0-9a-f]{64}$"}},"required":["kind","message_id","in_reply_to","digest"],"additionalProperties":false},
         {"type":"object","properties":{"kind":{"const":"journal"},"agent_id":text,"file":{"type":"string","maxLength":4096},"from_seq":{"type":"integer","minimum":0},"to_seq":{"type":"integer","minimum":0},"part":{"type":"integer","minimum":0},"digest":{"type":"string","pattern":"^[0-9a-f]{64}$"}},"required":["kind","agent_id","file","from_seq","to_seq","digest"],"additionalProperties":false}
     ]}));
-    fields.insert("after_seq".into(),json!({"type":"integer","minimum":0}));
-    let rows=[
-        ("capture_history",vec!["request_id","specialist_agent_id"],vec!["project_id","after_seq","limit"]),
-        ("profiles",vec![],vec!["cursor","limit"]),
-        ("profile_versions",vec!["profile_id"],vec!["cursor","limit"]),
-        ("attach_profile",vec!["request_id","profile_id","profile_revision","expected_revision"],vec![]),
-        ("list",vec![],vec!["cursor","limit"]),("search",vec!["role_id"],vec!["project_id","cursor","limit"]),
-        ("get",vec!["specialist_agent_id"],vec![]),
-        ("declare_roles",vec!["request_id","expected_revision","roles"],vec![]),
-        ("propose_profile",vec!["request_id","definition"],vec![]),
-        ("propose_revision",vec!["request_id","expected_revision","definition"],vec![]),
-        ("approve_revision",vec!["request_id","profile_id","revision"],vec![]),
-        ("activate",vec!["request_id","specialist_agent_id","profile_id","profile_revision","expected_revision","scope","durable","auto_start"],vec!["mandate","budget","launch_policy"]),
-        ("disable",vec!["request_id","specialist_agent_id","expected_revision"],vec![]),
-        ("configure_mandate",vec!["request_id","specialist_agent_id","expected_revision","mandate","scope","auto_start"],vec!["budget","launch_policy"]),
-        ("revoke",vec!["request_id","specialist_agent_id","expected_revision"],vec![]),
-        ("designate_role",vec!["request_id","specialist_agent_id","role_id","official"],vec![]),
-        ("memory_recall",vec!["specialist_agent_id","project_id","query"],vec!["cursor","limit"]),
-        ("memory_versions",vec!["memory_id"],vec!["cursor","limit"]),
-        ("memory_write",vec!["request_id","specialist_agent_id","project_id","shared","kind","text","source"],vec![]),
-        ("memory_correct",vec!["request_id","memory_id","expected_revision","text","kind"],vec![]),
-        ("memory_forget",vec!["request_id","memory_id","expected_revision"],vec![]),
-        ("export",vec!["profile_id","revision"],vec![]),
-        ("import",vec!["request_id","definition"],vec![]),
-        ("convert",vec!["request_id","specialist_agent_id","profile_id","profile_revision","expected_revision"],vec![]),
-        ("request_role",vec!["request_id","role_id","project_id","task"],vec!["specialist_agent_id"]),
-        ("request_status",vec!["request_id"],vec![]),
-        ("request_team",vec!["request_id","profile_id","revision","project_id","task"],vec![]),
+    fields.insert("after_seq".into(), json!({"type":"integer","minimum":0}));
+    let rows = [
+        (
+            "capture_history",
+            vec!["request_id", "specialist_agent_id"],
+            vec!["project_id", "after_seq", "limit"],
+        ),
+        ("profiles", vec![], vec!["cursor", "limit"]),
+        (
+            "profile_versions",
+            vec!["profile_id"],
+            vec!["cursor", "limit"],
+        ),
+        (
+            "attach_profile",
+            vec![
+                "request_id",
+                "profile_id",
+                "profile_revision",
+                "expected_revision",
+            ],
+            vec![],
+        ),
+        ("list", vec![], vec!["cursor", "limit"]),
+        (
+            "search",
+            vec!["role_id"],
+            vec!["project_id", "cursor", "limit"],
+        ),
+        ("get", vec!["specialist_agent_id"], vec![]),
+        (
+            "declare_roles",
+            vec!["request_id", "expected_revision", "roles"],
+            vec![],
+        ),
+        ("propose_profile", vec!["request_id", "definition"], vec![]),
+        (
+            "propose_revision",
+            vec!["request_id", "expected_revision", "definition"],
+            vec![],
+        ),
+        (
+            "approve_revision",
+            vec!["request_id", "profile_id", "revision"],
+            vec![],
+        ),
+        (
+            "activate",
+            vec![
+                "request_id",
+                "specialist_agent_id",
+                "profile_id",
+                "profile_revision",
+                "expected_revision",
+                "scope",
+                "durable",
+                "auto_start",
+            ],
+            vec!["mandate", "budget", "launch_policy"],
+        ),
+        (
+            "disable",
+            vec!["request_id", "specialist_agent_id", "expected_revision"],
+            vec![],
+        ),
+        (
+            "configure_mandate",
+            vec![
+                "request_id",
+                "specialist_agent_id",
+                "expected_revision",
+                "mandate",
+                "scope",
+                "auto_start",
+            ],
+            vec!["budget", "launch_policy"],
+        ),
+        (
+            "revoke",
+            vec!["request_id", "specialist_agent_id", "expected_revision"],
+            vec![],
+        ),
+        (
+            "designate_role",
+            vec!["request_id", "specialist_agent_id", "role_id", "official"],
+            vec![],
+        ),
+        (
+            "memory_recall",
+            vec!["specialist_agent_id", "project_id", "query"],
+            vec!["cursor", "limit"],
+        ),
+        (
+            "memory_versions",
+            vec!["memory_id"],
+            vec!["cursor", "limit"],
+        ),
+        (
+            "memory_write",
+            vec![
+                "request_id",
+                "specialist_agent_id",
+                "project_id",
+                "shared",
+                "kind",
+                "text",
+                "source",
+            ],
+            vec![],
+        ),
+        (
+            "memory_correct",
+            vec![
+                "request_id",
+                "memory_id",
+                "expected_revision",
+                "text",
+                "kind",
+            ],
+            vec![],
+        ),
+        (
+            "memory_forget",
+            vec!["request_id", "memory_id", "expected_revision"],
+            vec![],
+        ),
+        ("export", vec!["profile_id", "revision"], vec![]),
+        ("import", vec!["request_id", "definition"], vec![]),
+        (
+            "convert",
+            vec![
+                "request_id",
+                "specialist_agent_id",
+                "profile_id",
+                "profile_revision",
+                "expected_revision",
+            ],
+            vec![],
+        ),
+        (
+            "request_role",
+            vec!["request_id", "role_id", "project_id", "task"],
+            vec!["specialist_agent_id"],
+        ),
+        ("request_status", vec!["request_id"], vec![]),
+        (
+            "request_team",
+            vec!["request_id", "profile_id", "revision", "project_id", "task"],
+            vec![],
+        ),
     ];
-    let mut branches=Vec::new();
-    for (action,required,optional) in rows {
-        let mut properties=serde_json::Map::new();
-        properties.insert("version".into(),json!({"const":1}));properties.insert("action".into(),json!({"const":action}));
-        for name in required.iter().chain(optional.iter()){properties.insert((*name).into(),fields[*name].clone());}
-        let mut req=vec!["version","action"];req.extend(required);
-        if action=="memory_versions"{properties.insert("cursor".into(),json!({"type":"integer","minimum":1}));}
+    let mut branches = Vec::new();
+    for (action, required, optional) in rows {
+        let mut properties = serde_json::Map::new();
+        properties.insert("version".into(), json!({"const":1}));
+        properties.insert("action".into(), json!({"const":action}));
+        for name in required.iter().chain(optional.iter()) {
+            properties.insert((*name).into(), fields[*name].clone());
+        }
+        let mut req = vec!["version", "action"];
+        req.extend(required);
+        if action == "memory_versions" {
+            properties.insert("cursor".into(), json!({"type":"integer","minimum":1}));
+        }
         branches.push(json!({"type":"object","properties":properties,"required":req,"additionalProperties":false}));
     }
-    let approved=branches.iter().filter(|v|matches!(v["properties"]["action"]["const"].as_str(),
-        Some("approve_revision"|"activate"|"disable"|"configure_mandate"|"revoke"|"designate_role"|"import"|"convert"|"request_role"))).cloned().collect::<Vec<_>>();
+    let approved = branches
+        .iter()
+        .filter(|v| {
+            matches!(
+                v["properties"]["action"]["const"].as_str(),
+                Some(
+                    "approve_revision"
+                        | "activate"
+                        | "disable"
+                        | "configure_mandate"
+                        | "revoke"
+                        | "designate_role"
+                        | "import"
+                        | "convert"
+                        | "request_role"
+                )
+            )
+        })
+        .cloned()
+        .collect::<Vec<_>>();
     branches.push(json!({"type":"object","properties":{"version":{"const":1},"action":{"const":"request_approval"},
         "request_id":{"type":"string","format":"uuid"},"operation":{"oneOf":approved}},
         "required":["version","action","request_id","operation"],"additionalProperties":false}));
@@ -976,14 +1363,28 @@ mod tracking230_preflight_tests {
 
     #[test]
     fn spec259_preflight_refs_name_bounded_ack_ids_and_preserve_refusals() {
-        let error = || ClientError::Technical {code:"daemon_unreachable",message:"budget JSONL dépassé".into()};
+        let error = || ClientError::Technical {
+            code: "daemon_unreachable",
+            message: "budget JSONL dépassé".into(),
+        };
         let valid = json!({"task_ids":["task259", "other-task"]});
-        let ClientError::Technical {message, ..} = pre_dispatch_failure(error(), "test", &valid) else {panic!()};
+        let ClientError::Technical { message, .. } = pre_dispatch_failure(error(), "test", &valid)
+        else {
+            panic!()
+        };
         assert!(message.contains("task_ids=[\"task259\",\"other-task\"]"));
-        for invalid in [json!({"task_ids":["x".repeat(129)]}), json!({"task_ids":["task\nforged"]}),
-            json!({"task_ids":["task259","task259"]}), json!({"task_ids":[3]}),
-            json!({"task_ids":(0..17).map(|n| format!("task-{n}")).collect::<Vec<_>>()})] {
-            let ClientError::Technical {message, ..} = pre_dispatch_failure(error(), "test", &invalid) else {panic!()};
+        for invalid in [
+            json!({"task_ids":["x".repeat(129)]}),
+            json!({"task_ids":["task\nforged"]}),
+            json!({"task_ids":["task259","task259"]}),
+            json!({"task_ids":[3]}),
+            json!({"task_ids":(0..17).map(|n| format!("task-{n}")).collect::<Vec<_>>()}),
+        ] {
+            let ClientError::Technical { message, .. } =
+                pre_dispatch_failure(error(), "test", &invalid)
+            else {
+                panic!()
+            };
             assert!(message.contains("les identifiants des tâches de cet appel"));
             assert!(!message.contains("task_ids="));
         }
@@ -1001,33 +1402,82 @@ mod tracking230_preflight_tests {
         crate::mcp_identity::mock_private_identity(&socket, "owner", "instance");
         let server = std::thread::spawn(move || {
             let (mut stream, _) = listener.accept().unwrap();
-            stream.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(3)))
+                .unwrap();
             let mut line = String::new();
-            BufReader::new(stream.try_clone().unwrap()).read_line(&mut line).unwrap();
-            assert_eq!(serde_json::from_str::<Value>(&line).unwrap()["type"], "DaemonIdentityRequest");
+            BufReader::new(stream.try_clone().unwrap())
+                .read_line(&mut line)
+                .unwrap();
+            assert_eq!(
+                serde_json::from_str::<Value>(&line).unwrap()["type"],
+                "DaemonIdentityRequest"
+            );
             writeln!(stream, "{}", json!({"type":"DaemonIdentityReport","host":"fixture","db_path":"fixture","instance_id":"fixture","features":["wait_v1"]})).unwrap();
             drop(stream);
             for _ in 0..2 {
                 let (stream, _) = listener.accept().unwrap();
-                stream.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(3)))
+                    .unwrap();
                 let mut reader = BufReader::new(stream);
-                line.clear();reader.read_line(&mut line).unwrap();
-                assert_eq!(serde_json::from_str::<Value>(&line).unwrap()["type"], "RegisterAuxiliary");
+                line.clear();
+                reader.read_line(&mut line).unwrap();
+                assert_eq!(
+                    serde_json::from_str::<Value>(&line).unwrap()["type"],
+                    "RegisterAuxiliary"
+                );
             }
         });
-        let identity = ResolvedIdentity {name:"owner".into(), instance_id:"instance".into(), delegated_origin:None};
-        let result = execute(&identity, "bridget_task_wait", &json!({"task_ids":["task259"],"wait_timeout":1}), &socket);
-        assert!(matches!(&result, Err(ClientError::Technical {code:"daemon_unreachable",message})
+        let identity = ResolvedIdentity {
+            name: "owner".into(),
+            instance_id: "instance".into(),
+            delegated_origin: None,
+        };
+        let result = execute(
+            &identity,
+            "bridget_task_wait",
+            &json!({"task_ids":["task259"],"wait_timeout":1}),
+            &socket,
+        );
+        assert!(
+            matches!(&result, Err(ClientError::Technical {code:"daemon_unreachable",message})
             if message.contains("raccordement de cette session") && message.contains("task259")
-                && message.contains("n'a pas été transmise")), "refus inattendu : {result:?}");
+                && message.contains("n'a pas été transmise")),
+            "refus inattendu : {result:?}"
+        );
         server.join().unwrap();
     }
     #[test]
     fn tracking230_refus_avant_depart_precise_etape_et_tache_sans_accuser_le_modele() {
-        let error=pre_dispatch_failure(ClientError::Technical{code:"daemon_unreachable",message:"budget JSONL dépassé".into()},"lecture des capacités d’attente",&json!({"task_id":"t230"}));
-        let ClientError::Technical{code,message}=error else {panic!()};
-        assert_eq!(code,"daemon_unreachable");
-        for text in ["task_id=t230","n'a pas été transmise","cause précise","cet appel","autres travaux autorisés"] {assert!(message.contains(text));}
-        assert!(matches!(pre_dispatch_failure(ClientError::InvalidParams("forme".into()),"test",&json!({})),ClientError::InvalidParams(_)));
+        let error = pre_dispatch_failure(
+            ClientError::Technical {
+                code: "daemon_unreachable",
+                message: "budget JSONL dépassé".into(),
+            },
+            "lecture des capacités d’attente",
+            &json!({"task_id":"t230"}),
+        );
+        let ClientError::Technical { code, message } = error else {
+            panic!()
+        };
+        assert_eq!(code, "daemon_unreachable");
+        for text in [
+            "task_id=t230",
+            "n'a pas été transmise",
+            "cause précise",
+            "cet appel",
+            "autres travaux autorisés",
+        ] {
+            assert!(message.contains(text));
+        }
+        assert!(matches!(
+            pre_dispatch_failure(
+                ClientError::InvalidParams("forme".into()),
+                "test",
+                &json!({})
+            ),
+            ClientError::InvalidParams(_)
+        ));
     }
 }

@@ -9,16 +9,27 @@ use std::path::{Path, PathBuf};
 /// Aucun ajout de Bash aux profils de lecture seule.
 pub(crate) fn permits_command_execution(policy: &Value, requires_workspace_write: bool) -> bool {
     match policy["kind"].as_str() {
-        Some("codex") => matches!(policy["sandbox_policy"]["type"].as_str(),
-            Some("workspaceWrite" | "dangerFullAccess"))
-            || (!requires_workspace_write && policy["sandbox_policy"]["type"]=="readOnly"),
+        Some("codex") => {
+            matches!(
+                policy["sandbox_policy"]["type"].as_str(),
+                Some("workspaceWrite" | "dangerFullAccess")
+            ) || (!requires_workspace_write && policy["sandbox_policy"]["type"] == "readOnly")
+        }
         Some("claude") => {
             let tools = &policy["tools"];
             let exposed = tools == &json!({"type":"preset","preset":"claude_code"})
-                || tools.as_array().is_some_and(|tools| tools.iter().any(|tool| tool == "Bash"));
-            exposed && (!requires_workspace_write || !matches!(policy["permission_mode"].as_str(),Some("default"|"plan")))
-                && policy["disallowed_tools"].as_array().is_none_or(|tools|
-                !tools.iter().any(|tool|tool.as_str().is_some_and(|name|name=="*" || name.starts_with("Bash"))))
+                || tools
+                    .as_array()
+                    .is_some_and(|tools| tools.iter().any(|tool| tool == "Bash"));
+            exposed
+                && (!requires_workspace_write
+                    || !matches!(policy["permission_mode"].as_str(), Some("default" | "plan")))
+                && policy["disallowed_tools"].as_array().is_none_or(|tools| {
+                    !tools.iter().any(|tool| {
+                        tool.as_str()
+                            .is_some_and(|name| name == "*" || name.starts_with("Bash"))
+                    })
+                })
         }
         _ => false,
     }
@@ -72,35 +83,55 @@ fn sdk_settings171() -> Value {
     json!({"permissions":{"allow":["mcp__bridget__bridget_capabilities","mcp__bridget__bridget_task_status"]}})
 }
 
-struct AuthenticatedSdkInputs171<'a> { settings: &'a Value, environment: &'a Value }
+struct AuthenticatedSdkInputs171<'a> {
+    settings: &'a Value,
+    environment: &'a Value,
+}
 impl<'a> AuthenticatedSdkInputs171<'a> {
     fn from_parent(parent: &'a ProviderPermissions) -> Result<Option<Self>, String> {
-        let Some(settings) = parent.provider_policy.pointer("/launch_context/settings_overrides") else { return Ok(None); };
+        let Some(settings) = parent
+            .provider_policy
+            .pointer("/launch_context/settings_overrides")
+        else {
+            return Ok(None);
+        };
         let p = &parent.provider_policy;
         if p.pointer("/launch_context/source_equivalence/version") != Some(&json!(2))
-            || p.pointer("/launch_context/source_equivalence/scope") != Some(&json!("origin")) {
+            || p.pointer("/launch_context/source_equivalence/scope") != Some(&json!("origin"))
+        {
             return Ok(None); // Legacy CLI-derived overrides keep their existing path.
         }
         bridget_transport::protocol::validate_permissions(parent, true)?;
-        if parent.source != "provider_turn" || parent.driver != "claude_stream_json"
-            || parent.run_id.is_empty() || parent.provider_session_id.is_empty() || parent.provider_instance_id.is_empty()
-            || p["permission_callback"] != json!({"kind":"t3_runtime","tool_approval":"allow","plan_exit":"deny"})
+        if parent.source != "provider_turn"
+            || parent.driver != "claude_stream_json"
+            || parent.run_id.is_empty()
+            || parent.provider_session_id.is_empty()
+            || parent.provider_instance_id.is_empty()
+            || p["permission_callback"]
+                != json!({"kind":"t3_runtime","tool_approval":"allow","plan_exit":"deny"})
             || p["allowed_tools"] != json!(["mcp__t3-code__*"])
             || p.pointer("/launch_context/attestation_version") != Some(&json!(2))
             || p.pointer("/launch_context/hook_execution") != Some(&json!("native_same_host"))
             || p.pointer("/launch_context/source_equivalence/version") != Some(&json!(2))
             || p.pointer("/launch_context/source_equivalence/scope") != Some(&json!("origin"))
             || *settings != sdk_settings171()
-        { return Err("permission_mapping_unavailable".into()); }
-        Ok(Some(Self { settings, environment: &p["launch_context"]["source_equivalence"]["profile"]["origin_environment"] }))
+        {
+            return Err("permission_mapping_unavailable".into());
+        }
+        Ok(Some(Self {
+            settings,
+            environment: &p["launch_context"]["source_equivalence"]["profile"]["origin_environment"],
+        }))
     }
 }
 
 // Le port T3 atteste aussi les sessions natives sans profil de transplantation.
 // Conserver sa règle exacte, sans donner au fils une connexion T3 du parent.
 fn authenticated_t3_tool_scope171(parent: &ProviderPermissions) -> bool {
-    parent.source == "provider_turn" && parent.driver == "claude_stream_json"
-        && !parent.run_id.is_empty() && !parent.provider_session_id.is_empty()
+    parent.source == "provider_turn"
+        && parent.driver == "claude_stream_json"
+        && !parent.run_id.is_empty()
+        && !parent.provider_session_id.is_empty()
         && !parent.provider_instance_id.is_empty()
         && bridget_transport::protocol::validate_permissions(parent, true).is_ok()
         && parent.provider_policy["kind"] == "claude"
@@ -116,19 +147,28 @@ fn authenticated_t3_tool_scope171(parent: &ProviderPermissions) -> bool {
 /// plan_exit=deny ne crée aucun droit Codex : ce moteur n’émet pas cet événement ;
 /// approval_policy=never refuse toute approbation au lieu d’ouvrir une médiation.
 fn native_t3_codex_scope214(parent: &ProviderPermissions, definition: &AgentDefinition) -> bool {
-    parent.driver == "claude_stream_json" && definition.protocol == "codex_app_server"
-        && definition.mcp.interactive == "codex" && unrestricted_source_scope(parent)
+    parent.driver == "claude_stream_json"
+        && definition.protocol == "codex_app_server"
+        && definition.mcp.interactive == "codex"
+        && unrestricted_source_scope(parent)
 }
 
 /// Portée de fichiers explicite, pas le seul libellé « full-access ».
 /// Les profils Claude avec règles/sources privées gardent leurs racines déclarées.
-pub(crate) fn unrestricted_source_scope(parent:&ProviderPermissions)->bool {
+pub(crate) fn unrestricted_source_scope(parent: &ProviderPermissions) -> bool {
     bridget_transport::protocol::provider_has_unrestricted_source_scope(parent)
 }
 
 fn require_isolated_claude_mount171(definition: &AgentDefinition) -> Result<(), String> {
-    if definition.protocol != "claude_stream_json" || definition.mcp.interactive != "claude"
-        || definition.args.iter().any(|a| matches!(a.split('=').next(), Some("--mcp-config" | "--strict-mcp-config"))) {
+    if definition.protocol != "claude_stream_json"
+        || definition.mcp.interactive != "claude"
+        || definition.args.iter().any(|a| {
+            matches!(
+                a.split('=').next(),
+                Some("--mcp-config" | "--strict-mcp-config")
+            )
+        })
+    {
         return Err("permission_mapping_unavailable".into());
     }
     Ok(())
@@ -136,60 +176,123 @@ fn require_isolated_claude_mount171(definition: &AgentDefinition) -> Result<(), 
 
 fn portable_claude_rules(parent: &ProviderPermissions) -> bool {
     let policy = &parent.provider_policy;
-    let sdk = match AuthenticatedSdkInputs171::from_parent(parent) { Ok(value) => value, Err(_) => return false };
+    let sdk = match AuthenticatedSdkInputs171::from_parent(parent) {
+        Ok(value) => value,
+        Err(_) => return false,
+    };
     ["allowed_tools", "disallowed_tools"].iter().all(|field| {
-        policy.get(*field).is_none_or(|value| value.as_array().is_some_and(|rules| rules.iter().all(|rule| {
-            rule.as_str().is_some_and(|name| !name.is_empty() &&
-                (name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
-                 || (*field == "allowed_tools" && authenticated_t3_tool_scope171(parent) && name == "mcp__t3-code__*")))
-        })))
-    }) && (sdk.is_some() || policy.pointer("/launch_context/settings_overrides").is_none())
+        policy.get(*field).is_none_or(|value| {
+            value.as_array().is_some_and(|rules| {
+                rules.iter().all(|rule| {
+                    rule.as_str().is_some_and(|name| {
+                        !name.is_empty()
+                            && (name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
+                                || (*field == "allowed_tools"
+                                    && authenticated_t3_tool_scope171(parent)
+                                    && name == "mcp__t3-code__*"))
+                    })
+                })
+            })
+        })
+    }) && (sdk.is_some()
+        || policy
+            .pointer("/launch_context/settings_overrides")
+            .is_none())
 }
 
 // The existing managed wrapper mounts only its child-scoped Bridget server,
 // using --strict-mcp-config. T3 names remain unchanged and cannot select that
 // server. No parent T3 credential or authority is forwarded to the child.
-fn require_sdk_native_mount171(context: &Value, definition: &AgentDefinition) -> Result<(), String> {
-    if context.get("settings_overrides").is_none() { return Ok(()); }
+fn require_sdk_native_mount171(
+    context: &Value,
+    definition: &AgentDefinition,
+) -> Result<(), String> {
+    if context.get("settings_overrides").is_none() {
+        return Ok(());
+    }
     if context["settings_overrides"] != sdk_settings171()
-        || definition.protocol != "claude_stream_json" || definition.mcp.interactive != "claude"
-        || definition.args.iter().any(|a| matches!(a.split('=').next(), Some("--mcp-config" | "--strict-mcp-config")))
-    { return Err("permission_mapping_unavailable".into()); }
+        || definition.protocol != "claude_stream_json"
+        || definition.mcp.interactive != "claude"
+        || definition.args.iter().any(|a| {
+            matches!(
+                a.split('=').next(),
+                Some("--mcp-config" | "--strict-mcp-config")
+            )
+        })
+    {
+        return Err("permission_mapping_unavailable".into());
+    }
     Ok(())
 }
 
-fn recheck_parent_context171(parent: &ProviderPermissions, definition: &AgentDefinition,
-    cwd: &Path, source: &SourceEnvironment) -> Result<(), String> {
+fn recheck_parent_context171(
+    parent: &ProviderPermissions,
+    definition: &AgentDefinition,
+    cwd: &Path,
+    source: &SourceEnvironment,
+) -> Result<(), String> {
     let sdk = AuthenticatedSdkInputs171::from_parent(parent)?;
-    let context = parent.provider_policy.get("launch_context").ok_or_else(unavailable)?;
+    let context = parent
+        .provider_policy
+        .get("launch_context")
+        .ok_or_else(unavailable)?;
     let mut environment = build_environment(definition, source).map_err(|_| changed())?;
     if let Some(sdk) = &sdk {
         // These are the authenticated parent's three closed hook facts, not
         // the target definition's launch environment. The same-operation
         // verified profile checks every value again before reconstruction.
-        for key in ["TMUX", "TMUX_PANE", "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"] {
+        for key in [
+            "TMUX",
+            "TMUX_PANE",
+            "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC",
+        ] {
             match &sdk.environment[key] {
-                Value::Null => { environment.remove(key); }
-                Value::String(value) => { environment.insert(key.into(), std::ffi::OsString::from(value.as_str())); }
+                Value::Null => {
+                    environment.remove(key);
+                }
+                Value::String(value) => {
+                    environment.insert(key.into(), std::ffi::OsString::from(value.as_str()));
+                }
                 _ => return Err("permission_hook_environment_unavailable".into()),
             }
         }
     }
     let mut operation = PermissionReadOperation::default();
-    recheck_context_with_sdk171(context, definition, cwd, &environment, &mut operation, sdk.as_ref())?;
+    recheck_context_with_sdk171(
+        context,
+        definition,
+        cwd,
+        &environment,
+        &mut operation,
+        sdk.as_ref(),
+    )?;
     operation.finish()
 }
 
-fn parent_recheck_environment171(parent: &ProviderPermissions, definition: &AgentDefinition,
-    source: &SourceEnvironment) -> Result<SourceEnvironment, String> {
+fn parent_recheck_environment171(
+    parent: &ProviderPermissions,
+    definition: &AgentDefinition,
+    source: &SourceEnvironment,
+) -> Result<SourceEnvironment, String> {
     let sdk = AuthenticatedSdkInputs171::from_parent(parent)?;
-    parent.provider_policy.get("launch_context").ok_or_else(unavailable)?;
+    parent
+        .provider_policy
+        .get("launch_context")
+        .ok_or_else(unavailable)?;
     let mut environment = build_environment(definition, source).map_err(|_| changed())?;
     if let Some(sdk) = &sdk {
-        for key in ["TMUX", "TMUX_PANE", "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"] {
+        for key in [
+            "TMUX",
+            "TMUX_PANE",
+            "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC",
+        ] {
             match &sdk.environment[key] {
-                Value::Null => { environment.remove(key); }
-                Value::String(value) => { environment.insert(key.into(), std::ffi::OsString::from(value.as_str())); }
+                Value::Null => {
+                    environment.remove(key);
+                }
+                Value::String(value) => {
+                    environment.insert(key.into(), std::ffi::OsString::from(value.as_str()));
+                }
                 _ => return Err("permission_hook_environment_unavailable".into()),
             }
         }
@@ -197,11 +300,26 @@ fn parent_recheck_environment171(parent: &ProviderPermissions, definition: &Agen
     Ok(environment)
 }
 
-fn recheck_parent_context_in_operation171(parent: &ProviderPermissions, definition: &AgentDefinition,
-    cwd: &Path, environment: &SourceEnvironment, operation: &mut PermissionReadOperation) -> Result<(), String> {
+fn recheck_parent_context_in_operation171(
+    parent: &ProviderPermissions,
+    definition: &AgentDefinition,
+    cwd: &Path,
+    environment: &SourceEnvironment,
+    operation: &mut PermissionReadOperation,
+) -> Result<(), String> {
     let sdk = AuthenticatedSdkInputs171::from_parent(parent)?;
-    let context = parent.provider_policy.get("launch_context").ok_or_else(unavailable)?;
-    recheck_context_with_sdk171(context, definition, cwd, environment, operation, sdk.as_ref())
+    let context = parent
+        .provider_policy
+        .get("launch_context")
+        .ok_or_else(unavailable)?;
+    recheck_context_with_sdk171(
+        context,
+        definition,
+        cwd,
+        environment,
+        operation,
+        sdk.as_ref(),
+    )
 }
 
 /// A stack-owned catalogue scope. It shares only the opaque verified profile,
@@ -215,36 +333,71 @@ pub(crate) struct CataloguePermissionRead171 {
 }
 impl CataloguePermissionRead171 {
     pub(crate) fn new(parent: Option<&ProviderPermissions>, cwd: Option<&Path>) -> Self {
-        Self { binding: parent.zip(cwd).map(|(parent, cwd)| (parent.clone(), cwd.to_owned())), groups: Vec::new() }
+        Self {
+            binding: parent
+                .zip(cwd)
+                .map(|(parent, cwd)| (parent.clone(), cwd.to_owned())),
+            groups: Vec::new(),
+        }
     }
-    fn recheck(&mut self, parent: &ProviderPermissions, definition: &AgentDefinition,
-        cwd: &Path, source: &SourceEnvironment) -> Result<(), String> {
-        bridget_transport::protocol::validate_permissions(parent, parent.source == "provider_turn")?;
-        if self.binding.as_ref().is_none_or(|(bound, root)| bound != parent || root != cwd) {
+    fn recheck(
+        &mut self,
+        parent: &ProviderPermissions,
+        definition: &AgentDefinition,
+        cwd: &Path,
+        source: &SourceEnvironment,
+    ) -> Result<(), String> {
+        bridget_transport::protocol::validate_permissions(
+            parent,
+            parent.source == "provider_turn",
+        )?;
+        if self
+            .binding
+            .as_ref()
+            .is_none_or(|(bound, root)| bound != parent || root != cwd)
+        {
             return Err("permission_attestation_unavailable".into());
         }
         let environment = parent_recheck_environment171(parent, definition, source)?;
-        let position = match self.groups.iter().position(|(bound, _)| bound == &environment) {
+        let position = match self
+            .groups
+            .iter()
+            .position(|(bound, _)| bound == &environment)
+        {
             Some(position) => position,
             None => {
-                if self.groups.len() >= 128 { return Err(unavailable()); }
-                self.groups.push((environment.clone(), PermissionReadOperation::default()));
+                if self.groups.len() >= 128 {
+                    return Err(unavailable());
+                }
+                self.groups
+                    .push((environment.clone(), PermissionReadOperation::default()));
                 self.groups.len() - 1
             }
         };
         // No cross-definition cached Result: each definition takes every native
         // comparison. Only profile verification reads are operation-local.
-        recheck_parent_context_in_operation171(parent, definition, cwd, &environment, &mut self.groups[position].1)
+        recheck_parent_context_in_operation171(
+            parent,
+            definition,
+            cwd,
+            &environment,
+            &mut self.groups[position].1,
+        )
     }
     /// Consuming the scope gates publication. Any fresh finish failure returns
     /// an error instead of publishing an already-built favourable catalogue.
     pub(crate) fn finish<T>(mut self, response: T) -> Result<T, String> {
-        for (_, operation) in &mut self.groups { operation.finish()?; }
+        for (_, operation) in &mut self.groups {
+            operation.finish()?;
+        }
         // Legacy sources have no opaque profile. They keep their existing
         // per-entry checks and receive a fresh source check before publication.
         if !self.groups.is_empty() {
             let (parent, _) = self.binding.as_ref().ok_or_else(unavailable)?;
-            let context = parent.provider_policy.get("launch_context").ok_or_else(unavailable)?;
+            let context = parent
+                .provider_policy
+                .get("launch_context")
+                .ok_or_else(unavailable)?;
             if context.pointer("/source_equivalence/version") != Some(&json!(2)) {
                 bridget_transport::protocol::recheck_permission_context_sources(context)?;
             }
@@ -253,15 +406,27 @@ impl CataloguePermissionRead171 {
     }
 }
 
-fn mapped_permission_suffix171<'a>(original: &'a Path, source_root: &Path) -> Result<&'a Path, String> {
-    if original.components().any(|part| matches!(part, std::path::Component::ParentDir)) {
+fn mapped_permission_suffix171<'a>(
+    original: &'a Path,
+    source_root: &Path,
+) -> Result<&'a Path, String> {
+    if original
+        .components()
+        .any(|part| matches!(part, std::path::Component::ParentDir))
+    {
         return Err("permission_mapping_unavailable".into());
     }
-    original.strip_prefix(source_root).map_err(|_| "permission_mapping_unavailable".into())
+    original
+        .strip_prefix(source_root)
+        .map_err(|_| "permission_mapping_unavailable".into())
 }
 
-fn mapped_permission_directory171(mapping: &crate::registry::ProjectMapping, original: &Path) -> Result<PathBuf, String> {
-    crate::registry::validate_additional_mapping171(mapping).map_err(|_| "permission_mapping_unavailable")?;
+fn mapped_permission_directory171(
+    mapping: &crate::registry::ProjectMapping,
+    original: &Path,
+) -> Result<PathBuf, String> {
+    crate::registry::validate_additional_mapping171(mapping)
+        .map_err(|_| "permission_mapping_unavailable")?;
     if let Ok(suffix) = mapped_permission_suffix171(original, &mapping.source_root) {
         return Ok(mapping.remote_root.join(suffix));
     }
@@ -272,42 +437,80 @@ fn mapped_permission_directory171(mapping: &crate::registry::ProjectMapping, ori
     Err("permission_mapping_unavailable".into())
 }
 
-fn mapped_existing_permission_directory171(mapping: &crate::registry::ProjectMapping,
-    original: &Path, protected: &[PathBuf], working_alias:Option<&Path>) -> Result<PathBuf, String> {
+fn mapped_existing_permission_directory171(
+    mapping: &crate::registry::ProjectMapping,
+    original: &Path,
+    protected: &[PathBuf],
+    working_alias: Option<&Path>,
+) -> Result<PathBuf, String> {
     let root = crate::registry::validate_unprotected_local_path(&mapping.remote_root, protected)?;
     // Une vue remplace le checkout du parent par la racine de A. Les chemins
     // explicitement hérités hors de ce checkout gardent le mapping ordinaire.
-    let selected = if let Some(suffix)=working_alias.and_then(|base|
-        mapped_permission_suffix171(original,base).ok()) {
+    let selected = if let Some(suffix) =
+        working_alias.and_then(|base| mapped_permission_suffix171(original, base).ok())
+    {
         mapping.remote_root.join(suffix)
-    } else {mapped_permission_directory171(mapping, original)?};
+    } else {
+        mapped_permission_directory171(mapping, original)?
+    };
     let translated = crate::registry::validate_unprotected_local_path(&selected, protected)?;
-    let permitted = translated.starts_with(&root) || mapping.additional_root.as_ref()
-        .is_some_and(|extra| translated.starts_with(&extra.remote_root));
-    if !permitted || !translated.is_dir() { return Err("permission_mapping_unavailable".into()); }
+    let permitted = translated.starts_with(&root)
+        || mapping
+            .additional_root
+            .as_ref()
+            .is_some_and(|extra| translated.starts_with(&extra.remote_root));
+    if !permitted || !translated.is_dir() {
+        return Err("permission_mapping_unavailable".into());
+    }
     Ok(translated)
 }
 
-fn project_policy_directories171(policy: &mut Value, mapping: &crate::registry::ProjectMapping,
-    protected: &[PathBuf], working_alias:Option<&Path>, same_host:bool) -> Result<(), String> {
+fn project_policy_directories171(
+    policy: &mut Value,
+    mapping: &crate::registry::ProjectMapping,
+    protected: &[PathBuf],
+    working_alias: Option<&Path>,
+    same_host: bool,
+) -> Result<(), String> {
     let mut projected = policy.clone();
     for pointer in ["/sandbox_policy/writableRoots", "/additional_directories"] {
         if let Some(paths) = projected.pointer_mut(pointer) {
-            let mapped = paths.as_array().ok_or("permission_mapping_unavailable")?.iter()
+            let mapped = paths
+                .as_array()
+                .ok_or("permission_mapping_unavailable")?
+                .iter()
                 .map(|path| {
-                    let original=Path::new(path.as_str().ok_or("permission_mapping_unavailable")?);
-                    if same_host && !original.starts_with(&mapping.source_root)
-                        && !mapping.additional_root.as_ref().is_some_and(|extra|original.starts_with(&extra.source_root)) {
+                    let original =
+                        Path::new(path.as_str().ok_or("permission_mapping_unavailable")?);
+                    if same_host
+                        && !original.starts_with(&mapping.source_root)
+                        && !mapping
+                            .additional_root
+                            .as_ref()
+                            .is_some_and(|extra| original.starts_with(&extra.source_root))
+                    {
                         // Origine=cible vient du worker authentifié, pas du chemin.
                         // Ce chemin est déjà dans les droits attestés du parent ;
                         // il n'a pas à être provisionné comme une copie distante.
                         use std::os::unix::fs::MetadataExt;
-                        let canonical=crate::registry::validate_unprotected_local_path(original,protected)?;
-                        let meta=std::fs::symlink_metadata(original).map_err(|_|"permission_mapping_unavailable")?;
-                        verify_permission_directory171(original,meta.uid(),meta.mode()&0o7777,protected)?;
+                        let canonical =
+                            crate::registry::validate_unprotected_local_path(original, protected)?;
+                        let meta = std::fs::symlink_metadata(original)
+                            .map_err(|_| "permission_mapping_unavailable")?;
+                        verify_permission_directory171(
+                            original,
+                            meta.uid(),
+                            meta.mode() & 0o7777,
+                            protected,
+                        )?;
                         return Ok(canonical);
                     }
-                    mapped_existing_permission_directory171(mapping,original,protected,working_alias)
+                    mapped_existing_permission_directory171(
+                        mapping,
+                        original,
+                        protected,
+                        working_alias,
+                    )
                 })
                 .collect::<Result<Vec<_>, String>>()?;
             *paths = serde_json::to_value(mapped).map_err(|_| unavailable())?;
@@ -317,39 +520,75 @@ fn project_policy_directories171(policy: &mut Value, mapping: &crate::registry::
     Ok(())
 }
 
-fn verify_permission_directory171(path: &Path, uid: u32, mode: u32, protected: &[PathBuf]) -> Result<(), String> {
+fn verify_permission_directory171(
+    path: &Path,
+    uid: u32,
+    mode: u32,
+    protected: &[PathBuf],
+) -> Result<(), String> {
     use std::os::unix::fs::MetadataExt;
     let canonical = crate::registry::validate_unprotected_local_path(path, protected)?;
-    if canonical != path || uid != bridget_transport::fsutil::effective_uid() { return Err("permission_mapping_unavailable".into()); }
+    if canonical != path || uid != bridget_transport::fsutil::effective_uid() {
+        return Err("permission_mapping_unavailable".into());
+    }
     for ancestor in path.ancestors() {
-        let m = std::fs::symlink_metadata(ancestor).map_err(|_| "permission_mapping_unavailable")?;
-        if !m.is_dir() || m.file_type().is_symlink()
-            || std::fs::canonicalize(ancestor).map_err(|_| "permission_mapping_unavailable")? != ancestor {
+        let m =
+            std::fs::symlink_metadata(ancestor).map_err(|_| "permission_mapping_unavailable")?;
+        if !m.is_dir()
+            || m.file_type().is_symlink()
+            || std::fs::canonicalize(ancestor).map_err(|_| "permission_mapping_unavailable")?
+                != ancestor
+        {
             return Err("permission_mapping_unavailable".into());
         }
     }
     let m = std::fs::symlink_metadata(path).map_err(|_| "permission_mapping_unavailable")?;
-    if m.uid() != uid || m.mode() & 0o7777 != mode { return Err("permission_mapping_unavailable".into()); }
+    if m.uid() != uid || m.mode() & 0o7777 != mode {
+        return Err("permission_mapping_unavailable".into());
+    }
     Ok(())
 }
 
-fn check_profile_additional_root171(profile: &Value, mapping: &crate::registry::ProjectMapping) -> Result<(), String> {
-    let expected = mapping.additional_root.as_ref().map(serde_json::to_value).transpose().map_err(|_| "permission_hook_equivalence_unavailable".to_owned())?;
+fn check_profile_additional_root171(
+    profile: &Value,
+    mapping: &crate::registry::ProjectMapping,
+) -> Result<(), String> {
+    let expected = mapping
+        .additional_root
+        .as_ref()
+        .map(serde_json::to_value)
+        .transpose()
+        .map_err(|_| "permission_hook_equivalence_unavailable".to_owned())?;
     if profile["mapping"].get("additional_root") != expected.as_ref()
         || profile["mapping"]["mapping_revision"] != mapping.mapping_revision
         || profile["mapping"]["source_host"] != mapping.source_host
         || profile["mapping"]["source_root"] != json!(mapping.source_root)
         || profile["mapping"]["remote_root"] != json!(mapping.remote_root)
-        || profile["mapping"]["source_identity"] != mapping.expected_git_identity {
+        || profile["mapping"]["source_identity"] != mapping.expected_git_identity
+    {
         return Err("permission_hook_equivalence_unavailable".to_owned());
     }
     Ok(())
 }
 
-fn check_parent_additional_root171(parent: &ProviderPermissions, profile: &Value) -> Result<(), String> {
+fn check_parent_additional_root171(
+    parent: &ProviderPermissions,
+    profile: &Value,
+) -> Result<(), String> {
     if let Some(extra) = profile["mapping"].get("additional_root") {
-        let root = extra["source_root"].as_str().ok_or_else(|| "permission_hook_equivalence_unavailable".to_owned())?;
-        if parent.provider_policy["additional_directories"].as_array().is_none_or(|paths| paths.iter().filter(|path| path.as_str() == Some(root)).count() != 1) {
+        let root = extra["source_root"]
+            .as_str()
+            .ok_or_else(|| "permission_hook_equivalence_unavailable".to_owned())?;
+        if parent.provider_policy["additional_directories"]
+            .as_array()
+            .is_none_or(|paths| {
+                paths
+                    .iter()
+                    .filter(|path| path.as_str() == Some(root))
+                    .count()
+                    != 1
+            })
+        {
             return Err("permission_hook_equivalence_unavailable".to_owned());
         }
     }
@@ -363,17 +602,32 @@ fn check_parent_additional_root171(parent: &ProviderPermissions, profile: &Value
 /// valeur locale ; chaque frontière relit intégralement les dépendances.
 #[derive(Default)]
 pub(crate) struct PermissionReadOperation {
-    profiles: Vec<(std::sync::Arc<bridget_transport::protocol::VerifiedGuardedHookProfile>, Value)>,
+    profiles: Vec<(
+        std::sync::Arc<bridget_transport::protocol::VerifiedGuardedHookProfile>,
+        Value,
+    )>,
 }
 impl PermissionReadOperation {
-    fn profile(&mut self, context: &Value) -> Result<std::sync::Arc<bridget_transport::protocol::VerifiedGuardedHookProfile>, String> {
-        if let Some((verified, last)) = self.profiles.iter_mut().find(|(v,_)| v.same_profile(context)) {
+    fn profile(
+        &mut self,
+        context: &Value,
+    ) -> Result<std::sync::Arc<bridget_transport::protocol::VerifiedGuardedHookProfile>, String>
+    {
+        if let Some((verified, last)) = self
+            .profiles
+            .iter_mut()
+            .find(|(v, _)| v.same_profile(context))
+        {
             verified.profile(context)?;
             *last = context.clone();
             return Ok(verified.clone());
         }
-        if self.profiles.len() >= 128 { return Err(equivalence_fail_at(ProjectionGuard::G002)); }
-        let verified = std::sync::Arc::new(bridget_transport::protocol::VerifiedGuardedHookProfile::verify(context)?);
+        if self.profiles.len() >= 128 {
+            return Err(equivalence_fail_at(ProjectionGuard::G002));
+        }
+        let verified = std::sync::Arc::new(
+            bridget_transport::protocol::VerifiedGuardedHookProfile::verify(context)?,
+        );
         verified.profile(context)?;
         self.profiles.push((verified.clone(), context.clone()));
         Ok(verified)
@@ -396,7 +650,18 @@ pub(crate) fn project_remote_permissions(
     protected: &[PathBuf],
 ) -> Result<(Value, SpawnPosture), String> {
     let mut operation = PermissionReadOperation::default();
-    let result = project_remote_permissions_in_operation(parent, definition, mapping, execution_cwd, source, posture, protected, &mut operation, false, false)?;
+    let result = project_remote_permissions_in_operation(
+        parent,
+        definition,
+        mapping,
+        execution_cwd,
+        source,
+        posture,
+        protected,
+        &mut operation,
+        false,
+        false,
+    )?;
     operation.finish()?;
     Ok(result)
 }
@@ -410,8 +675,8 @@ pub(crate) fn project_remote_permissions_in_operation(
     posture: Option<SpawnPosture>,
     protected: &[PathBuf],
     _operation: &mut PermissionReadOperation,
-    commit_view:bool,
-    same_host:bool,
+    commit_view: bool,
+    same_host: bool,
 ) -> Result<(Value, SpawnPosture), String> {
     bridget_transport::protocol::validate_permissions(parent, parent.source == "provider_turn")?;
     let root = crate::registry::validate_unprotected_local_path(&mapping.remote_root, protected)?;
@@ -428,22 +693,44 @@ pub(crate) fn project_remote_permissions_in_operation(
     // commit_view est fourni seulement par une demande worker authentifiée,
     // après preuve de la racine Git dans le périmètre du parent sur l'origine.
     // Il ne change ni le parent, ni le mapping attesté, ni les règles explicites.
-    if commit_view && posture!=Some(SpawnPosture::Discovery) {
+    if commit_view && posture != Some(SpawnPosture::Discovery) {
         return Err("permission_not_inherited".into());
     }
-    let working_alias=commit_view.then(||Path::new(&parent.cwd));
-    let project_path = |origin: &str| mapped_existing_permission_directory171(mapping, Path::new(origin), protected, working_alias);
-    let local_source=same_host && crate::lifecycle::source_root(parent,execution_cwd)
-        .is_ok_and(|selected|selected==root && execution_cwd.starts_with(&selected));
-    let selected_source=crate::lifecycle::source_root(parent,&mapping.source_root)
-        .is_ok_and(|selected|selected==mapping.source_root);
-    if !local_source && !selected_source {mapped_permission_suffix171(Path::new(&parent.cwd), &mapping.source_root)?;}
+    let working_alias = commit_view.then(|| Path::new(&parent.cwd));
+    let project_path = |origin: &str| {
+        mapped_existing_permission_directory171(
+            mapping,
+            Path::new(origin),
+            protected,
+            working_alias,
+        )
+    };
+    let local_source = same_host
+        && crate::lifecycle::source_root(parent, execution_cwd)
+            .is_ok_and(|selected| selected == root && execution_cwd.starts_with(&selected));
+    let selected_source = crate::lifecycle::source_root(parent, &mapping.source_root)
+        .is_ok_and(|selected| selected == mapping.source_root);
+    if !local_source && !selected_source {
+        mapped_permission_suffix171(Path::new(&parent.cwd), &mapping.source_root)?;
+    }
     if let Some(extra) = &mapping.additional_root {
         crate::registry::validate_additional_mapping171(mapping)?;
-        verify_permission_directory171(&extra.remote_root, extra.remote_uid, extra.remote_mode, protected)?;
+        verify_permission_directory171(
+            &extra.remote_root,
+            extra.remote_uid,
+            extra.remote_mode,
+            protected,
+        )?;
     }
     let cwd = crate::registry::validate_unprotected_local_path(execution_cwd, protected)?;
-    if (!local_source && !cwd.starts_with(if selected_source {root.clone()}else{project_path(&parent.cwd)?})) || !cwd.is_dir() {
+    if (!local_source
+        && !cwd.starts_with(if selected_source {
+            root.clone()
+        } else {
+            project_path(&parent.cwd)?
+        }))
+        || !cwd.is_dir()
+    {
         return Err("permission_mapping_unavailable".into());
     }
     let mut translated = parent.clone();
@@ -454,17 +741,29 @@ pub(crate) fn project_remote_permissions_in_operation(
         return Err("permission_mapping_unavailable".into());
     }
     if parent.driver == "claude_stream_json"
-        && parent.provider_policy["allowed_tools"].as_array().is_some_and(|rules|
-            rules.iter().any(|rule| rule == "mcp__t3-code__*"))
-        && !native_t3_codex_scope214(parent, definition) {
-            require_isolated_claude_mount171(definition)?;
-        }
-    project_policy_directories171(&mut translated.provider_policy, mapping, protected, working_alias, same_host)?;
+        && parent.provider_policy["allowed_tools"]
+            .as_array()
+            .is_some_and(|rules| rules.iter().any(|rule| rule == "mcp__t3-code__*"))
+        && !native_t3_codex_scope214(parent, definition)
+    {
+        require_isolated_claude_mount171(definition)?;
+    }
+    project_policy_directories171(
+        &mut translated.provider_policy,
+        mapping,
+        protected,
+        working_alias,
+        same_host,
+    )?;
     let prepared = if definition.protocol == "claude_stream_json" {
         Some(capture_native_target_context(definition, &cwd, source)?)
-    } else { None };
+    } else {
+        None
+    };
     let (mut policy, effective) =
-        child_policy_reader_with_capture(&translated, definition, &cwd, source, true, prepared)(posture)?;
+        child_policy_reader_with_capture(&translated, definition, &cwd, source, true, prepared)(
+            posture,
+        )?;
     if definition.protocol == "claude_stream_json" {
         merge_native_target_arguments(&mut policy, definition, protected)?;
     }
@@ -472,7 +771,9 @@ pub(crate) fn project_remote_permissions_in_operation(
         // The destination's configured mode is authoritative. A full-access
         // parent cannot turn a normally restricted destination into a bypass.
         let mode = native_target_mode(definition)?;
-        if mode == "plan" { return Err("permission_not_inherited".into()); }
+        if mode == "plan" {
+            return Err("permission_not_inherited".into());
+        }
         policy["permission_mode"] = json!(mode);
     }
     recheck_remote_child_permissions(
@@ -500,7 +801,16 @@ pub(crate) fn recheck_remote_child_permissions(
     origin_parent: Option<&ProviderPermissions>,
 ) -> Result<(), String> {
     let mut operation = PermissionReadOperation::default();
-    recheck_remote_child_permissions_in_operation(policy, definition, cwd, source, protected, mapping, origin_parent, &mut operation)?;
+    recheck_remote_child_permissions_in_operation(
+        policy,
+        definition,
+        cwd,
+        source,
+        protected,
+        mapping,
+        origin_parent,
+        &mut operation,
+    )?;
     operation.finish()?;
     Ok(())
 }
@@ -531,9 +841,11 @@ pub(crate) fn recheck_remote_child_permissions_in_operation(
         if context.get("hook_execution").is_some() && context.get("settings_overrides").is_some() {
             require_sdk_native_mount171(context, definition)?;
             let parent = origin_parent.ok_or("permission_mapping_unavailable")?;
-            let sdk = AuthenticatedSdkInputs171::from_parent(parent)?.ok_or("permission_mapping_unavailable")?;
+            let sdk = AuthenticatedSdkInputs171::from_parent(parent)?
+                .ok_or("permission_mapping_unavailable")?;
             if context.get("settings_overrides") != Some(sdk.settings)
-                || policy["allowed_tools"] != parent.provider_policy["allowed_tools"] {
+                || policy["allowed_tools"] != parent.provider_policy["allowed_tools"]
+            {
                 return Err("permission_mapping_unavailable".into());
             }
         }
@@ -553,8 +865,11 @@ pub(crate) fn recheck_remote_child_permissions_in_operation(
             let parent = origin_parent.ok_or_else(|| equivalence_fail_at(ProjectionGuard::G005))?;
             check_equivalence_mapping(&witness["binding"], mapping)?;
             if witness["binding"] != mapping_equivalence_binding(parent, policy, mapping)?
-                || witness["profile"] != parent.provider_policy["launch_context"]["source_equivalence"]["profile"]
-                || witness["origin_sources"] != parent.provider_policy["launch_context"]["permission_sources"] {
+                || witness["profile"]
+                    != parent.provider_policy["launch_context"]["source_equivalence"]["profile"]
+                || witness["origin_sources"]
+                    != parent.provider_policy["launch_context"]["permission_sources"]
+            {
                 return Err(equivalence_fail_at(ProjectionGuard::G006));
             }
             let verified = operation.profile(context)?;
@@ -562,7 +877,12 @@ pub(crate) fn recheck_remote_child_permissions_in_operation(
             check_profile_additional_root171(profile, mapping)?;
             check_parent_additional_root171(parent, profile)?;
             if let Some(extra) = &mapping.additional_root {
-                verify_permission_directory171(&extra.remote_root, extra.remote_uid, extra.remote_mode, protected)?;
+                verify_permission_directory171(
+                    &extra.remote_root,
+                    extra.remote_uid,
+                    extra.remote_mode,
+                    protected,
+                )?;
             }
         } else if context["hook_execution"] == "native_remote_equivalent" {
             let witness = &context["source_equivalence"];
@@ -874,23 +1194,36 @@ fn configured_absolute_claude171(command: &str, launcher: &Path) -> Result<bool,
     if !logical.is_absolute() || logical.file_name().and_then(|s| s.to_str()) != Some("claude") {
         return Ok(false);
     }
-    if logical.components().any(|p| matches!(p, std::path::Component::ParentDir)) {
+    if logical
+        .components()
+        .any(|p| matches!(p, std::path::Component::ParentDir))
+    {
         return Err(unavailable());
     }
     let mut file = std::fs::File::open(launcher).map_err(|_| unavailable())?;
     let metadata = file.metadata().map_err(|_| unavailable())?;
     let owner = bridget_transport::fsutil::effective_uid();
-    if !metadata.is_file() || (metadata.uid() != owner && metadata.uid() != 0)
-        || metadata.mode() & 0o022 != 0 || metadata.mode() & 0o111 == 0 {
+    if !metadata.is_file()
+        || (metadata.uid() != owner && metadata.uid() != 0)
+        || metadata.mode() & 0o022 != 0
+        || metadata.mode() & 0o111 == 0
+    {
         return Err(unavailable());
     }
     let mut magic = [0u8; 4];
     file.read_exact(&mut magic).map_err(|_| unavailable())?;
-    if !matches!(magic, [0x7f, b'E', b'L', b'F']
-        | [0xcf, 0xfa, 0xed, 0xfe] | [0xce, 0xfa, 0xed, 0xfe]
-        | [0xfe, 0xed, 0xfa, 0xcf] | [0xfe, 0xed, 0xfa, 0xce]
-        | [0xca, 0xfe, 0xba, 0xbe] | [0xbe, 0xba, 0xfe, 0xca]
-        | [0xca, 0xfe, 0xba, 0xbf] | [0xbf, 0xba, 0xfe, 0xca]) {
+    if !matches!(
+        magic,
+        [0x7f, b'E', b'L', b'F']
+            | [0xcf, 0xfa, 0xed, 0xfe]
+            | [0xce, 0xfa, 0xed, 0xfe]
+            | [0xfe, 0xed, 0xfa, 0xcf]
+            | [0xfe, 0xed, 0xfa, 0xce]
+            | [0xca, 0xfe, 0xba, 0xbe]
+            | [0xbe, 0xba, 0xfe, 0xca]
+            | [0xca, 0xfe, 0xba, 0xbf]
+            | [0xbf, 0xba, 0xfe, 0xca]
+    ) {
         return Err(unavailable());
     }
     if std::fs::canonicalize(logical).map_err(|_| unavailable())? != launcher {
@@ -1138,49 +1471,98 @@ pub(crate) fn capture_context_with_env(
 
 // Only the destination's own CLI grants are used; parent tool denials and
 // explicit tool reductions remain constraints on the mission.
-fn merge_native_target_arguments(policy: &mut Value, definition: &AgentDefinition,
-    protected: &[PathBuf]) -> Result<(), String> {
-    policy.as_object_mut().ok_or_else(unavailable)?.remove("allowed_tools");
+fn merge_native_target_arguments(
+    policy: &mut Value,
+    definition: &AgentDefinition,
+    protected: &[PathBuf],
+) -> Result<(), String> {
+    policy
+        .as_object_mut()
+        .ok_or_else(unavailable)?
+        .remove("allowed_tools");
     let mut index = 0;
     while index < definition.args.len() {
         let arg = &definition.args[index];
-        let (flag, inline) = arg.split_once('=').map_or((arg.as_str(), None), |(a,b)| (a,Some(b)));
-        if !matches!(flag, "--tools" | "--allowedTools" | "--allowed-tools" |
-            "--disallowedTools" | "--disallowed-tools" | "--add-dir") { index += 1; continue; }
+        let (flag, inline) = arg
+            .split_once('=')
+            .map_or((arg.as_str(), None), |(a, b)| (a, Some(b)));
+        if !matches!(
+            flag,
+            "--tools"
+                | "--allowedTools"
+                | "--allowed-tools"
+                | "--disallowedTools"
+                | "--disallowed-tools"
+                | "--add-dir"
+        ) {
+            index += 1;
+            continue;
+        }
         let mut values = Vec::new();
-        if let Some(value) = inline { values.push(value.to_owned()); }
-        else {
+        if let Some(value) = inline {
+            values.push(value.to_owned());
+        } else {
             index += 1;
             while index < definition.args.len() && !definition.args[index].starts_with('-') {
-                values.push(definition.args[index].clone()); index += 1;
+                values.push(definition.args[index].clone());
+                index += 1;
             }
             index = index.saturating_sub(1);
         }
-        if values.is_empty() { return Err("permission_mapping_unavailable".into()); }
+        if values.is_empty() {
+            return Err("permission_mapping_unavailable".into());
+        }
         if flag == "--add-dir" {
             for value in values {
                 crate::registry::validate_unprotected_local_path(Path::new(&value), protected)?;
-                let paths = policy.as_object_mut().ok_or_else(unavailable)?
-                    .entry("additional_directories").or_insert_with(|| json!([]))
-                    .as_array_mut().ok_or_else(unavailable)?;
-                if !paths.contains(&json!(value)) { paths.push(json!(value)); }
+                let paths = policy
+                    .as_object_mut()
+                    .ok_or_else(unavailable)?
+                    .entry("additional_directories")
+                    .or_insert_with(|| json!([]))
+                    .as_array_mut()
+                    .ok_or_else(unavailable)?;
+                if !paths.contains(&json!(value)) {
+                    paths.push(json!(value));
+                }
             }
         } else {
-            let rules: Vec<Value> = values.iter().flat_map(|v| v.split(','))
-                .filter(|v| !v.is_empty()).map(|v| json!(v)).collect();
+            let rules: Vec<Value> = values
+                .iter()
+                .flat_map(|v| v.split(','))
+                .filter(|v| !v.is_empty())
+                .map(|v| json!(v))
+                .collect();
             match flag {
                 "--tools" => {
-                    if rules == vec![json!("default")] { /* Native preset; retain the parent's reduction. */ }
-                    else if let Some(parent_tools) = policy["tools"].as_array() {
-                        policy["tools"] = json!(rules.into_iter().filter(|r| parent_tools.contains(r)).collect::<Vec<_>>());
-                    } else { policy["tools"] = json!(rules); }
+                    if rules == vec![json!("default")] { /* Native preset; retain the parent's reduction. */
+                    } else if let Some(parent_tools) = policy["tools"].as_array() {
+                        policy["tools"] = json!(
+                            rules
+                                .into_iter()
+                                .filter(|r| parent_tools.contains(r))
+                                .collect::<Vec<_>>()
+                        );
+                    } else {
+                        policy["tools"] = json!(rules);
+                    }
                 }
-                "--allowedTools" | "--allowed-tools" => { policy["allowed_tools"] = json!(rules); }
+                "--allowedTools" | "--allowed-tools" => {
+                    policy["allowed_tools"] = json!(rules);
+                }
                 _ => {
-                    let denies = policy.as_object_mut().ok_or_else(unavailable)?
-                        .entry("disallowed_tools").or_insert_with(|| json!([]))
-                        .as_array_mut().ok_or_else(unavailable)?;
-                    for rule in rules { if !denies.contains(&rule) { denies.push(rule); } }
+                    let denies = policy
+                        .as_object_mut()
+                        .ok_or_else(unavailable)?
+                        .entry("disallowed_tools")
+                        .or_insert_with(|| json!([]))
+                        .as_array_mut()
+                        .ok_or_else(unavailable)?;
+                    for rule in rules {
+                        if !denies.contains(&rule) {
+                            denies.push(rule);
+                        }
+                    }
                 }
             }
         }
@@ -1190,13 +1572,24 @@ fn merge_native_target_arguments(policy: &mut Value, definition: &AgentDefinitio
 }
 
 fn check_native_target_directories(context: &Value, protected: &[PathBuf]) -> Result<(), String> {
-    for source in context["permission_sources"].as_array().ok_or_else(unavailable)? {
+    for source in context["permission_sources"]
+        .as_array()
+        .ok_or_else(unavailable)?
+    {
         let path = Path::new(source["path"].as_str().ok_or_else(unavailable)?);
-        if source["revision"] == "absent" || !path.is_file() || path.extension().and_then(|e|e.to_str()) != Some("json") { continue; }
+        if source["revision"] == "absent"
+            || !path.is_file()
+            || path.extension().and_then(|e| e.to_str()) != Some("json")
+        {
+            continue;
+        }
         let settings = read_json_source(path)?;
         if let Some(paths) = settings.pointer("/permissions/additionalDirectories") {
             for path in paths.as_array().ok_or_else(unavailable)? {
-                crate::registry::validate_unprotected_local_path(Path::new(path.as_str().ok_or_else(unavailable)?), protected)?;
+                crate::registry::validate_unprotected_local_path(
+                    Path::new(path.as_str().ok_or_else(unavailable)?),
+                    protected,
+                )?;
             }
         }
     }
@@ -1204,30 +1597,47 @@ fn check_native_target_directories(context: &Value, protected: &[PathBuf]) -> Re
 }
 
 fn capture_native_target_context(
-    definition: &AgentDefinition, cwd: &Path, source: &SourceEnvironment,
+    definition: &AgentDefinition,
+    cwd: &Path,
+    source: &SourceEnvironment,
 ) -> Result<Value, String> {
     let env = build_environment(definition, source).map_err(|_| unavailable())?;
     capture_context_with_env_impl(definition, cwd, &env, false, true)
 }
 
 fn native_target_mode(definition: &AgentDefinition) -> Result<&str, String> {
-    let mut mode = if definition.args.iter().any(|a| a == "--dangerously-skip-permissions") {
+    let mut mode = if definition
+        .args
+        .iter()
+        .any(|a| a == "--dangerously-skip-permissions")
+    {
         "bypassPermissions"
-    } else { "default" };
+    } else {
+        "default"
+    };
     let mut args = definition.args.iter();
     while let Some(arg) = args.next() {
-        if arg == "--permission-mode" { mode = args.next().ok_or_else(unavailable)?; }
-        else if let Some(value) = arg.strip_prefix("--permission-mode=") { mode = value; }
+        if arg == "--permission-mode" {
+            mode = args.next().ok_or_else(unavailable)?;
+        } else if let Some(value) = arg.strip_prefix("--permission-mode=") {
+            mode = value;
+        }
     }
-    if !matches!(mode, "default" | "plan" | "acceptEdits" | "bypassPermissions" | "auto" | "dontAsk") {
+    if !matches!(
+        mode,
+        "default" | "plan" | "acceptEdits" | "bypassPermissions" | "auto" | "dontAsk"
+    ) {
         return Err("permission_mapping_unavailable".into());
     }
     Ok(mode)
 }
 
 fn capture_context_with_env_impl(
-    definition: &AgentDefinition, cwd: &Path, env: &SourceEnvironment,
-    guarded_selection: bool, native_target: bool,
+    definition: &AgentDefinition,
+    cwd: &Path,
+    env: &SourceEnvironment,
+    guarded_selection: bool,
+    native_target: bool,
 ) -> Result<Value, String> {
     if definition.protocol != "claude_stream_json" {
         return Err(unavailable());
@@ -1258,8 +1668,13 @@ fn capture_context_with_env_impl(
         // name and installation path need not match any origin computer.
         use std::os::unix::fs::MetadataExt;
         let m = std::fs::metadata(&launcher).map_err(|_| unavailable())?;
-        if !m.is_file() || (m.uid() != bridget_transport::fsutil::effective_uid() && m.uid() != 0)
-            || m.mode() & 0o022 != 0 || m.mode() & 0o111 == 0 { return Err(unavailable()); }
+        if !m.is_file()
+            || (m.uid() != bridget_transport::fsutil::effective_uid() && m.uid() != 0)
+            || m.mode() & 0o022 != 0
+            || m.mode() & 0o111 == 0
+        {
+            return Err(unavailable());
+        }
         launcher.clone()
     } else if launcher_revision == TRANSPARENT_GCLAUDE {
         // The pinned transparent wrapper still needs its actual PATH target.
@@ -1302,7 +1717,9 @@ fn capture_context_with_env_impl(
         ("managed", managed.join("managed-settings.d")),
     ];
     if guarded_selection {
-        if selected != json!([]) { return Err(equivalence_fail_at(ProjectionGuard::G010)); }
+        if selected != json!([]) {
+            return Err(equivalence_fail_at(ProjectionGuard::G010));
+        }
         paths.retain(|(_, p)| p.starts_with(&managed));
     }
     // Les politiques MDM ne sont pas assimilées aux settings fichiers.
@@ -1319,7 +1736,9 @@ fn capture_context_with_env_impl(
         }
     }
     for ancestor in cwd.ancestors() {
-        if guarded_selection { break; }
+        if guarded_selection {
+            break;
+        }
         paths.push(("project", ancestor.join(".claude/settings.json")));
         paths.push(("local", ancestor.join(".claude/settings.local.json")));
         if paths.len() > 24 {
@@ -1373,7 +1792,11 @@ fn capture_context_with_env_impl(
         paths.push(("user", config.join("plugins/installed_plugins.json")));
         paths.push(("user", config.join("plugins/known_marketplaces.json")));
     }
-    if let Some(enabled) = settings.get("enabledPlugins").and_then(Value::as_object).filter(|_| !native_target) {
+    if let Some(enabled) = settings
+        .get("enabledPlugins")
+        .and_then(Value::as_object)
+        .filter(|_| !native_target)
+    {
         let installed_path = config.join("plugins/installed_plugins.json");
         paths.push(("user", installed_path.clone()));
         let installed: Value = read_json_source(&installed_path)?;
@@ -1470,7 +1893,8 @@ fn capture_context_with_env_impl(
     let mut sources = Vec::new();
     for (kind, path) in paths {
         security_source_is_observable(&path)?;
-        if !native_target && path != config.join("settings.json")
+        if !native_target
+            && path != config.join("settings.json")
             && path.is_file()
             && path
                 .file_name()
@@ -1484,9 +1908,10 @@ fn capture_context_with_env_impl(
                             | "remote-settings.json"
                     )
                 })
-            && read_json_source(&path)?.get("enabledPlugins").is_some() {
-                return Err(unavailable());
-            }
+            && read_json_source(&path)?.get("enabledPlugins").is_some()
+        {
+            return Err(unavailable());
+        }
         if !native_target && path.is_dir() {
             for entry in std::fs::read_dir(&path).map_err(|_| unavailable())? {
                 let entry = entry.map_err(|_| unavailable())?.path();
@@ -1506,12 +1931,20 @@ fn capture_context_with_env_impl(
                 }
             }
         }
-        let revision = if native_target && kind == "user"
-            && path == config.join("plugins/known_marketplaces.json") {
-            bridget_transport::protocol::permission_marketplace_revision171(&path, 16 * 1024 * 1024)?
-        } else { source_revision(&path)? };
+        let revision = if native_target
+            && kind == "user"
+            && path == config.join("plugins/known_marketplaces.json")
+        {
+            bridget_transport::protocol::permission_marketplace_revision171(
+                &path,
+                16 * 1024 * 1024,
+            )?
+        } else {
+            source_revision(&path)?
+        };
         sources.push(json!({"kind":kind,"path":path,"revision":revision}));
-        if !native_target && path.is_file()
+        if !native_target
+            && path.is_file()
             && path.extension().and_then(|extension| extension.to_str()) == Some("json")
         {
             let value = read_json_source(&path)?;
@@ -1627,13 +2060,18 @@ pub(crate) fn recheck_context_with_env_in_operation(
 }
 
 fn recheck_context_with_sdk171(
-    context: &Value, definition: &AgentDefinition, cwd: &Path,
-    environment: &SourceEnvironment, operation: &mut PermissionReadOperation,
+    context: &Value,
+    definition: &AgentDefinition,
+    cwd: &Path,
+    environment: &SourceEnvironment,
+    operation: &mut PermissionReadOperation,
     sdk: Option<&AuthenticatedSdkInputs171<'_>>,
 ) -> Result<(), String> {
     let verified_profile = if context.pointer("/source_equivalence/version") == Some(&json!(2)) {
         let verified = operation.profile(context)?;
-        bridget_transport::protocol::recheck_permission_context_sources_with_profile(context, &verified)?;
+        bridget_transport::protocol::recheck_permission_context_sources_with_profile(
+            context, &verified,
+        )?;
         Some(verified)
     } else {
         bridget_transport::protocol::recheck_permission_context_sources(context)?;
@@ -1644,21 +2082,33 @@ fn recheck_context_with_sdk171(
         let verified = operation.profile(context)?;
         scoped = guarded_profile_definition(definition, verified.profile(context)?, context)?;
         &scoped
-    } else { definition };
+    } else {
+        definition
+    };
     let mut captured = if context["hook_execution"] == "native_remote_guarded" {
-        capture_guarded_context(definition, context, cwd, environment, operation).map_err(|_| changed())?
-    } else if context.get("hook_execution").is_none() && context.get("source_equivalence").is_none() {
+        capture_guarded_context(definition, context, cwd, environment, operation)
+            .map_err(|_| changed())?
+    } else if context.get("hook_execution").is_none() && context.get("source_equivalence").is_none()
+    {
         // The wrapper must recheck the same native destination capture used at
         // admission, rather than reconstructing an origin-equivalent profile.
-        capture_context_with_env_impl(definition, cwd, environment, false, true).map_err(|_| changed())?
-    } else { capture_context_with_env(definition, cwd, environment).map_err(|_| changed())? };
+        capture_context_with_env_impl(definition, cwd, environment, false, true)
+            .map_err(|_| changed())?
+    } else {
+        capture_context_with_env(definition, cwd, environment).map_err(|_| changed())?
+    };
     if let Some(sdk) = sdk {
         // SDK query settings are a provider-turn fact, not registry CLI args.
         // Never replace a native CLI selector or an independently captured override.
         if captured.get("settings_overrides").is_some()
-            || definition.args.iter().any(|a| a == "--settings" || a.starts_with("--settings="))
+            || definition
+                .args
+                .iter()
+                .any(|a| a == "--settings" || a.starts_with("--settings="))
             || context.get("settings_overrides") != Some(sdk.settings)
-        { return Err(changed()); }
+        {
+            return Err(changed());
+        }
         captured["settings_overrides"] = sdk.settings.clone();
     }
     let legacy = context.get("attestation_version").is_none();
@@ -1684,15 +2134,28 @@ fn recheck_context_with_sdk171(
         if captured.get("settings_overrides") != context.get("settings_overrides") {
             return Err(changed());
         }
-        if environment.keys().any(|key| ["SECURITY_", "SECURITY_GUIDANCE_", "SECURITY_WARNINGS_", "SG_",
-            "ENABLE_PATTERN_RULES", "ENABLE_CODE_SECURITY_REVIEW", "ENABLE_STOP_REVIEW", "ENABLE_COMMIT_REVIEW"]
-            .iter().any(|prefix| key.starts_with(prefix))) {
+        if environment.keys().any(|key| {
+            [
+                "SECURITY_",
+                "SECURITY_GUIDANCE_",
+                "SECURITY_WARNINGS_",
+                "SG_",
+                "ENABLE_PATTERN_RULES",
+                "ENABLE_CODE_SECURITY_REVIEW",
+                "ENABLE_STOP_REVIEW",
+                "ENABLE_COMMIT_REVIEW",
+            ]
+            .iter()
+            .any(|prefix| key.starts_with(prefix))
+        }) {
             return Err("permission_hook_environment_unavailable".into());
         }
         let env_value = |key: &str| -> Result<Value, String> {
             match environment.get(key) {
                 None => Ok(Value::Null),
-                Some(value) => value.to_str().map(|s| json!(s))
+                Some(value) => value
+                    .to_str()
+                    .map(|s| json!(s))
                     .ok_or_else(|| "permission_hook_environment_unavailable".to_owned()),
             }
         };
@@ -1701,7 +2164,9 @@ fn recheck_context_with_sdk171(
             "TMUX_PANE":env_value("TMUX_PANE")?,
             "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC":env_value("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC")?,
         });
-        captured["source_equivalence"] = verified_profile.as_ref().ok_or_else(|| "permission_hook_equivalence_unavailable".to_owned())?
+        captured["source_equivalence"] = verified_profile
+            .as_ref()
+            .ok_or_else(|| "permission_hook_equivalence_unavailable".to_owned())?
             .origin_witness_for(&captured, &project_root(cwd), &environment)?;
     }
     if context["hook_execution"] == "native_remote_guarded" {
@@ -1835,25 +2300,42 @@ fn child_policy_reader_mode<'a>(
 }
 
 fn child_policy_reader_with_capture<'a>(
-    parent: &'a ProviderPermissions, definition: &'a AgentDefinition,
-    cwd: &'a Path, source: &'a SourceEnvironment, origin_attested: bool,
+    parent: &'a ProviderPermissions,
+    definition: &'a AgentDefinition,
+    cwd: &'a Path,
+    source: &'a SourceEnvironment,
+    origin_attested: bool,
     prepared: Option<Value>,
 ) -> impl FnMut(Option<SpawnPosture>) -> Result<(Value, SpawnPosture), String> + 'a {
-    child_policy_reader_catalogue_scope171(parent, definition, cwd, source, origin_attested, prepared, None)
+    child_policy_reader_catalogue_scope171(
+        parent,
+        definition,
+        cwd,
+        source,
+        origin_attested,
+        prepared,
+        None,
+    )
 }
 
 pub(crate) fn child_policy_reader_for_catalogue171<'a>(
-    parent: &'a ProviderPermissions, definition: &'a AgentDefinition,
-    cwd: &'a Path, source: &'a SourceEnvironment,
+    parent: &'a ProviderPermissions,
+    definition: &'a AgentDefinition,
+    cwd: &'a Path,
+    source: &'a SourceEnvironment,
     catalogue: Option<&'a std::cell::RefCell<CataloguePermissionRead171>>,
 ) -> impl FnMut(Option<SpawnPosture>) -> Result<(Value, SpawnPosture), String> + 'a {
     child_policy_reader_catalogue_scope171(parent, definition, cwd, source, false, None, catalogue)
 }
 
 fn child_policy_reader_catalogue_scope171<'a>(
-    parent: &'a ProviderPermissions, definition: &'a AgentDefinition,
-    cwd: &'a Path, source: &'a SourceEnvironment, origin_attested: bool,
-    prepared: Option<Value>, catalogue: Option<&'a std::cell::RefCell<CataloguePermissionRead171>>,
+    parent: &'a ProviderPermissions,
+    definition: &'a AgentDefinition,
+    cwd: &'a Path,
+    source: &'a SourceEnvironment,
+    origin_attested: bool,
+    prepared: Option<Value>,
+    catalogue: Option<&'a std::cell::RefCell<CataloguePermissionRead171>>,
 ) -> impl FnMut(Option<SpawnPosture>) -> Result<(Value, SpawnPosture), String> + 'a {
     let mut captured: Option<Result<Value, String>> = prepared.map(Ok);
     let mut rechecked: Option<Result<(), String>> = None;
@@ -1919,7 +2401,12 @@ fn child_policy_reader_catalogue_scope171<'a>(
                         require_sdk_native_mount171(&policy["launch_context"], definition)?;
                     }
                     rechecked
-                        .get_or_insert_with(|| match catalogue { Some(scope) => scope.borrow_mut().recheck(parent, definition, cwd, source), None => recheck_parent_context171(parent, definition, cwd, source) })
+                        .get_or_insert_with(|| match catalogue {
+                            Some(scope) => {
+                                scope.borrow_mut().recheck(parent, definition, cwd, source)
+                            }
+                            None => recheck_parent_context171(parent, definition, cwd, source),
+                        })
                         .clone()?;
                 }
                 if Path::new(&parent.cwd) != cwd {
@@ -1986,15 +2473,20 @@ fn child_policy_reader_catalogue_scope171<'a>(
                 if native_scope {
                     policy.as_object_mut().unwrap().remove("allowed_tools");
                 } else {
-                    let context = policy.get("launch_context").ok_or("permission_source_unavailable")?;
-                    if !origin_attested && !without_rules
-                        .get_or_insert_with(|| claude_inputs_without_rules(context)).clone()? {
+                    let context = policy
+                        .get("launch_context")
+                        .ok_or("permission_source_unavailable")?;
+                    if !origin_attested
+                        && !without_rules
+                            .get_or_insert_with(|| claude_inputs_without_rules(context))
+                            .clone()?
+                    {
                         return Err("permission_mapping_unavailable".into());
                     }
                 }
                 if policy["disallowed_tools"]
-                        .as_array()
-                        .is_some_and(|a| !a.is_empty())
+                    .as_array()
+                    .is_some_and(|a| !a.is_empty())
                 {
                     return Err("permission_mapping_unavailable".into());
                 }
@@ -2098,8 +2590,10 @@ pub(crate) fn apply_child_arguments_in_operation(
             continue;
         }
         if protocol == "claude_stream_json"
-            && policy.pointer("/launch_context/hook_execution") == Some(&json!("native_remote_guarded"))
-            && matches!(flag, "--plugin-dir" | "--settings") {
+            && policy.pointer("/launch_context/hook_execution")
+                == Some(&json!("native_remote_guarded"))
+            && matches!(flag, "--plugin-dir" | "--settings")
+        {
             index += if arg.contains('=') { 1 } else { 2 };
             continue;
         }
@@ -2222,16 +2716,30 @@ pub(crate) fn apply_child_arguments_in_operation(
                     ]);
                 }
             }
-            if policy.pointer("/launch_context/hook_execution") == Some(&json!("native_remote_guarded")) {
+            if policy.pointer("/launch_context/hook_execution")
+                == Some(&json!("native_remote_guarded"))
+            {
                 let verified = operation.profile(&policy["launch_context"])?;
                 let profile = verified.profile(&policy["launch_context"])?;
                 let settings = match guarded_sdk_settings171(profile, &policy["launch_context"])? {
                     Some(value) => serde_json::to_string(&value).map_err(|_| unavailable())?,
-                    None => profile["settings"]["target"]["path"].as_str().ok_or_else(|| equivalence_fail_at(ProjectionGuard::G011))?.to_owned(),
+                    None => profile["settings"]["target"]["path"]
+                        .as_str()
+                        .ok_or_else(|| equivalence_fail_at(ProjectionGuard::G011))?
+                        .to_owned(),
                 };
                 kept.extend(["--settings".into(), settings]);
-                for plugin in profile["target_controls"]["plugins"].as_array().ok_or_else(|| equivalence_fail_at(ProjectionGuard::G012))? {
-                    kept.extend(["--plugin-dir".into(), plugin["private_root"].as_str().ok_or_else(|| equivalence_fail_at(ProjectionGuard::G013))?.into()]);
+                for plugin in profile["target_controls"]["plugins"]
+                    .as_array()
+                    .ok_or_else(|| equivalence_fail_at(ProjectionGuard::G012))?
+                {
+                    kept.extend([
+                        "--plugin-dir".into(),
+                        plugin["private_root"]
+                            .as_str()
+                            .ok_or_else(|| equivalence_fail_at(ProjectionGuard::G013))?
+                            .into(),
+                    ]);
                 }
             } else if let Some(value) = policy.pointer("/launch_context/settings_overrides") {
                 kept.extend([
@@ -2360,7 +2868,13 @@ pub(crate) fn observed_fact(
 // Numérotation stable des diagnostics : un code retiré n'est jamais réattribué.
 // G003, G072 et G078 (route gardée retirée en 243) ne sont plus produits ;
 // G001 sert de témoin aux bancs. ALL et code() gardent les 83 entrées.
-#[cfg_attr(not(test), expect(dead_code, reason = "variantes gardées pour l'inventaire des 83 gardes ; G001 sert de témoin aux bancs"))]
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "variantes gardées pour l'inventaire des 83 gardes ; G001 sert de témoin aux bancs"
+    )
+)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ProjectionGuard {
     G001,
@@ -2449,7 +2963,91 @@ pub(crate) enum ProjectionGuard {
 }
 impl ProjectionGuard {
     #[cfg(test)]
-    pub(crate) const ALL: [Self; 83] = [Self::G001,Self::G002,Self::G003,Self::G004,Self::G005,Self::G006,Self::G007,Self::G008,Self::G009,Self::G010,Self::G011,Self::G012,Self::G013,Self::G014,Self::G015,Self::G016,Self::G017,Self::G018,Self::G019,Self::G020,Self::G021,Self::G022,Self::G023,Self::G024,Self::G025,Self::G026,Self::G027,Self::G028,Self::G029,Self::G030,Self::G031,Self::G032,Self::G033,Self::G034,Self::G035,Self::G036,Self::G037,Self::G038,Self::G039,Self::G040,Self::G041,Self::G042,Self::G043,Self::G044,Self::G045,Self::G046,Self::G047,Self::G048,Self::G049,Self::G050,Self::G051,Self::G052,Self::G053,Self::G054,Self::G055,Self::G056,Self::G057,Self::G058,Self::G059,Self::G060,Self::G061,Self::G062,Self::G063,Self::G064,Self::G065,Self::G066,Self::G067,Self::G068,Self::G069,Self::G070,Self::G071,Self::G072,Self::G073,Self::G074,Self::G075,Self::G076,Self::G077,Self::G078,Self::G079,Self::G080,Self::G081,Self::G082,Self::G083];
+    pub(crate) const ALL: [Self; 83] = [
+        Self::G001,
+        Self::G002,
+        Self::G003,
+        Self::G004,
+        Self::G005,
+        Self::G006,
+        Self::G007,
+        Self::G008,
+        Self::G009,
+        Self::G010,
+        Self::G011,
+        Self::G012,
+        Self::G013,
+        Self::G014,
+        Self::G015,
+        Self::G016,
+        Self::G017,
+        Self::G018,
+        Self::G019,
+        Self::G020,
+        Self::G021,
+        Self::G022,
+        Self::G023,
+        Self::G024,
+        Self::G025,
+        Self::G026,
+        Self::G027,
+        Self::G028,
+        Self::G029,
+        Self::G030,
+        Self::G031,
+        Self::G032,
+        Self::G033,
+        Self::G034,
+        Self::G035,
+        Self::G036,
+        Self::G037,
+        Self::G038,
+        Self::G039,
+        Self::G040,
+        Self::G041,
+        Self::G042,
+        Self::G043,
+        Self::G044,
+        Self::G045,
+        Self::G046,
+        Self::G047,
+        Self::G048,
+        Self::G049,
+        Self::G050,
+        Self::G051,
+        Self::G052,
+        Self::G053,
+        Self::G054,
+        Self::G055,
+        Self::G056,
+        Self::G057,
+        Self::G058,
+        Self::G059,
+        Self::G060,
+        Self::G061,
+        Self::G062,
+        Self::G063,
+        Self::G064,
+        Self::G065,
+        Self::G066,
+        Self::G067,
+        Self::G068,
+        Self::G069,
+        Self::G070,
+        Self::G071,
+        Self::G072,
+        Self::G073,
+        Self::G074,
+        Self::G075,
+        Self::G076,
+        Self::G077,
+        Self::G078,
+        Self::G079,
+        Self::G080,
+        Self::G081,
+        Self::G082,
+        Self::G083,
+    ];
     pub(crate) fn as_str(self) -> &'static str {
         match self {
             Self::G001 => "g001",
@@ -2548,7 +3146,9 @@ thread_local! {
 struct ProjectionGuardScope171(Option<Option<ProjectionGuard>>);
 impl Drop for ProjectionGuardScope171 {
     fn drop(&mut self) {
-        PROJECTION_GUARD171.with(|slot| { slot.replace(self.0); });
+        PROJECTION_GUARD171.with(|slot| {
+            slot.replace(self.0);
+        });
     }
 }
 pub(crate) fn observe_projection171<T>(
@@ -2556,14 +3156,22 @@ pub(crate) fn observe_projection171<T>(
 ) -> (Result<T, String>, Option<ProjectionGuard>) {
     let _scope = ProjectionGuardScope171(PROJECTION_GUARD171.with(|slot| slot.replace(Some(None))));
     let result = read();
-    let guard = if result.as_ref().err().is_some_and(|e| e == "permission_hook_equivalence_unavailable") {
+    let guard = if result
+        .as_ref()
+        .err()
+        .is_some_and(|e| e == "permission_hook_equivalence_unavailable")
+    {
         PROJECTION_GUARD171.with(|slot| (*slot.borrow()).flatten())
-    } else { None };
+    } else {
+        None
+    };
     (result, guard)
 }
 pub(crate) fn equivalence_fail_at(guard: ProjectionGuard) -> String {
     PROJECTION_GUARD171.with(|slot| {
-        if let Some(current) = slot.borrow_mut().as_mut() { *current = Some(guard); }
+        if let Some(current) = slot.borrow_mut().as_mut() {
+            *current = Some(guard);
+        }
     });
     "permission_hook_equivalence_unavailable".into()
 }
@@ -2579,13 +3187,19 @@ pub(crate) struct ProjectionWitnessSummary171 {
 }
 fn projection_value_kind171(value: Option<&Value>) -> &'static str {
     match value {
-        None => "absent", Some(Value::Null) => "null", Some(Value::Bool(_)) => "boolean",
-        Some(Value::Number(_)) => "number", Some(Value::String(_)) => "string",
-        Some(Value::Array(_)) => "array", Some(Value::Object(_)) => "object",
+        None => "absent",
+        Some(Value::Null) => "null",
+        Some(Value::Bool(_)) => "boolean",
+        Some(Value::Number(_)) => "number",
+        Some(Value::String(_)) => "string",
+        Some(Value::Array(_)) => "array",
+        Some(Value::Object(_)) => "object",
     }
 }
 pub(crate) fn projection_witness_summary171(policy: &Value) -> ProjectionWitnessSummary171 {
-    let witness = policy.get("launch_context").and_then(|c| c.get("source_equivalence"));
+    let witness = policy
+        .get("launch_context")
+        .and_then(|c| c.get("source_equivalence"));
     let version = witness.and_then(|w| w.get("version"));
     let scope = witness.and_then(|w| w.get("scope"));
     let profile = witness.and_then(|w| w.get("profile"));
@@ -2593,16 +3207,25 @@ pub(crate) fn projection_witness_summary171(policy: &Value) -> ProjectionWitness
     ProjectionWitnessSummary171 {
         shape: projection_value_kind171(witness),
         version: match version.and_then(Value::as_u64) {
-            Some(v @ (1 | 2)) => json!(v), _ => json!(projection_value_kind171(version)),
+            Some(v @ (1 | 2)) => json!(v),
+            _ => json!(projection_value_kind171(version)),
         },
         scope: match scope.and_then(Value::as_str) {
-            Some("origin") => json!("origin"), Some("remote") => json!("remote"),
+            Some("origin") => json!("origin"),
+            Some("remote") => json!("remote"),
             _ => json!(projection_value_kind171(scope)),
         },
         profile: projection_value_kind171(profile),
         revision: match revision.and_then(Value::as_str) {
-            Some(s) if s.len() == 71 && s.starts_with("sha256:")
-                && s[7..].bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)) => json!(s),
+            Some(s)
+                if s.len() == 71
+                    && s.starts_with("sha256:")
+                    && s[7..]
+                        .bytes()
+                        .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)) =>
+            {
+                json!(s)
+            }
             _ => json!(projection_value_kind171(revision)),
         },
     }
@@ -2632,7 +3255,9 @@ fn equivalence_read(path: &Path) -> Result<(Vec<u8>, std::fs::Metadata), String>
     use std::io::Read;
     use std::os::unix::fs::MetadataExt;
     let file = std::fs::File::open(path).map_err(|_| equivalence_fail_at(ProjectionGuard::G016))?;
-    let a = file.metadata().map_err(|_| equivalence_fail_at(ProjectionGuard::G017))?;
+    let a = file
+        .metadata()
+        .map_err(|_| equivalence_fail_at(ProjectionGuard::G017))?;
     if !a.is_file() || a.len() > 4 * 1024 * 1024 {
         return Err(equivalence_fail_at(ProjectionGuard::G018));
     }
@@ -2675,7 +3300,8 @@ fn equivalence_script_dependencies(path: &Path) -> Result<Vec<Value>, String> {
         return Err("permission_hook_dependencies_unavailable".into());
     }
     let interpreter = Path::new("/bin/sh");
-    let m = std::fs::metadata(interpreter).map_err(|_| equivalence_fail_at(ProjectionGuard::G023))?;
+    let m =
+        std::fs::metadata(interpreter).map_err(|_| equivalence_fail_at(ProjectionGuard::G023))?;
     if !m.is_file()
         || m.uid() != 0
         || m.gid() != 0
@@ -2712,7 +3338,8 @@ fn equivalence_command(command: &str, project: &Path, context: &Value) -> Result
     {
         return Err(equivalence_fail_at(ProjectionGuard::G027));
     }
-    let real = std::fs::canonicalize(path).map_err(|_| equivalence_fail_at(ProjectionGuard::G028))?;
+    let real =
+        std::fs::canonicalize(path).map_err(|_| equivalence_fail_at(ProjectionGuard::G028))?;
     if !real.starts_with(project)
         || !context["permission_sources"]
             .as_array()
@@ -2731,7 +3358,9 @@ fn equivalence_command(command: &str, project: &Path, context: &Value) -> Result
     Ok(())
 }
 fn equivalence_settings(value: &Value, project: &Path, context: &Value) -> Result<(), String> {
-    let object = value.as_object().ok_or_else(|| equivalence_fail_at(ProjectionGuard::G031))?;
+    let object = value
+        .as_object()
+        .ok_or_else(|| equivalence_fail_at(ProjectionGuard::G031))?;
     if object.keys().any(|k| {
         !matches!(
             k.as_str(),
@@ -2741,7 +3370,9 @@ fn equivalence_settings(value: &Value, project: &Path, context: &Value) -> Resul
         return Err(equivalence_fail_at(ProjectionGuard::G032));
     }
     if let Some(p) = object.get("permissions") {
-        let p = p.as_object().ok_or_else(|| equivalence_fail_at(ProjectionGuard::G033))?;
+        let p = p
+            .as_object()
+            .ok_or_else(|| equivalence_fail_at(ProjectionGuard::G033))?;
         if p.keys().any(|k| {
             !matches!(
                 k.as_str(),
@@ -2792,7 +3423,10 @@ fn equivalence_settings(value: &Value, project: &Path, context: &Value) -> Resul
         }
     }
     if let Some(hooks) = object.get("hooks") {
-        for (event, groups) in hooks.as_object().ok_or_else(|| equivalence_fail_at(ProjectionGuard::G037))? {
+        for (event, groups) in hooks
+            .as_object()
+            .ok_or_else(|| equivalence_fail_at(ProjectionGuard::G037))?
+        {
             if !matches!(
                 event.as_str(),
                 "PreToolUse"
@@ -2809,7 +3443,9 @@ fn equivalence_settings(value: &Value, project: &Path, context: &Value) -> Resul
                 .filter(|a| a.len() <= 128)
                 .ok_or_else(|| equivalence_fail_at(ProjectionGuard::G039))?
             {
-                let group = group.as_object().ok_or_else(|| equivalence_fail_at(ProjectionGuard::G040))?;
+                let group = group
+                    .as_object()
+                    .ok_or_else(|| equivalence_fail_at(ProjectionGuard::G040))?;
                 if group
                     .keys()
                     .any(|k| !matches!(k.as_str(), "matcher" | "hooks"))
@@ -2823,7 +3459,9 @@ fn equivalence_settings(value: &Value, project: &Path, context: &Value) -> Resul
                     .filter(|a| a.len() <= 128)
                     .ok_or_else(|| equivalence_fail_at(ProjectionGuard::G042))?
                 {
-                    let hook = hook.as_object().ok_or_else(|| equivalence_fail_at(ProjectionGuard::G043))?;
+                    let hook = hook
+                        .as_object()
+                        .ok_or_else(|| equivalence_fail_at(ProjectionGuard::G043))?;
                     if hook
                         .keys()
                         .any(|k| !matches!(k.as_str(), "type" | "command" | "timeout"))
@@ -2854,7 +3492,8 @@ fn equivalence_selector(
     project: &Path,
 ) -> Result<String, String> {
     if kind == "hook" && path.extension().and_then(|s| s.to_str()) == Some("json") {
-        let canonical = std::fs::canonicalize(path).map_err(|_| equivalence_fail_at(ProjectionGuard::G046))?;
+        let canonical =
+            std::fs::canonicalize(path).map_err(|_| equivalence_fail_at(ProjectionGuard::G046))?;
         let mut selected = Vec::new();
         for row in context["permission_sources"]
             .as_array()
@@ -2863,10 +3502,16 @@ fn equivalence_selector(
             if row["kind"] == "hook" || row["revision"] == "absent" {
                 continue;
             }
-            let p = Path::new(row["path"].as_str().ok_or_else(|| equivalence_fail_at(ProjectionGuard::G048))?);
+            let p = Path::new(
+                row["path"]
+                    .as_str()
+                    .ok_or_else(|| equivalence_fail_at(ProjectionGuard::G048))?,
+            );
             if std::fs::canonicalize(p).is_ok_and(|p| p == canonical) {
                 selected.push(equivalence_selector(
-                    row["kind"].as_str().ok_or_else(|| equivalence_fail_at(ProjectionGuard::G049))?,
+                    row["kind"]
+                        .as_str()
+                        .ok_or_else(|| equivalence_fail_at(ProjectionGuard::G049))?,
                     p,
                     context,
                     project,
@@ -2881,7 +3526,9 @@ fn equivalence_selector(
     if let Ok(relative) = path.strip_prefix(project) {
         return Ok(format!(
             "project:{}",
-            relative.to_str().ok_or_else(|| equivalence_fail_at(ProjectionGuard::G051))?
+            relative
+                .to_str()
+                .ok_or_else(|| equivalence_fail_at(ProjectionGuard::G051))?
         ));
     }
     let config = Path::new(
@@ -2890,12 +3537,15 @@ fn equivalence_selector(
             .ok_or_else(|| equivalence_fail_at(ProjectionGuard::G052))?,
     );
     if let Ok(relative) = path.strip_prefix(config)
-        && matches!(kind, "user" | "managed") {
-            return Ok(format!(
-                "native-profile:{}",
-                relative.to_str().ok_or_else(|| equivalence_fail_at(ProjectionGuard::G053))?
-            ));
-        }
+        && matches!(kind, "user" | "managed")
+    {
+        return Ok(format!(
+            "native-profile:{}",
+            relative
+                .to_str()
+                .ok_or_else(|| equivalence_fail_at(ProjectionGuard::G053))?
+        ));
+    }
     if kind == "managed"
         && path.file_name().and_then(|p| p.to_str()) == Some("managed-settings.json")
     {
@@ -2909,7 +3559,8 @@ fn source_equivalence_manifest(context: &Value, project: &Path) -> Result<Value,
     if context["attestation_version"] != 2 || context.get("settings_overrides").is_some() {
         return Err(equivalence_fail_at(ProjectionGuard::G055));
     }
-    let project = std::fs::canonicalize(project).map_err(|_| equivalence_fail_at(ProjectionGuard::G056))?;
+    let project =
+        std::fs::canonicalize(project).map_err(|_| equivalence_fail_at(ProjectionGuard::G056))?;
     let profile = std::fs::metadata(
         context["config_dir"]
             .as_str()
@@ -2925,8 +3576,14 @@ fn source_equivalence_manifest(context: &Value, project: &Path) -> Result<Value,
         .filter(|a| a.len() <= 128)
         .ok_or_else(|| equivalence_fail_at(ProjectionGuard::G060))?
     {
-        let kind = source["kind"].as_str().ok_or_else(|| equivalence_fail_at(ProjectionGuard::G061))?;
-        let path = Path::new(source["path"].as_str().ok_or_else(|| equivalence_fail_at(ProjectionGuard::G062))?);
+        let kind = source["kind"]
+            .as_str()
+            .ok_or_else(|| equivalence_fail_at(ProjectionGuard::G061))?;
+        let path = Path::new(
+            source["path"]
+                .as_str()
+                .ok_or_else(|| equivalence_fail_at(ProjectionGuard::G062))?,
+        );
         if source["revision"] == "absent" {
             rows.push(json!({"kind":kind,"path":path,"revision":"absent","selector":null,"content_revision":"absent","mode":0,"owner":"absent","dependencies":[]}));
             continue;
@@ -2947,7 +3604,8 @@ fn source_equivalence_manifest(context: &Value, project: &Path) -> Result<Value,
                 equivalence_script_dependencies(path)?
             } else {
                 equivalence_settings(
-                    &serde_json::from_slice(&bytes).map_err(|_| equivalence_fail_at(ProjectionGuard::G064))?,
+                    &serde_json::from_slice(&bytes)
+                        .map_err(|_| equivalence_fail_at(ProjectionGuard::G064))?,
                     &project,
                     context,
                 )?;
@@ -3027,45 +3685,92 @@ fn check_equivalence_mapping(
     Ok(())
 }
 fn guarded_sdk_settings171(profile: &Value, context: &Value) -> Result<Option<Value>, String> {
-    let Some(sdk) = context.get("settings_overrides") else { return Ok(None); };
-    if *sdk != sdk_settings171() { return Err("permission_mapping_unavailable".into()); }
-    let path = Path::new(profile["settings"]["target"]["path"].as_str().ok_or_else(unavailable)?);
+    let Some(sdk) = context.get("settings_overrides") else {
+        return Ok(None);
+    };
+    if *sdk != sdk_settings171() {
+        return Err("permission_mapping_unavailable".into());
+    }
+    let path = Path::new(
+        profile["settings"]["target"]["path"]
+            .as_str()
+            .ok_or_else(unavailable)?,
+    );
     let base = read_json_source(path)?;
     Ok(Some(compose_sdk_settings171(&base, sdk)?))
 }
 fn compose_sdk_settings171(base: &Value, sdk: &Value) -> Result<Value, String> {
-    if *sdk != sdk_settings171() || !base.is_object() { return Err("permission_mapping_unavailable".into()); }
+    if *sdk != sdk_settings171() || !base.is_object() {
+        return Err("permission_mapping_unavailable".into());
+    }
     let mut result = base.clone();
-    let permissions = result.as_object_mut().ok_or_else(unavailable)?
-        .entry("permissions").or_insert_with(|| json!({})).as_object_mut().ok_or_else(unavailable)?;
-    let allow = permissions.entry("allow").or_insert_with(|| json!([])).as_array_mut().ok_or_else(unavailable)?;
-    if allow.iter().any(|v| !v.is_string()) { return Err(unavailable()); }
-    for rule in sdk["permissions"]["allow"].as_array().ok_or_else(unavailable)? {
-        if !allow.contains(rule) { allow.push(rule.clone()); }
+    let permissions = result
+        .as_object_mut()
+        .ok_or_else(unavailable)?
+        .entry("permissions")
+        .or_insert_with(|| json!({}))
+        .as_object_mut()
+        .ok_or_else(unavailable)?;
+    let allow = permissions
+        .entry("allow")
+        .or_insert_with(|| json!([]))
+        .as_array_mut()
+        .ok_or_else(unavailable)?;
+    if allow.iter().any(|v| !v.is_string()) {
+        return Err(unavailable());
+    }
+    for rule in sdk["permissions"]["allow"]
+        .as_array()
+        .ok_or_else(unavailable)?
+    {
+        if !allow.contains(rule) {
+            allow.push(rule.clone());
+        }
     }
     // All native denies/asks, modes, hooks, and other settings stay byte-for-value.
     Ok(result)
 }
-fn validate_guarded_settings_args171(definition: &AgentDefinition, profile: &Value, context: &Value) -> Result<(), String> {
-    let Some(expected) = guarded_sdk_settings171(profile, context)? else { return Ok(()); };
+fn validate_guarded_settings_args171(
+    definition: &AgentDefinition,
+    profile: &Value,
+    context: &Value,
+) -> Result<(), String> {
+    let Some(expected) = guarded_sdk_settings171(profile, context)? else {
+        return Ok(());
+    };
     require_sdk_native_mount171(context, definition)?;
-    let selected = profile["settings"]["target"]["path"].as_str().ok_or_else(unavailable)?;
+    let selected = profile["settings"]["target"]["path"]
+        .as_str()
+        .ok_or_else(unavailable)?;
     let mut count = 0;
-    for (i,arg) in definition.args.iter().enumerate() {
-        let value = if arg == "--settings" { Some(definition.args.get(i+1).ok_or_else(unavailable)?.as_str()) }
-            else { arg.strip_prefix("--settings=") };
+    for (i, arg) in definition.args.iter().enumerate() {
+        let value = if arg == "--settings" {
+            Some(definition.args.get(i + 1).ok_or_else(unavailable)?.as_str())
+        } else {
+            arg.strip_prefix("--settings=")
+        };
         if let Some(value) = value {
             count += 1;
-            if value != selected && serde_json::from_str::<Value>(value).ok().as_ref() != Some(&expected) {
+            if value != selected
+                && serde_json::from_str::<Value>(value).ok().as_ref() != Some(&expected)
+            {
                 return Err(changed());
             }
         }
     }
-    if count > 1 { return Err(changed()); }
+    if count > 1 {
+        return Err(changed());
+    }
     Ok(())
 }
-fn guarded_profile_definition(definition: &AgentDefinition, profile: &Value, context: &Value) -> Result<AgentDefinition, String> {
-    let selected = profile["settings"]["target"]["path"].as_str().ok_or_else(|| equivalence_fail_at(ProjectionGuard::G069))?;
+fn guarded_profile_definition(
+    definition: &AgentDefinition,
+    profile: &Value,
+    context: &Value,
+) -> Result<AgentDefinition, String> {
+    let selected = profile["settings"]["target"]["path"]
+        .as_str()
+        .ok_or_else(|| equivalence_fail_at(ProjectionGuard::G069))?;
     validate_guarded_settings_args171(definition, profile, context)?;
     let mut scoped = definition.clone();
     let mut args = Vec::new();
@@ -3075,43 +3780,92 @@ fn guarded_profile_definition(definition: &AgentDefinition, profile: &Value, con
         let flag = arg.split('=').next().unwrap_or(arg);
         if matches!(flag, "--settings" | "--setting-sources" | "--plugin-dir") {
             index += if arg.contains('=') { 1 } else { 2 };
-        } else { args.push(arg.clone()); index += 1; }
+        } else {
+            args.push(arg.clone());
+            index += 1;
+        }
     }
-    args.extend(["--settings".into(), selected.into(), "--setting-sources".into(), "".into()]);
-    for plugin in profile["target_controls"]["plugins"].as_array().ok_or_else(|| equivalence_fail_at(ProjectionGuard::G070))? {
-        args.extend(["--plugin-dir".into(), plugin["private_root"].as_str().ok_or_else(|| equivalence_fail_at(ProjectionGuard::G071))?.into()]);
+    args.extend([
+        "--settings".into(),
+        selected.into(),
+        "--setting-sources".into(),
+        "".into(),
+    ]);
+    for plugin in profile["target_controls"]["plugins"]
+        .as_array()
+        .ok_or_else(|| equivalence_fail_at(ProjectionGuard::G070))?
+    {
+        args.extend([
+            "--plugin-dir".into(),
+            plugin["private_root"]
+                .as_str()
+                .ok_or_else(|| equivalence_fail_at(ProjectionGuard::G071))?
+                .into(),
+        ]);
     }
     scoped.args = args;
     Ok(scoped)
 }
 
 fn capture_guarded_context(
-    definition: &AgentDefinition, context: &Value, cwd: &Path,
+    definition: &AgentDefinition,
+    context: &Value,
+    cwd: &Path,
     environment: &SourceEnvironment,
     operation: &mut PermissionReadOperation,
 ) -> Result<Value, String> {
     let verified = operation.profile(context)?;
     let profile = verified.profile(context)?;
-    let config = environment.get("CLAUDE_CONFIG_DIR").map(PathBuf::from)
-        .or_else(|| environment.get("HOME").map(|p| PathBuf::from(p).join(".claude")))
+    let config = environment
+        .get("CLAUDE_CONFIG_DIR")
+        .map(PathBuf::from)
+        .or_else(|| {
+            environment
+                .get("HOME")
+                .map(|p| PathBuf::from(p).join(".claude"))
+        })
         .ok_or_else(unavailable)?;
     if std::fs::canonicalize(&config).map_err(|_| unavailable())?
-        != std::path::Path::new(profile["target_controls"]["config_dir"].as_str().ok_or_else(|| equivalence_fail_at(ProjectionGuard::G073))?) {
+        != std::path::Path::new(
+            profile["target_controls"]["config_dir"]
+                .as_str()
+                .ok_or_else(|| equivalence_fail_at(ProjectionGuard::G073))?,
+        )
+    {
         return Err(equivalence_fail_at(ProjectionGuard::G074));
     }
     let scoped = guarded_profile_definition(definition, profile, context)?;
     let mut reader = scoped.clone();
-    let mut args = Vec::new(); let mut index = 0;
+    let mut args = Vec::new();
+    let mut index = 0;
     while index < reader.args.len() {
-        if reader.args[index] == "--plugin-dir" { index += 2; }
-        else { args.push(reader.args[index].clone()); index += 1; }
+        if reader.args[index] == "--plugin-dir" {
+            index += 2;
+        } else {
+            args.push(reader.args[index].clone());
+            index += 1;
+        }
     }
     reader.args = args;
     let mut captured = capture_context_with_env_impl(&reader, cwd, environment, true, false)?;
-    let sources = captured["permission_sources"].as_array_mut().ok_or_else(|| equivalence_fail_at(ProjectionGuard::G075))?;
-    for plugin in profile["target_controls"]["plugins"].as_array().ok_or_else(|| equivalence_fail_at(ProjectionGuard::G076))? {
-        let root = Path::new(plugin["private_root"].as_str().ok_or_else(|| equivalence_fail_at(ProjectionGuard::G077))?);
-        for relative in [".claude-plugin/plugin.json", "hooks/hooks.json", "settings.json", ".mcp.json"] {
+    let sources = captured["permission_sources"]
+        .as_array_mut()
+        .ok_or_else(|| equivalence_fail_at(ProjectionGuard::G075))?;
+    for plugin in profile["target_controls"]["plugins"]
+        .as_array()
+        .ok_or_else(|| equivalence_fail_at(ProjectionGuard::G076))?
+    {
+        let root = Path::new(
+            plugin["private_root"]
+                .as_str()
+                .ok_or_else(|| equivalence_fail_at(ProjectionGuard::G077))?,
+        );
+        for relative in [
+            ".claude-plugin/plugin.json",
+            "hooks/hooks.json",
+            "settings.json",
+            ".mcp.json",
+        ] {
             let path = root.join(relative);
             security_source_is_observable(&path)?;
             sources.push(json!({"kind":"user","path":path,"revision":source_revision(&path)?}));
@@ -3119,19 +3873,30 @@ fn capture_guarded_context(
                 let value = read_json_source(&path)?;
                 let mut hooks = Vec::new();
                 append_hook_sources(&value, &path, cwd, root, environment, &mut hooks)?;
-                for (kind,path) in hooks {
-                    let revision = bridget_transport::protocol::permission_hook_source_revision(&path,16*1024*1024)?;
-                    if revision == "absent" { return Err(unavailable()); }
+                for (kind, path) in hooks {
+                    let revision = bridget_transport::protocol::permission_hook_source_revision(
+                        &path,
+                        16 * 1024 * 1024,
+                    )?;
+                    if revision == "absent" {
+                        return Err(unavailable());
+                    }
                     sources.push(json!({"kind":kind,"path":path,"revision":revision}));
                 }
             }
         }
     }
-    sources.sort_by(|a,b| (a["kind"].as_str(),a["path"].as_str()).cmp(&(b["kind"].as_str(),b["path"].as_str())));
-    sources.dedup_by(|a,b| a["kind"]==b["kind"] && a["path"]==b["path"]);
-    if sources.len()>128 { return Err(unavailable()); }
+    sources.sort_by(|a, b| {
+        (a["kind"].as_str(), a["path"].as_str()).cmp(&(b["kind"].as_str(), b["path"].as_str()))
+    });
+    sources.dedup_by(|a, b| a["kind"] == b["kind"] && a["path"] == b["path"]);
+    if sources.len() > 128 {
+        return Err(unavailable());
+    }
     if let Some(sdk) = context.get("settings_overrides") {
-        if *sdk != sdk_settings171() || captured.get("settings_overrides").is_some() { return Err(changed()); }
+        if *sdk != sdk_settings171() || captured.get("settings_overrides").is_some() {
+            return Err(changed());
+        }
         captured["settings_overrides"] = sdk.clone();
     }
     captured["hook_execution"] = json!("native_remote_guarded");
@@ -3180,19 +3945,25 @@ pub(crate) fn refresh_remote_permissions_context_in_operation(
         let verified = operation.profile(&previous)?;
         scoped = guarded_profile_definition(definition, verified.profile(&previous)?, &previous)?;
         &scoped
-    } else { definition };
+    } else {
+        definition
+    };
     let mut captured = if previous["hook_execution"] == "native_remote_guarded" {
         let environment = build_environment(definition, source).map_err(|_| unavailable())?;
         capture_guarded_context(definition, &previous, cwd, &environment, operation)?
     } else if previous.get("hook_execution").is_none() {
         capture_native_target_context(definition, cwd, source)?
-    } else { capture_context(definition, cwd, source)? };
+    } else {
+        capture_context(definition, cwd, source)?
+    };
     if previous["hook_execution"] == "native_remote_guarded" {
         let witness = &previous["source_equivalence"];
         check_equivalence_mapping(&witness["binding"], mapping)?;
         let verified = operation.profile(&previous)?;
         check_profile_additional_root171(verified.profile(&previous)?, mapping)?;
-        if witness["binding"]["child_policy_digest"] != equivalence_policy_digest(policy)? { return Err(equivalence_fail_at(ProjectionGuard::G082)); }
+        if witness["binding"]["child_policy_digest"] != equivalence_policy_digest(policy)? {
+            return Err(equivalence_fail_at(ProjectionGuard::G082));
+        }
         captured["hook_execution"] = json!("native_remote_guarded");
         captured["source_equivalence"] = witness.clone();
         operation.profile(&captured)?;

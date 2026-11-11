@@ -13,16 +13,25 @@ pub const HUMAN_REPLY_NOTICE: &str = "Instruction de l’utilisateur : réponds 
 /// Présentation seule : les clients humains historiques n'avaient pas origin ; les agents sont routés par UUID.
 pub fn is_human_instruction(msg: &BridgetMessage) -> bool {
     msg.origin == Some(crate::MessageOrigin::Human)
-        || (msg.origin.is_none() && matches!(msg.from.as_str(), "human" | "humain") && msg.delegated_origin.is_none())
+        || (msg.origin.is_none()
+            && matches!(msg.from.as_str(), "human" | "humain")
+            && msg.delegated_origin.is_none())
 }
 
 pub fn no_reply_notice(msg: &BridgetMessage) -> &'static str {
-    if is_human_instruction(msg) { HUMAN_REPLY_NOTICE } else { NO_REPLY_NOTICE }
+    if is_human_instruction(msg) {
+        HUMAN_REPLY_NOTICE
+    } else {
+        NO_REPLY_NOTICE
+    }
 }
 
 pub fn wrap_envelope(msg: &BridgetMessage) -> String {
     if !msg.reply && is_human_instruction(msg) {
-        return format!("💬 Instruction de l’utilisateur (id={})\n{}\n\n{HUMAN_REPLY_NOTICE}", msg.id, msg.body);
+        return format!(
+            "💬 Instruction de l’utilisateur (id={})\n{}\n\n{HUMAN_REPLY_NOTICE}",
+            msg.id, msg.body
+        );
     }
     if msg.reply {
         // reply=yes : l'expéditeur attend une réponse.
@@ -106,17 +115,18 @@ mod tests {
 
     #[test]
     fn mobile177_human_instruction_replies_in_the_conversation_without_a_routable_human() {
-        let mut message=BridgetMessage::new("human","agent177","Dis-moi coucou");
-        for origin in [None,Some(crate::MessageOrigin::Human)] {
-            message.origin=origin;
-            let rendered=wrap_envelope(&message);
+        let mut message = BridgetMessage::new("human", "agent177", "Dis-moi coucou");
+        for origin in [None, Some(crate::MessageOrigin::Human)] {
+            message.origin = origin;
+            let rendered = wrap_envelope(&message);
             assert!(rendered.contains("Dis-moi coucou"));
             assert!(rendered.contains(HUMAN_REPLY_NOTICE));
             assert!(!rendered.contains(NO_REPLY_NOTICE));
         }
-        message.origin=Some(crate::MessageOrigin::Agent);
+        message.origin = Some(crate::MessageOrigin::Agent);
         assert!(!is_human_instruction(&message));
-        message.from="agent177".into();message.origin=None;
+        message.from = "agent177".into();
+        message.origin = None;
         assert!(wrap_envelope(&message).contains(NO_REPLY_NOTICE));
     }
 
@@ -138,8 +148,8 @@ mod tests {
 
     #[test]
     fn spec253_notification_ne_detourne_pas_le_resultat_natif() {
-        let msg=BridgetMessage::new("parent","enfant","Complément de travail");
-        let env=wrap_envelope(&msg);
+        let msg = BridgetMessage::new("parent", "enfant", "Complément de travail");
+        let env = wrap_envelope(&msg);
         assert!(env.contains("reply=no concerne cette notification"));
         assert!(env.contains("ne désactive pas la remise finale automatique"));
         assert!(env.contains("ne la renvoie pas avec bridget_send"));

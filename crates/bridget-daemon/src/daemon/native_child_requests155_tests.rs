@@ -357,7 +357,10 @@ fn remote162_demande155_recontrole_worker_hors_verrou_et_epoch_avant_reponse() {
             st.connections.insert("worker155".into(), writer);
             st.remote_workers.insert(
                 placement.machine_id.clone(),
-                RemoteWorkerConnection { catalogues:HashMap::new(), catalogue_refresh_id:"epoch".into(),catalogue_refresh_at:None,
+                RemoteWorkerConnection {
+                    catalogues: HashMap::new(),
+                    catalogue_refresh_id: "epoch".into(),
+                    catalogue_refresh_at: None,
                     identity: WorkerIdentity {
                         machine_id: placement.machine_id.clone(),
                         worker_id: placement.worker_id.clone(),
@@ -394,7 +397,7 @@ fn remote162_demande155_recontrole_worker_hors_verrou_et_epoch_avant_reponse() {
                 command: request.command,
                 response: WorkerResponseOperation::Observation {
                     observation: WorkerObservation {
-                    startup_failure: None,
+                        startup_failure: None,
                         phase: WorkerCommandPhase::Released,
                         native_ready: true,
                         exit_code: None,
@@ -516,7 +519,10 @@ fn remote162_release_relit_droits_parent_apres_start_et_refuse_preuve_t3_indispo
             st.connections.insert("worker155".into(), writer);
             st.remote_workers.insert(
                 worker.machine_id.clone(),
-                RemoteWorkerConnection { catalogues:HashMap::new(), catalogue_refresh_id:"epoch".into(),catalogue_refresh_at:None,
+                RemoteWorkerConnection {
+                    catalogues: HashMap::new(),
+                    catalogue_refresh_id: "epoch".into(),
+                    catalogue_refresh_at: None,
                     identity: worker,
                     conn_id: "worker155".into(),
                     epoch: "epoch155".into(),
@@ -671,7 +677,8 @@ fn remote162_prepare_posture_omise_conserve_heritage_et_refuse_null() {
     let fixture = RequestFixture155::with_remote_start("r155-posture", true, false);
     let task = &fixture.task;
     let placement = task.remote_placement.as_ref().unwrap();
-    let prepare = WorkerPrepare { service_tier: None,
+    let prepare = WorkerPrepare {
+        service_tier: None,
         machine_id: placement.machine_id.clone(),
         project_id: placement.project_id.clone(),
         provisioning_revision: 1,
@@ -754,7 +761,10 @@ fn remote162_arret_atteste_avant_connected_cloture_demarrage_apres_reprise() {
             st.connections.insert("worker155".into(), writer);
             st.remote_workers.insert(
                 placement.machine_id.clone(),
-                RemoteWorkerConnection { catalogues:HashMap::new(), catalogue_refresh_id:"epoch".into(),catalogue_refresh_at:None,
+                RemoteWorkerConnection {
+                    catalogues: HashMap::new(),
+                    catalogue_refresh_id: "epoch".into(),
+                    catalogue_refresh_at: None,
                     identity: remote_worker_identity(placement),
                     conn_id: "worker155".into(),
                     epoch: "epoch155".into(),
@@ -2102,18 +2112,48 @@ fn spec174_child_delivery_unavailable_is_not_revoked() {
     let now = unix_timestamp();
     assert!(native_child_requests::valid_delivery(&st, &fixture.task, &row, now).is_ok());
     st.native_permission_facts.remove("conn-1");
-    st.native_permission_refusals.insert("conn-1".into(), "permission_source_unavailable".into());
-    assert_eq!(native_child_requests::valid_delivery(&st, &fixture.task, &row, now), Err("permission_source_unavailable"));
-    st.native_permission_refusals.insert("conn-1".into(), "permission_not_inherited".into());
-    assert_eq!(native_child_requests::valid_delivery(&st, &fixture.task, &row, now), Err("revoked"));
-    st.native_permission_refusals.insert("conn-1".into(), "/private/canary: read failed".into());
-    assert_eq!(native_child_requests::valid_delivery(&st, &fixture.task, &row, now), Err("delivery_check_unavailable"));
-    st.provider_limits.record_scoped("native-test", fixture.task.child_instance.as_deref().unwrap(),
-        bridget_transport::protocol::RateLimitFact { credits: None, window: "five_hour".into(), status: "rate_limit_reached".into(), resets_at: Some(now + 600), used_percent: Some(100) },
-        bridget_transport::protocol::RateLimitSource::CodexAppServer, now);
-    assert_eq!(native_child_requests::valid_delivery(&st, &fixture.task, &row, now), Err("provider_quota_exhausted"));
+    st.native_permission_refusals
+        .insert("conn-1".into(), "permission_source_unavailable".into());
+    assert_eq!(
+        native_child_requests::valid_delivery(&st, &fixture.task, &row, now),
+        Err("permission_source_unavailable")
+    );
+    st.native_permission_refusals
+        .insert("conn-1".into(), "permission_not_inherited".into());
+    assert_eq!(
+        native_child_requests::valid_delivery(&st, &fixture.task, &row, now),
+        Err("revoked")
+    );
+    st.native_permission_refusals
+        .insert("conn-1".into(), "/private/canary: read failed".into());
+    assert_eq!(
+        native_child_requests::valid_delivery(&st, &fixture.task, &row, now),
+        Err("delivery_check_unavailable")
+    );
+    st.provider_limits.record_scoped(
+        "native-test",
+        fixture.task.child_instance.as_deref().unwrap(),
+        bridget_transport::protocol::RateLimitFact {
+            credits: None,
+            window: "five_hour".into(),
+            status: "rate_limit_reached".into(),
+            resets_at: Some(now + 600),
+            used_percent: Some(100),
+        },
+        bridget_transport::protocol::RateLimitSource::CodexAppServer,
+        now,
+    );
+    assert_eq!(
+        native_child_requests::valid_delivery(&st, &fixture.task, &row, now),
+        Err("provider_quota_exhausted")
+    );
     let view = failure("delivery_check_unavailable");
-    assert!(view["detail"]["recovery"].as_str().unwrap().contains("bridget_task_status"));
+    assert!(
+        view["detail"]["recovery"]
+            .as_str()
+            .unwrap()
+            .contains("bridget_task_status")
+    );
     assert!(!view.to_string().contains("canary"));
 }
 
@@ -2126,9 +2166,13 @@ fn spec174_child_answer_invalidated_after_decision_is_visible() {
     fixture.decide(&row);
     {
         let mut st = fixture.state.lock().unwrap();
-        assert_eq!(current_task_view(&st, &fixture.task, true).unwrap()["recent_requests"][0]["delivery_state"], "pending");
+        assert_eq!(
+            current_task_view(&st, &fixture.task, true).unwrap()["recent_requests"][0]["delivery_state"],
+            "pending"
+        );
         st.native_permission_facts.remove("conn-1");
-        st.native_permission_refusals.insert("conn-1".into(), "permission_source_unavailable".into());
+        st.native_permission_refusals
+            .insert("conn-1".into(), "permission_source_unavailable".into());
     }
     native_child_requests::tick(&fixture.state);
     let row = fixture.row(&question);
@@ -2136,36 +2180,68 @@ fn spec174_child_answer_invalidated_after_decision_is_visible() {
     assert_eq!(row.outcome.as_deref(), Some("answered_by_parent"));
     assert_eq!(row.delivery_state, "void");
     let view = current_task_view(&fixture.state.lock().unwrap(), &fixture.task, true).unwrap();
-    assert_eq!(view["recent_requests"][0]["delivery_error"], "permission_source_unavailable");
+    assert_eq!(
+        view["recent_requests"][0]["delivery_error"],
+        "permission_source_unavailable"
+    );
     let frames = fixture.frames();
     assert_eq!(frames.len(), 1);
-    assert!(matches!(frames[0], DaemonToWrapper::ChildRequestCancel { .. }));
+    assert!(matches!(
+        frames[0],
+        DaemonToWrapper::ChildRequestCancel { .. }
+    ));
 }
-
 
 #[test]
 fn spec184_slow_release_confirmation_keeps_existing_task() {
     use bridget_transport::protocol::*;
     let fixture = RequestFixture155::with_remote_start("r184-slow-release", true, false);
-    let parent = fixture.task.permission_snapshot.as_ref().unwrap().parent.clone();
+    let parent = fixture
+        .task
+        .permission_snapshot
+        .as_ref()
+        .unwrap()
+        .parent
+        .clone();
     let prepared = WorkerPrepared {
-        placement: fixture.task.remote_placement.clone().unwrap(), workspace: None,
-        token: "prepared184".into(), definition: fixture.task.definition.clone(),
-        child_policy: fixture.task.permission_snapshot.as_ref().unwrap().child_policy.clone(),
-        effective_posture: fixture.task.effective_posture.unwrap(), prepared_at: unix_timestamp(),
+        placement: fixture.task.remote_placement.clone().unwrap(),
+        workspace: None,
+        token: "prepared184".into(),
+        definition: fixture.task.definition.clone(),
+        child_policy: fixture
+            .task
+            .permission_snapshot
+            .as_ref()
+            .unwrap()
+            .child_policy
+            .clone(),
+        effective_posture: fixture.task.effective_posture.unwrap(),
+        prepared_at: unix_timestamp(),
     };
     let (writer, mut reader) = crate::daemon::presence_tests::control_socket("wf184");
-    reader.get_ref().set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+    reader
+        .get_ref()
+        .set_read_timeout(Some(Duration::from_secs(10)))
+        .unwrap();
     let worker = remote_worker_identity(&prepared.placement);
     {
         let mut st = fixture.state.lock().unwrap();
         st.connections.insert("worker184".into(), writer);
-        st.remote_workers.insert(worker.machine_id.clone(), RemoteWorkerConnection { catalogues:HashMap::new(), catalogue_refresh_id:"epoch".into(),catalogue_refresh_at:None,
-            identity: worker, conn_id: "worker184".into(), epoch: "epoch184".into(),
-            capabilities: vec![WorkerCapability::ReleaseLeaseV2],
-            last_contact: Instant::now(), last_contact_at: unix_timestamp(),
-            contact: WorkerContactState::Connected,
-        });
+        st.remote_workers.insert(
+            worker.machine_id.clone(),
+            RemoteWorkerConnection {
+                catalogues: HashMap::new(),
+                catalogue_refresh_id: "epoch".into(),
+                catalogue_refresh_at: None,
+                identity: worker,
+                conn_id: "worker184".into(),
+                epoch: "epoch184".into(),
+                capabilities: vec![WorkerCapability::ReleaseLeaseV2],
+                last_contact: Instant::now(),
+                last_contact_at: unix_timestamp(),
+                contact: WorkerContactState::Connected,
+            },
+        );
     }
     let shared = fixture.state.clone();
     let server = std::thread::spawn(move || {
@@ -2176,32 +2252,71 @@ fn spec184_slow_release_confirmation_keeps_existing_task() {
                 panic!("requête worker attendue");
             };
             let response = match request.request {
-                WorkerRequestOperation::Start { .. } if step == 0 =>
-                    WorkerResponseOperation::ReadyToRelease { ready_at: unix_timestamp() },
-                WorkerRequestOperation::ReserveResultSlot { slot } if step == 1 =>
-                    WorkerResponseOperation::ResultSlotReserved { slot, slot_id: "slot184".into() },
+                WorkerRequestOperation::Start { .. } if step == 0 => {
+                    WorkerResponseOperation::ReadyToRelease {
+                        ready_at: unix_timestamp(),
+                    }
+                }
+                WorkerRequestOperation::ReserveResultSlot { slot } if step == 1 => {
+                    WorkerResponseOperation::ResultSlotReserved {
+                        slot,
+                        slot_id: "slot184".into(),
+                    }
+                }
                 WorkerRequestOperation::Release { permit } if step == 2 => {
-                    assert_eq!(permit.expires_at - permit.issued_at, WORKER_RELEASE_LEASE_SECS);
+                    assert_eq!(
+                        permit.expires_at - permit.issued_at,
+                        WORKER_RELEASE_LEASE_SECS
+                    );
                     // Une revalidation distante peut dépasser l'ancien budget de cinq secondes.
                     std::thread::sleep(Duration::from_secs(6));
-                    assert!(unix_timestamp() < permit.expires_at, "le permis doit rester valable");
+                    assert!(
+                        unix_timestamp() < permit.expires_at,
+                        "le permis doit rester valable"
+                    );
                     WorkerResponseOperation::Released {}
                 }
                 other => panic!("séquence de démarrage inattendue : {other:?}"),
             };
-            assert!(handle_worker_message(&shared, "worker184", WrapperToDaemon::WorkerResponse {
-                response: WorkerResponse { version: REMOTE_WORKER_VERSION,
-                    correlation_id: request.correlation_id, connection_epoch: request.connection_epoch,
-                    worker: request.worker, command: request.command, response },
-            }).is_none());
+            assert!(
+                handle_worker_message(
+                    &shared,
+                    "worker184",
+                    WrapperToDaemon::WorkerResponse {
+                        response: WorkerResponse {
+                            version: REMOTE_WORKER_VERSION,
+                            correlation_id: request.correlation_id,
+                            connection_epoch: request.connection_epoch,
+                            worker: request.worker,
+                            command: request.command,
+                            response
+                        },
+                    }
+                )
+                .is_none()
+            );
         }
     });
-    let outcome = start_remote_task(&fixture.state, &fixture.task.task_id, &prepared,
-        &parent, "conn-1", None, None);
+    let outcome = start_remote_task(
+        &fixture.state,
+        &fixture.task.task_id,
+        &prepared,
+        &parent,
+        "conn-1",
+        None,
+        None,
+    );
     server.join().unwrap();
-    assert!(outcome.is_ok(), "la confirmation lente doit être acceptée : {outcome:?}");
+    assert!(
+        outcome.is_ok(),
+        "la confirmation lente doit être acceptée : {outcome:?}"
+    );
     let st = fixture.state.lock().unwrap();
-    assert_eq!(st.delegation_store.tasks().unwrap().len(), 1, "aucune mission dupliquée");
+    assert_eq!(
+        st.delegation_store.tasks().unwrap().len(),
+        1,
+        "aucune mission dupliquée"
+    );
     assert!(st.pending_worker_responses.is_empty());
 }
 
@@ -2216,19 +2331,52 @@ fn spec201_master_restart_preserves_remote_child_callbacks_without_stop_proof() 
             fixture.decide(&row);
         }
         if stage == "sent" {
-            assert!(fixture.state.lock().unwrap().delegation_store
-                .claim_child_request(&row.request_id, unix_timestamp()).unwrap());
+            assert!(
+                fixture
+                    .state
+                    .lock()
+                    .unwrap()
+                    .delegation_store
+                    .claim_child_request(&row.request_id, unix_timestamp())
+                    .unwrap()
+            );
         }
         let before = serde_json::to_value(fixture.row(&request)).unwrap();
-        let task_before = serde_json::to_value(fixture.state.lock().unwrap().delegation_store
-            .get(&fixture.task.task_id).unwrap().unwrap()).unwrap();
+        let task_before = serde_json::to_value(
+            fixture
+                .state
+                .lock()
+                .unwrap()
+                .delegation_store
+                .get(&fixture.task.task_id)
+                .unwrap()
+                .unwrap(),
+        )
+        .unwrap();
         {
             let mut st = fixture.state.lock().unwrap();
             native_delegation::prepare_restart(&mut st).unwrap();
         }
-        assert_eq!(serde_json::to_value(fixture.row(&request)).unwrap(), before, "{stage}");
-        assert_eq!(serde_json::to_value(fixture.state.lock().unwrap().delegation_store
-            .get(&fixture.task.task_id).unwrap().unwrap()).unwrap(), task_before, "{stage}");
+        assert_eq!(
+            serde_json::to_value(fixture.row(&request)).unwrap(),
+            before,
+            "{stage}"
+        );
+        assert_eq!(
+            serde_json::to_value(
+                fixture
+                    .state
+                    .lock()
+                    .unwrap()
+                    .delegation_store
+                    .get(&fixture.task.task_id)
+                    .unwrap()
+                    .unwrap()
+            )
+            .unwrap(),
+            task_before,
+            "{stage}"
+        );
     }
 }
 
@@ -2246,31 +2394,79 @@ fn spec201_remote_reconnect_gap_keeps_callbacks_but_not_cancel_or_expiry() {
         let request = fixture.approval(202);
         fixture.receive(request.clone());
         let row = fixture.row(&request);
-        if stage != "open" { fixture.decide(&row); }
-        if stage == "sent" { assert!(fixture.state.lock().unwrap().delegation_store
-            .claim_child_request(&row.request_id, unix_timestamp()).unwrap()); }
+        if stage != "open" {
+            fixture.decide(&row);
+        }
+        if stage == "sent" {
+            assert!(
+                fixture
+                    .state
+                    .lock()
+                    .unwrap()
+                    .delegation_store
+                    .claim_child_request(&row.request_id, unix_timestamp())
+                    .unwrap()
+            );
+        }
         let before = callback(fixture.row(&request));
-        let route = fixture.state.lock().unwrap().router.unregister_by_conn("child155").unwrap();
+        let route = fixture
+            .state
+            .lock()
+            .unwrap()
+            .router
+            .unregister_by_conn("child155")
+            .unwrap();
         native_child_requests::tick(&fixture.state);
         assert_eq!(callback(fixture.row(&request)), before, "{stage}");
         let persisted = fixture.row(&request);
         let mut st = fixture.state.lock().unwrap();
-        let mut current = st.delegation_store.get(&fixture.task.task_id).unwrap().unwrap();
-        assert_eq!(native_child_requests::valid_delivery(&st, &current, &persisted, unix_timestamp()), Err("remote_reconnecting"));
+        let mut current = st
+            .delegation_store
+            .get(&fixture.task.task_id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            native_child_requests::valid_delivery(&st, &current, &persisted, unix_timestamp()),
+            Err("remote_reconnecting")
+        );
         current.state = "cancelling".into();
-        assert_eq!(native_child_requests::valid_delivery(&st, &current, &persisted, unix_timestamp()), Err("cancelled"));
+        assert_eq!(
+            native_child_requests::valid_delivery(&st, &current, &persisted, unix_timestamp()),
+            Err("cancelled")
+        );
         current.state = "working".into();
-        assert_eq!(native_child_requests::valid_delivery(&st, &current, &persisted, persisted.deadline_at), Err("expired"));
-        st.router.register(&route.agent_id, &route.agent_type, &route.connection_id).unwrap();
-        assert_ne!(native_child_requests::valid_delivery(&st, &current, &persisted, unix_timestamp()), Err("remote_reconnecting"));
+        assert_eq!(
+            native_child_requests::valid_delivery(&st, &current, &persisted, persisted.deadline_at),
+            Err("expired")
+        );
+        st.router
+            .register(&route.agent_id, &route.agent_type, &route.connection_id)
+            .unwrap();
+        assert_ne!(
+            native_child_requests::valid_delivery(&st, &current, &persisted, unix_timestamp()),
+            Err("remote_reconnecting")
+        );
         let owner_route = st.router.unregister_by_conn("conn-1").unwrap();
         drop(st);
         native_child_requests::tick(&fixture.state);
         assert_eq!(callback(fixture.row(&request)), before, "parent/{stage}");
         let mut st = fixture.state.lock().unwrap();
-        st.router.register(&owner_route.agent_id, &owner_route.agent_type, &owner_route.connection_id).unwrap();
-        assert_ne!(native_child_requests::valid_delivery(&st, &current, &persisted, unix_timestamp()), Err("remote_reconnecting"));
-        st.conn_instances.insert("child155".into(), "foreign-instance201".into());
-        assert_eq!(native_child_requests::valid_delivery(&st, &current, &persisted, unix_timestamp()), Err("instance_changed"));
+        st.router
+            .register(
+                &owner_route.agent_id,
+                &owner_route.agent_type,
+                &owner_route.connection_id,
+            )
+            .unwrap();
+        assert_ne!(
+            native_child_requests::valid_delivery(&st, &current, &persisted, unix_timestamp()),
+            Err("remote_reconnecting")
+        );
+        st.conn_instances
+            .insert("child155".into(), "foreign-instance201".into());
+        assert_eq!(
+            native_child_requests::valid_delivery(&st, &current, &persisted, unix_timestamp()),
+            Err("instance_changed")
+        );
     }
 }

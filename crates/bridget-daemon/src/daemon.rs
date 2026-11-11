@@ -1,40 +1,39 @@
 //! Daemon bridget — écoute sur socket locale Unix, route les messages
 //! entre les wrappers connectés, persiste l'état en SQLite.
 
+mod dispatch_diagnostics;
+mod late_worker_prepares240;
 mod native_child_requests;
 mod native_delegation;
 mod native_provider_catalogue220;
-mod dispatch_diagnostics;
-mod late_worker_prepares240;
 pub(crate) use native_delegation::catalogue_entries177;
-mod native_lineage;
-mod mobile_admin;
-mod specialists222;
 mod agent_tracking230;
-mod origin_proof;
+mod mobile_admin;
+mod mobile_artifacts;
 mod mobile_operations;
+mod mobile_questions;
 mod mobile_queue;
+mod mobile_tasks;
+mod native_lineage;
+mod origin_proof;
+mod specialists222;
 mod user_input;
 mod wrapper_dispatch;
-mod mobile_artifacts;
-mod mobile_tasks;
-mod mobile_questions;
 
-use bridget_transport::poison::RecoverPoison;
 use bridget_core::{CircuitBreaker, Deduplicator, EnvelopeGuard, Router, RouterAction};
 use bridget_transport::greffe_authorization::{
     GreffeAuthorizationGate, GreffeDepositAuthorization, GreffeMutationAction,
 };
+use bridget_transport::poison::RecoverPoison;
 use bridget_transport::protocol::{
     ARTIFACT_READ_VERSION, ArtifactReadOutcome, ArtifactReadRefusal, ArtifactReadRequest,
 };
 use bridget_transport::protocol::{
-    AttachRefusal, CLIENT_CONTRACT_VERSION,
-    COORDINATION_EVENTS_VERSION, COORDINATION_STREAM_VERSION, ClientCapability, ClientRefusal,
-    ConnectionRole, DelegatedRuntimeEventFrame, DiskSpaceFact,
-    ExecutionControlCommand, ExecutionControlOperation, ExecutionControlOutcome,
-    ExecutionControlRefusal, ExecutionDeliveryContext, IdempotencyIssue, PresenceMode,
-    ProjectAdminOutcome, ProjectAdminRequest, ProjectBindOutcome, ProjectBindRequest,
+    AttachRefusal, CLIENT_CONTRACT_VERSION, COORDINATION_EVENTS_VERSION,
+    COORDINATION_STREAM_VERSION, ClientCapability, ClientRefusal, ConnectionRole,
+    DelegatedRuntimeEventFrame, DiskSpaceFact, ExecutionControlCommand, ExecutionControlOperation,
+    ExecutionControlOutcome, ExecutionControlRefusal, ExecutionDeliveryContext, IdempotencyIssue,
+    PresenceMode, ProjectAdminOutcome, ProjectAdminRequest, ProjectBindOutcome, ProjectBindRequest,
     ProjectBindStatus, ProjectProfileOutcome, ProjectProfileRefusal, ProjectProfileRequest,
     ProjectRegistryRefusal, ProjectRoundOutcome, ProjectRoundRefusal, ProjectRoundRequest,
     ProjectRuntimeOutcome, ProjectRuntimeRefusal, ProjectRuntimeRequest, ProjectSystemOutcome,
@@ -548,8 +547,8 @@ fn sleep_until_flag(total: Duration, flag: &AtomicBool) -> bool {
 
 #[cfg(test)]
 mod arret_tests {
-    use bridget_transport::poison::RecoverPoison;
     use super::{SHUTDOWN_POLL, SHUTDOWN_REQUESTED, sleep_until_flag, sleep_until_shutdown};
+    use bridget_transport::poison::RecoverPoison;
     use std::process::Command;
     use std::sync::Arc;
     use std::sync::Mutex;
@@ -671,9 +670,7 @@ mod arret_tests {
         if std::env::var(ADAPTATEUR_CHILD_ENV).ok().as_deref() != Some("1") {
             return;
         }
-        let _ordre = VERROU_DRAPEAU
-            .lock()
-            .recover_poison();
+        let _ordre = VERROU_DRAPEAU.lock().recover_poison();
         SHUTDOWN_REQUESTED.store(false, Ordering::SeqCst);
 
         let sieste = Duration::from_secs(3);
@@ -706,9 +703,7 @@ mod arret_tests {
     /// `true` passerait le test ci-dessus.
     #[test]
     fn l_adaptateur_sans_ordre_d_arret_va_au_bout_de_sa_sieste() {
-        let _ordre = VERROU_DRAPEAU
-            .lock()
-            .recover_poison();
+        let _ordre = VERROU_DRAPEAU.lock().recover_poison();
         SHUTDOWN_REQUESTED.store(false, Ordering::SeqCst);
 
         let sieste = SHUTDOWN_POLL * 3;
@@ -853,7 +848,8 @@ fn busy_turn_is_stale(presence: &Presence, ttl_secs: u64, now: Instant) -> bool 
     let start = if presence.turn_attest {
         // Le délai n'expire pas un tour que le porteur réatteste encore.
         if presence
-            .last_attested_at.is_none_or(|at| now.saturating_duration_since(at) <= Duration::from_secs(90))
+            .last_attested_at
+            .is_none_or(|at| now.saturating_duration_since(at) <= Duration::from_secs(90))
         {
             return false;
         }
@@ -1153,9 +1149,9 @@ struct DaemonState {
     worker_probe_connections: HashSet<String>,
     pending_worker_responses: HashMap<String, PendingWorkerResponse>,
     late_worker_prepares: late_worker_prepares240::Cache,
-    pending_workspace_repairs: HashMap<String,native_delegation::workspace_repair::Pending>,
-    pending_origin_proofs: HashMap<String,origin_proof::Pending>,
-    user_input_dispatch_after: Option<(i64,String)>,
+    pending_workspace_repairs: HashMap<String, native_delegation::workspace_repair::Pending>,
+    pending_origin_proofs: HashMap<String, origin_proof::Pending>,
+    user_input_dispatch_after: Option<(i64, String)>,
     mobile_notifier: Option<crate::mobile::notifications::Notifier>,
     pending_candidate_probes: HashMap<String, PendingCandidateProbe>,
     pending_candidate_probes_v2: HashMap<String, PendingCandidateProbeV2>,
@@ -1184,15 +1180,21 @@ struct DaemonState {
             std::sync::mpsc::Sender<bridget_transport::protocol::RuntimeSelectionOutcome>,
         ),
     >,
-    pending_runtime_catalogues: HashMap<String,(String,std::sync::mpsc::Sender<bridget_transport::protocol::RuntimeCatalogueOutcome>)>,
-    runtime_catalogue_connections: HashMap<String,(String,String)>,
+    pending_runtime_catalogues: HashMap<
+        String,
+        (
+            String,
+            std::sync::mpsc::Sender<bridget_transport::protocol::RuntimeCatalogueOutcome>,
+        ),
+    >,
+    runtime_catalogue_connections: HashMap<String, (String, String)>,
     presences: HashMap<String, Presence>,
     conn_counter: u64,
     /// Messages --reply en attente de réponse : (msg_id, from, to, expire_at, target_conn)
     pending_replies: Vec<PendingReply>,
     /// Remises idempotentes à écrire juste après la réponse `Registered`.
     /// L'ordre rend le réenregistrement observable avant toute redélivrance.
-    specialist_capture_active:HashSet<String>,
+    specialist_capture_active: HashSet<String>,
     pending_post_response_controls: HashMap<String, Vec<DeferredControl>>,
 }
 
@@ -1203,9 +1205,9 @@ struct RemoteWorkerConnection {
     /// Négociées à l'ouverture seulement : reconnexion ou remplacement les
     /// efface avec l'ancienne époque, sans déduire une capacité du build.
     capabilities: Vec<bridget_transport::protocol::WorkerCapability>,
-    catalogues: HashMap<String,native_provider_catalogue220::CachedCatalogue>,
-    catalogue_refresh_id:String,
-    catalogue_refresh_at:Option<Instant>,
+    catalogues: HashMap<String, native_provider_catalogue220::CachedCatalogue>,
+    catalogue_refresh_id: String,
+    catalogue_refresh_at: Option<Instant>,
     last_contact: Instant,
     last_contact_at: i64,
     contact: bridget_transport::protocol::WorkerContactState,
@@ -1361,10 +1363,7 @@ impl ManagedStopControl {
 
     fn request(&self) -> Receiver<StopOutcome> {
         let (sender, receiver) = mpsc::channel();
-        self.waiters
-            .lock()
-            .recover_poison()
-            .push(sender);
+        self.waiters.lock().recover_poison().push(sender);
         self.requested.store(true, Ordering::SeqCst);
         receiver
     }
@@ -1382,12 +1381,7 @@ impl ManagedStopControl {
     }
 
     fn complete(&self, outcome: StopOutcome) {
-        let waiters = std::mem::take(
-            &mut *self
-                .waiters
-                .lock()
-                .recover_poison(),
-        );
+        let waiters = std::mem::take(&mut *self.waiters.lock().recover_poison());
         for waiter in waiters {
             let _ = waiter.send(outcome.clone());
         }
@@ -1624,12 +1618,7 @@ impl AttachView {
                     }
                 };
                 let Some((next, terminal)) = next else {
-                    if worker_queue
-                        .0
-                        .lock()
-                        .recover_poison()
-                        .closed
-                    {
+                    if worker_queue.0.lock().recover_poison().closed {
                         break;
                     }
                     continue;
@@ -1937,14 +1926,22 @@ fn wake_target_guard(
     use bridget_transport::protocol::{ThreadAction, ThreadRequest, WakeTarget};
     match target {
         WakeTarget::SelfTarget {} => {
-            if crate::agent_tracking::dormant(st.store.connection(),owner).map_err(|_|"tracking_storage_unavailable")? {return Err("agent_dormant");}
+            if crate::agent_tracking::dormant(st.store.connection(), owner)
+                .map_err(|_| "tracking_storage_unavailable")?
+            {
+                return Err("agent_dormant");
+            }
             Ok(())
-        },
+        }
         WakeTarget::Agent { id } => {
             if crate::threads::canonical_uuid(id).as_deref() != Some(id.as_str()) {
                 return Err("invalid_request");
             }
-            if crate::agent_tracking::dormant(st.store.connection(),id).map_err(|_|"tracking_storage_unavailable")? {return Err("agent_dormant");}
+            if crate::agent_tracking::dormant(st.store.connection(), id)
+                .map_err(|_| "tracking_storage_unavailable")?
+            {
+                return Err("agent_dormant");
+            }
             if !st.presences.values().any(|p| p.name == *id) && st.router.get_agent(id).is_none() {
                 return Err("target_unknown");
             }
@@ -2043,7 +2040,8 @@ fn handle_wake_request(
                     .client_negotiations
                     .get(conn_id)
                     .is_some_and(|n| n.version == CLIENT_CONTRACT_VERSION)
-                && st.peer_uids.get(conn_id).copied() == Some(bridget_transport::fsutil::effective_uid())
+                && st.peer_uids.get(conn_id).copied()
+                    == Some(bridget_transport::fsutil::effective_uid())
             {
                 ("bridget-local-cli".to_owned(), None, false)
             } else {
@@ -2385,15 +2383,15 @@ fn deliver_frozen_wake(
                     .cli_wake(&wake.id)
                     .map_err(|_| "storage_unavailable")?
                     .is_some_and(|(_, phase, _)| phase == crate::idempotency::RecordState::Prepared)
-                {
-                    st.idempotency
-                        .transition(
-                            &key,
-                            crate::idempotency::RecordState::Prepared,
-                            crate::idempotency::RecordState::Dispatching,
-                        )
-                        .map_err(|_| "storage_unavailable")?;
-                }
+            {
+                st.idempotency
+                    .transition(
+                        &key,
+                        crate::idempotency::RecordState::Prepared,
+                        crate::idempotency::RecordState::Dispatching,
+                    )
+                    .map_err(|_| "storage_unavailable")?;
+            }
             let current_now = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .ok()
@@ -2451,7 +2449,9 @@ fn deliver_frozen_wake(
             WakeTarget::Agent { id } => id.as_str(),
             _ => unreachable!(),
         };
-        if crate::agent_tracking::dormant(st.store.connection(),target).map_err(|_|"tracking_storage_unavailable")? {
+        if crate::agent_tracking::dormant(st.store.connection(), target)
+            .map_err(|_| "tracking_storage_unavailable")?
+        {
             return Ok(WakePhase::MissedBeforeDeparture);
         }
         let route = st.router.get_agent(target).ok_or("target_unavailable")?;
@@ -2809,7 +2809,9 @@ fn scheduled_wakes_tick(state: &Arc<Mutex<DaemonState>>, now: i64, clock: Instan
                 if let Some(due) = calendar.due_at {
                     let target_guard = wake_target_guard(&st, &schedule.owner, &schedule.target);
                     let dormant = target_guard == Err("agent_dormant");
-                    if target_guard.is_err() && !dormant { continue; }
+                    if target_guard.is_err() && !dormant {
+                        continue;
+                    }
                     let mut wake = FrozenWake {
                         version: 1,
                         source: WakeSource::Scheduled,
@@ -2854,8 +2856,13 @@ fn scheduled_wakes_tick(state: &Arc<Mutex<DaemonState>>, now: i64, clock: Instan
                         if dormant {
                             // Pas de rattrapage au réveil : cette occurrence est close,
                             // sans émission. La cadence suivante reste programmée.
-                            let _ = st.store.settle_wake_occurrence(&schedule.schedule_id,&wake.id,
-                                WakePhase::MissedBeforeDeparture,calendar.next_at,calendar.next_calendar_date.as_deref());
+                            let _ = st.store.settle_wake_occurrence(
+                                &schedule.schedule_id,
+                                &wake.id,
+                                WakePhase::MissedBeforeDeparture,
+                                calendar.next_at,
+                                calendar.next_calendar_date.as_deref(),
+                            );
                             continue;
                         }
                         frozen = Some(wake);
@@ -2878,24 +2885,24 @@ fn scheduled_wakes_tick(state: &Arc<Mutex<DaemonState>>, now: i64, clock: Instan
         if let Some(wake) = frozen
             && let Ok(phase) =
                 deliver_frozen_wake(state, &wake, Some(&schedule.schedule_id), now, clock)
-            {
-                let future = if phase.terminal() && schedule.next_at <= now {
-                    match calculate_cadence(&schedule, now) {
-                        Ok(c) => c,
-                        Err(_) => continue,
-                    }
-                } else {
-                    calendar.clone()
-                };
-                let st = state.lock().recover_poison();
-                let _ = st.store.settle_wake_occurrence(
-                    &schedule.schedule_id,
-                    &wake.id,
-                    phase,
-                    future.next_at.max(schedule.next_at),
-                    future.next_calendar_date.as_deref(),
-                );
-            }
+        {
+            let future = if phase.terminal() && schedule.next_at <= now {
+                match calculate_cadence(&schedule, now) {
+                    Ok(c) => c,
+                    Err(_) => continue,
+                }
+            } else {
+                calendar.clone()
+            };
+            let st = state.lock().recover_poison();
+            let _ = st.store.settle_wake_occurrence(
+                &schedule.schedule_id,
+                &wake.id,
+                phase,
+                future.next_at.max(schedule.next_at),
+                future.next_calendar_date.as_deref(),
+            );
+        }
     }
     let pending = {
         let st = state.lock().recover_poison();
@@ -2904,10 +2911,7 @@ fn scheduled_wakes_tick(state: &Arc<Mutex<DaemonState>>, now: i64, clock: Instan
     };
     if let Ok(pending) = pending {
         if pending.is_empty() {
-            state
-                .lock()
-                .recover_poison()
-                .cli_wake_cursor = None;
+            state.lock().recover_poison().cli_wake_cursor = None;
         }
         for (wake, _, _) in pending {
             let outcome = deliver_frozen_wake(state, &wake, None, now, clock);
@@ -2934,19 +2938,20 @@ fn scheduled_wakes_tick(state: &Arc<Mutex<DaemonState>>, now: i64, clock: Instan
                     crate::wake_schedules::CLI_WAKE_SCOPE,
                     OperationKind::Send,
                     &wake.id,
+                )
+            {
+                if matches!(
+                    st.idempotency.cli_wake(&wake.id),
+                    Ok(Some((_, crate::idempotency::RecordState::Prepared, _)))
                 ) {
-                    if matches!(
-                        st.idempotency.cli_wake(&wake.id),
-                        Ok(Some((_, crate::idempotency::RecordState::Prepared, _)))
-                    ) {
-                        let _ = st.idempotency.transition(
-                            &key,
-                            crate::idempotency::RecordState::Prepared,
-                            crate::idempotency::RecordState::Dispatching,
-                        );
-                    }
-                    let _ = st.idempotency.finalize(&key, result);
+                    let _ = st.idempotency.transition(
+                        &key,
+                        crate::idempotency::RecordState::Prepared,
+                        crate::idempotency::RecordState::Dispatching,
+                    );
                 }
+                let _ = st.idempotency.finalize(&key, result);
+            }
         }
     }
 }
@@ -3103,7 +3108,8 @@ fn queue_observation_notifications_at(
             let instance = st.conn_instances.get(&route.connection_id)?;
             let presence = st.presences.get(instance)?;
             if crate::agent_tracking::dormant(st.store.connection(), &notice.owner).unwrap_or(true)
-                || presence.dnd_until.is_some_and(|until| clock < until) {
+                || presence.dnd_until.is_some_and(|until| clock < until)
+            {
                 return None;
             }
             st.connections.get(&route.connection_id).cloned()
@@ -3191,7 +3197,8 @@ fn observer_return_tick(state: &Arc<Mutex<DaemonState>>, now: i64, clock: Instan
                     let presence = st.presences.get(instance)?;
                     Some(
                         presence.name == owner
-                            && !crate::agent_tracking::dormant(st.store.connection(), &owner).unwrap_or(true)
+                            && !crate::agent_tracking::dormant(st.store.connection(), &owner)
+                                .unwrap_or(true)
                             && matches!(presence.state.as_str(), "connected" | "busy")
                             && presence.dnd_until.is_none_or(|until| clock >= until),
                     )
@@ -4108,11 +4115,17 @@ fn handle_managed_command(
                         "BootstrapReady non corrélé".to_string(),
                     ));
                 }
-                let authority_guard=prepared.specialist_authority.as_ref().map(crate::lifecycle::SpecialistLaunchAuthority::lock).transpose()?;
+                let authority_guard = prepared
+                    .specialist_authority
+                    .as_ref()
+                    .map(crate::lifecycle::SpecialistLaunchAuthority::lock)
+                    .transpose()?;
                 let mut child = ready
                     .persist_marker(marker_store, &prepared.lease.name)?
                     .release()?;
-                if let Some(guard)=authority_guard {guard.finish()?;}
+                if let Some(guard) = authority_guard {
+                    guard.finish()?;
+                }
                 child.set_status_nonblocking()?;
                 Ok(Some(child))
             })();
@@ -4803,12 +4816,26 @@ impl DaemonState {
         // Allocation durable monotone : un timestamp d'admission ou un UUID
         // aléatoire ne permettrait pas le prédicat SQL « époque antérieure ».
         let coordinator_epoch = delegation_store.next_auto_coordinator_epoch()?;
-        let mut provider_limits=crate::provider_limits::ProviderLimits::restore_routing244(store.connection(),unix_timestamp());
-        for connection in registry.routing_policy().into_iter().flat_map(|policy|&policy.connections) {
-            if let (Some(old),Some(new))=(registry.routing_account_scope_legacy245(&connection.connection_id),registry.routing_account_scope244(&connection.connection_id))
-                && provider_limits.migrate_account_scope245(store.connection(),&old,&new).is_err() {
-                    warn!("reclassement du cache de quota indisponible ; observations originales conservées");
-                }
+        let mut provider_limits = crate::provider_limits::ProviderLimits::restore_routing244(
+            store.connection(),
+            unix_timestamp(),
+        );
+        for connection in registry
+            .routing_policy()
+            .into_iter()
+            .flat_map(|policy| &policy.connections)
+        {
+            if let (Some(old), Some(new)) = (
+                registry.routing_account_scope_legacy245(&connection.connection_id),
+                registry.routing_account_scope244(&connection.connection_id),
+            ) && provider_limits
+                .migrate_account_scope245(store.connection(), &old, &new)
+                .is_err()
+            {
+                warn!(
+                    "reclassement du cache de quota indisponible ; observations originales conservées"
+                );
+            }
         }
         Ok(DaemonState {
             update_gate: crate::updates::Gate::open(
@@ -4897,7 +4924,10 @@ impl DaemonState {
             pending_workspace_repairs: HashMap::new(),
             pending_origin_proofs: HashMap::new(),
             user_input_dispatch_after: None,
-            mobile_notifier: config.db_path.parent().and_then(crate::mobile::notifications::Notifier::start),
+            mobile_notifier: config
+                .db_path
+                .parent()
+                .and_then(crate::mobile::notifications::Notifier::start),
             pending_candidate_probes: HashMap::new(),
             pending_candidate_probes_v2: HashMap::new(),
             terminal_sessions: HashSet::new(),
@@ -4916,7 +4946,7 @@ impl DaemonState {
             presences: HashMap::new(),
             conn_counter: 0,
             pending_replies: Vec::new(),
-            specialist_capture_active:HashSet::new(),
+            specialist_capture_active: HashSet::new(),
             pending_post_response_controls: HashMap::new(),
         })
     }
@@ -5231,7 +5261,8 @@ impl DaemonState {
             let owner = presence.name.clone();
             if self
                 .router
-                .get_agent(&owner).is_none_or(|route| route.connection_id != conn_id)
+                .get_agent(&owner)
+                .is_none_or(|route| route.connection_id != conn_id)
             {
                 return Err("signal de tour d’une ancienne connexion".into());
             }
@@ -5969,7 +6000,9 @@ fn defer_idempotent_delivery(
     let mut message: bridget_core::BridgetMessage = serde_json::from_slice(&delivery.message_bytes)
         .map_err(|error| format!("enveloppe de remise idempotente corrompue: {error}"))?;
     if message.intent == Some(bridget_core::MessageIntent::StoreOnly) {
-        return Err("information_not_deliverable : dépôt silencieux, aucune remise fournisseur".into());
+        return Err(
+            "information_not_deliverable : dépôt silencieux, aucune remise fournisseur".into(),
+        );
     }
     // O(log E): le reçu de promotion est l’autorité durable, y compris après une panne.
     // Les octets et le canon de création restent intacts (contrat159).
@@ -5978,8 +6011,10 @@ fn defer_idempotent_delivery(
         [&delivery.delivery_id],|r|r.get(0),
     ).map_err(|e|format!("reçu de promotion illisible: {e}"))?;
     if promoted {
-        message.intent=Some(bridget_core::MessageIntent::SteerCurrent);
-        if !message.references.iter().any(|r|r=="steer-or-queue") {message.references.push("steer-or-queue".into());}
+        message.intent = Some(bridget_core::MessageIntent::SteerCurrent);
+        if !message.references.iter().any(|r| r == "steer-or-queue") {
+            message.references.push("steer-or-queue".into());
+        }
     }
     // Le journal et l'idempotence conservent l'Agent ID. Le seul nom destiné
     // au fournisseur est une projection de présentation ajoutée à la remise.
@@ -6047,7 +6082,9 @@ fn defer_idempotent_delivery(
 /// FR004 : cinq déclencheurs partagent State, route attestée et transaction.
 /// O(log N+G+B), G réservations, B enveloppe. Aucun verrou writer ici.
 fn schedule_held_release(st: &mut DaemonState, agent: &str, now: Instant) -> bool {
-    if crate::agent_tracking::dormant(st.store.connection(),agent).unwrap_or(true) {return false;}
+    if crate::agent_tracking::dormant(st.store.connection(), agent).unwrap_or(true) {
+        return false;
+    }
     let Some(route) = st.router.get_agent(agent) else {
         return false;
     };
@@ -6327,8 +6364,12 @@ fn schedule_execution_recovery(
         }
     };
     let continuation_id = format!("continuation-recovery-{parent_execution_id}");
-    let specialist_budget=match specialists222::budget_for_execution(state,parent_execution_id) {
-        Ok(policy)=>policy,Err(code)=>{warn!("continuation conservée sans départ : {code}");return;}
+    let specialist_budget = match specialists222::budget_for_execution(state, parent_execution_id) {
+        Ok(policy) => policy,
+        Err(code) => {
+            warn!("continuation conservée sans départ : {code}");
+            return;
+        }
     };
     match reserve_governed_continuation(
         &state.execution_store,
@@ -6733,11 +6774,7 @@ pub fn run(config: DaemonConfig) -> Result<(), Box<dyn std::error::Error>> {
         warn!("ramasse-copies: thread détaché impossible: {error}");
     }
 
-    let fleet = state
-        .lock()
-        .recover_poison()
-        .fleet
-        .clone();
+    let fleet = state.lock().recover_poison().fleet.clone();
     #[cfg(any(test, feature = "test-support"))]
     let executable_override =
         std::env::var_os("BRIDGET_T908_MANAGED_EXECUTABLE").map(PathBuf::from);
@@ -6822,21 +6859,31 @@ pub fn run(config: DaemonConfig) -> Result<(), Box<dyn std::error::Error>> {
     // socket lente ; aucune inscription, lecture ou annulation n'en dépend.
     // Un seul collecteur, sans file supplémentaire, et sans Arc gardé en veille.
     let views_state = Arc::downgrade(&state);
-    thread::Builder::new().name("attach-cleanup".into()).spawn(move || {
-        loop {
-            if sleep_until_shutdown(Duration::from_millis(100)) { return; }
-            let Some(shared) = views_state.upgrade() else { return; };
-            let Some(_activity) = update_activity(&shared) else { continue; };
-            let (controls, views) = {
-                let mut st = shared.lock().recover_poison();
-                collect_closed_attach_views(&mut st)
-            };
-            drop(_activity);
-            drop(shared);
-            let _ = execute_controls(controls);
-            for view in views { view.close_and_join(); }
-        }
-    })?;
+    thread::Builder::new()
+        .name("attach-cleanup".into())
+        .spawn(move || {
+            loop {
+                if sleep_until_shutdown(Duration::from_millis(100)) {
+                    return;
+                }
+                let Some(shared) = views_state.upgrade() else {
+                    return;
+                };
+                let Some(_activity) = update_activity(&shared) else {
+                    continue;
+                };
+                let (controls, views) = {
+                    let mut st = shared.lock().recover_poison();
+                    collect_closed_attach_views(&mut st)
+                };
+                drop(_activity);
+                drop(shared);
+                let _ = execute_controls(controls);
+                for view in views {
+                    view.close_and_join();
+                }
+            }
+        })?;
 
     let st_reminder = state.clone();
     thread::spawn(move || {
@@ -7174,10 +7221,7 @@ fn handle_connection(
     state: Arc<Mutex<DaemonState>>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let peer_uid = unix_peer_uid(&stream).ok();
-    let conn_id = state
-        .lock()
-        .recover_poison()
-        .next_conn_id();
+    let conn_id = state.lock().recover_poison().next_conn_id();
     log::debug!("handle_connection: nouvelle connexion {}", conn_id);
     let reader_stream = stream.try_clone()?;
     let mut reader = BufReader::new(reader_stream);
@@ -7214,11 +7258,7 @@ fn handle_connection(
             };
             let wire_len = frame.len();
             if wire_len > bridget_transport::protocol::MAX_WORKER_FRAME_BYTES
-                && state
-                    .lock()
-                    .recover_poison()
-                    .connection_roles
-                    .get(&conn_id)
+                && state.lock().recover_poison().connection_roles.get(&conn_id)
                     == Some(&ConnectionRole::Worker)
             {
                 return Err("worker frame exceeds bound".into());
@@ -7254,7 +7294,8 @@ fn handle_connection(
             if display_name_kind.as_deref() == Some("HumanLineage")
                 && (decode::<WrapperToDaemon>(line).is_err()
                     || serde_json::from_str::<serde_json::Value>(line)
-                        .ok().is_none_or(|v| v.as_object().is_none_or(|o| o.len() != 2)))
+                        .ok()
+                        .is_none_or(|v| v.as_object().is_none_or(|o| o.len() != 2)))
             {
                 writeln!(
                     my_writer,
@@ -7482,9 +7523,10 @@ fn handle_connection(
         st.human_thread_watches.remove(&conn_id);
         st.lineage_watches.remove(&conn_id);
         if let Some(journal) = st.lineage_journals.remove(&conn_id)
-            && let Some(socket) = journal.shutdown {
-                let _ = socket.shutdown(std::net::Shutdown::Both);
-            }
+            && let Some(socket) = journal.shutdown
+        {
+            let _ = socket.shutdown(std::net::Shutdown::Both);
+        }
         st.service_negotiations.remove(&conn_id);
         st.peer_uids.remove(&conn_id);
         st.coordination_subscriptions.remove(&conn_id);
@@ -8648,12 +8690,16 @@ fn handle_register_with_channel(
             }
 
             state.restore_pending_for_agent(&final_agent_id, conn_id);
-            let mut specialist_controls=Vec::new();
-            specialists222::resume_for_registered(state,&final_agent_id,&mut specialist_controls);
+            let mut specialist_controls = Vec::new();
+            specialists222::resume_for_registered(state, &final_agent_id, &mut specialist_controls);
             // Une entrée vide ferait croire à une activité en attente
             // (contrôle de maintenance) jusqu'à la vidange après réponse.
             if !specialist_controls.is_empty() {
-                state.pending_post_response_controls.entry(conn_id.into()).or_default().extend(specialist_controls);
+                state
+                    .pending_post_response_controls
+                    .entry(conn_id.into())
+                    .or_default()
+                    .extend(specialist_controls);
             }
             info!("agent '{}' enregistré ({})", final_agent_id, conn_id);
             state.revoke_identity_authorizations(conn_id);
@@ -8945,9 +8991,13 @@ fn handle_rate_limit(
     log::debug!("limite de '{}' mise à jour par {}", presence.name, source);
     // Dernier usage de presence ci-dessus : la mémoire partagée ne garde pas son emprunt.
     if let Some(instance) = instance {
-        state
-            .provider_limits
-            .record_scoped(&agent_type, &instance, fact.clone(), source, unix_timestamp());
+        state.provider_limits.record_scoped(
+            &agent_type,
+            &instance,
+            fact.clone(),
+            source,
+            unix_timestamp(),
+        );
         // Le runtime doit réattester la définition exacte du lanceur. Une
         // observation sans cette preuve reste disponible au chemin legacy,
         // mais ne devient pas un fait de compte pour le routage168.
@@ -8963,12 +9013,19 @@ fn handle_rate_limit(
                 {
                     return None;
                 }
-                let mut matches = policy.connections.iter().filter(|connection|
-                    connection.enabled && connection.agent_type == agent_type
-                        && connection.machine_id == placement.machine_id);
+                let mut matches = policy.connections.iter().filter(|connection| {
+                    connection.enabled
+                        && connection.agent_type == agent_type
+                        && connection.machine_id == placement.machine_id
+                });
                 let connection = matches.next()?;
-                if matches.next().is_some() { return None; }
-                return Some((connection.connection_id.clone(), placement.definition_digest.clone()));
+                if matches.next().is_some() {
+                    return None;
+                }
+                return Some((
+                    connection.connection_id.clone(),
+                    placement.definition_digest.clone(),
+                ));
             }
             let mut matches = policy.connections.iter().filter(|connection| {
                 connection.enabled
@@ -8993,7 +9050,13 @@ fn handle_rate_limit(
         });
         if let Some((connection_id, digest)) = binding {
             if let Some(account) = state.registry.routing_account_scope244(&connection_id) {
-                state.provider_limits.record_account244(state.store.connection(), &account, &fact, source, unix_timestamp());
+                state.provider_limits.record_account244(
+                    state.store.connection(),
+                    &account,
+                    &fact,
+                    source,
+                    unix_timestamp(),
+                );
             }
             if let Some(scope) = state.registry.routing_connection_scope(&connection_id) {
                 state.provider_limits.bind_routing_instance(
@@ -9215,14 +9278,23 @@ fn collect_reminder_actions(state: &mut DaemonState, now: Instant) -> Vec<Remind
         })
         .map(|(conn, _)| conn.clone())
         .collect();
-    let dormant=crate::agent_tracking::dormant_ids(state.store.connection()).unwrap_or_else(|_| {
-        // Une fiche illisible diffère son rappel ; les autres restent indépendantes.
-        state.presences.values().filter(|p|crate::agent_tracking::dormant(state.store.connection(),&p.name).unwrap_or(true)).map(|p|p.name.clone()).collect()
-    });
+    let dormant =
+        crate::agent_tracking::dormant_ids(state.store.connection()).unwrap_or_else(|_| {
+            // Une fiche illisible diffère son rappel ; les autres restent indépendantes.
+            state
+                .presences
+                .values()
+                .filter(|p| {
+                    crate::agent_tracking::dormant(state.store.connection(), &p.name)
+                        .unwrap_or(true)
+                })
+                .map(|p| p.name.clone())
+                .collect()
+        });
     let undisturbed: std::collections::HashSet<String> = state
         .presences
         .values()
-        .filter(|presence| presence.is_dnd()||dormant.contains(&presence.name))
+        .filter(|presence| presence.is_dnd() || dormant.contains(&presence.name))
         .map(|presence| presence.name.clone())
         .collect();
     // SPEC-087 : en pause, les paliers 1 et 2 sont différés comme pour un
@@ -9684,10 +9756,10 @@ fn sweep_held(st: &mut DaemonState, now: i64) -> Result<(), String> {
                     .idempotency
                     .settle_held(&delivery_id, reason, now)
                     .map_err(|error| error.to_string())?
-                {
-                    st.held_ids.remove(&notice.message_id);
-                    settled_ids.insert(notice.message_id);
-                }
+            {
+                st.held_ids.remove(&notice.message_id);
+                settled_ids.insert(notice.message_id);
+            }
         }
         Ok(())
     })();
@@ -10193,9 +10265,10 @@ fn handle_execution_transition(
             // Un terminal d'exécution n'atteste pas le repos de la session réelle.
             // Les porteurs legacy gardent leur projection historique.
             if (in_progress || !attested)
-                && let Err(reason) = st.set_turn_state(conn_id, in_progress) {
-                    warn!("projection de tour après transition ignorée: {reason}");
-                }
+                && let Err(reason) = st.set_turn_state(conn_id, in_progress)
+            {
+                warn!("projection de tour après transition ignorée: {reason}");
+            }
             if matches!(
                 transition.next_state.as_str(),
                 "completed" | "failed" | "cancelled" | "interrupted" | "unreachable"
@@ -10250,31 +10323,31 @@ fn handle_delivery_ack(
         Ok(answered_request) => {
             if let Some((owner, _)) = live_connection_identity(st, conn_id)
                 && let Ok(Some(summary)) = st.store.observation_summary_current(&owner)
-                    && let Ok(key) = IdempotencyKey::new(
-                        crate::wake_schedules::MISSED_SUMMARY_SCOPE,
-                        OperationKind::Send,
-                        &summary.summary_id,
-                    )
-                        && let Ok(Some(delivery)) = st.idempotency.stored_send_delivery(&key)
-                            && delivery.delivery_id == delivery_id
-                                && delivery.recipient_instance_id == instance_id
-                                && delivery.delivery_generation == delivery_generation
-                            {
-                                let _ = st.store.bind_observation_summary_delivery(
-                                    &summary.summary_id,
-                                    &delivery_id,
-                                    &instance_id,
-                                    delivery_generation,
-                                );
-                                let _ = st.store.confirm_observation_summary(
-                                    &owner,
-                                    &summary.summary_id,
-                                    summary.generation,
-                                    &delivery_id,
-                                    &instance_id,
-                                    delivery_generation,
-                                );
-                            }
+                && let Ok(key) = IdempotencyKey::new(
+                    crate::wake_schedules::MISSED_SUMMARY_SCOPE,
+                    OperationKind::Send,
+                    &summary.summary_id,
+                )
+                && let Ok(Some(delivery)) = st.idempotency.stored_send_delivery(&key)
+                && delivery.delivery_id == delivery_id
+                && delivery.recipient_instance_id == instance_id
+                && delivery.delivery_generation == delivery_generation
+            {
+                let _ = st.store.bind_observation_summary_delivery(
+                    &summary.summary_id,
+                    &delivery_id,
+                    &instance_id,
+                    delivery_generation,
+                );
+                let _ = st.store.confirm_observation_summary(
+                    &owner,
+                    &summary.summary_id,
+                    summary.generation,
+                    &delivery_id,
+                    &instance_id,
+                    delivery_generation,
+                );
+            }
             if let Some(request_id) = answered_request {
                 st.delegation_store.wait_epoch().bump();
                 st.pending_replies
@@ -10438,7 +10511,11 @@ fn dispatch_thread_wakes(
     for candidate in candidates {
         st.thread_wake_departures
             .retain(|departure| now.duration_since(*departure) < Duration::from_secs(1));
-        if crate::agent_tracking::dormant(st.store.connection(),&candidate.agent_id).unwrap_or(true) {continue;}
+        if crate::agent_tracking::dormant(st.store.connection(), &candidate.agent_id)
+            .unwrap_or(true)
+        {
+            continue;
+        }
         if st.thread_wake_departures.len() >= crate::threads::WAKE_DEPARTURES_PER_SEC as usize {
             let _ = st.store.thread_wake_defer(
                 &candidate.thread_id,
@@ -10620,7 +10697,9 @@ fn project_thread_wake(
     departure: &ThreadWakeDeparture,
     controls: &mut Vec<DeferredControl>,
 ) -> Result<(), String> {
-    if crate::agent_tracking::dormant(st.store.connection(),&departure.agent_id).map_err(|_|"tracking_storage_unavailable")? {
+    if crate::agent_tracking::dormant(st.store.connection(), &departure.agent_id)
+        .map_err(|_| "tracking_storage_unavailable")?
+    {
         return Err("agent_dormant".into());
     }
     let issuer_scope = st
@@ -10774,7 +10853,8 @@ impl crate::threads::Directory for DaemonDirectory<'_> {
             .as_ref()
             .and_then(|conn| self.state.thread_notice_versions.get(conn).copied());
         crate::threads::MemberFacts {
-            dormant: crate::agent_tracking::dormant(self.state.store.connection(),agent_id).unwrap_or(true),
+            dormant: crate::agent_tracking::dormant(self.state.store.connection(), agent_id)
+                .unwrap_or(true),
             connected,
             thread_notice_version,
         }
@@ -10859,43 +10939,63 @@ fn announce_communication_project(
             .and_then(|instance| st.presences.get(instance))
             .is_some_and(|presence| presence.transport == "t3code");
         let host_ok = bridget_core::host_is_attested(host)
-            && (bare && host==st.host || st.conn_hosts.get(conn_id).is_some_and(|v| v == host))
+            && (bare && host == st.host || st.conn_hosts.get(conn_id).is_some_and(|v| v == host))
             && (source == CommunicationProjectSource::Git || t3);
         // Une tâche native ne devient jamais locale par simple égalité de hostname.
         // Une erreur de lecture de sa relation interdit aussi le repli local.
-        let native_owner=source==CommunicationProjectSource::Git && owner.as_ref().is_some_and(|(agent,_)|
-            !matches!(st.delegation_store.for_child(agent),Ok(None)));
-        let native_command=if host_ok && source==CommunicationProjectSource::Git
-            && worktree.is_none() {
-            native_delegation::native_communication_project_worker(&st,conn_id,root)
-        } else {None};
-        let foreign=host_ok && owner.is_some()
-            && ((host!=st.host && t3 && source==CommunicationProjectSource::T3)
+        let native_owner = source == CommunicationProjectSource::Git
+            && owner.as_ref().is_some_and(|(agent, _)| {
+                !matches!(st.delegation_store.for_child(agent), Ok(None))
+            });
+        let native_command =
+            if host_ok && source == CommunicationProjectSource::Git && worktree.is_none() {
+                native_delegation::native_communication_project_worker(&st, conn_id, root)
+            } else {
+                None
+            };
+        let foreign = host_ok
+            && owner.is_some()
+            && ((host != st.host && t3 && source == CommunicationProjectSource::T3)
                 || native_command.is_some())
-            && owner.as_ref().and_then(|(_,instance)|st.presences.get(instance)).is_some_and(|p|p.host==host);
+            && owner
+                .as_ref()
+                .and_then(|(_, instance)| st.presences.get(instance))
+                .is_some_and(|p| p.host == host);
         (
             owner,
-            host_ok && host==st.host && !native_owner,
+            host_ok && host == st.host && !native_owner,
             foreign,
-            native_command.as_ref().map(|(_,command)|command.clone()),
-            native_command.map_or_else(||host.to_owned(),|(host,_)|host),
+            native_command.as_ref().map(|(_, command)| command.clone()),
+            native_command.map_or_else(|| host.to_owned(), |(host, _)| host),
             st.instance_id.clone(),
         )
     };
     let (resolved, unavailable) = if local {
-        (crate::communication::resolve_communication_project(root,host,source,worktree),false)
+        (
+            crate::communication::resolve_communication_project(root, host, source, worktree),
+            false,
+        )
     } else if foreign {
-        match origin_proof::communication_project(state,&proof_host,root,source,worktree) {
-            Ok(project)=>(project,false),Err(_)=>(None,true),
+        match origin_proof::communication_project(state, &proof_host, root, source, worktree) {
+            Ok(project) => (project, false),
+            Err(_) => (None, true),
         }
-    } else {(None,false)};
-    let verified=resolved.is_some();
+    } else {
+        (None, false)
+    };
+    let verified = resolved.is_some();
     let mut st = state.lock().recover_poison();
-    let unchanged = generation == st.instance_id && live_connection_identity(&st, conn_id) == owner
-        && (local || st.conn_hosts.get(conn_id).is_some_and(|current|current==host))
-        && native_command.as_ref().is_none_or(|command|
-            native_delegation::native_communication_project_worker(&st,conn_id,root)
-                .as_ref()==Some(&(proof_host.clone(),command.clone())));
+    let unchanged = generation == st.instance_id
+        && live_connection_identity(&st, conn_id) == owner
+        && (local
+            || st
+                .conn_hosts
+                .get(conn_id)
+                .is_some_and(|current| current == host))
+        && native_command.as_ref().is_none_or(|command| {
+            native_delegation::native_communication_project_worker(&st, conn_id, root).as_ref()
+                == Some(&(proof_host.clone(), command.clone()))
+        });
     let previous = st
         .communication_projects
         .get(conn_id)
@@ -10904,14 +11004,23 @@ fn announce_communication_project(
     let conflicting =
         previous.2 || matches!((&previous.1, &resolved), (Some(a), Some(b)) if a != b);
     let project = if unchanged && !conflicting {
-        resolved.or_else(||previous.0.clone().filter(|p|unavailable && p.host==proof_host))
+        resolved.or_else(|| {
+            previous
+                .0
+                .clone()
+                .filter(|p| unavailable && p.host == proof_host)
+        })
     } else {
         None
     };
     let last_known = previous.1.or_else(|| project.clone());
     st.communication_projects
         .insert(conn_id.into(), (project.clone(), last_known, conflicting));
-    if verified && project.is_some() && (local || foreign) && source == CommunicationProjectSource::T3 {
+    if verified
+        && project.is_some()
+        && (local || foreign)
+        && source == CommunicationProjectSource::T3
+    {
         st.t3_project_connections.insert(conn_id.into());
     } else {
         st.t3_project_connections.remove(conn_id);
@@ -11187,7 +11296,9 @@ fn guidance_facts(
         .and_then(|c| connection_communication_project(st, c))
         .zip(agent_communication_project(st, target))
         .is_some_and(|(from, to)| from != to)
-        && !conn.is_some_and(|conn| native_delegation::admitted_task_communication248(st, conn, target, None));
+        && !conn.is_some_and(|conn| {
+            native_delegation::admitted_task_communication248(st, conn, target, None)
+        });
     let control =
         crate::referent_control::read(st.store.connection()).map_err(|e| e.to_string())?;
     let paused = matches!(
@@ -11836,7 +11947,10 @@ fn prepare_dispatch(
         .router
         .get_agent(&routing_from)
         .map(|agent| agent.connection_id.clone());
-    if message.reply && reply_sender_conn.is_none() && !specialists222::is_human_request(st,message) {
+    if message.reply
+        && reply_sender_conn.is_none()
+        && !specialists222::is_human_request(st, message)
+    {
         return Err((
             "reply_sender_unavailable",
             "--reply requiert un agent Bridget connecté ; lance la commande depuis un wrapper actif ou envoie sans --reply".to_string(),
@@ -11874,7 +11988,12 @@ fn prepare_dispatch(
     // confondent pas les emplacements d’une même mission avec deux projets.
     // La coordination ordinaire ne gagne ni autorité de mission ni exception au sommeil.
     let project_warnings = if native_task_exchange
-        || native_delegation::admitted_task_communication248(st, conn_id, &routing_to, Some(&message.id)) {
+        || native_delegation::admitted_task_communication248(
+            st,
+            conn_id,
+            &routing_to,
+            Some(&message.id),
+        ) {
         Vec::new()
     } else {
         crate::communication::project_scope(
@@ -11935,10 +12054,12 @@ fn prepare_dispatch(
             format!("« {target} » ne souhaite pas être dérangé (encore {minutes} min)"),
         ));
     }
-    let target_conn = match st
-        .router
-        .resolve(&routing_from, &routing_to, if store_only { 1 } else { message.hops }, conn_id)
-    {
+    let target_conn = match st.router.resolve(
+        &routing_from,
+        &routing_to,
+        if store_only { 1 } else { message.hops },
+        conn_id,
+    ) {
         RouterAction::Deliver { target_conn } => target_conn,
         RouterAction::Reject(error) => return Err(("routing", error.to_string())),
     };
@@ -12047,7 +12168,7 @@ fn handle_idempotent_send(
     )
 }
 
-#[derive(Clone,Copy)]
+#[derive(Clone, Copy)]
 enum RetainedSendAuthority<'a> {
     WrapperReply(&'a str),
     Result(&'a native_delegation::RetainedResultAuthority),
@@ -12057,44 +12178,114 @@ enum RetainedSendAuthority<'a> {
 
 /// Une réponse automatique ordinaire garde les droits de sa connexion primaire.
 /// Ce chemin ne transporte jamais le résultat courant ou passé d'une mission.
-fn authorize_wrapper_reply(st:&DaemonState,conn:&str,message:&bridget_core::BridgetMessage,instance:&str)->Result<(),String> {
+fn authorize_wrapper_reply(
+    st: &DaemonState,
+    conn: &str,
+    message: &bridget_core::BridgetMessage,
+    instance: &str,
+) -> Result<(), String> {
     if st.auxiliary_connections.contains(conn)
-        || st.connection_roles.get(conn)==Some(&ConnectionRole::Attach)
-        || live_connection_identity(st,conn)!=Some((message.from.clone(),instance.to_owned()))
-        || message.reply || !matches!(message.intent,None|Some(bridget_core::MessageIntent::QueueOnly)) {
+        || st.connection_roles.get(conn) == Some(&ConnectionRole::Attach)
+        || live_connection_identity(st, conn) != Some((message.from.clone(), instance.to_owned()))
+        || message.reply
+        || !matches!(
+            message.intent,
+            None | Some(bridget_core::MessageIntent::QueueOnly)
+        )
+    {
         return Err("wrapper_reply_identity_required".into());
     }
-    let correlation=message.in_reply_to.as_deref().ok_or("wrapper_reply_correlation_required")?;
-    let request=st.store.get_request(correlation).map_err(|_|"wrapper_reply_request_unavailable")?
+    let correlation = message
+        .in_reply_to
+        .as_deref()
+        .ok_or("wrapper_reply_correlation_required")?;
+    let request = st
+        .store
+        .get_request(correlation)
+        .map_err(|_| "wrapper_reply_request_unavailable")?
         .ok_or("wrapper_reply_request_unavailable")?;
-    if request.sender!=message.to || request.target!=message.from {return Err("wrapper_reply_correlation_mismatch".into());}
-    if st.delegation_store.for_mission(correlation)?.is_some() || st.delegation_store.past_mission_task(correlation)?.is_some() {
+    if request.sender != message.to || request.target != message.from {
+        return Err("wrapper_reply_correlation_mismatch".into());
+    }
+    if st.delegation_store.for_mission(correlation)?.is_some()
+        || st
+            .delegation_store
+            .past_mission_task(correlation)?
+            .is_some()
+    {
         return Err("remote_result_requires_worker".into());
     }
     Ok(())
 }
 
-fn retain_wrapper_reply(conn:&str,message:bridget_core::BridgetMessage,instance:&str,st:&mut DaemonState)->DaemonToWrapper {
-    let id=message.id.clone();
-    let scope=crate::communication::issuer_scope(&format!("wrapper-reply:{instance}"));
-    let key=match IdempotencyKey::new(scope,OperationKind::Send,id.clone()) {
-        Ok(key)=>key,Err(_)=>return DaemonToWrapper::Nack{id,reason:"wrapper_reply_id_invalid".into()}
+fn retain_wrapper_reply(
+    conn: &str,
+    message: bridget_core::BridgetMessage,
+    instance: &str,
+    st: &mut DaemonState,
+) -> DaemonToWrapper {
+    let id = message.id.clone();
+    let scope = crate::communication::issuer_scope(&format!("wrapper-reply:{instance}"));
+    let key = match IdempotencyKey::new(scope, OperationKind::Send, id.clone()) {
+        Ok(key) => key,
+        Err(_) => {
+            return DaemonToWrapper::Nack {
+                id,
+                reason: "wrapper_reply_id_invalid".into(),
+            };
+        }
     };
-    let issued_at=match st.idempotency.original_issued_at(&key) {
-        Ok(stored)=>stored.unwrap_or_else(unix_now_secs),
-        Err(_)=>return DaemonToWrapper::Nack{id,reason:"wrapper_reply_store_unavailable".into()}
+    let issued_at = match st.idempotency.original_issued_at(&key) {
+        Ok(stored) => stored.unwrap_or_else(unix_now_secs),
+        Err(_) => {
+            return DaemonToWrapper::Nack {
+                id,
+                reason: "wrapper_reply_store_unavailable".into(),
+            };
+        }
     };
-    let mut controls=Vec::new();
-    let response=handle_idempotent_send_with_result_authority(conn,message,id.clone(),issued_at,
-        IdempotentSendAdmission{project:None,issued_at_tolerance_secs:CLIENT_ISSUED_AT_TOLERANCE_SECS},st,&mut controls,
-        Some(RetainedSendAuthority::WrapperReply(instance)),false);
-    st.pending_post_response_controls.entry(conn.into()).or_default().extend(controls);
+    let mut controls = Vec::new();
+    let response = handle_idempotent_send_with_result_authority(
+        conn,
+        message,
+        id.clone(),
+        issued_at,
+        IdempotentSendAdmission {
+            project: None,
+            issued_at_tolerance_secs: CLIENT_ISSUED_AT_TOLERANCE_SECS,
+        },
+        st,
+        &mut controls,
+        Some(RetainedSendAuthority::WrapperReply(instance)),
+        false,
+    );
+    st.pending_post_response_controls
+        .entry(conn.into())
+        .or_default()
+        .extend(controls);
     match response {
-        DaemonToWrapper::IdempotencyResult{issue:IdempotencyIssue::Accepted{..},project_warnings,..}
-        | DaemonToWrapper::IdempotencyResult{issue:IdempotencyIssue::OutcomeUnknown{delivery_id:Some(_),..},project_warnings,..}
-            =>DaemonToWrapper::Ack{id,project_warnings},
-        DaemonToWrapper::IdempotencyResult{issue,..}=>DaemonToWrapper::Nack{id,reason:format!("wrapper_reply_not_deposited:{issue:?}")},
-        other=>other,
+        DaemonToWrapper::IdempotencyResult {
+            issue: IdempotencyIssue::Accepted { .. },
+            project_warnings,
+            ..
+        }
+        | DaemonToWrapper::IdempotencyResult {
+            issue:
+                IdempotencyIssue::OutcomeUnknown {
+                    delivery_id: Some(_),
+                    ..
+                },
+            project_warnings,
+            ..
+        } => DaemonToWrapper::Ack {
+            id,
+            project_warnings,
+        },
+        DaemonToWrapper::IdempotencyResult { issue, .. } => DaemonToWrapper::Nack {
+            id,
+            reason: format!("wrapper_reply_not_deposited:{issue:?}"),
+        },
+        other => other,
     }
 }
 
@@ -12110,9 +12301,14 @@ fn handle_idempotent_send_with_result_authority(
     scoped_mobile_human: bool,
 ) -> DaemonToWrapper {
     if message.intent == Some(bridget_core::MessageIntent::StoreOnly)
-        && !st.client_negotiations.get(conn_id).is_some_and(|n| n.capabilities.contains(&ClientCapability::SendInformationV1))
+        && !st.client_negotiations.get(conn_id).is_some_and(|n| {
+            n.capabilities
+                .contains(&ClientCapability::SendInformationV1)
+        })
     {
-        return DaemonToWrapper::ClientRejected { reason: ClientRefusal::CapabilityNotNegotiated };
+        return DaemonToWrapper::ClientRejected {
+            reason: ClientRefusal::CapabilityNotNegotiated,
+        };
     }
     if message.reply && message.intent == Some(bridget_core::MessageIntent::SteerCurrent) {
         return DaemonToWrapper::Nack {
@@ -12132,13 +12328,21 @@ fn handle_idempotent_send_with_result_authority(
     let human_from_bare_client = matches!(message.from.as_str(), "" | "human" | "humain")
         && !st.conn_names.contains_key(conn_id);
     if let Some(authority) = authority {
-        let verified=match authority {
-            RetainedSendAuthority::Result(authority)=>native_delegation::authorize_retained_result(st,authority,conn_id,&message),
-            RetainedSendAuthority::Specialist(authority)=>specialists222::authorize_prepared_send(st,authority,&message),
-            RetainedSendAuthority::WrapperReply(instance)=>authorize_wrapper_reply(st,conn_id,&message,instance),
-            RetainedSendAuthority::Lineage(proof)=>native_lineage::authorize_compose_send(st,conn_id,&message,proof),
+        let verified = match authority {
+            RetainedSendAuthority::Result(authority) => {
+                native_delegation::authorize_retained_result(st, authority, conn_id, &message)
+            }
+            RetainedSendAuthority::Specialist(authority) => {
+                specialists222::authorize_prepared_send(st, authority, &message)
+            }
+            RetainedSendAuthority::WrapperReply(instance) => {
+                authorize_wrapper_reply(st, conn_id, &message, instance)
+            }
+            RetainedSendAuthority::Lineage(proof) => {
+                native_lineage::authorize_compose_send(st, conn_id, &message, proof)
+            }
         };
-        if let Err(reason)=verified {
+        if let Err(reason) = verified {
             return DaemonToWrapper::Nack {
                 id: message_id,
                 reason,
@@ -12150,13 +12354,19 @@ fn handle_idempotent_send_with_result_authority(
             reason: "identité expéditeur non attestée : rattachement auxiliaire requis".into(),
         };
     }
-    let issuer_scope=if let Some(RetainedSendAuthority::Lineage(proof))=authority {proof.issuer_scope()}
-    else if let Some(RetainedSendAuthority::Specialist(authority))=authority {
-        crate::communication::issuer_scope(&format!("specialist:{}",authority.issuer_scope))
-    }else if let Some(RetainedSendAuthority::WrapperReply(instance))=authority {
+    let issuer_scope = if let Some(RetainedSendAuthority::Lineage(proof)) = authority {
+        proof.issuer_scope()
+    } else if let Some(RetainedSendAuthority::Specialist(authority)) = authority {
+        crate::communication::issuer_scope(&format!("specialist:{}", authority.issuer_scope))
+    } else if let Some(RetainedSendAuthority::WrapperReply(instance)) = authority {
         crate::communication::issuer_scope(&format!("wrapper-reply:{instance}"))
-    }else if let Some(negotiated)=st.client_negotiations.get(conn_id) {negotiated.issuer_scope.clone()}
-    else{return DaemonToWrapper::ClientRejected{reason:ClientRefusal::NegotiationRequired};};
+    } else if let Some(negotiated) = st.client_negotiations.get(conn_id) {
+        negotiated.issuer_scope.clone()
+    } else {
+        return DaemonToWrapper::ClientRejected {
+            reason: ClientRefusal::NegotiationRequired,
+        };
+    };
     // L'identifiant métier est l'autorité publique ; l'ancien champ `id` de
     // Bridget est donc normalisé avant toute comparaison ou garde mutable.
     message.id = message_id.clone();
@@ -12255,8 +12465,14 @@ fn handle_idempotent_send_with_result_authority(
     // Une information ne peut ni capturer ni masquer une réponse attendue.
     // Refus durable AVANT capture_reply et avant tout effet fournisseur.
     if message.intent == Some(bridget_core::MessageIntent::StoreOnly)
-        && (message.reply || message.reply_timeout.is_some() || message.in_reply_to.is_some()
-            || authority.is_some() || st.delegation_store.for_mission(&message.id).map_or(true, |task| task.is_some()))
+        && (message.reply
+            || message.reply_timeout.is_some()
+            || message.in_reply_to.is_some()
+            || authority.is_some()
+            || st
+                .delegation_store
+                .for_mission(&message.id)
+                .map_or(true, |task| task.is_some()))
     {
         return reject_idempotent_send(st, &key, "information_requires_uncorrelated_message",
             "Pour une demande ou un résultat attendu, gardez l'envoi normal et sa corrélation. information conserve seulement un avis sans action : reply=false, sans in_reply_to ni délai de réponse. Ce refus définitif concerne cet envoi ; aucun résultat n'a été capturé. Pour corriger, gardez la demande ou le résultat sur son parcours normal avec une nouvelle clé après ce refus attesté ; ne modifiez pas cette enveloppe sous sa clé close.")
@@ -12264,11 +12480,17 @@ fn handle_idempotent_send_with_result_authority(
     }
     // L'autorité de résultat a déjà été vérifiée ci-dessus. Sa notification
     // est une sortie du store canonique, jamais un nouvel ingress du wrapper.
-    let capture = if matches!(authority,Some(RetainedSendAuthority::Result(_) | RetainedSendAuthority::Specialist(_))) {
+    let capture = if matches!(
+        authority,
+        Some(RetainedSendAuthority::Result(_) | RetainedSendAuthority::Specialist(_))
+    ) {
         // Le résultat canonique reste conservé, sans nouvelle notification au dormant.
-        if matches!(authority,Some(RetainedSendAuthority::Result(_))) {
-            crate::agent_tracking::dormant(st.store.connection(),&message.to).map_err(|e|e.to_string())
-        } else { Ok(false) }
+        if matches!(authority, Some(RetainedSendAuthority::Result(_))) {
+            crate::agent_tracking::dormant(st.store.connection(), &message.to)
+                .map_err(|e| e.to_string())
+        } else {
+            Ok(false)
+        }
     } else {
         native_delegation::capture_reply(st, conn_id, &message)
     };
@@ -12278,14 +12500,20 @@ fn handle_idempotent_send_with_result_authority(
             // Refus métier constaté avant capture, pas perte d'accusé.
             // La réponse corrélée clôt aussi une ancienne réservation Prepared.
             let reason = "Ce résultat de mission distante se publie par le worker. Donnez votre réponse finale normale : le worker conserve et remet le résultat natif au parent. N'utilisez pas bridget_send avec in_reply_to pour remplacer cette publication et ne rejouez pas ce message refusé. Le parent lit le résultat avec bridget_task_status et le task_id existant ; une remise en vol distincte ne prouve pas la perte de ce résultat. Ce refus concerne cet envoi manuel, sans nouvelle mission ni changement de droits. Les autres travaux autorisés suivent leur propre état.";
-            return reject_idempotent_send(st, &key, error, reason)
-                .unwrap_or_else(|reason| DaemonToWrapper::Nack { id: message.id.clone(), reason });
+            return reject_idempotent_send(st, &key, error, reason).unwrap_or_else(|reason| {
+                DaemonToWrapper::Nack {
+                    id: message.id.clone(),
+                    reason,
+                }
+            });
         }
         Err(error) => {
             error!("capture native non persistée: {error}");
             return DaemonToWrapper::Nack {
                 id: message.id.clone(),
-                reason: if error == "remote_result_requires_worker" || error.starts_with("retained_reply_") {
+                reason: if error == "remote_result_requires_worker"
+                    || error.starts_with("retained_reply_")
+                {
                     error
                 } else {
                     "native_result_not_persisted".into()
@@ -12334,7 +12562,14 @@ fn handle_idempotent_send_with_result_authority(
         }
         _ => None,
     };
-    let native_task_exchange = if matches!(authority,Some(RetainedSendAuthority::Result(_) | RetainedSendAuthority::Specialist(_) | RetainedSendAuthority::Lineage(_))) {
+    let native_task_exchange = if matches!(
+        authority,
+        Some(
+            RetainedSendAuthority::Result(_)
+                | RetainedSendAuthority::Specialist(_)
+                | RetainedSendAuthority::Lineage(_)
+        )
+    ) {
         // authorize_retained_result a déjà contrôlé le résultat canonique.
         true
     } else {
@@ -12399,26 +12634,46 @@ fn handle_idempotent_send_with_result_authority(
     }
     let guidance_admission = match guidance_action {
         Some(action) => {
-            let facts = if (scoped_mobile_human || matches!(authority,Some(RetainedSendAuthority::Lineage(_)))) && action == crate::guidance::GuidanceAction::Steer {
+            let facts = if (scoped_mobile_human
+                || matches!(authority, Some(RetainedSendAuthority::Lineage(_))))
+                && action == crate::guidance::GuidanceAction::Steer
+            {
                 // The mobile ingress has just verified this device and this recipient's scope.
-                guidance_facts(st, Some(conn_id), &message.to, action,
+                guidance_facts(
+                    st,
+                    Some(conn_id),
+                    &message.to,
+                    action,
                     crate::guidance::GuidancePath::SendIdempotent,
-                    Some(bridget_core::MessageOrigin::Human), false, unix_timestamp())
-                    .map(|mut facts| {
-                        facts.actor = crate::guidance::GuidanceActor::AttachedHuman;
-                        facts.identity_attested = true;
-                        facts
-                    }).map_err(|_| ("intent_not_permitted".into(), "identity_unattested".into()))
-                    .and_then(|facts| {
-                        crate::guidance::authorize(&facts).map(|()| facts).map_err(|refusal| {
-                            let (code,reason)=guidance_refusal_fields(refusal);
-                            (code.into(),reason)
+                    Some(bridget_core::MessageOrigin::Human),
+                    false,
+                    unix_timestamp(),
+                )
+                .map(|mut facts| {
+                    facts.actor = crate::guidance::GuidanceActor::AttachedHuman;
+                    facts.identity_attested = true;
+                    facts
+                })
+                .map_err(|_| ("intent_not_permitted".into(), "identity_unattested".into()))
+                .and_then(|facts| {
+                    crate::guidance::authorize(&facts)
+                        .map(|()| facts)
+                        .map_err(|refusal| {
+                            let (code, reason) = guidance_refusal_fields(refusal);
+                            (code.into(), reason)
                         })
-                    })
+                })
             } else {
-                check_guidance(st, Some(conn_id), &message.to, action,
-                    crate::guidance::GuidancePath::SendIdempotent, None,
-                    message.delegated_origin.is_some(), &message.id)
+                check_guidance(
+                    st,
+                    Some(conn_id),
+                    &message.to,
+                    action,
+                    crate::guidance::GuidancePath::SendIdempotent,
+                    None,
+                    message.delegated_origin.is_some(),
+                    &message.id,
+                )
             };
             match facts {
                 Ok(facts) => Some(facts),
@@ -12705,9 +12960,10 @@ fn handle_idempotent_send_with_result_authority(
                 .origin
                 .filter(|origin| *origin == bridget_core::MessageOrigin::System),
             Some(conn_id),
-        ) {
-            error!("remise idempotente préparée mais non sérialisable: {error}");
-        }
+        )
+    {
+        error!("remise idempotente préparée mais non sérialisable: {error}");
+    }
     #[cfg(feature = "test-support")]
     crate::test_sync::checkpoint("after_delivery_before_issue");
     let response = issue_response_with_project(
@@ -12779,17 +13035,26 @@ fn handle_execution_control(
     command: ExecutionControlCommand,
     st: &mut DaemonState,
 ) -> DaemonToWrapper {
-    handle_execution_control_authorized(conn_id,issuer_scope,command,st,None)
+    handle_execution_control_authorized(conn_id, issuer_scope, command, st, None)
 }
 
 fn handle_execution_control_authorized(
-    conn_id:Option<&str>,issuer_scope:&str,mut command:ExecutionControlCommand,
-    st:&mut DaemonState,proof:Option<&native_lineage::ComposeAuthority>,
-)->DaemonToWrapper {
-    if let Some(proof)=proof
-        && conn_id.is_none_or(|conn|native_lineage::authorize_compose_control(st,conn,&command,proof).is_err()) {
-            return control_result(&command,ExecutionControlOutcome::Refused(ExecutionControlRefusal::NotPermitted));
-        }
+    conn_id: Option<&str>,
+    issuer_scope: &str,
+    mut command: ExecutionControlCommand,
+    st: &mut DaemonState,
+    proof: Option<&native_lineage::ComposeAuthority>,
+) -> DaemonToWrapper {
+    if let Some(proof) = proof
+        && conn_id.is_none_or(|conn| {
+            native_lineage::authorize_compose_control(st, conn, &command, proof).is_err()
+        })
+    {
+        return control_result(
+            &command,
+            ExecutionControlOutcome::Refused(ExecutionControlRefusal::NotPermitted),
+        );
+    }
     if command.version != 1 || command.command_id.is_empty() || command.command_id.len() > 256 {
         return control_result(
             &command,
@@ -12920,7 +13185,9 @@ fn handle_execution_control_authorized(
     } else {
         crate::guidance::GuidanceAction::Interrupt
     };
-    let scope_result = if proof.is_some() {Ok(Vec::new())} else if invalid_reason {
+    let scope_result = if proof.is_some() {
+        Ok(Vec::new())
+    } else if invalid_reason {
         Err("invalid_cross_project_reason")
     } else if let Some(message) = command.message.as_ref() {
         match conn_id {
@@ -12992,23 +13259,42 @@ fn handle_execution_control_authorized(
     };
     let admission = if proof.is_some() {
         // La preuve privée a revérifié racine, tâche, instance et ronde sous ce verrou.
-        guidance_facts(st,conn_id,&target.target_agent,action,crate::guidance::GuidancePath::Control,
-            Some(bridget_core::MessageOrigin::Human),false,now)
-            .map(|mut facts| {facts.actor=crate::guidance::GuidanceActor::AttachedHuman;facts.identity_attested=true;facts})
-            .map_err(|_|("intent_not_permitted".to_owned(),"identity_unattested".to_owned()))
-    } else { check_guidance(
-        st,
-        conn_id,
-        &target.target_agent,
-        action,
-        crate::guidance::GuidancePath::Control,
-        None,
-        command
-            .message
-            .as_ref()
-            .is_some_and(|m| m.delegated_origin.is_some()),
-        &command.command_id,
-    ) };
+        guidance_facts(
+            st,
+            conn_id,
+            &target.target_agent,
+            action,
+            crate::guidance::GuidancePath::Control,
+            Some(bridget_core::MessageOrigin::Human),
+            false,
+            now,
+        )
+        .map(|mut facts| {
+            facts.actor = crate::guidance::GuidanceActor::AttachedHuman;
+            facts.identity_attested = true;
+            facts
+        })
+        .map_err(|_| {
+            (
+                "intent_not_permitted".to_owned(),
+                "identity_unattested".to_owned(),
+            )
+        })
+    } else {
+        check_guidance(
+            st,
+            conn_id,
+            &target.target_agent,
+            action,
+            crate::guidance::GuidancePath::Control,
+            None,
+            command
+                .message
+                .as_ref()
+                .is_some_and(|m| m.delegated_origin.is_some()),
+            &command.command_id,
+        )
+    };
     let guidance_admission = match admission {
         Ok(facts) => facts,
         Err((_code, _reason)) => {
@@ -13722,7 +14008,9 @@ fn daemon_deposit_human_inbox(
     match crate::human_inbox::deposit_and_notify(st.store.connection(), request, channel.as_ref()) {
         Ok(Ok(deposited)) => {
             if deposited.created {
-                if let Some(notifier)=&st.mobile_notifier { notifier.changed(); }
+                if let Some(notifier) = &st.mobile_notifier {
+                    notifier.changed();
+                }
                 info!(
                     "boîte humaine: item {} déposé ({})",
                     deposited.item_id,
@@ -13917,13 +14205,13 @@ fn handle_control_state_set(
                 let agents: Vec<_> = st.presences.values().map(|p| p.name.clone()).collect();
                 for agent in agents {
                     if schedule_held_release(&mut st, &agent, Instant::now())
-                        && let Some(route) = st.router.get_agent(&agent) {
-                            let conn = route.connection_id.clone();
-                            if let Some(controls) = st.pending_post_response_controls.remove(&conn)
-                            {
-                                resume_controls.push((conn, controls));
-                            }
+                        && let Some(route) = st.router.get_agent(&agent)
+                    {
+                        let conn = route.connection_id.clone();
+                        if let Some(controls) = st.pending_post_response_controls.remove(&conn) {
+                            resume_controls.push((conn, controls));
                         }
+                    }
                 }
             }
             drop(st);
@@ -14354,16 +14642,36 @@ fn human_client_guard(
 }
 
 /// O(C), C connexions ; identité et projet viennent de la liaison primaire.
-fn human_request_project(state:&Arc<Mutex<DaemonState>>,thread:&str,root:&str)
-    ->Option<bridget_transport::protocol::CommunicationProject>{
-    let (host,local)={let st=state.lock().recover_poison();
-        let owner=crate::t3code::stable_uuid(thread);
-        let host=origin_proof::host_for_owner(&st,&owner).ok()?;
-        let local=host==st.host;(host,local)};
-    if local {crate::communication::resolve_communication_project(root,&host,
-        bridget_transport::protocol::CommunicationProjectSource::T3,None)}
-    else {origin_proof::communication_project(state,&host,root,
-        bridget_transport::protocol::CommunicationProjectSource::T3,None).ok().flatten()}
+fn human_request_project(
+    state: &Arc<Mutex<DaemonState>>,
+    thread: &str,
+    root: &str,
+) -> Option<bridget_transport::protocol::CommunicationProject> {
+    let (host, local) = {
+        let st = state.lock().recover_poison();
+        let owner = crate::t3code::stable_uuid(thread);
+        let host = origin_proof::host_for_owner(&st, &owner).ok()?;
+        let local = host == st.host;
+        (host, local)
+    };
+    if local {
+        crate::communication::resolve_communication_project(
+            root,
+            &host,
+            bridget_transport::protocol::CommunicationProjectSource::T3,
+            None,
+        )
+    } else {
+        origin_proof::communication_project(
+            state,
+            &host,
+            root,
+            bridget_transport::protocol::CommunicationProjectSource::T3,
+            None,
+        )
+        .ok()
+        .flatten()
+    }
 }
 fn human_authority_guard(
     st: &DaemonState,
@@ -14389,15 +14697,20 @@ fn human_authority_guard(
             .get_agent(&agent)
             .is_none_or(|route| route.connection_id != *owner)
         || live_connection_identity(st, owner) != Some((agent.clone(), instance.clone()))
-        || !st
-            .presences
-            .get(&instance)
-            .is_some_and(|p| p.transport == "t3code" && match project {
-                Some(project) if project.host!=st.host => p.host==project.host
-                    && st.conn_hosts.get(owner).is_some_and(|host|host==&project.host)
-                    && origin_proof::worker_is_current(st,&project.host),
-                _=>p.host==st.host,
-            })
+        || !st.presences.get(&instance).is_some_and(|p| {
+            p.transport == "t3code"
+                && match project {
+                    Some(project) if project.host != st.host => {
+                        p.host == project.host
+                            && st
+                                .conn_hosts
+                                .get(owner)
+                                .is_some_and(|host| host == &project.host)
+                            && origin_proof::worker_is_current(st, &project.host)
+                    }
+                    _ => p.host == st.host,
+                }
+        })
     {
         return Err(E::BindingUnavailable);
     }
@@ -14434,7 +14747,7 @@ fn handle_human_thread_view(
             return refusal(code);
         }
     }
-    let project = human_request_project(state,&request.t3_thread_id,&request.project_root);
+    let project = human_request_project(state, &request.t3_thread_id, &request.project_root);
     let st = state.lock().recover_poison();
     if let Err(code) = human_client_guard(
         &st,
@@ -14480,7 +14793,9 @@ fn human_watch_guard(
 /// O(log T+M+S*C), M<=16, S<=128 ; une requête de membres par mutation.
 /// Aucun corps ni E/S socket et aucune requête SQL par suivi humain.
 fn publish_human_thread_change(st: &mut DaemonState, thread_id: &str) {
-    if let Some(notifier)=&st.mobile_notifier { notifier.changed(); }
+    if let Some(notifier) = &st.mobile_notifier {
+        notifier.changed();
+    }
     let connections: Vec<_> = st.human_thread_watches.keys().cloned().collect();
     if connections.is_empty() {
         return;
@@ -14652,7 +14967,7 @@ fn handle_human_thread_watch(
             return refusal(code);
         }
     }
-    let project = human_request_project(state,&request.t3_thread_id,&request.project_root);
+    let project = human_request_project(state, &request.t3_thread_id, &request.project_root);
     let mut st = state.lock().recover_poison();
     if let Err(code) = human_client_guard(
         &st,
@@ -14746,11 +15061,18 @@ fn remote_worker_command_known(
     worker: &bridget_transport::protocol::WorkerIdentity,
     command: &bridget_transport::protocol::WorkerCommandIdentity,
 ) -> Result<bool, bridget_transport::protocol::WorkerRefusal> {
-    st.idempotency.spawn_command(&st.fleet.supervisor_scope(), &command.command_id)
-        .map(|known| known.is_some_and(|known|
-            known.remote_placement.as_ref().is_some_and(|placement| placement.matches_worker(worker))
-                && known.generation == command.generation
-                && known.instance_id.as_deref() == Some(command.instance_id.as_str())))
+    st.idempotency
+        .spawn_command(&st.fleet.supervisor_scope(), &command.command_id)
+        .map(|known| {
+            known.is_some_and(|known| {
+                known
+                    .remote_placement
+                    .as_ref()
+                    .is_some_and(|placement| placement.matches_worker(worker))
+                    && known.generation == command.generation
+                    && known.instance_id.as_deref() == Some(command.instance_id.as_str())
+            })
+        })
         .map_err(|_| bridget_transport::protocol::WorkerRefusal::StoreUnavailable)
 }
 
@@ -14792,7 +15114,8 @@ fn remote_worker_disconnected(st: &mut DaemonState, conn_id: &str) {
     invalidate_human_authority(st);
     st.pending_worker_responses
         .retain(|_, pending| pending.conn_id != conn_id);
-    st.pending_origin_proofs.retain(|_,pending|pending.conn_id!=conn_id);
+    st.pending_origin_proofs
+        .retain(|_, pending| pending.conn_id != conn_id);
     st.pending_candidate_probes
         .retain(|_, pending| pending.conn_id != conn_id);
     st.pending_candidate_probes_v2
@@ -14841,10 +15164,16 @@ fn handle_worker_message(
         _ => None,
     };
     let refused = |reason| {
-        if matches!(reason, WorkerRefusal::CommandMismatch | WorkerRefusal::StoreUnavailable) {
-            eprintln!("bridget_worker_refusal235 {}", serde_json::json!({
-                "reason":reason,"context":refused_context,
-            }));
+        if matches!(
+            reason,
+            WorkerRefusal::CommandMismatch | WorkerRefusal::StoreUnavailable
+        ) {
+            eprintln!(
+                "bridget_worker_refusal235 {}",
+                serde_json::json!({
+                    "reason":reason,"context":refused_context,
+                })
+            );
         }
         Some(DaemonToWrapper::WorkerRejected { reason })
     };
@@ -14864,12 +15193,31 @@ fn handle_worker_message(
                 && capabilities.iter().all(|capability| {
                     matches!(
                         capability,
-                        WorkerCapability::CandidateProbeV1 | WorkerCapability::CandidateProbeV2 | WorkerCapability::WorkloadToolsV1 | WorkerCapability::ReleaseLeaseV2 | WorkerCapability::ParentSourceProofV1 | WorkerCapability::ResultSlotDeadlineV1 | WorkerCapability::OriginProofV1 | WorkerCapability::OriginProjectContextV1 | WorkerCapability::WorkspaceRepairV1 | WorkerCapability::StartRecoveryV1 | WorkerCapability::WorkspaceFailureV1 | WorkerCapability::ProviderCatalogueV1 | WorkerCapability::ModelOptionsV1 | WorkerCapability::ProviderAccountsV1 | WorkerCapability::WorkspaceViewV1 | WorkerCapability::ExecutionStatusV1 | WorkerCapability::ProgramCompatibilityV1
+                        WorkerCapability::CandidateProbeV1
+                            | WorkerCapability::CandidateProbeV2
+                            | WorkerCapability::WorkloadToolsV1
+                            | WorkerCapability::ReleaseLeaseV2
+                            | WorkerCapability::ParentSourceProofV1
+                            | WorkerCapability::ResultSlotDeadlineV1
+                            | WorkerCapability::OriginProofV1
+                            | WorkerCapability::OriginProjectContextV1
+                            | WorkerCapability::WorkspaceRepairV1
+                            | WorkerCapability::StartRecoveryV1
+                            | WorkerCapability::WorkspaceFailureV1
+                            | WorkerCapability::ProviderCatalogueV1
+                            | WorkerCapability::ModelOptionsV1
+                            | WorkerCapability::ProviderAccountsV1
+                            | WorkerCapability::WorkspaceViewV1
+                            | WorkerCapability::ExecutionStatusV1
+                            | WorkerCapability::ProgramCompatibilityV1
                     ) || (crate::workspace_git::COMMIT_VIEW_LAUNCH_ENABLED
-                        && matches!(capability,WorkerCapability::WorkspaceViewCreateV1))
+                        && matches!(capability, WorkerCapability::WorkspaceViewCreateV1))
                 })
-                && capabilities.iter().enumerate().all(|(index, value)| !capabilities[..index].contains(value)))
-                .then(|| (hello.hello.clone(), capabilities))
+                && capabilities
+                    .iter()
+                    .enumerate()
+                    .all(|(index, value)| !capabilities[..index].contains(value)))
+            .then(|| (hello.hello.clone(), capabilities))
         }
         _ => None,
     };
@@ -14931,7 +15279,9 @@ fn handle_worker_message(
                 conn_id: conn_id.into(),
                 epoch: epoch.clone(),
                 capabilities: capabilities.clone(),
-                catalogues:HashMap::new(), catalogue_refresh_id:epoch.clone(), catalogue_refresh_at:None,
+                catalogues: HashMap::new(),
+                catalogue_refresh_id: epoch.clone(),
+                catalogue_refresh_at: None,
                 last_contact: Instant::now(),
                 last_contact_at: unix_now_secs(),
                 contact: WorkerContactState::Connected,
@@ -14944,7 +15294,8 @@ fn handle_worker_message(
             st.late_worker_prepares.forget_connection(previous);
             st.pending_worker_responses
                 .retain(|_, pending| &pending.conn_id != previous);
-            st.pending_origin_proofs.retain(|_,pending| &pending.conn_id != previous);
+            st.pending_origin_proofs
+                .retain(|_, pending| &pending.conn_id != previous);
             st.pending_candidate_probes
                 .retain(|_, pending| &pending.conn_id != previous);
             st.pending_candidate_probes_v2
@@ -14991,7 +15342,7 @@ fn handle_worker_message(
     };
     match message {
         WrapperToDaemon::ProviderCatalogueUpdate { update } => {
-            native_provider_catalogue220::ingest(&mut st,conn_id,update)
+            native_provider_catalogue220::ingest(&mut st, conn_id, update)
         }
         WrapperToDaemon::Heartbeat => {
             let worker = &st.remote_workers[&machine];
@@ -15045,28 +15396,45 @@ fn handle_worker_message(
                 // Un tuple historique exact, déjà connu de Fleet, ne modifie
                 // ni la tentative courante ni la connexion authentifiée.
                 if observation.phase == WorkerCommandPhase::Refused
-                    && remote_worker_has_command(&st,&response.worker,Some(&response.command))
-                    && st.delegation_store.get(&response.command.task_id).is_ok_and(|task|
-                        task.is_some_and(|task|
-                            native_delegation::remote_command_identity(&st,&task)
-                                .is_ok_and(|current|current != response.command)
-                            && task.start_recovery.as_ref().is_some_and(|plan|
-                                plan.previous == response.command || plan.history.iter().any(|old|
-                                    old.command == response.command)))) {
+                    && remote_worker_has_command(&st, &response.worker, Some(&response.command))
+                    && st
+                        .delegation_store
+                        .get(&response.command.task_id)
+                        .is_ok_and(|task| {
+                            task.is_some_and(|task| {
+                                native_delegation::remote_command_identity(&st, &task)
+                                    .is_ok_and(|current| current != response.command)
+                                    && task.start_recovery.as_ref().is_some_and(|plan| {
+                                        plan.previous == response.command
+                                            || plan
+                                                .history
+                                                .iter()
+                                                .any(|old| old.command == response.command)
+                                    })
+                            })
+                        })
+                {
                     // Même une ancienne observation peut être la réponse à une
                     // lecture déjà en vol. Ne jamais absorber son attente corrélée.
-                    if let Some(pending)=st.pending_worker_responses.get(&response.correlation_id) {
-                        if pending.conn_id!=conn_id || pending.epoch!=response.connection_epoch
-                            || pending.worker!=response.worker || pending.command!=response.command {
+                    if let Some(pending) = st.pending_worker_responses.get(&response.correlation_id)
+                    {
+                        if pending.conn_id != conn_id
+                            || pending.epoch != response.connection_epoch
+                            || pending.worker != response.worker
+                            || pending.command != response.command
+                        {
                             return refused(WorkerRefusal::CommandMismatch);
                         }
-                        let pending=st.pending_worker_responses.remove(&response.correlation_id).unwrap();
-                        let _=pending.reply.try_send(response.response);
+                        let pending = st
+                            .pending_worker_responses
+                            .remove(&response.correlation_id)
+                            .unwrap();
+                        let _ = pending.reply.try_send(response.response);
                     }
                     return None;
                 }
                 match remote_worker_command_known(&st, &response.worker, &response.command) {
-                    Ok(true) => {},
+                    Ok(true) => {}
                     Ok(false) => return refused(WorkerRefusal::CommandMismatch),
                     Err(reason) => return refused(reason),
                 }
@@ -15074,11 +15442,15 @@ fn handle_worker_message(
                 // comme task_id. Son tuple durable exact reste obligatoire ;
                 // une délégation existante garde son contrôle d’identité complet.
                 let command_matches = match st.delegation_store.get(&response.command.task_id) {
-                    Ok(Some(task)) => match native_delegation::remote_command_identity(&st, &task) {
-                        Ok(identity) => identity == response.command,
-                        Err(WorkerRefusal::StoreUnavailable) => return refused(WorkerRefusal::StoreUnavailable),
-                        Err(_) => false,
-                    },
+                    Ok(Some(task)) => {
+                        match native_delegation::remote_command_identity(&st, &task) {
+                            Ok(identity) => identity == response.command,
+                            Err(WorkerRefusal::StoreUnavailable) => {
+                                return refused(WorkerRefusal::StoreUnavailable);
+                            }
+                            Err(_) => false,
+                        }
+                    }
                     Ok(None) => response.command.task_id == response.command.command_id,
                     Err(_) => return refused(WorkerRefusal::StoreUnavailable),
                 };
@@ -15087,62 +15459,82 @@ fn handle_worker_message(
                 }
                 if let Some(failure) = observation.startup_failure
                     && let Ok(Some(mut task)) = st.delegation_store.get(&response.command.task_id)
-                        && task.state == "starting" && task.mission_issued_at.is_none() {
-                            let detail = match observation.exit_code {
-                                Some(code) => format!("remote_start_failed:{}:exit={code}", failure.code()),
-                                None => format!("remote_start_failed:{}", failure.code()),
-                            };
-                            task.error = Some(detail);
-                            if st.delegation_store.save(&task).is_err() {
-                                return refused(WorkerRefusal::StoreUnavailable);
-                            }
-                        }
+                    && task.state == "starting"
+                    && task.mission_issued_at.is_none()
+                {
+                    let detail = match observation.exit_code {
+                        Some(code) => format!("remote_start_failed:{}:exit={code}", failure.code()),
+                        None => format!("remote_start_failed:{}", failure.code()),
+                    };
+                    task.error = Some(detail);
+                    if st.delegation_store.save(&task).is_err() {
+                        return refused(WorkerRefusal::StoreUnavailable);
+                    }
+                }
                 if matches!(
                     observation.phase,
                     WorkerCommandPhase::Terminal | WorkerCommandPhase::Refused
-                )
-                    && let Some(lease) = st
-                        .managed_spawns
-                        .get(&response.command.command_id)
-                        .map(|record| record.lease.clone())
+                ) && let Some(lease) = st
+                    .managed_spawns
+                    .get(&response.command.command_id)
+                    .map(|record| record.lease.clone())
+                {
+                    if lease.instance_id != response.command.instance_id
+                        || lease.generation != response.command.generation
                     {
-                        if lease.instance_id != response.command.instance_id
-                            || lease.generation != response.command.generation
-                        {
-                            return refused(WorkerRefusal::CommandMismatch);
-                        }
-                        if st.fleet.invalidate_for_stop(&lease).is_err() {
-                            return refused(WorkerRefusal::StoreUnavailable);
-                        }
-                        st.managed_spawns.remove(&lease.command_id);
-                        st.managed_by_instance.remove(&lease.instance_id);
-                        st.remote_native_ready.remove(&lease.command_id);
-                        st.managed_terminal_instances.insert(lease.instance_id);
+                        return refused(WorkerRefusal::CommandMismatch);
                     }
+                    if st.fleet.invalidate_for_stop(&lease).is_err() {
+                        return refused(WorkerRefusal::StoreUnavailable);
+                    }
+                    st.managed_spawns.remove(&lease.command_id);
+                    st.managed_by_instance.remove(&lease.instance_id);
+                    st.remote_native_ready.remove(&lease.command_id);
+                    st.managed_terminal_instances.insert(lease.instance_id);
+                }
                 if observation.native_ready && observation.phase == WorkerCommandPhase::Released {
                     st.remote_native_ready
                         .insert(response.command.command_id.clone());
                     complete_remote_registration(&mut st, &response.command.command_id);
                 }
             }
-            if matches!(response.response,WorkerResponseOperation::CommitViewRejected{..})
-                && !st.remote_workers[&machine].capabilities.contains(&WorkerCapability::WorkspaceViewCreateV1) {
+            if matches!(
+                response.response,
+                WorkerResponseOperation::CommitViewRejected { .. }
+            ) && !st.remote_workers[&machine]
+                .capabilities
+                .contains(&WorkerCapability::WorkspaceViewCreateV1)
+            {
                 return refused(WorkerRefusal::CapabilityRequired);
             }
-            if matches!(response.response, WorkerResponseOperation::CommitViewConserved {..}|WorkerResponseOperation::CommitViewFile{..})
-                && !st.remote_workers[&machine].capabilities.contains(&WorkerCapability::WorkspaceViewV1) {
+            if matches!(
+                response.response,
+                WorkerResponseOperation::CommitViewConserved { .. }
+                    | WorkerResponseOperation::CommitViewFile { .. }
+            ) && !st.remote_workers[&machine]
+                .capabilities
+                .contains(&WorkerCapability::WorkspaceViewV1)
+            {
                 return refused(WorkerRefusal::CapabilityRequired);
             }
-            if matches!(response.response, WorkerResponseOperation::WorkspaceRejected {..})
-                && !st.remote_workers[&machine].capabilities.contains(&WorkerCapability::WorkspaceFailureV1) {
+            if matches!(
+                response.response,
+                WorkerResponseOperation::WorkspaceRejected { .. }
+            ) && !st.remote_workers[&machine]
+                .capabilities
+                .contains(&WorkerCapability::WorkspaceFailureV1)
+            {
                 return refused(WorkerRefusal::CapabilityRequired);
             }
             let Some(pending) = st.pending_worker_responses.get(&response.correlation_id) else {
                 if st.late_worker_prepares.ignores(conn_id, &response) {
-                    eprintln!("bridget_late_prepare240 {}", serde_json::json!({
+                    eprintln!(
+                        "bridget_late_prepare240 {}",
+                        serde_json::json!({
                         "machine_id": response.worker.machine_id,
                         "correlation_id": response.correlation_id,
-                        "event": "expired_prepare_response_ignored"}));
+                        "event": "expired_prepare_response_ignored"})
+                    );
                     return None;
                 }
                 // Une réponse de préparation tardive n'est pas une commande Fleet.
@@ -15150,27 +15542,66 @@ fn handle_worker_message(
                 // PrepareDiagnosed exclut PrepareFenced. L'unique Prepare initial
                 // émis par delegate_remote_with_routing porte command_id=task_id ;
                 // une autre commande sans preuve durable reste refusée.
-                if matches!(response.response, WorkerResponseOperation::WorkspaceRejected {..})
-                    && st.delegation_store.get(&response.command.task_id).ok().flatten()
-                        .is_some_and(|task| task.task_id == response.command.command_id
-                            && task.remote_placement.as_ref().is_some_and(|p| p.matches_worker(&response.worker))) {
+                if matches!(
+                    response.response,
+                    WorkerResponseOperation::WorkspaceRejected { .. }
+                ) && st
+                    .delegation_store
+                    .get(&response.command.task_id)
+                    .ok()
+                    .flatten()
+                    .is_some_and(|task| {
+                        task.task_id == response.command.command_id
+                            && task
+                                .remote_placement
+                                .as_ref()
+                                .is_some_and(|p| p.matches_worker(&response.worker))
+                    })
+                {
                     return None;
                 }
                 // ACK tardif de conservation : pas d'effet de Task ni preuve
                 // nouvelle. Seule une liaison connue exactement est tolérée.
-                if let WorkerResponseOperation::CommitViewConserved {prepare_digest}=&response.response
-                    && st.delegation_store.get(&response.command.task_id).ok().flatten()
-                        .is_some_and(|task|commit_view_conservation_matches(&task,&response.worker,&response.command,prepare_digest)) {
+                if let WorkerResponseOperation::CommitViewConserved { prepare_digest } =
+                    &response.response
+                    && st
+                        .delegation_store
+                        .get(&response.command.task_id)
+                        .ok()
+                        .flatten()
+                        .is_some_and(|task| {
+                            commit_view_conservation_matches(
+                                &task,
+                                &response.worker,
+                                &response.command,
+                                prepare_digest,
+                            )
+                        })
+                {
                     return None;
                 }
                 // Une conservation refusée après expiration n'a aucun effet. Le tuple
                 // doit encore désigner la vue exacte d'une tâche close, hors continuation.
                 if matches!(&response.response, WorkerResponseOperation::Rejected { .. })
-                    && st.remote_workers[&machine].capabilities.contains(&WorkerCapability::WorkspaceViewV1)
-                    && st.delegation_store.get(&response.command.task_id).ok().flatten()
-                        .is_some_and(|task|task.commit_view_binding().is_some_and(|binding|
-                            commit_view_conservation_matches(&task,&response.worker,&response.command,
-                                &binding.prepare_digest))) {
+                    && st.remote_workers[&machine]
+                        .capabilities
+                        .contains(&WorkerCapability::WorkspaceViewV1)
+                    && st
+                        .delegation_store
+                        .get(&response.command.task_id)
+                        .ok()
+                        .flatten()
+                        .is_some_and(|task| {
+                            task.commit_view_binding().is_some_and(|binding| {
+                                commit_view_conservation_matches(
+                                    &task,
+                                    &response.worker,
+                                    &response.command,
+                                    &binding.prepare_digest,
+                                )
+                            })
+                        })
+                {
                     return None;
                 }
                 // Une sonde sans attente ou une réponse tardive ne ferme pas le canal de sa commande connue.
@@ -15204,7 +15635,9 @@ fn handle_worker_message(
             let _ = pending.reply.try_send(response.response);
             None
         }
-        WrapperToDaemon::OriginProofResponse {response} => origin_proof::receive(&mut st,conn_id,response),
+        WrapperToDaemon::OriginProofResponse { response } => {
+            origin_proof::receive(&mut st, conn_id, response)
+        }
         WrapperToDaemon::CandidateProbeResult { result } => {
             let worker = &st.remote_workers[&machine];
             if !worker
@@ -15320,13 +15753,21 @@ fn commit_view_conservation_matches(
     command: &bridget_transport::protocol::WorkerCommandIdentity,
     prepare_digest: &str,
 ) -> bool {
-    task.terminal() && !task.continuation_guard_open()
-        && (task.workspace.is_none() || task.workspace_report_mission.as_deref()==Some(task.mission.as_str()))
+    task.terminal()
+        && !task.continuation_guard_open()
+        && (task.workspace.is_none()
+            || task.workspace_report_mission.as_deref() == Some(task.mission.as_str()))
         && (!task.guarded || task.guard_released)
-        && task.task_id==command.task_id
-        && task.remote_placement.as_ref().is_some_and(|p|p.matches_worker(worker))
-        && task.commit_view_binding().is_some_and(|binding|
-            binding.worker==*worker && binding.command==*command && binding.prepare_digest==prepare_digest)
+        && task.task_id == command.task_id
+        && task
+            .remote_placement
+            .as_ref()
+            .is_some_and(|p| p.matches_worker(worker))
+        && task.commit_view_binding().is_some_and(|binding| {
+            binding.worker == *worker
+                && binding.command == *command
+                && binding.prepare_digest == prepare_digest
+        })
 }
 
 fn remote_worker_roundtrip(
@@ -15339,7 +15780,9 @@ fn remote_worker_roundtrip(
     bridget_transport::protocol::WorkerResponseOperation,
     bridget_transport::protocol::WorkerRefusal,
 > {
-    remote_worker_roundtrip_with_send_deadline(state, worker, command, operation, deadline, deadline)
+    remote_worker_roundtrip_with_send_deadline(
+        state, worker, command, operation, deadline, deadline,
+    )
 }
 
 // The response budget must not retain the shared writer during a slow read-only probe.
@@ -15365,12 +15808,23 @@ fn remote_worker_roundtrip_with_send_deadline(
             .machines()
             .get(&worker.machine_id)
             .ok_or(WorkerRefusal::Unauthorized)?;
-        let conserving = if let WorkerRequestOperation::ConserveCommitView {prepare_digest}=&operation {
-            let known=st.delegation_store.get(&command.task_id).ok().flatten()
-                .is_some_and(|task|commit_view_conservation_matches(&task,worker,command,prepare_digest));
-            if !known {return Err(WorkerRefusal::Unauthorized);}
-            true
-        } else {false};
+        let conserving =
+            if let WorkerRequestOperation::ConserveCommitView { prepare_digest } = &operation {
+                let known = st
+                    .delegation_store
+                    .get(&command.task_id)
+                    .ok()
+                    .flatten()
+                    .is_some_and(|task| {
+                        commit_view_conservation_matches(&task, worker, command, prepare_digest)
+                    });
+                if !known {
+                    return Err(WorkerRefusal::Unauthorized);
+                }
+                true
+            } else {
+                false
+            };
         if !provision.enabled
             && matches!(
                 &operation,
@@ -15385,7 +15839,10 @@ fn remote_worker_roundtrip_with_send_deadline(
         {
             return Err(WorkerRefusal::Unauthorized);
         }
-        if !provision.enabled && !conserving && !remote_worker_has_command(&st, worker, Some(command)) {
+        if !provision.enabled
+            && !conserving
+            && !remote_worker_has_command(&st, worker, Some(command))
+        {
             return Err(WorkerRefusal::CommandMismatch);
         }
         if provision.worker_id != worker.worker_id
@@ -15404,7 +15861,10 @@ fn remote_worker_roundtrip_with_send_deadline(
             return Err(WorkerRefusal::WorkerUnavailable);
         }
         if matches!(&operation, WorkerRequestOperation::PrepareDiagnosed { .. })
-            && !session.capabilities.contains(&WorkerCapability::WorkspaceFailureV1) {
+            && !session
+                .capabilities
+                .contains(&WorkerCapability::WorkspaceFailureV1)
+        {
             return Err(WorkerRefusal::CapabilityRequired);
         }
         let routed_prepare = matches!(&operation, WorkerRequestOperation::PrepareV2 { .. })
@@ -15417,37 +15877,63 @@ fn remote_worker_roundtrip_with_send_deadline(
         {
             return Err(WorkerRefusal::CapabilityRequired);
         }
-        if matches!(&operation,WorkerRequestOperation::ExecutionStatus {})
-            && !session.capabilities.contains(&WorkerCapability::ExecutionStatusV1) {
+        if matches!(&operation, WorkerRequestOperation::ExecutionStatus {})
+            && !session
+                .capabilities
+                .contains(&WorkerCapability::ExecutionStatusV1)
+        {
             return Err(WorkerRefusal::CapabilityRequired);
         }
         if operation.requires_provider_accounts()
-            && !session.capabilities.contains(&WorkerCapability::ProviderAccountsV1) {
+            && !session
+                .capabilities
+                .contains(&WorkerCapability::ProviderAccountsV1)
+        {
             return Err(WorkerRefusal::CapabilityRequired);
         }
         if operation.requires_model_options()
-            && !session.capabilities.contains(&WorkerCapability::ModelOptionsV1) {
+            && !session
+                .capabilities
+                .contains(&WorkerCapability::ModelOptionsV1)
+        {
             return Err(WorkerRefusal::CapabilityRequired);
         }
         if operation.requires_commit_view_creation()
             && (!crate::workspace_git::COMMIT_VIEW_LAUNCH_ENABLED
-                || !session.capabilities.contains(&WorkerCapability::WorkspaceViewCreateV1)) {
+                || !session
+                    .capabilities
+                    .contains(&WorkerCapability::WorkspaceViewCreateV1))
+        {
             return Err(WorkerRefusal::CapabilityRequired);
         }
         if operation.requires_commit_view_reader()
-            && !session.capabilities.contains(&WorkerCapability::WorkspaceViewV1) {
+            && !session
+                .capabilities
+                .contains(&WorkerCapability::WorkspaceViewV1)
+        {
             return Err(WorkerRefusal::CapabilityRequired);
         }
         if matches!(&operation, WorkerRequestOperation::RepairWorkspace { .. })
-            && !session.capabilities.contains(&WorkerCapability::WorkspaceRepairV1) {
+            && !session
+                .capabilities
+                .contains(&WorkerCapability::WorkspaceRepairV1)
+        {
             return Err(WorkerRefusal::CapabilityRequired);
         }
         if matches!(&operation, WorkerRequestOperation::ParentSourceProof { .. })
-            && !session.capabilities.contains(&WorkerCapability::ParentSourceProofV1) {
+            && !session
+                .capabilities
+                .contains(&WorkerCapability::ParentSourceProofV1)
+        {
             return Err(WorkerRefusal::CapabilityRequired);
         }
-        if matches!(&operation, WorkerRequestOperation::ReserveResultSlotUntil { .. })
-            && !session.capabilities.contains(&WorkerCapability::ResultSlotDeadlineV1) {
+        if matches!(
+            &operation,
+            WorkerRequestOperation::ReserveResultSlotUntil { .. }
+        ) && !session
+            .capabilities
+            .contains(&WorkerCapability::ResultSlotDeadlineV1)
+        {
             return Err(WorkerRefusal::CapabilityRequired);
         }
         // Reprise198 : un ancien pair ne reçoit jamais ces enveloppes.
@@ -15456,7 +15942,9 @@ fn remote_worker_roundtrip_with_send_deadline(
             WorkerRequestOperation::StartDetailed { .. }
                 | WorkerRequestOperation::FenceUnstarted { .. }
                 | WorkerRequestOperation::PrepareFenced { .. }
-        ) && !session.capabilities.contains(&WorkerCapability::StartRecoveryV1)
+        ) && !session
+            .capabilities
+            .contains(&WorkerCapability::StartRecoveryV1)
         {
             return Err(WorkerRefusal::CapabilityRequired);
         }
@@ -15514,10 +16002,19 @@ fn remote_worker_roundtrip_with_send_deadline(
     st.pending_worker_responses.remove(&correlation_id);
     // Un contact périmé peut avoir retiré l'attente sans fermer le socket.
     // L'histoire exige toujours une requête écrite et la même connexion/époque.
-    if written && initial_prepare && response.is_none() && st.connections.contains_key(&conn_id)
-        && st.remote_workers.get(&worker.machine_id).is_some_and(|current|
-            current.conn_id == conn_id && current.epoch == epoch && current.identity == *worker) {
-        st.late_worker_prepares.remember(correlation_id.clone(), &conn_id, &epoch, worker, command);
+    if written
+        && initial_prepare
+        && response.is_none()
+        && st.connections.contains_key(&conn_id)
+        && st
+            .remote_workers
+            .get(&worker.machine_id)
+            .is_some_and(|current| {
+                current.conn_id == conn_id && current.epoch == epoch && current.identity == *worker
+            })
+    {
+        st.late_worker_prepares
+            .remember(correlation_id.clone(), &conn_id, &epoch, worker, command);
     }
     if !st
         .remote_workers
@@ -15688,23 +16185,46 @@ fn remote_candidate_probe_v2(
         {
             return Err(WorkerRefusal::CapabilityRequired);
         }
-        if probe.candidates.iter().any(|candidate|
-            st.registry.get(&candidate.agent_type).is_ok_and(|definition|definition.capabilities.account_profiles))
-            && !session.capabilities.contains(&WorkerCapability::ProviderAccountsV1) {
+        if probe.candidates.iter().any(|candidate| {
+            st.registry
+                .get(&candidate.agent_type)
+                .is_ok_and(|definition| definition.capabilities.account_profiles)
+        }) && !session
+            .capabilities
+            .contains(&WorkerCapability::ProviderAccountsV1)
+        {
             return Err(WorkerRefusal::CapabilityRequired);
         }
-        if !probe.required_tools.is_empty() && !session.capabilities.contains(&WorkerCapability::WorkloadToolsV1) {
+        if !probe.required_tools.is_empty()
+            && !session
+                .capabilities
+                .contains(&WorkerCapability::WorkloadToolsV1)
+        {
             return Err(WorkerRefusal::CapabilityRequired);
         }
-        if probe.candidates.iter().any(|candidate|candidate.service_tier.is_some())
-            && !session.capabilities.contains(&WorkerCapability::ModelOptionsV1) {
+        if probe
+            .candidates
+            .iter()
+            .any(|candidate| candidate.service_tier.is_some())
+            && !session
+                .capabilities
+                .contains(&WorkerCapability::ModelOptionsV1)
+        {
             return Err(WorkerRefusal::CapabilityRequired);
         }
-        if probe.candidates.iter().any(|candidate|matches!(candidate.workspace,
-            Some(bridget_transport::protocol::WorkspaceRequest::CommitView{})))
-            && (!crate::workspace_git::COMMIT_VIEW_LAUNCH_ENABLED
-                || !session.capabilities.contains(&WorkerCapability::WorkspaceViewCreateV1)
-                || !session.capabilities.contains(&WorkerCapability::WorkspaceViewV1)) {
+        if probe.candidates.iter().any(|candidate| {
+            matches!(
+                candidate.workspace,
+                Some(bridget_transport::protocol::WorkspaceRequest::CommitView {})
+            )
+        }) && (!crate::workspace_git::COMMIT_VIEW_LAUNCH_ENABLED
+            || !session
+                .capabilities
+                .contains(&WorkerCapability::WorkspaceViewCreateV1)
+            || !session
+                .capabilities
+                .contains(&WorkerCapability::WorkspaceViewV1))
+        {
             return Err(WorkerRefusal::CapabilityRequired);
         }
         if session.identity != probe.worker
@@ -15780,11 +16300,7 @@ fn handle_wrapper_message(
 }
 
 fn update_activity(state: &Arc<Mutex<DaemonState>>) -> Option<crate::updates::Activity> {
-    let gate = state
-        .lock()
-        .recover_poison()
-        .update_gate
-        .clone();
+    let gate = state.lock().recover_poison().update_gate.clone();
     gate.enter()
 }
 fn update_exempt(msg: &WrapperToDaemon) -> bool {
@@ -15836,7 +16352,7 @@ fn handle_wrapper_message_with_peer(
         return Some(mobile_operations::handle(conn_id, request.clone(), state));
     }
     if let WrapperToDaemon::MobileAdministration { request } = &msg {
-        return Some(mobile_admin::handle(conn_id,request.clone(),state));
+        return Some(mobile_admin::handle(conn_id, request.clone(), state));
     }
     if let WrapperToDaemon::HumanLineage { request } = &msg {
         return native_lineage::handle(conn_id, request, state);
@@ -15948,12 +16464,7 @@ fn handle_wrapper_message_with_peer(
         return Some(DaemonToWrapper::RoleAccepted { role: *role });
     }
 
-    if state
-        .lock()
-        .recover_poison()
-        .connection_roles
-        .get(conn_id)
-        == Some(&ConnectionRole::Worker)
+    if state.lock().recover_poison().connection_roles.get(conn_id) == Some(&ConnectionRole::Worker)
     {
         return handle_worker_message(state, conn_id, msg);
     }
@@ -16013,8 +16524,8 @@ fn handle_wrapper_message_with_peer(
         | WrapperToDaemon::WorkerResponse { .. }
         | WrapperToDaemon::CandidateProbeResult { .. }
         | WrapperToDaemon::CandidateProbeResultV2 { .. }
-                | WrapperToDaemon::ProviderCatalogueUpdate { .. }
-                | WrapperToDaemon::OriginProofResponse { .. } => Some(DaemonToWrapper::WorkerRejected {
+        | WrapperToDaemon::ProviderCatalogueUpdate { .. }
+        | WrapperToDaemon::OriginProofResponse { .. } => Some(DaemonToWrapper::WorkerRejected {
             reason: bridget_transport::protocol::WorkerRefusal::Unauthorized,
         }),
         WrapperToDaemon::WakeRequest { request } => Some(handle_wake_request(
@@ -16029,7 +16540,15 @@ fn handle_wrapper_message_with_peer(
             action,
             message_id,
             before_message_id,
-        } => wrapper_dispatch::on_queue_edit_request(request_id, target, action, message_id, before_message_id, conn_id, state),
+        } => wrapper_dispatch::on_queue_edit_request(
+            request_id,
+            target,
+            action,
+            message_id,
+            before_message_id,
+            conn_id,
+            state,
+        ),
         WrapperToDaemon::QueueList { target } => {
             let st = state.lock().recover_poison();
             Some(handle_guidance_queue(&st, conn_id, &target))
@@ -16047,7 +16566,9 @@ fn handle_wrapper_message_with_peer(
             &host,
             worktree_root.as_deref(),
         )),
-        WrapperToDaemon::DirectoryScoped { scope } => wrapper_dispatch::on_directory_scoped(scope, conn_id, state),
+        WrapperToDaemon::DirectoryScoped { scope } => {
+            wrapper_dispatch::on_directory_scoped(scope, conn_id, state)
+        }
         WrapperToDaemon::ObservationGap { dropped } => {
             use bridget_transport::protocol::ObservationKind;
             let mut st = state.lock().recover_poison();
@@ -16067,7 +16588,10 @@ fn handle_wrapper_message_with_peer(
             queue_observation_notifications(&mut st, notices);
             None
         }
-        WrapperToDaemon::ObservationCapabilities { events, runtime_catalogue } => {
+        WrapperToDaemon::ObservationCapabilities {
+            events,
+            runtime_catalogue,
+        } => {
             let mut st = state.lock().recover_poison();
             let Some((agent, instance)) = live_connection_identity(&st, conn_id) else {
                 return Some(DaemonToWrapper::Nack {
@@ -16087,8 +16611,12 @@ fn handle_wrapper_message_with_peer(
                     reason: "invalid_primary_capabilities".into(),
                 });
             }
-            if runtime_catalogue {st.runtime_catalogue_connections.insert(conn_id.into(),(agent.clone(),instance));}
-            else {st.runtime_catalogue_connections.remove(conn_id);}
+            if runtime_catalogue {
+                st.runtime_catalogue_connections
+                    .insert(conn_id.into(), (agent.clone(), instance));
+            } else {
+                st.runtime_catalogue_connections.remove(conn_id);
+            }
             st.observations
                 .set_source(conn_id, &agent, events, Instant::now());
             None
@@ -16125,7 +16653,9 @@ fn handle_wrapper_message_with_peer(
             }
             None
         }
-        WrapperToDaemon::ThreadRequest { request } => wrapper_dispatch::on_thread_request(request, conn_id, state),
+        WrapperToDaemon::ThreadRequest { request } => {
+            wrapper_dispatch::on_thread_request(request, conn_id, state)
+        }
         // Session 104 : lecture seule hors verrou. Identité et permis sous
         // verrou bref ; SQL et repli sur le thread de connexion ; identité
         // revérifiée avant publication ; permis relâché par RAII.
@@ -16165,8 +16695,12 @@ fn handle_wrapper_message_with_peer(
             };
             Some(DaemonToWrapper::LedgerReadResult { outcome })
         }
-        WrapperToDaemon::ObservationRequest { request } => wrapper_dispatch::on_observation_request(request, conn_id, state),
-        WrapperToDaemon::ObservedActivity { seq, event, file } => wrapper_dispatch::on_observed_activity(seq, event, file, conn_id, state),
+        WrapperToDaemon::ObservationRequest { request } => {
+            wrapper_dispatch::on_observation_request(request, conn_id, state)
+        }
+        WrapperToDaemon::ObservedActivity { seq, event, file } => {
+            wrapper_dispatch::on_observed_activity(seq, event, file, conn_id, state)
+        }
         WrapperToDaemon::RoleHandshake { .. } => unreachable!("handshake traité avant le dispatch"),
         WrapperToDaemon::DelegationOverviewRead {
             version,
@@ -16296,7 +16830,12 @@ fn handle_wrapper_message_with_peer(
         WrapperToDaemon::ArtifactPublish {
             contract_version,
             canonical_publication,
-        } => wrapper_dispatch::on_artifact_publish(contract_version, canonical_publication, conn_id, state),
+        } => wrapper_dispatch::on_artifact_publish(
+            contract_version,
+            canonical_publication,
+            conn_id,
+            state,
+        ),
         // Surface historique fermée : aucun moteur, aucune écriture de
         // projet. Les données de liaison restent seulement l'autorité ACL des
         // contenus déjà publiés, jamais une autorisation de lancer sur l'hôte.
@@ -16354,7 +16893,14 @@ fn handle_wrapper_message_with_peer(
             kind,
             code,
             reference,
-        } => wrapper_dispatch::on_delegated_runtime_event(execution_id, kind, code, reference, conn_id, state),
+        } => wrapper_dispatch::on_delegated_runtime_event(
+            execution_id,
+            kind,
+            code,
+            reference,
+            conn_id,
+            state,
+        ),
         WrapperToDaemon::DelegatedRuntimeEventAcknowledged { event_id } => {
             let (parent_instance_id, fleet) = {
                 let st = state.lock().recover_poison();
@@ -16386,7 +16932,14 @@ fn handle_wrapper_message_with_peer(
             service,
             issuer_scope,
             capabilities,
-        } => wrapper_dispatch::on_service_hello(version, service, issuer_scope, capabilities, conn_id, state),
+        } => wrapper_dispatch::on_service_hello(
+            version,
+            service,
+            issuer_scope,
+            capabilities,
+            conn_id,
+            state,
+        ),
         WrapperToDaemon::CoordinationSubscribe {
             version,
             after_cursor,
@@ -16400,7 +16953,18 @@ fn handle_wrapper_message_with_peer(
             to,
             operation,
             payload,
-        } => wrapper_dispatch::on_service_request(version, issuer_scope, request_id, issued_at, from, to, operation, payload, conn_id, state),
+        } => wrapper_dispatch::on_service_request(
+            version,
+            issuer_scope,
+            request_id,
+            issued_at,
+            from,
+            to,
+            operation,
+            payload,
+            conn_id,
+            state,
+        ),
         WrapperToDaemon::GuichetClaimNext { version } => {
             if version != SERVICE_CONTRACT_VERSION {
                 return Some(DaemonToWrapper::ServiceRejected {
@@ -16486,12 +17050,30 @@ fn handle_wrapper_message_with_peer(
             in_reply_to,
             outcome,
             payload,
-        } => wrapper_dispatch::on_guichet_reply(version, issuer_scope, request_id, claim_generation, claim_token, response_message_id, in_reply_to, outcome, payload, conn_id, state),
+        } => wrapper_dispatch::on_guichet_reply(
+            version,
+            issuer_scope,
+            request_id,
+            claim_generation,
+            claim_token,
+            response_message_id,
+            in_reply_to,
+            outcome,
+            payload,
+            conn_id,
+            state,
+        ),
         WrapperToDaemon::ClientHello {
             contract_version,
             issuer_scope,
             capabilities,
-        } => wrapper_dispatch::on_client_hello(contract_version, issuer_scope, capabilities, conn_id, state),
+        } => wrapper_dispatch::on_client_hello(
+            contract_version,
+            issuer_scope,
+            capabilities,
+            conn_id,
+            state,
+        ),
         WrapperToDaemon::RegisterAuxiliary {
             agent_id,
             instance_id,
@@ -16568,7 +17150,15 @@ fn handle_wrapper_message_with_peer(
             execution_id,
             accepted,
             refusal_reason,
-        } => wrapper_dispatch::on_control_execution_reported(issuer_scope, command_id, execution_id, accepted, refusal_reason, conn_id, state),
+        } => wrapper_dispatch::on_control_execution_reported(
+            issuer_scope,
+            command_id,
+            execution_id,
+            accepted,
+            refusal_reason,
+            conn_id,
+            state,
+        ),
         WrapperToDaemon::DeliverAcked {
             delivery_id,
             delivery_generation,
@@ -16579,7 +17169,12 @@ fn handle_wrapper_message_with_peer(
         WrapperToDaemon::DeliveryIndeterminate {
             delivery_id,
             delivery_generation,
-        } => wrapper_dispatch::on_delivery_indeterminate(delivery_id, delivery_generation, conn_id, state),
+        } => wrapper_dispatch::on_delivery_indeterminate(
+            delivery_id,
+            delivery_generation,
+            conn_id,
+            state,
+        ),
         WrapperToDaemon::RequestWait {
             request_id,
             wait_timeout,
@@ -16591,22 +17186,25 @@ fn handle_wrapper_message_with_peer(
             peer,
             Duration::from_secs(5),
         )),
-        WrapperToDaemon::NativeDelegation { request } => {
-            Some(native_delegation::handle_with_peer(
+        WrapperToDaemon::NativeDelegation { request } => Some(native_delegation::handle_with_peer(
             conn_id, request, state, peer,
-        ))
-        },
-        WrapperToDaemon::NativeDelegationT3 { request, proof } => {
-            Some(
+        )),
+        WrapperToDaemon::NativeDelegationT3 { request, proof } => Some(
             native_delegation::handle_attested(conn_id, request, &proof, state, peer),
-        )
-        },
+        ),
         WrapperToDaemon::NativePermissionFact {
             fact,
             request_id,
             observation_id,
             unavailable_code,
-        } => wrapper_dispatch::on_native_permission_fact(fact, request_id, observation_id, unavailable_code, conn_id, state),
+        } => wrapper_dispatch::on_native_permission_fact(
+            fact,
+            request_id,
+            observation_id,
+            unavailable_code,
+            conn_id,
+            state,
+        ),
         WrapperToDaemon::SpawnOrder {
             posture,
             agent_type,
@@ -16618,7 +17216,20 @@ fn handle_wrapper_message_with_peer(
             issued_at,
             deadline_at,
             ownership,
-        } => wrapper_dispatch::on_spawn_order(posture, agent_type, project, agent_id, cwd, persistent, command_id, issued_at, deadline_at, ownership, conn_id, state),
+        } => wrapper_dispatch::on_spawn_order(
+            posture,
+            agent_type,
+            project,
+            agent_id,
+            cwd,
+            persistent,
+            command_id,
+            issued_at,
+            deadline_at,
+            ownership,
+            conn_id,
+            state,
+        ),
         WrapperToDaemon::StopOrder {
             agent_id: name,
             command_id,
@@ -16645,9 +17256,15 @@ fn handle_wrapper_message_with_peer(
             agent_id: name,
             command_id,
         } => wrapper_dispatch::on_adopt_stopped_order(name, command_id, state),
-        WrapperToDaemon::Subscribe { agent, window } => wrapper_dispatch::on_subscribe(agent, window, conn_id, state),
-        WrapperToDaemon::Unsubscribe { subscription_id } => wrapper_dispatch::on_unsubscribe(subscription_id, conn_id, state),
-        WrapperToDaemon::Subscribed { subscription_id } => wrapper_dispatch::on_subscribed(subscription_id, conn_id, state),
+        WrapperToDaemon::Subscribe { agent, window } => {
+            wrapper_dispatch::on_subscribe(agent, window, conn_id, state)
+        }
+        WrapperToDaemon::Unsubscribe { subscription_id } => {
+            wrapper_dispatch::on_unsubscribe(subscription_id, conn_id, state)
+        }
+        WrapperToDaemon::Subscribed { subscription_id } => {
+            wrapper_dispatch::on_subscribed(subscription_id, conn_id, state)
+        }
         WrapperToDaemon::AttachRejected {
             subscription_id,
             reason,
@@ -16728,7 +17345,14 @@ fn handle_wrapper_message_with_peer(
             offset,
             final_fragment,
             bytes,
-        } => wrapper_dispatch::on_live_journal_fragment(seq, offset, final_fragment, bytes, conn_id, state),
+        } => wrapper_dispatch::on_live_journal_fragment(
+            seq,
+            offset,
+            final_fragment,
+            bytes,
+            conn_id,
+            state,
+        ),
         WrapperToDaemon::SnapshotCaughtUp {
             subscription_id,
             through_seq,
@@ -16775,7 +17399,25 @@ fn handle_wrapper_message_with_peer(
             journal_available,
             turn_attest,
             queue_fallback,
-        } => wrapper_dispatch::on_register(identity_version, agent_type, agent_id, host, transport, channel, mode, location, os, instance_id, domain, turn_in_progress, journal_available, turn_attest, queue_fallback, conn_id, state),
+        } => wrapper_dispatch::on_register(
+            identity_version,
+            agent_type,
+            agent_id,
+            host,
+            transport,
+            channel,
+            mode,
+            location,
+            os,
+            instance_id,
+            domain,
+            turn_in_progress,
+            journal_available,
+            turn_attest,
+            queue_fallback,
+            conn_id,
+            state,
+        ),
 
         WrapperToDaemon::DiskSpace { fact } => {
             let mut st = state.lock().recover_poison();
@@ -16799,7 +17441,9 @@ fn handle_wrapper_message_with_peer(
             None
         }
 
-        WrapperToDaemon::JournalReady { receipt_probe } => wrapper_dispatch::on_journal_ready(receipt_probe, conn_id, state),
+        WrapperToDaemon::JournalReady { receipt_probe } => {
+            wrapper_dispatch::on_journal_ready(receipt_probe, conn_id, state)
+        }
 
         WrapperToDaemon::TerminalSessionReady => {
             let mut st = state.lock().recover_poison();
@@ -16858,11 +17502,15 @@ fn handle_wrapper_message_with_peer(
             }
             None
         }
-        WrapperToDaemon::RuntimeCatalogueReported{token,outcome}=>{
-            let mut st=state.lock().recover_poison();
-            if st.pending_runtime_catalogues.get(&token).is_some_and(|(target,_)|target==conn_id)
-                && let Some((_,sender))=st.pending_runtime_catalogues.remove(&token) {
-                let _=sender.send(outcome);
+        WrapperToDaemon::RuntimeCatalogueReported { token, outcome } => {
+            let mut st = state.lock().recover_poison();
+            if st
+                .pending_runtime_catalogues
+                .get(&token)
+                .is_some_and(|(target, _)| target == conn_id)
+                && let Some((_, sender)) = st.pending_runtime_catalogues.remove(&token)
+            {
+                let _ = sender.send(outcome);
             }
             None
         }
@@ -16879,16 +17527,18 @@ fn handle_wrapper_message_with_peer(
             None
         }
 
-        WrapperToDaemon::TurnState { in_progress } => wrapper_dispatch::on_turn_state(in_progress, conn_id, state),
+        WrapperToDaemon::TurnState { in_progress } => {
+            wrapper_dispatch::on_turn_state(in_progress, conn_id, state)
+        }
 
         WrapperToDaemon::ExecutionStateChanged { transition } => {
             let mut st = state.lock().recover_poison();
             handle_execution_transition(conn_id, transition, &mut st)
         }
 
-        WrapperToDaemon::WorkspaceRepairResult {task_id,status} => {
-            let mut st=state.lock().recover_poison();
-            native_delegation::workspace_repair::response(&mut st,conn_id,&task_id,status);
+        WrapperToDaemon::WorkspaceRepairResult { task_id, status } => {
+            let mut st = state.lock().recover_poison();
+            native_delegation::workspace_repair::response(&mut st, conn_id, &task_id, status);
             None
         }
         WrapperToDaemon::ExecutionProviderObserved { context } => {
@@ -16896,11 +17546,15 @@ fn handle_wrapper_message_with_peer(
             handle_execution_provider_context(conn_id, context, &mut st)
         }
 
-        WrapperToDaemon::DaemonIdentityRequest => wrapper_dispatch::on_daemon_identity_request(state),
+        WrapperToDaemon::DaemonIdentityRequest => {
+            wrapper_dispatch::on_daemon_identity_request(state)
+        }
 
         WrapperToDaemon::SentinelStatusRead => {
-            let path={state.lock().recover_poison().db_path.clone()};
-            Some(DaemonToWrapper::SentinelStatus { report:crate::sentinel244::status(path.parent().unwrap()) })
+            let path = { state.lock().recover_poison().db_path.clone() };
+            Some(DaemonToWrapper::SentinelStatus {
+                report: crate::sentinel244::status(path.parent().unwrap()),
+            })
         }
 
         WrapperToDaemon::ListAgents => {
@@ -16908,8 +17562,12 @@ fn handle_wrapper_message_with_peer(
             let agents = st.agent_infos();
             Some(DaemonToWrapper::AgentList { agents })
         }
-        WrapperToDaemon::DisplayNameResolve { request } => wrapper_dispatch::on_display_name_resolve(request, state),
-        WrapperToDaemon::DisplayNameSet { request } => wrapper_dispatch::on_display_name_set(request, conn_id, state),
+        WrapperToDaemon::DisplayNameResolve { request } => {
+            wrapper_dispatch::on_display_name_resolve(request, state)
+        }
+        WrapperToDaemon::DisplayNameSet { request } => {
+            wrapper_dispatch::on_display_name_set(request, conn_id, state)
+        }
         WrapperToDaemon::Runtime {
             agent,
             model,
@@ -17036,16 +17694,36 @@ fn handle_wrapper_message_with_peer(
             reason,
             execution_id,
             generation,
-        } => wrapper_dispatch::on_delivery_rejected(id, reason, execution_id, generation, conn_id, state),
+        } => wrapper_dispatch::on_delivery_rejected(
+            id,
+            reason,
+            execution_id,
+            generation,
+            conn_id,
+            state,
+        ),
 
-        WrapperToDaemon::CancelRequest { id, sender, reason } => wrapper_dispatch::on_cancel_request(id, sender, reason, conn_id, state),
+        WrapperToDaemon::CancelRequest { id, sender, reason } => {
+            wrapper_dispatch::on_cancel_request(id, sender, reason, conn_id, state)
+        }
 
-        WrapperToDaemon::ListRequests { sender, limit } => wrapper_dispatch::on_list_requests(sender, limit, state),
+        WrapperToDaemon::ListRequests { sender, limit } => {
+            wrapper_dispatch::on_list_requests(sender, limit, state)
+        }
 
-        WrapperToDaemon::UserInput { request } => Some(user_input::handle(conn_id, &request, state, None)),
+        WrapperToDaemon::UserInput { request } => {
+            Some(user_input::handle(conn_id, &request, state, None))
+        }
         WrapperToDaemon::ChildRequest { request } => {
-            let primary={let st=state.lock().recover_poison();user_input::primary_request(conn_id,&request,&st)};
-            if primary {Some(user_input::receive_native(conn_id,request,state))}else{native_child_requests::receive(conn_id, request, state)}
+            let primary = {
+                let st = state.lock().recover_poison();
+                user_input::primary_request(conn_id, &request, &st)
+            };
+            if primary {
+                Some(user_input::receive_native(conn_id, request, state))
+            } else {
+                native_child_requests::receive(conn_id, request, state)
+            }
         }
         WrapperToDaemon::ChildRequestAnswered {
             request_id,
@@ -17053,7 +17731,9 @@ fn handle_wrapper_message_with_peer(
             reason,
         } => {
             let st = state.lock().recover_poison();
-            if user_input::native_ack(conn_id,&request_id,Some(applied),None,&st){return None;}
+            if user_input::native_ack(conn_id, &request_id, Some(applied), None, &st) {
+                return None;
+            }
             native_child_requests::acknowledged(
                 conn_id,
                 &request_id,
@@ -17068,13 +17748,18 @@ fn handle_wrapper_message_with_peer(
             state: closed_state,
         } => {
             let st = state.lock().recover_poison();
-            if user_input::native_ack(conn_id,&request_id,None,Some(closed_state),&st){return None;}
+            if user_input::native_ack(conn_id, &request_id, None, Some(closed_state), &st) {
+                return None;
+            }
             native_child_requests::closed(conn_id, &request_id, closed_state, &st);
             None
         }
 
         // Le contrôle de rôle mobile est exécuté avant cette matrice.
-        WrapperToDaemon::AgentTracking { .. } | WrapperToDaemon::Specialists { .. } | WrapperToDaemon::MobileAdministration { .. } | WrapperToDaemon::MobileOperation { .. } => None,
+        WrapperToDaemon::AgentTracking { .. }
+        | WrapperToDaemon::Specialists { .. }
+        | WrapperToDaemon::MobileAdministration { .. }
+        | WrapperToDaemon::MobileOperation { .. } => None,
         WrapperToDaemon::LedgerProjection { scope, limit } => {
             let st = state.lock().recover_poison();
             match crate::ledger::read_projection(&st.store, scope, usize::from(limit)) {
@@ -18313,33 +18998,56 @@ fn spec_068_register_rejoue_apres_registered_les_incidents_delegues_en_ordre() {
 fn spec172_auxiliary_scope_excludes_runtime_replay_without_losing_parent_notice() {
     use crate::idempotency::{AgentLinkRecord, AgentLinkState, DelegatedRuntimeEventInput};
     use bridget_transport::protocol::{DelegatedRuntimeEventKind, NativeDelegationRequest};
-    for kind in [DelegatedRuntimeEventKind::Warning, DelegatedRuntimeEventKind::Failed] {
-        let (mut state, config) = presence_tests::state_with_registered_agent("spec172-scope-replay");
+    for kind in [
+        DelegatedRuntimeEventKind::Warning,
+        DelegatedRuntimeEventKind::Failed,
+    ] {
+        let (mut state, config) =
+            presence_tests::state_with_registered_agent("spec172-scope-replay");
         state.conn_counter = 1;
         let agent = state.conn_names["conn-1"].clone();
         let credential = state.identity_credentials["conn-1"].clone();
-        state.idempotency.create_agent_link(&AgentLinkRecord {
-            link_id: "link-scope172".into(),
-            parent_instance_id: "instance-1".into(),
-            child_instance_id: "child-scope172".into(),
-            parent_execution_id: None, objective_id: None, delegation_id: None,
-            project: None, role: "worker".into(),
-            agent_path: "instance-1/child-scope172".into(),
-            state: AgentLinkState::Reserved, created_at: 1_700_000_000,
-            closed_at: None, revision: 0,
-        }).unwrap();
-        let event = state.fleet.record_delegated_runtime_event(DelegatedRuntimeEventInput {
-            child_instance_id: "child-scope172".into(),
-            child_execution_id: "execution-scope172".into(),
-            kind, code: if kind == DelegatedRuntimeEventKind::Failed {
-                "provider_failed".into()
-            } else { "unsupported_provider_request".into() },
-            reference: format!("sha256:{}", "e".repeat(64)), observed_at: 1_700_000_001,
-        }).unwrap();
+        state
+            .idempotency
+            .create_agent_link(&AgentLinkRecord {
+                link_id: "link-scope172".into(),
+                parent_instance_id: "instance-1".into(),
+                child_instance_id: "child-scope172".into(),
+                parent_execution_id: None,
+                objective_id: None,
+                delegation_id: None,
+                project: None,
+                role: "worker".into(),
+                agent_path: "instance-1/child-scope172".into(),
+                state: AgentLinkState::Reserved,
+                created_at: 1_700_000_000,
+                closed_at: None,
+                revision: 0,
+            })
+            .unwrap();
+        let event = state
+            .fleet
+            .record_delegated_runtime_event(DelegatedRuntimeEventInput {
+                child_instance_id: "child-scope172".into(),
+                child_execution_id: "execution-scope172".into(),
+                kind,
+                code: if kind == DelegatedRuntimeEventKind::Failed {
+                    "provider_failed".into()
+                } else {
+                    "unsupported_provider_request".into()
+                },
+                reference: format!("sha256:{}", "e".repeat(64)),
+                observed_at: 1_700_000_001,
+            })
+            .unwrap();
         let (parent_writer, parent_peer) = UnixStream::pair().unwrap();
-        parent_peer.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
-        state.connections.insert("conn-1".into(),
-            Arc::new(Mutex::new(BufWriter::new(parent_writer))));
+        parent_peer
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        state.connections.insert(
+            "conn-1".into(),
+            Arc::new(Mutex::new(BufWriter::new(parent_writer))),
+        );
         let shared = Arc::new(Mutex::new(state));
         let listener = UnixListener::bind(&config.socket_path).unwrap();
         let serving = Arc::clone(&shared);
@@ -18348,46 +19056,88 @@ fn spec172_auxiliary_scope_excludes_runtime_replay_without_losing_parent_notice(
             handle_connection(stream, serving).unwrap();
         });
         let stream = UnixStream::connect(&config.socket_path).unwrap();
-        stream.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
         let mut reader = BufReader::new(stream.try_clone().unwrap());
         let mut writer = BufWriter::new(stream);
-        writeln!(writer, "{}", encode(&WrapperToDaemon::RegisterAuxiliary {
-            agent_id: agent, instance_id: "instance-1".into(), credential,
-        }).unwrap()).unwrap();
+        writeln!(
+            writer,
+            "{}",
+            encode(&WrapperToDaemon::RegisterAuxiliary {
+                agent_id: agent,
+                instance_id: "instance-1".into(),
+                credential,
+            })
+            .unwrap()
+        )
+        .unwrap();
         writer.flush().unwrap();
         let mut line = String::new();
         reader.read_line(&mut line).unwrap();
-        assert!(matches!(decode(line.trim()).unwrap(), DaemonToWrapper::Registered { .. }));
-        writeln!(writer, "{}", encode(&WrapperToDaemon::NativeDelegation {
-            request: NativeDelegationRequest::CallerScope {},
-        }).unwrap()).unwrap();
+        assert!(matches!(
+            decode(line.trim()).unwrap(),
+            DaemonToWrapper::Registered { .. }
+        ));
+        writeln!(
+            writer,
+            "{}",
+            encode(&WrapperToDaemon::NativeDelegation {
+                request: NativeDelegationRequest::CallerScope {},
+            })
+            .unwrap()
+        )
+        .unwrap();
         writer.flush().unwrap();
         line.clear();
         reader.read_line(&mut line).unwrap();
         let response = decode(line.trim()).unwrap();
-        assert!(matches!(response, DaemonToWrapper::NativeDelegationResult { ref result }
+        assert!(
+            matches!(response, DaemonToWrapper::NativeDelegationResult { ref result }
             if result == &serde_json::json!({"version":1,"caller_read_only":false})),
-            "CallerScope reçoit un avis au lieu du plafond : {response:?}");
+            "CallerScope reçoit un avis au lieu du plafond : {response:?}"
+        );
         // Le correctif ne lit ni n’acquitte l’avis à la place du parent.
         {
             let st = shared.lock().unwrap();
-            let pending = st.fleet.delegated_runtime_events_for_parent("instance-1").unwrap();
+            let pending = st
+                .fleet
+                .delegated_runtime_events_for_parent("instance-1")
+                .unwrap();
             assert_eq!(pending.len(), 1);
             assert_eq!(pending[0].event_id, event.event_id);
         }
         replay_delegated_runtime_events_for_connection(&shared, "conn-1");
         let mut parent_reader = BufReader::new(parent_peer);
-        line.clear(); parent_reader.read_line(&mut line).unwrap();
+        line.clear();
+        parent_reader.read_line(&mut line).unwrap();
         assert!(matches!(decode(line.trim()).unwrap(),
             DaemonToWrapper::DelegatedRuntimeEvent { event: ref actual }
             if actual.event_id == event.event_id && actual.kind == kind));
-        assert!(matches!(handle_wrapper_message("conn-1",
-            WrapperToDaemon::DelegatedRuntimeEventAcknowledged { event_id: event.event_id },
-            &shared), Some(DaemonToWrapper::Ack { .. })));
-        assert!(shared.lock().unwrap().fleet
-            .delegated_runtime_events_for_parent("instance-1").unwrap().is_empty());
-        drop(reader);drop(writer);server.join().unwrap();
-        drop(parent_reader);drop(shared);
+        assert!(matches!(
+            handle_wrapper_message(
+                "conn-1",
+                WrapperToDaemon::DelegatedRuntimeEventAcknowledged {
+                    event_id: event.event_id
+                },
+                &shared
+            ),
+            Some(DaemonToWrapper::Ack { .. })
+        ));
+        assert!(
+            shared
+                .lock()
+                .unwrap()
+                .fleet
+                .delegated_runtime_events_for_parent("instance-1")
+                .unwrap()
+                .is_empty()
+        );
+        drop(reader);
+        drop(writer);
+        server.join().unwrap();
+        drop(parent_reader);
+        drop(shared);
         let _ = std::fs::remove_file(config.socket_path);
         let _ = std::fs::remove_file(config.db_path);
     }

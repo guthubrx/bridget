@@ -1,13 +1,13 @@
 //! Vue humaine froide de la saga native. Aucun moteur de présentation parallèle.
-use bridget_transport::poison::RecoverPoison;
 use super::*;
 use crate::delegation::ProjectionMutation;
+use bridget_transport::poison::RecoverPoison;
+use bridget_transport::protocol::{HumanComposeOperation as Op, HumanComposeSendIntent as Intent};
 use bridget_transport::protocol::{
     HumanLineageAction as A, HumanLineageError as E, HumanLineageRequest as Request,
     HumanLineageWatchEvent as Event,
 };
 use serde_json::Value;
-use bridget_transport::protocol::{HumanComposeOperation as Op, HumanComposeSendIntent as Intent};
 
 #[derive(Clone)]
 pub(super) struct Context {
@@ -363,9 +363,9 @@ fn guard_journal_snapshot(
         && &native_delegation::remote_command_identity(st, &current)
             .map_err(|_| E::JournalUnavailable)?
             != command
-        {
-            return Err(E::JournalUnavailable);
-        }
+    {
+        return Err(E::JournalUnavailable);
+    }
     Ok(())
 }
 
@@ -413,9 +413,9 @@ pub(super) fn handle(
             result: journal_page(conn, &context, state).unwrap_or_else(E::result),
         });
     }
-    if matches!(request.request,A::Compose{..}) {
+    if matches!(request.request, A::Compose { .. }) {
         return Some(DaemonToWrapper::HumanLineageResult {
-            result:compose(conn,&context,state).unwrap_or_else(E::result),
+            result: compose(conn, &context, state).unwrap_or_else(E::result),
         });
     }
     let mut drive = false;
@@ -1042,7 +1042,8 @@ fn compose_select_runtime(
             );
             None
         } else {
-            #[allow(clippy::unnecessary_unwrap)] // la garde `choice.is_none()` est posée par le `if` ci-dessus
+            #[allow(clippy::unnecessary_unwrap)]
+            // la garde `choice.is_none()` est posée par le `if` ci-dessus
             let choice = choice.unwrap();
             let effort = effort
                 .or(choice.default_effort.as_deref())
@@ -1224,10 +1225,7 @@ pub(super) fn read_task_journal(
             state,
             worker,
             command,
-            WorkerRequestOperation::JournalPage {
-                after_seq,
-                limit,
-            },
+            WorkerRequestOperation::JournalPage { after_seq, limit },
             Instant::now() + Duration::from_secs(5),
         )
         .map_err(|_| E::JournalUnavailable)?;
@@ -1350,7 +1348,9 @@ pub(super) fn invalid_message(st: &mut DaemonState, conn: &str) -> bool {
 }
 
 fn publish(st: &mut DaemonState, root: &str, mutation: &ProjectionMutation) {
-    if let Some(notifier)=&st.mobile_notifier { notifier.changed(); }
+    if let Some(notifier) = &st.mobile_notifier {
+        notifier.changed();
+    }
     for conn in st.lineage_watches.keys().cloned().collect::<Vec<_>>() {
         if st.lineage_watches[&conn].context.root != root {
             continue;
@@ -1487,11 +1487,7 @@ fn watch(conn: &str, context: Context, state: &Arc<Mutex<DaemonState>>) -> Optio
                     },
                 );
                 if terminal || sent.is_err() {
-                    state
-                        .lock()
-                        .recover_poison()
-                        .lineage_watches
-                        .remove(&conn);
+                    state.lock().recover_poison().lineage_watches.remove(&conn);
                     break;
                 }
             } else {
@@ -1671,23 +1667,12 @@ fn journal_follow(
         if let Err(error) = result {
             let error = weak
                 .upgrade()
-                .and_then(|s| {
-                    guard(
-                        &s.lock().recover_poison(),
-                        &conn,
-                        &context,
-                    )
-                    .err()
-                })
+                .and_then(|s| guard(&s.lock().recover_poison(), &conn, &context).err())
                 .unwrap_or(error);
             let _ = emit(error.result());
         }
         if let Some(state) = weak.upgrade() {
-            state
-                .lock()
-                .recover_poison()
-                .lineage_journals
-                .remove(&conn);
+            state.lock().recover_poison().lineage_journals.remove(&conn);
         }
         let _ = shutdown.shutdown(std::net::Shutdown::Both);
     });

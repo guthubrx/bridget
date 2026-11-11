@@ -272,9 +272,9 @@ impl Fixture {
         if let Some(agent) = &self.native_agent
             && let Ok(marker) =
                 ManagedMarkerStore::at_directory(self.state.join("managed")).load(agent)
-            {
-                self.native = Some(marker);
-            }
+        {
+            self.native = Some(marker);
+        }
         if let Some(marker) = self.native.take() {
             let provider = evidence152(self)
                 .into_iter()
@@ -403,29 +403,29 @@ impl Drop for Fixture {
             return;
         }
         if let Some(marker) = &self.native
-            && process_birth(marker.pgid).ok() == Some(marker.birth) {
-                let observed = Command::new("/bin/ps")
-                    .args(["-ww", "-p", &marker.pgid.to_string(), "-o", "command="])
-                    .output()
-                    .unwrap();
-                let command = String::from_utf8_lossy(&observed.stdout);
-                if process_birth(marker.pgid).ok() == Some(marker.birth) {
-                    assert!(
-                        command.contains(env!("CARGO_BIN_EXE_bridget"))
-                            && !command.to_lowercase().contains("firefox")
-                    );
-                    // PID leader attesté seulement, jamais signal à un groupe.
-                    // SAFETY: kill ne déréférence aucun pointeur ; ses arguments sont des entiers.
-                    assert_eq!(unsafe { libc::kill(marker.pgid as i32, libc::SIGTERM) }, 0);
-                }
-                thread::sleep(Duration::from_secs(3));
-                let deadline = Instant::now() + Duration::from_secs(10);
-                while process_birth(marker.pgid).ok() == Some(marker.birth)
-                    && Instant::now() < deadline
-                {
-                    thread::sleep(Duration::from_millis(10));
-                }
+            && process_birth(marker.pgid).ok() == Some(marker.birth)
+        {
+            let observed = Command::new("/bin/ps")
+                .args(["-ww", "-p", &marker.pgid.to_string(), "-o", "command="])
+                .output()
+                .unwrap();
+            let command = String::from_utf8_lossy(&observed.stdout);
+            if process_birth(marker.pgid).ok() == Some(marker.birth) {
+                assert!(
+                    command.contains(env!("CARGO_BIN_EXE_bridget"))
+                        && !command.to_lowercase().contains("firefox")
+                );
+                // PID leader attesté seulement, jamais signal à un groupe.
+                // SAFETY: kill ne déréférence aucun pointeur ; ses arguments sont des entiers.
+                assert_eq!(unsafe { libc::kill(marker.pgid as i32, libc::SIGTERM) }, 0);
             }
+            thread::sleep(Duration::from_secs(3));
+            let deadline = Instant::now() + Duration::from_secs(10);
+            while process_birth(marker.pgid).ok() == Some(marker.birth) && Instant::now() < deadline
+            {
+                thread::sleep(Duration::from_millis(10));
+            }
+        }
         drop(self.daemon.take());
         if !thread::panicking() {
             fs::remove_dir_all(&self.root).unwrap();

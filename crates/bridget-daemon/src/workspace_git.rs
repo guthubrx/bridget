@@ -1,7 +1,7 @@
 //! Git natif154 : un exécuteur borné, aucune suppression ni commande réseau.
-use bridget_transport::poison::RecoverPoison;
 use crate::delegation::{WorkspaceCommit, WorkspaceRecord, WorkspaceState, WorkspaceStrategy};
 use bridget_core::is_disallowed_control;
+use bridget_transport::poison::RecoverPoison;
 use std::fs;
 use std::io::{self, Read};
 use std::os::fd::AsRawFd;
@@ -13,20 +13,25 @@ use std::time::{Duration, Instant};
 #[path = "workspace_git_tests.rs"]
 mod tests;
 
-#[path = "workspace_repair_git.rs"]
-mod repair;
-#[path = "workspace_compact.rs"]
-mod compact;
 #[path = "workspace_commit_view.rs"]
 mod commit_view;
+#[path = "workspace_compact.rs"]
+mod compact;
+#[path = "workspace_repair_git.rs"]
+mod repair;
 /// Parcours de vue négocié : lecteur durable et créateur discovery.
 /// Toute livraison exige la qualification du chemin complet et du retour.
-pub(crate) const COMMIT_VIEW_LAUNCH_ENABLED:bool=true;
+pub(crate) const COMMIT_VIEW_LAUNCH_ENABLED: bool = true;
 
-pub(crate) use commit_view::{run_commit_view_plan, run_commit_view_export, run_commit_view_materialize, ViewPlan, ViewBinding, ViewIntent, ViewProofs, ViewJob, ViewJobRequest, JobPoll, ExportFailure, view_export_failure};
 pub(crate) use commit_view::MAX_VIEW_RESERVATION_BYTES;
+pub(crate) use commit_view::{
+    ExportFailure, JobPoll, ViewBinding, ViewIntent, ViewJob, ViewJobRequest, ViewPlan, ViewProofs,
+    run_commit_view_export, run_commit_view_materialize, run_commit_view_plan, view_export_failure,
+};
 
-pub(crate) use repair::{RepairAnchor, inspect_repair, report_repair, report_repaired_workspace, apply_repair_git};
+pub(crate) use repair::{
+    RepairAnchor, apply_repair_git, inspect_repair, report_repair, report_repaired_workspace,
+};
 
 pub(crate) const READ_TIMEOUT: Duration = Duration::from_secs(10);
 // Un arbre accepté jusqu'à 64 Mio n'est pas une lecture de configuration.
@@ -37,10 +42,16 @@ thread_local! {
 }
 struct GitTask234(Option<uuid::Uuid>);
 impl GitTask234 {
-    fn enter(task: uuid::Uuid) -> Self { Self(GIT_TASK234.with(|value| value.replace(Some(task)))) }
+    fn enter(task: uuid::Uuid) -> Self {
+        Self(GIT_TASK234.with(|value| value.replace(Some(task))))
+    }
 }
 impl Drop for GitTask234 {
-    fn drop(&mut self) { GIT_TASK234.with(|value| { value.replace(self.0); }); }
+    fn drop(&mut self) {
+        GIT_TASK234.with(|value| {
+            value.replace(self.0);
+        });
+    }
 }
 const CREATE_TIMEOUT: Duration = Duration::from_secs(20);
 // Même plafond que T3 (WORKTREE_ADD_TIMEOUT_MS) : l'extraction d'un gros dépôt
@@ -90,7 +101,13 @@ pub(crate) struct WorkspacePreflight {
     pub branch: Option<String>,
     pub base_commit: String,
     // Lu par les bancs d'inventaire (bornes de 127 chemins) ; non utilisé en production.
-    #[cfg_attr(not(test), expect(dead_code, reason = "lu par les bancs d'inventaire ; non utilisé en production"))]
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "lu par les bancs d'inventaire ; non utilisé en production"
+        )
+    )]
     pub listed_paths: Vec<PathBuf>,
 }
 
@@ -194,8 +211,19 @@ fn allowed(args: &[&str]) -> bool {
         ["ls-files", "-v", "-z"] => true,
         ["cat-file", "--batch-command"] => true,
         ["read-tree", "-mu", "HEAD"] => true,
-        ["config", "--local", "--no-includes", "--get", "bridget.worktreeProfile" | "extensions.worktreeConfig"] => true,
-        ["config", "--worktree", "--get", "core.sparseCheckout" | "core.sparseCheckoutCone"] => true,
+        [
+            "config",
+            "--local",
+            "--no-includes",
+            "--get",
+            "bridget.worktreeProfile" | "extensions.worktreeConfig",
+        ] => true,
+        [
+            "config",
+            "--worktree",
+            "--get",
+            "core.sparseCheckout" | "core.sparseCheckoutCone",
+        ] => true,
         ["config", "--no-includes", "--get", "bridget.compactFormat"] => true,
         ["config", "--worktree", "core.sparseCheckout", "true"]
         | ["config", "--worktree", "core.sparseCheckoutCone", "false"]
@@ -204,19 +232,20 @@ fn allowed(args: &[&str]) -> bool {
         ["rev-parse", "--show-toplevel" | "--git-common-dir"] => true,
         ["rev-parse", "--short", "HEAD"] => true,
         ["rev-parse", "--verify", "--end-of-options", value] => revision(value),
-        ["rev-parse", "--verify", "--quiet", "--end-of-options", value] => revision(value),
+        [
+            "rev-parse",
+            "--verify",
+            "--quiet",
+            "--end-of-options",
+            value,
+        ] => revision(value),
         ["symbolic-ref", "-q" | "--quiet" | "--short", "HEAD"] => true,
         ["check-ref-format", "--branch", branch] => validate_branch(branch).is_ok(),
         ["check-ignore", "-q", "--", path] => !path.starts_with('-') && !path.contains('\0'),
         ["show-ref", "--verify", "--quiet", branch] => branch
             .strip_prefix("refs/heads/")
             .is_some_and(|branch| validate_branch(branch).is_ok()),
-        [
-            "config",
-            "--no-includes",
-            "--get-regexp",
-            pattern,
-        ] => *pattern == HOSTILE_CONFIG,
+        ["config", "--no-includes", "--get-regexp", pattern] => *pattern == HOSTILE_CONFIG,
         [
             "config",
             "--local",
@@ -224,14 +253,28 @@ fn allowed(args: &[&str]) -> bool {
             "--get",
             "remote.origin.url",
         ] => true,
-        ["fetch", "--no-tags", "--no-write-fetch-head", "--no-recurse-submodules", "--", origin, commit] =>
-            Path::new(origin).is_absolute() && sha(commit),
+        [
+            "fetch",
+            "--no-tags",
+            "--no-write-fetch-head",
+            "--no-recurse-submodules",
+            "--",
+            origin,
+            commit,
+        ] => Path::new(origin).is_absolute() && sha(commit),
         ["worktree", "repair", "--", path] => Path::new(path).is_absolute(),
         ["worktree", "list", "--porcelain"] | ["worktree", "list", "--porcelain", "-z"] => true,
         ["worktree", "add", "-b", branch, "--", path, base]
-        | ["worktree", "add", "--no-checkout", "-b", branch, "--", path, base] => {
-            validate_branch(branch).is_ok() && Path::new(path).is_absolute() && sha(base)
-        }
+        | [
+            "worktree",
+            "add",
+            "--no-checkout",
+            "-b",
+            branch,
+            "--",
+            path,
+            base,
+        ] => validate_branch(branch).is_ok() && Path::new(path).is_absolute() && sha(base),
         ["update-ref", "-d", reference, old] => {
             sha(old)
                 && reference
@@ -248,7 +291,14 @@ fn allowed(args: &[&str]) -> bool {
         ] => range(commits),
         ["status", "--porcelain=v1", "--untracked-files=normal"] => true,
         ["merge-base", "--is-ancestor", head, target] => sha(head) && sha(target),
-        ["merge", "--ff-only", "--no-edit", "--no-stat", "--no-overwrite-ignore", target] => sha(target),
+        [
+            "merge",
+            "--ff-only",
+            "--no-edit",
+            "--no-stat",
+            "--no-overwrite-ignore",
+            target,
+        ] => sha(target),
         _ => false,
     }
 }
@@ -302,16 +352,25 @@ pub(crate) fn take_status_reads193() -> usize {
 
 // Construction commune : l'export brut ajoute uniquement la lecture littérale
 // des objets ; les appels historiques gardent exactement leur environnement.
-fn spawn_git(cwd: &Path, args: &[&str], anchor: Option<(&Path, &Path)>,
-             stdin: Stdio, literal_objects: bool) -> Result<Child, String> {
-    if !allowed(args) { return Err("commande Git hors liste blanche".into()); }
+fn spawn_git(
+    cwd: &Path,
+    args: &[&str],
+    anchor: Option<(&Path, &Path)>,
+    stdin: Stdio,
+    literal_objects: bool,
+) -> Result<Child, String> {
+    if !allowed(args) {
+        return Err("commande Git hors liste blanche".into());
+    }
     let mut command = Command::new("git");
     for (name, _) in
         std::env::vars_os().filter(|(name, _)| name.to_string_lossy().starts_with("GIT_"))
     {
         command.env_remove(name);
     }
-    if literal_objects { command.env("GIT_NO_REPLACE_OBJECTS", "1"); }
+    if literal_objects {
+        command.env("GIT_NO_REPLACE_OBJECTS", "1");
+    }
     command
         .env("LC_ALL", "C")
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
@@ -347,8 +406,12 @@ fn spawn_git(cwd: &Path, args: &[&str], anchor: Option<(&Path, &Path)>,
     if args.first() == Some(&"fetch") {
         // Seule une origine locale canonique, déjà liée au mapping, est admise.
         // Aucun transport réseau, helper remote, hook ou refspec fourni librement.
-        command.env("GIT_ALLOW_PROTOCOL", "file")
-            .args(["-c", "protocol.file.allow=always", "-c", "fetch.writeCommitGraph=false"]);
+        command.env("GIT_ALLOW_PROTOCOL", "file").args([
+            "-c",
+            "protocol.file.allow=always",
+            "-c",
+            "fetch.writeCommitGraph=false",
+        ]);
     }
     if let Some((git_dir, work_tree)) = anchor {
         command.arg(format!("--git-dir={}", git_dir.display()));
@@ -368,7 +431,6 @@ fn spawn_git(cwd: &Path, args: &[&str], anchor: Option<(&Path, &Path)>,
         .stderr(Stdio::piped())
         .spawn()
         .map_err(|error| format!("workspace_git_unsupported: Git indisponible : {error}"))
-
 }
 
 fn capture(
@@ -380,24 +442,31 @@ fn capture(
     capture_with_objects(cwd, args, timeout, anchor, false)
 }
 
-fn capture_with_objects(cwd: &Path, args: &[&str], timeout: Duration,
-    anchor: Option<(&Path, &Path)>, literal_objects: bool) -> Result<GitOutput, String> {
+fn capture_with_objects(
+    cwd: &Path,
+    args: &[&str],
+    timeout: Duration,
+    anchor: Option<(&Path, &Path)>,
+    literal_objects: bool,
+) -> Result<GitOutput, String> {
     #[cfg(test)]
     if args.first() == Some(&"status") {
         STATUS_READS193.with(|count| count.set(count.get() + 1));
     }
 
-    let timeout = timeout.min(if args.first() == Some(&"worktree") && args.get(1) == Some(&"add")
-        || args.first() == Some(&"read-tree")
-    {
-        WORKTREE_ADD_TIMEOUT
-    } else if args.first() == Some(&"fetch") {
-        CREATE_TIMEOUT
-    } else if matches!(args.first(), Some(&"ls-tree" | &"ls-files")) {
-        INVENTORY_TIMEOUT
-    } else {
-        READ_TIMEOUT
-    });
+    let timeout = timeout.min(
+        if args.first() == Some(&"worktree") && args.get(1) == Some(&"add")
+            || args.first() == Some(&"read-tree")
+        {
+            WORKTREE_ADD_TIMEOUT
+        } else if args.first() == Some(&"fetch") {
+            CREATE_TIMEOUT
+        } else if matches!(args.first(), Some(&"ls-tree" | &"ls-files")) {
+            INVENTORY_TIMEOUT
+        } else {
+            READ_TIMEOUT
+        },
+    );
     let started = Instant::now();
     let deadline = Instant::now() + timeout;
     if !allowed(args) {
@@ -454,7 +523,12 @@ fn capture_with_objects(cwd: &Path, args: &[&str], timeout: Duration,
                     progressed = true;
                     // Comme T3, chaque flux garde son budget : stdout ne peut
                     // pas effacer le diagnostic stderr. Arbres/index : stdout 64 Mio ; autres : 1 Mio.
-                    let maximum = if index == 0 && matches!(args.first(), Some(&"ls-tree" | &"ls-files")) { MAX_TREE_OUTPUT } else { MAX_OUTPUT };
+                    let maximum =
+                        if index == 0 && matches!(args.first(), Some(&"ls-tree" | &"ls-files")) {
+                            MAX_TREE_OUTPUT
+                        } else {
+                            MAX_OUTPUT
+                        };
                     let remaining = maximum.saturating_sub(bytes.len());
                     bytes.extend_from_slice(&buffer[..count.min(remaining)]);
                     truncated |= count > remaining;
@@ -477,8 +551,18 @@ fn capture_with_objects(cwd: &Path, args: &[&str], timeout: Duration,
         }
         if Instant::now() >= deadline {
             let stopped = stop_git(&mut child);
-            log_git_timeout234(args, timeout, started, out.len(), err.len(),
-                if stopped.is_ok() { "confirmed" } else { "unconfirmed" });
+            log_git_timeout234(
+                args,
+                timeout,
+                started,
+                out.len(),
+                err.len(),
+                if stopped.is_ok() {
+                    "confirmed"
+                } else {
+                    "unconfirmed"
+                },
+            );
             return Err(format!("délai Git dépassé; arrêt {stopped:?}"));
         }
         // Pas de thread lecteur à rejoindre : un descendant gardant un pipe
@@ -505,9 +589,7 @@ fn capture_with_objects(cwd: &Path, args: &[&str], timeout: Duration,
                     parts.next()?.parse::<u32>().ok()?,
                 ))
             });
-        if !output.success()
-            || output.truncated
-            || version.is_none_or(|version| version < (2, 44))
+        if !output.success() || output.truncated || version.is_none_or(|version| version < (2, 44))
         {
             return Err("workspace_git_unsupported: Git 2.44 ou plus est requis".into());
         }
@@ -515,22 +597,49 @@ fn capture_with_objects(cwd: &Path, args: &[&str], timeout: Duration,
     Ok(output)
 }
 
-fn git_timeout_fact234(args: &[&str], budget: Duration, elapsed: Duration,
-    stdout_retained: usize, stderr_retained: usize, stop: &str) -> serde_json::Value {
+fn git_timeout_fact234(
+    args: &[&str],
+    budget: Duration,
+    elapsed: Duration,
+    stdout_retained: usize,
+    stderr_retained: usize,
+    stop: &str,
+) -> serde_json::Value {
     // Seulement des libellés fermés : jamais argv, chemin, SHA ou stderr bruts.
     let (operation, command) = match args {
-        ["ls-tree", "--full-tree", "-r", "-l", "-z", _] =>
-            ("tree_inventory", "git ls-tree --full-tree -r -l -z <commit>"),
+        ["ls-tree", "--full-tree", "-r", "-l", "-z", _] => (
+            "tree_inventory",
+            "git ls-tree --full-tree -r -l -z <commit>",
+        ),
         ["ls-files", ..] => ("index_inventory", "git ls-files"),
-        ["config", "--local", "--no-includes", "--get", "bridget.worktreeProfile"] =>
-            ("compact_profile_config", "git config --local --no-includes --get bridget.worktreeProfile"),
-        ["config", "--local", "--no-includes", "--get", "extensions.worktreeConfig"] =>
-            ("worktree_extension_config", "git config --local --no-includes --get extensions.worktreeConfig"),
+        [
+            "config",
+            "--local",
+            "--no-includes",
+            "--get",
+            "bridget.worktreeProfile",
+        ] => (
+            "compact_profile_config",
+            "git config --local --no-includes --get bridget.worktreeProfile",
+        ),
+        [
+            "config",
+            "--local",
+            "--no-includes",
+            "--get",
+            "extensions.worktreeConfig",
+        ] => (
+            "worktree_extension_config",
+            "git config --local --no-includes --get extensions.worktreeConfig",
+        ),
         ["--version"] => ("version_check", "git --version"),
         ["worktree", "add", ..] => ("worktree_add", "git worktree add"),
         ["read-tree", ..] => ("read_tree", "git read-tree"),
         ["config", ..] => ("config_read", "git config"),
-        ["status", ..] => ("status_read", "git status --porcelain=v1 --untracked-files=normal"),
+        ["status", ..] => (
+            "status_read",
+            "git status --porcelain=v1 --untracked-files=normal",
+        ),
         ["rev-parse", ..] => ("revision_read", "git rev-parse"),
         ["check-ignore", ..] => ("ignore_read", "git check-ignore"),
         ["worktree", ..] => ("worktree_read", "git worktree list --porcelain -z"),
@@ -553,10 +662,25 @@ fn git_timeout_fact234(args: &[&str], budget: Duration, elapsed: Duration,
         "stop":if matches!(stop,"confirmed"|"not_spawned") {stop} else {"unconfirmed"}})
 }
 
-fn log_git_timeout234(args: &[&str], budget: Duration, started: Instant,
-    stdout_retained: usize, stderr_retained: usize, stop: &str) {
-    eprintln!("bridget_workspace_git_timeout {}", git_timeout_fact234(args,budget,
-        started.elapsed(),stdout_retained,stderr_retained,stop));
+fn log_git_timeout234(
+    args: &[&str],
+    budget: Duration,
+    started: Instant,
+    stdout_retained: usize,
+    stderr_retained: usize,
+    stop: &str,
+) {
+    eprintln!(
+        "bridget_workspace_git_timeout {}",
+        git_timeout_fact234(
+            args,
+            budget,
+            started.elapsed(),
+            stdout_retained,
+            stderr_retained,
+            stop
+        )
+    );
 }
 
 /// O(B), configuration commune + config.worktree, bornée, sans inclusion.
@@ -565,12 +689,7 @@ fn log_git_timeout234(args: &[&str], budget: Duration, started: Instant,
 pub(crate) fn executable_configuration(cwd: &Path) -> Result<bool, String> {
     let output = run_git(
         cwd,
-        &[
-            "config",
-            "--no-includes",
-            "--get-regexp",
-            HOSTILE_CONFIG,
-        ],
+        &["config", "--no-includes", "--get-regexp", HOSTILE_CONFIG],
         READ_TIMEOUT,
     )?;
     if output.truncated {
@@ -599,7 +718,13 @@ pub(crate) fn resolve_source_commit(
     // Code 1 : référence absente. Code 128 : dépôt invalide ou Git en échec.
     let base_output = run_git(
         cwd,
-        &["rev-parse", "--verify", "--quiet", "--end-of-options", &base],
+        &[
+            "rev-parse",
+            "--verify",
+            "--quiet",
+            "--end-of-options",
+            &base,
+        ],
         READ_TIMEOUT,
     )
     .map_err(|error| {
@@ -633,20 +758,43 @@ pub(crate) fn resolve_source_commit(
 // Le miroir configuré est lu sans modifier le checkout pendant Probe.
 // Un origin réseau reste un prérequis explicite : aucune connexion cachée.
 fn local_origin(cwd: &Path) -> Result<PathBuf, String> {
-    let origin = run_git(cwd, &["config", "--local", "--no-includes", "--get", "remote.origin.url"], READ_TIMEOUT)?.complete()?;
+    let origin = run_git(
+        cwd,
+        &[
+            "config",
+            "--local",
+            "--no-includes",
+            "--get",
+            "remote.origin.url",
+        ],
+        READ_TIMEOUT,
+    )?
+    .complete()?;
     let path = PathBuf::from(origin);
-    if !path.is_absolute() || path.canonicalize().map_err(|e| e.to_string())? != path || !path.is_dir() {
-        return Err("workspace_base_unavailable: commit absent et aucun miroir local configuré".into());
+    if !path.is_absolute()
+        || path.canonicalize().map_err(|e| e.to_string())? != path
+        || !path.is_dir()
+    {
+        return Err(
+            "workspace_base_unavailable: commit absent et aucun miroir local configuré".into(),
+        );
     }
     if executable_configuration(&path)? {
-        return Err("workspace_repo_unsupported: configuration du miroir local non prise en charge".into());
+        return Err(
+            "workspace_repo_unsupported: configuration du miroir local non prise en charge".into(),
+        );
     }
     Ok(path)
 }
 
-pub(crate) fn remote_source_commit(cwd: &Path, base_ref: Option<&str>) -> Result<String, WorkspacePreflightError> {
+pub(crate) fn remote_source_commit(
+    cwd: &Path,
+    base_ref: Option<&str>,
+) -> Result<String, WorkspacePreflightError> {
     match resolve_source_commit(cwd, base_ref) {
-        Err(WorkspacePreflightError::Refused(error)) if error == "workspace_base_unavailable: référence de base inconnue" => {
+        Err(WorkspacePreflightError::Refused(error))
+            if error == "workspace_base_unavailable: référence de base inconnue" =>
+        {
             let origin = local_origin(cwd).map_err(WorkspacePreflightError::Refused)?;
             resolve_source_commit(&origin, base_ref)
         }
@@ -657,49 +805,104 @@ pub(crate) fn remote_source_commit(cwd: &Path, base_ref: Option<&str>) -> Result
 /// Après sélection seulement : importer les objets exacts, sans modifier HEAD,
 /// branche, index, FETCH_HEAD, réglage Git ni contenu du checkout partagé.
 pub(crate) fn import_remote_commit(cwd: &Path, commit: &str) -> Result<(), String> {
-    if !sha(commit) { return Err("workspace_base_unavailable: commit invalide".into()); }
+    if !sha(commit) {
+        return Err("workspace_base_unavailable: commit invalide".into());
+    }
     match resolve_source_commit(cwd, Some(commit)) {
         Ok(actual) if actual == commit => return Ok(()),
-        Err(WorkspacePreflightError::Refused(error)) if error == "workspace_base_unavailable: référence de base inconnue" => {},
-        result => return Err(result.err().map_or_else(|| "expected_base_commit_mismatch".into(), WorkspacePreflightError::into_legacy)),
+        Err(WorkspacePreflightError::Refused(error))
+            if error == "workspace_base_unavailable: référence de base inconnue" => {}
+        result => {
+            return Err(result.err().map_or_else(
+                || "expected_base_commit_mismatch".into(),
+                WorkspacePreflightError::into_legacy,
+            ));
+        }
     }
-    if executable_configuration(cwd)? { return Err("workspace_repo_unsupported: configuration cible non prise en charge".into()); }
+    if executable_configuration(cwd)? {
+        return Err("workspace_repo_unsupported: configuration cible non prise en charge".into());
+    }
     let origin = local_origin(cwd)?;
-    let actual = resolve_source_commit(&origin, Some(commit)).map_err(WorkspacePreflightError::into_legacy)?;
-    if actual != commit { return Err("expected_base_commit_mismatch".into()); }
-    run_git(cwd, &["fetch", "--no-tags", "--no-write-fetch-head", "--no-recurse-submodules", "--", origin.to_str().ok_or("workspace_path_unsafe")?, commit], CREATE_TIMEOUT)?.workspace_complete()?;
-    let actual = resolve_source_commit(cwd, Some(commit)).map_err(WorkspacePreflightError::into_legacy)?;
-    if actual != commit { return Err("expected_base_commit_mismatch".into()); }
+    let actual = resolve_source_commit(&origin, Some(commit))
+        .map_err(WorkspacePreflightError::into_legacy)?;
+    if actual != commit {
+        return Err("expected_base_commit_mismatch".into());
+    }
+    run_git(
+        cwd,
+        &[
+            "fetch",
+            "--no-tags",
+            "--no-write-fetch-head",
+            "--no-recurse-submodules",
+            "--",
+            origin.to_str().ok_or("workspace_path_unsafe")?,
+            commit,
+        ],
+        CREATE_TIMEOUT,
+    )?
+    .workspace_complete()?;
+    let actual =
+        resolve_source_commit(cwd, Some(commit)).map_err(WorkspacePreflightError::into_legacy)?;
+    if actual != commit {
+        return Err("expected_base_commit_mismatch".into());
+    }
     Ok(())
 }
 
 /// Préparation Shared : le probe reste en lecture. Un dossier déjà au bon
 /// commit conserve son comportement historique (y compris des edits locaux).
 /// Pour déplacer HEAD : dossier propre, racine entière autorisée et FF seulement.
-pub(crate) fn shared_refresh_needed(root: &Path, expected: &str) -> Result<bool, bridget_transport::protocol::CandidateProbeRefusal> {
+pub(crate) fn shared_refresh_needed(
+    root: &Path,
+    expected: &str,
+) -> Result<bool, bridget_transport::protocol::CandidateProbeRefusal> {
     use bridget_transport::protocol::CandidateProbeRefusal as R;
-    if !sha(expected) { return Err(R::WorkspaceBaseUnavailable); }
-    let head = resolve_source_commit(root, None).map_err(|_| R::WorkspaceUnavailable)?;
-    if head == expected { return Ok(false); }
-    let top = run_git(root, &["rev-parse", "--show-toplevel"], READ_TIMEOUT)
-        .and_then(GitOutput::complete).map_err(|_| R::WorkspaceUnavailable)?;
-    if Path::new(&top).canonicalize().ok().as_deref() != Some(root)
-        || executable_configuration(root).map_err(|_| R::WorkspaceUnavailable)? {
-        return Err(R::WorkspaceUnavailable);
-    }
-    let status = run_git(root, &["status", "--porcelain=v1", "--untracked-files=normal"], READ_TIMEOUT)
-        .and_then(GitOutput::complete).map_err(|_| R::WorkspaceUnavailable)?;
-    if !status.is_empty() { return Err(R::WorkspaceDirty); }
-    let source = match resolve_source_commit(root, Some(expected)) {
-        Ok(actual) if actual == expected => root.to_path_buf(),
-        Err(WorkspacePreflightError::Refused(_)) => local_origin(root).map_err(|_| R::WorkspaceBaseUnavailable)?,
-        _ => return Err(R::WorkspaceBaseUnavailable),
-    };
-    if resolve_source_commit(&source, Some(expected)).ok().as_deref() != Some(expected) {
+    if !sha(expected) {
         return Err(R::WorkspaceBaseUnavailable);
     }
-    let ancestor = run_git(&source, &["merge-base", "--is-ancestor", &head, expected], READ_TIMEOUT)
+    let head = resolve_source_commit(root, None).map_err(|_| R::WorkspaceUnavailable)?;
+    if head == expected {
+        return Ok(false);
+    }
+    let top = run_git(root, &["rev-parse", "--show-toplevel"], READ_TIMEOUT)
+        .and_then(GitOutput::complete)
         .map_err(|_| R::WorkspaceUnavailable)?;
+    if Path::new(&top).canonicalize().ok().as_deref() != Some(root)
+        || executable_configuration(root).map_err(|_| R::WorkspaceUnavailable)?
+    {
+        return Err(R::WorkspaceUnavailable);
+    }
+    let status = run_git(
+        root,
+        &["status", "--porcelain=v1", "--untracked-files=normal"],
+        READ_TIMEOUT,
+    )
+    .and_then(GitOutput::complete)
+    .map_err(|_| R::WorkspaceUnavailable)?;
+    if !status.is_empty() {
+        return Err(R::WorkspaceDirty);
+    }
+    let source = match resolve_source_commit(root, Some(expected)) {
+        Ok(actual) if actual == expected => root.to_path_buf(),
+        Err(WorkspacePreflightError::Refused(_)) => {
+            local_origin(root).map_err(|_| R::WorkspaceBaseUnavailable)?
+        }
+        _ => return Err(R::WorkspaceBaseUnavailable),
+    };
+    if resolve_source_commit(&source, Some(expected))
+        .ok()
+        .as_deref()
+        != Some(expected)
+    {
+        return Err(R::WorkspaceBaseUnavailable);
+    }
+    let ancestor = run_git(
+        &source,
+        &["merge-base", "--is-ancestor", &head, expected],
+        READ_TIMEOUT,
+    )
+    .map_err(|_| R::WorkspaceUnavailable)?;
     match (ancestor.code, ancestor.truncated) {
         (Some(0), false) => Ok(true),
         (Some(1), false) => Err(R::WorkspaceDiverged),
@@ -710,19 +913,38 @@ pub(crate) fn shared_refresh_needed(root: &Path, expected: &str) -> Result<bool,
 /// Appelé seulement par Prepare du candidat élu, après ses droits et sous
 /// l'exclusion des missions connues du worker. Jamais reset/stash/clean.
 pub(crate) fn refresh_shared(root: &Path, expected: &str) -> Result<(), String> {
-    if !shared_refresh_needed(root, expected).map_err(|r| format!("{r:?}"))? { return Ok(()); }
+    if !shared_refresh_needed(root, expected).map_err(|r| format!("{r:?}"))? {
+        return Ok(());
+    }
     import_remote_commit(root, expected)?;
     // Relire après import : une écriture concurrente ne devient pas un reset.
     if shared_refresh_needed(root, expected).map_err(|r| format!("{r:?}"))? {
-        run_git(root, &["merge", "--ff-only", "--no-edit", "--no-stat", "--no-overwrite-ignore", expected], READ_TIMEOUT)?.complete()?;
+        run_git(
+            root,
+            &[
+                "merge",
+                "--ff-only",
+                "--no-edit",
+                "--no-stat",
+                "--no-overwrite-ignore",
+                expected,
+            ],
+            READ_TIMEOUT,
+        )?
+        .complete()?;
     }
-    if resolve_source_commit(root, None).map_err(WorkspacePreflightError::into_legacy)? != expected {
+    if resolve_source_commit(root, None).map_err(WorkspacePreflightError::into_legacy)? != expected
+    {
         return Err("expected_base_commit_mismatch".into());
     }
     Ok(())
 }
 
-pub(crate) fn preflight_remote(cwd: &Path, base_ref: Option<&str>, branch: Option<&str>) -> Result<WorkspacePreflight, String> {
+pub(crate) fn preflight_remote(
+    cwd: &Path,
+    base_ref: Option<&str>,
+    branch: Option<&str>,
+) -> Result<WorkspacePreflight, String> {
     preflight_on_host(cwd, base_ref, branch, true).map_err(WorkspacePreflightError::into_legacy)
 }
 
@@ -746,7 +968,12 @@ pub(crate) fn preflight_classified(
     preflight_on_host(cwd, base_ref, branch, false)
 }
 
-fn preflight_on_host(cwd: &Path, base_ref: Option<&str>, branch: Option<&str>, remote: bool) -> Result<WorkspacePreflight, WorkspacePreflightError> {
+fn preflight_on_host(
+    cwd: &Path,
+    base_ref: Option<&str>,
+    branch: Option<&str>,
+    remote: bool,
+) -> Result<WorkspacePreflight, WorkspacePreflightError> {
     run_git(cwd, &["--version"], READ_TIMEOUT)?.complete()?;
     let cwd = cwd
         .canonicalize()
@@ -770,7 +997,11 @@ fn preflight_on_host(cwd: &Path, base_ref: Option<&str>, branch: Option<&str>, r
             "workspace_repo_unsupported: filtre, inclusion ou clone partiel".into(),
         ));
     }
-    let base_commit = if remote { remote_source_commit(&cwd, base_ref)? } else { resolve_source_commit(&cwd, base_ref)? };
+    let base_commit = if remote {
+        remote_source_commit(&cwd, base_ref)?
+    } else {
+        resolve_source_commit(&cwd, base_ref)?
+    };
     if let Some(branch) = branch {
         validate_branch(branch)?;
         run_git(
@@ -865,16 +1096,24 @@ fn worktree_failure_code(stderr: &str) -> &'static str {
 
 /// Même lecture de capacité pour les worktrees et les vues de commit.
 /// Mesure instantanée, sans réservation ni quota par nombre de travaux.
-pub(super) fn available_space(directory: &fs::File) -> io::Result<(u128,u128)> {
+pub(super) fn available_space(directory: &fs::File) -> io::Result<(u128, u128)> {
     use std::os::fd::AsRawFd;
-    let mut stat=std::mem::MaybeUninit::<libc::statvfs>::uninit();
+    let mut stat = std::mem::MaybeUninit::<libc::statvfs>::uninit();
     // SAFETY: les pointeurs passés à fstatvfs désignent des variables locales valides pendant l'appel.
-    if unsafe {libc::fstatvfs(directory.as_raw_fd(),stat.as_mut_ptr())}!=0 {return Err(io::Error::last_os_error());}
+    if unsafe { libc::fstatvfs(directory.as_raw_fd(), stat.as_mut_ptr()) } != 0 {
+        return Err(io::Error::last_os_error());
+    }
     // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
-    let stat=unsafe{stat.assume_init()};
-    let block=if stat.f_frsize>0 {stat.f_frsize as u128} else {stat.f_bsize as u128};
-    if block==0 {return Err(io::Error::other("taille de bloc inconnue"));}
-    Ok(((stat.f_bavail as u128).saturating_mul(block),block))
+    let stat = unsafe { stat.assume_init() };
+    let block = if stat.f_frsize > 0 {
+        stat.f_frsize as u128
+    } else {
+        stat.f_bsize as u128
+    };
+    if block == 0 {
+        return Err(io::Error::other("taille de bloc inconnue"));
+    }
+    Ok(((stat.f_bavail as u128).saturating_mul(block), block))
 }
 
 /// O(f), f fichiers extraits par Git. Seule une extraction échouée retire sa
@@ -929,57 +1168,89 @@ pub(crate) fn create(
     // par dépôt sérialise l'extraction sans bloquer les autres projets.
     let lock = {
         static LOCKS: std::sync::OnceLock<
-            std::sync::Mutex<std::collections::HashMap<PathBuf, std::sync::Arc<std::sync::Mutex<()>>>>,
+            std::sync::Mutex<
+                std::collections::HashMap<PathBuf, std::sync::Arc<std::sync::Mutex<()>>>,
+            >,
         > = std::sync::OnceLock::new();
-        let mut locks = LOCKS
-            .get_or_init(Default::default)
-            .lock()
-            .recover_poison();
+        let mut locks = LOCKS.get_or_init(Default::default).lock().recover_poison();
         std::sync::Arc::clone(locks.entry(preflight.toplevel.clone()).or_default())
     };
     let _serialized = lock.lock().recover_poison();
     let compact = crate::workspace_failure210::stage(
         bridget_transport::protocol::WorkspacePrepareStage::CompactPlan,
-        compact::plan(preflight))?;
+        compact::plan(preflight),
+    )?;
     // Git classe encore ENOSPC/EDQUOT pendant l'extraction : aucune prédiction
     // ni réservation n'empêche un autre processus de consommer le disque.
-    let capacity_root=if preflight.worktree_dir.is_dir(){&preflight.worktree_dir}else{&preflight.cwd};
+    let capacity_root = if preflight.worktree_dir.is_dir() {
+        &preflight.worktree_dir
+    } else {
+        &preflight.cwd
+    };
     use std::os::unix::fs::OpenOptionsExt;
-    let directory=fs::OpenOptions::new().read(true)
-        .custom_flags(libc::O_NOFOLLOW|libc::O_DIRECTORY).open(capacity_root)
-        .map_err(|error|format!("workspace_storage_space_unavailable: {error}"))?;
-    let (available,_) = available_space(&directory)
-        .map_err(|error|format!("workspace_storage_space_unavailable: {error}"))?;
-    let needed=if let Some(plan)=compact.as_ref() {plan.selected_bytes as u128} else {
+    let directory = fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_DIRECTORY)
+        .open(capacity_root)
+        .map_err(|error| format!("workspace_storage_space_unavailable: {error}"))?;
+    let (available, _) = available_space(&directory)
+        .map_err(|error| format!("workspace_storage_space_unavailable: {error}"))?;
+    let needed = if let Some(plan) = compact.as_ref() {
+        plan.selected_bytes as u128
+    } else {
         // Le Git déjà présent fournit les tailles sans extraire les objets.
         // L'inventaire réutilise son budget 64 Mio / 60 s, pas le nombre de WT.
-        let listing=run_git(&preflight.cwd,&["ls-tree","--full-tree","-r","-l","-z",&preflight.base_commit],INVENTORY_TIMEOUT)?.complete()?;
-        let mut bytes=0u128;
-        for row in listing.split('\0').filter(|row|!row.is_empty()) {
-            let (metadata,_)=row.split_once('\t').ok_or("workspace_repo_unsupported: arbre Git illisible")?;
-            let fields:Vec<_>=metadata.split_whitespace().collect();
-            if fields.len()!=4 {return Err("workspace_repo_unsupported: arbre Git illisible".into());}
-            if fields[1]=="blob" {
-                bytes=bytes.checked_add(fields[3].parse::<u64>().map_err(|_|"workspace_repo_unsupported: taille Git illisible")? as u128)
+        let listing = run_git(
+            &preflight.cwd,
+            &[
+                "ls-tree",
+                "--full-tree",
+                "-r",
+                "-l",
+                "-z",
+                &preflight.base_commit,
+            ],
+            INVENTORY_TIMEOUT,
+        )?
+        .complete()?;
+        let mut bytes = 0u128;
+        for row in listing.split('\0').filter(|row| !row.is_empty()) {
+            let (metadata, _) = row
+                .split_once('\t')
+                .ok_or("workspace_repo_unsupported: arbre Git illisible")?;
+            let fields: Vec<_> = metadata.split_whitespace().collect();
+            if fields.len() != 4 {
+                return Err("workspace_repo_unsupported: arbre Git illisible".into());
+            }
+            if fields[1] == "blob" {
+                bytes = bytes
+                    .checked_add(
+                        fields[3]
+                            .parse::<u64>()
+                            .map_err(|_| "workspace_repo_unsupported: taille Git illisible")?
+                            as u128,
+                    )
                     .ok_or("workspace_repo_unsupported: tailles Git excessives")?;
             }
         }
         bytes
     };
-    if available==0 || available<needed {
-        return Err(format!("workspace_disk_full: espace disponible {available} octets, fichiers prévus {needed} octets ; aucune réservation ni extraction effectuée"));
+    if available == 0 || available < needed {
+        return Err(format!(
+            "workspace_disk_full: espace disponible {available} octets, fichiers prévus {needed} octets ; aucune réservation ni extraction effectuée"
+        ));
     }
     let mut checkout_args = vec!["worktree", "add"];
-    if compact.is_some() { checkout_args.push("--no-checkout"); }
+    if compact.is_some() {
+        checkout_args.push("--no-checkout");
+    }
     checkout_args.extend(["-b", &branch, "--", path_text, &preflight.base_commit]);
-    let checkout = run_git(
-        &preflight.cwd,
-        &checkout_args,
-        WORKTREE_ADD_TIMEOUT,
-    );
-    let code = checkout.as_ref().map_or("workspace_create_failed", |output| {
-        worktree_failure_code(&output.stderr)
-    });
+    let checkout = run_git(&preflight.cwd, &checkout_args, WORKTREE_ADD_TIMEOUT);
+    let code = checkout
+        .as_ref()
+        .map_or("workspace_create_failed", |output| {
+            worktree_failure_code(&output.stderr)
+        });
     if let Err(error) = checkout.and_then(GitOutput::complete) {
         // Git crée la branche avant l'extraction. Sans retrait, la reprise de
         // la même demande serait refusée (workspace_branch_exists). Le retrait
@@ -994,9 +1265,11 @@ pub(crate) fn create(
     if let Some(plan) = compact {
         crate::workspace_failure210::stage(
             bridget_transport::protocol::WorkspacePrepareStage::CompactApply,
-            compact::apply(&path, plan)).map_err(|e| {
-            let code=compact::failure_code(&e);
-            residue(code,e)
+            compact::apply(&path, plan),
+        )
+        .map_err(|e| {
+            let code = compact::failure_code(&e);
+            residue(code, e)
         })?;
     }
     let canonical = path
@@ -1005,8 +1278,8 @@ pub(crate) fn create(
     let child_path = path.join(&preflight.offset);
     if compact::is_compact(&path) && !child_path.exists() {
         fs::create_dir_all(&child_path).map_err(|e| {
-            let error=compact::io_failure(e);
-            residue(compact::failure_code(&error),error)
+            let error = compact::io_failure(e);
+            residue(compact::failure_code(&error), error)
         })?;
     }
     if canonical != path
@@ -1019,7 +1292,8 @@ pub(crate) fn create(
         ));
     }
     Ok(WorkspaceRecord {
-        strategy: WorkspaceStrategy::Worktree, commit_view:None,
+        strategy: WorkspaceStrategy::Worktree,
+        commit_view: None,
         state: WorkspaceState::Active,
         toplevel: preflight.toplevel.to_string_lossy().into_owned(),
         path: path_text.into(),
@@ -1039,9 +1313,16 @@ pub(crate) fn create(
 // update-ref refuse si la branche a bougé depuis la base.
 fn release_unused_branch(cwd: &Path, branch: &str, base: &str) -> bool {
     let reference = format!("refs/heads/{branch}");
-    let used = run_git(cwd, &["worktree", "list", "--porcelain", "-z"], READ_TIMEOUT)
-        .and_then(GitOutput::complete)
-        .map(|list| list.split('\0').any(|field| field == format!("branch {reference}")));
+    let used = run_git(
+        cwd,
+        &["worktree", "list", "--porcelain", "-z"],
+        READ_TIMEOUT,
+    )
+    .and_then(GitOutput::complete)
+    .map(|list| {
+        list.split('\0')
+            .any(|field| field == format!("branch {reference}"))
+    });
     if used != Ok(false) {
         return false;
     }
@@ -1090,9 +1371,10 @@ fn report_anchor(workspace: &WorkspaceRecord) -> Result<(PathBuf, PathBuf), Stri
         candidate.canonicalize().ok()
     })();
     if let Some(common) = parent_common
-        && !candidates.contains(&common) {
-            candidates.push(common);
-        }
+        && !candidates.contains(&common)
+    {
+        candidates.push(common);
+    }
     let expected_gitfile = path.join(".git");
     for common in candidates {
         let registry = common.join("worktrees");
@@ -1158,25 +1440,26 @@ fn report_anchor(workspace: &WorkspaceRecord) -> Result<(PathBuf, PathBuf), Stri
 
 /// O(B+50), sorties bornées et 50 commits ; faits inconnus renvoyés en erreur.
 pub(crate) fn report(workspace: &WorkspaceRecord) -> Result<WorkspaceRecord, String> {
-    if matches!(workspace.strategy,WorkspaceStrategy::CommitView) {
+    if matches!(workspace.strategy, WorkspaceStrategy::CommitView) {
         return commit_view::report_view(workspace);
     }
 
     if workspace.commit_view.is_some() {
-        return Err("workspace_record_invalid: conserver le dossier ; ancre de vue sur un worktree".into());
+        return Err(
+            "workspace_record_invalid: conserver le dossier ; ancre de vue sur un worktree".into(),
+        );
     }
     let (git_dir, path) = report_anchor(workspace)?;
     report_at(workspace, &git_dir, &path)
 }
 
-fn report_at(workspace: &WorkspaceRecord, git_dir: &Path, path: &Path) -> Result<WorkspaceRecord, String> {
+fn report_at(
+    workspace: &WorkspaceRecord,
+    git_dir: &Path,
+    path: &Path,
+) -> Result<WorkspaceRecord, String> {
     let read = |args: &[&str]| capture(path, args, READ_TIMEOUT, Some((git_dir, path)));
-    let configuration = read(&[
-        "config",
-        "--no-includes",
-        "--get-regexp",
-        HOSTILE_CONFIG,
-    ])?;
+    let configuration = read(&["config", "--no-includes", "--get-regexp", HOSTILE_CONFIG])?;
     if configuration.truncated || configuration.code != Some(1) {
         return Err("rapport indisponible (configuration exécutable ou illisible)".into());
     }

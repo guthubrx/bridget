@@ -27,8 +27,21 @@ pub(super) struct DirectoryQuery {
 
 impl DirectoryQuery {
     pub(super) fn validate(&self) -> Result<(), &'static str> {
-        if self.visibility.as_deref().is_some_and(|v|!matches!(v,"active"|"dormant"|"all")) {return Err("invalid_request");}
-        if self.ids.as_ref().is_some_and(|ids|ids.len()>1850 || !ids.is_empty() && (ids.split(',').count()>50 || ids.split(',').any(|id|uuid::Uuid::parse_str(id).is_err()))) {return Err("invalid_request");}
+        if self
+            .visibility
+            .as_deref()
+            .is_some_and(|v| !matches!(v, "active" | "dormant" | "all"))
+        {
+            return Err("invalid_request");
+        }
+        if self.ids.as_ref().is_some_and(|ids| {
+            ids.len() > 1850
+                || !ids.is_empty()
+                    && (ids.split(',').count() > 50
+                        || ids.split(',').any(|id| uuid::Uuid::parse_str(id).is_err()))
+        }) {
+            return Err("invalid_request");
+        }
         if self.choice.as_ref().is_some_and(|s| s.len() > 1024)
             || self.limit.is_some_and(|n| n == 0 || n > 50)
             || self
@@ -49,8 +62,13 @@ impl DirectoryQuery {
     }
 
     fn matches(&self, agent: &ScopedAgentInfo) -> bool {
-        self.agent_id.as_ref().is_none_or(|id|id==&agent.agent.agent_id)
-            && self.ids.as_ref().is_none_or(|ids|ids.split(',').any(|id|id==agent.agent.agent_id))
+        self.agent_id
+            .as_ref()
+            .is_none_or(|id| id == &agent.agent.agent_id)
+            && self
+                .ids
+                .as_ref()
+                .is_none_or(|ids| ids.split(',').any(|id| id == agent.agent.agent_id))
             && self.machine.as_ref().is_none_or(|m| m == &agent.agent.host)
             && self.project_host.as_ref().is_none_or(|h| {
                 agent
@@ -98,10 +116,10 @@ pub(super) fn agents_page(
     query.validate()?;
     let mut visible = permitted(device, agents, Operation::Read);
     visible.retain(|a| query.matches(a));
-    visible.retain(|a|match query.visibility.as_deref().unwrap_or("active") {
-        "dormant"=>a.tracking.as_ref().is_some_and(|t|t.dormant),
-        "all"=>true,
-        _=>a.tracking.as_ref().is_none_or(|t|!t.dormant),
+    visible.retain(|a| match query.visibility.as_deref().unwrap_or("active") {
+        "dormant" => a.tracking.as_ref().is_some_and(|t| t.dormant),
+        "all" => true,
+        _ => a.tracking.as_ref().is_none_or(|t| !t.dormant),
     });
     visible.sort_by(|a, b| a.agent.agent_id.cmp(&b.agent.agent_id));
     if visible
@@ -210,8 +228,13 @@ pub(crate) fn mobile_operation(
     ) {
         return Err("endpoint_unavailable");
     }
-    let mut required=vec![ClientCapability::MobileOperationsV1];
-    if matches!(&operation,bridget_transport::protocol::MobileOperation::Specialists{..}){required.push(ClientCapability::SpecialistsV1);}
+    let mut required = vec![ClientCapability::MobileOperationsV1];
+    if matches!(
+        &operation,
+        bridget_transport::protocol::MobileOperation::Specialists { .. }
+    ) {
+        required.push(ClientCapability::SpecialistsV1);
+    }
     if !matches!(connection.exchange(&WrapperToDaemon::ClientHello {
         contract_version:CLIENT_CONTRACT_VERSION,issuer_scope:crate::communication::issuer_scope("mobile-operation"),
         capabilities:required.clone(),
@@ -296,8 +319,8 @@ mod tests {
         let projected = serde_json::to_string(&first).unwrap();
         assert!(!projected.contains("private"));
         assert!(!projected.contains("connection_id"));
-        assert_eq!(first["items"][0]["reconnect_count"],0);
-        assert_eq!(first["items"][0]["observed_age_secs"],2);
+        assert_eq!(first["items"][0]["reconnect_count"], 0);
+        assert_eq!(first["items"][0]["observed_age_secs"], 2);
         assert_eq!(
             projects_page(&d, &list, &Default::default()).unwrap()["items"]
                 .as_array()

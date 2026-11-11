@@ -95,11 +95,15 @@ impl CatalogueModel {
                 .default_effort
                 .as_ref()
                 .is_none_or(|e| self.supported_efforts.contains(e))
-            && (!self.service_tiers_unavailable || (self.service_tiers.is_empty() && self.default_service_tier.is_none()))
+            && (!self.service_tiers_unavailable
+                || (self.service_tiers.is_empty() && self.default_service_tier.is_none()))
             && self.service_tiers.len() <= 16
             && self.service_tiers.iter().all(|v| catalogue_token(v))
             && self.service_tiers.iter().collect::<BTreeSet<_>>().len() == self.service_tiers.len()
-            && self.default_service_tier.as_deref().is_none_or(catalogue_token)
+            && self
+                .default_service_tier
+                .as_deref()
+                .is_none_or(catalogue_token)
     }
 }
 impl ProviderCatalogue {
@@ -240,25 +244,42 @@ pub fn model_page(value: &Value) -> Result<(Vec<CatalogueModel>, Option<String>)
                     .ok_or(CatalogueCause::ProtocolUnavailable)
             })
             .transpose()?;
-        let options=(|| -> Result<(Vec<String>,Option<String>),()> {
-            let tiers=match item.get("serviceTiers") {
-                None=>Vec::new(),
-                Some(value)=>{
-                    let rows=value.as_array().ok_or(())?;
-                    if rows.len()>16 { return Err(()); }
-                    rows.iter().map(|tier|tier.get("id").and_then(Value::as_str)
-                        .filter(|v|catalogue_token(v)).map(str::to_owned).ok_or(()))
-                        .collect::<Result<Vec<_>,_>>()?
+        let options = (|| -> Result<(Vec<String>, Option<String>), ()> {
+            let tiers = match item.get("serviceTiers") {
+                None => Vec::new(),
+                Some(value) => {
+                    let rows = value.as_array().ok_or(())?;
+                    if rows.len() > 16 {
+                        return Err(());
+                    }
+                    rows.iter()
+                        .map(|tier| {
+                            tier.get("id")
+                                .and_then(Value::as_str)
+                                .filter(|v| catalogue_token(v))
+                                .map(str::to_owned)
+                                .ok_or(())
+                        })
+                        .collect::<Result<Vec<_>, _>>()?
                 }
             };
-            if tiers.iter().collect::<BTreeSet<_>>().len()!=tiers.len() { return Err(()); }
-            let default=item.get("defaultServiceTier").filter(|v|!v.is_null())
-                .map(|v|v.as_str().filter(|v|catalogue_token(v)).map(str::to_owned).ok_or(()))
+            if tiers.iter().collect::<BTreeSet<_>>().len() != tiers.len() {
+                return Err(());
+            }
+            let default = item
+                .get("defaultServiceTier")
+                .filter(|v| !v.is_null())
+                .map(|v| {
+                    v.as_str()
+                        .filter(|v| catalogue_token(v))
+                        .map(str::to_owned)
+                        .ok_or(())
+                })
                 .transpose()?;
-            Ok((tiers,default))
+            Ok((tiers, default))
         })();
-        let service_tiers_unavailable=options.is_err();
-        let (service_tiers,default_service_tier)=options.unwrap_or_default();
+        let service_tiers_unavailable = options.is_err();
+        let (service_tiers, default_service_tier) = options.unwrap_or_default();
         let model = CatalogueModel {
             service_tiers_unavailable,
             model,
@@ -317,81 +338,108 @@ mod tests {
 
     #[test]
     fn spec221_c05_model_page_preserves_service_tiers_and_never_applies_a_default() {
-        let page=json!({"data":[{"model":"model-a",
+        let page = json!({"data":[{"model":"model-a",
             "supportedReasoningEfforts":[{"reasoningEffort":"low"}],"defaultReasoningEffort":"low",
             "serviceTiers":[{"id":"default","name":"Standard","description":"PRIVATE_PROVIDER_TEXT"},
                 {"id":"priority","name":"Priority","description":"PRIVATE_PROVIDER_TEXT"}],
             "defaultServiceTier":"default"}],"nextCursor":null});
-        let (models,next)=model_page(&page).unwrap();
+        let (models, next) = model_page(&page).unwrap();
         assert!(next.is_none());
-        let value=serde_json::to_value(&models[0]).unwrap();
-        assert_eq!(value["service_tiers"],json!(["default","priority"]));
-        assert_eq!(value["default_service_tier"],"default");
+        let value = serde_json::to_value(&models[0]).unwrap();
+        assert_eq!(value["service_tiers"], json!(["default", "priority"]));
+        assert_eq!(value["default_service_tier"], "default");
         assert!(!value.to_string().contains("PRIVATE_PROVIDER_TEXT"));
-        let legacy=json!({"data":[{"model":"legacy",
+        let legacy = json!({"data":[{"model":"legacy",
             "supportedReasoningEfforts":[],"defaultReasoningEffort":null}],
             "nextCursor":null});
-        let old=serde_json::to_value(&model_page(&legacy).unwrap().0[0]).unwrap();
-        assert_eq!(old,json!({"model":"legacy","supported_efforts":[],"default_effort":null}));
-        let mut deprecated=legacy;
-        deprecated["data"][0]["additionalSpeedTiers"]=json!(["priority"]);
-        assert_eq!(serde_json::to_value(&model_page(&deprecated).unwrap().0[0]).unwrap(),old);
+        let old = serde_json::to_value(&model_page(&legacy).unwrap().0[0]).unwrap();
+        assert_eq!(
+            old,
+            json!({"model":"legacy","supported_efforts":[],"default_effort":null})
+        );
+        let mut deprecated = legacy;
+        deprecated["data"][0]["additionalSpeedTiers"] = json!(["priority"]);
+        assert_eq!(
+            serde_json::to_value(&model_page(&deprecated).unwrap().0[0]).unwrap(),
+            old
+        );
     }
 
     #[test]
     fn spec221_c05_model_page_preserves_models_when_optional_service_tiers_are_invalid() {
-        let page=json!({"data":[{"model":"model-a",
+        let page = json!({"data":[{"model":"model-a",
             "supportedReasoningEfforts":[],"defaultReasoningEffort":null,
             "serviceTiers":[{"id":"default","name":"Standard","description":"standard"}],
             "defaultServiceTier":"default"}],"nextCursor":null});
-        for bad in [json!(true),json!([{}]),json!([{"id":"bad\nvalue"}]),
-            json!([{"id":"default"},{"id":"default"}])] {
-            let mut value=page.clone();value["data"][0]["serviceTiers"]=bad;
-            let (models,_)=model_page(&value).unwrap();
-            assert_eq!(models[0].model,"model-a");
+        for bad in [
+            json!(true),
+            json!([{}]),
+            json!([{"id":"bad\nvalue"}]),
+            json!([{"id":"default"},{"id":"default"}]),
+        ] {
+            let mut value = page.clone();
+            value["data"][0]["serviceTiers"] = bad;
+            let (models, _) = model_page(&value).unwrap();
+            assert_eq!(models[0].model, "model-a");
             assert!(models[0].service_tiers_unavailable);
             assert!(models[0].service_tiers.is_empty());
             assert!(models[0].default_service_tier.is_none());
         }
-        let mut large=page.clone();
-        large["data"][0]["serviceTiers"]=json!((0..17).map(|n|json!({"id":format!("tier-{n}")})).collect::<Vec<_>>());
-        let (models,_)=model_page(&large).unwrap();
+        let mut large = page.clone();
+        large["data"][0]["serviceTiers"] = json!(
+            (0..17)
+                .map(|n| json!({"id":format!("tier-{n}")}))
+                .collect::<Vec<_>>()
+        );
+        let (models, _) = model_page(&large).unwrap();
         assert!(models[0].service_tiers_unavailable);
-        let mut invalid=page;
-        invalid["data"][0]["defaultServiceTier"]=json!(true);
-        let (models,_)=model_page(&invalid).unwrap();
+        let mut invalid = page;
+        invalid["data"][0]["defaultServiceTier"] = json!(true);
+        let (models, _) = model_page(&invalid).unwrap();
         assert!(models[0].service_tiers_unavailable);
-        assert_eq!(models[0].model,"model-a");
+        assert_eq!(models[0].model, "model-a");
     }
 
     #[test]
     fn spec221_c05_legacy_projection_keeps_the_original_wire_and_bounds() {
-        let value=json!({"connection_id":"main","definition_digest":"a".repeat(64),
+        let value = json!({"connection_id":"main","definition_digest":"a".repeat(64),
             "observed_at":1,"state":"observed","account_scope":"b".repeat(32),"cause":null,
             "models":[{"model":"model-a","supported_efforts":["low"],"default_effort":"low",
                 "service_tiers":["default","priority"],"default_service_tier":"default"}]});
-        let catalogue:ProviderCatalogue=serde_json::from_value(value).unwrap();
+        let catalogue: ProviderCatalogue = serde_json::from_value(value).unwrap();
         assert!(catalogue.valid());
-        let original=serde_json::to_value(&catalogue).unwrap();
-        let legacy=catalogue.clone().legacy_projection();
+        let original = serde_json::to_value(&catalogue).unwrap();
+        let legacy = catalogue.clone().legacy_projection();
         assert!(legacy.valid());
-        assert_eq!(serde_json::to_string(&legacy.models[0]).unwrap(),
-            r#"{"model":"model-a","supported_efforts":["low"],"default_effort":"low"}"#);
-        assert_eq!(serde_json::to_value(&catalogue).unwrap(),original);
-        let mut invalid=catalogue.clone();
-        invalid.models[0].service_tiers=vec!["default".into(),"default".into()];
+        assert_eq!(
+            serde_json::to_string(&legacy.models[0]).unwrap(),
+            r#"{"model":"model-a","supported_efforts":["low"],"default_effort":"low"}"#
+        );
+        assert_eq!(serde_json::to_value(&catalogue).unwrap(), original);
+        let mut invalid = catalogue.clone();
+        invalid.models[0].service_tiers = vec!["default".into(), "default".into()];
         assert!(!invalid.valid());
-        invalid=catalogue.clone();
-        invalid.models[0].default_service_tier=Some("bad\nvalue".into());
+        invalid = catalogue.clone();
+        invalid.models[0].default_service_tier = Some("bad\nvalue".into());
         assert!(!invalid.valid());
-        let mut large=catalogue;
-        large.models=(0..MAX_CATALOGUE_MODELS).map(|n|CatalogueModel {
-            service_tiers_unavailable:false,
-            model:format!("model-{n}"),supported_efforts:vec![],default_effort:None,
-            service_tiers:(0..16).map(|n|format!("tier-{n}-{}","x".repeat(200))).collect(),
-            default_service_tier:None}).collect();
-        assert!(serde_json::to_vec(&large).unwrap().len()>MAX_CATALOGUE_BYTES);
-        assert!(!large.valid(),"le nouveau catalogue ne relève pas la borne64Kio");
+        let mut large = catalogue;
+        large.models = (0..MAX_CATALOGUE_MODELS)
+            .map(|n| CatalogueModel {
+                service_tiers_unavailable: false,
+                model: format!("model-{n}"),
+                supported_efforts: vec![],
+                default_effort: None,
+                service_tiers: (0..16)
+                    .map(|n| format!("tier-{n}-{}", "x".repeat(200)))
+                    .collect(),
+                default_service_tier: None,
+            })
+            .collect();
+        assert!(serde_json::to_vec(&large).unwrap().len() > MAX_CATALOGUE_BYTES);
+        assert!(
+            !large.valid(),
+            "le nouveau catalogue ne relève pas la borne64Kio"
+        );
     }
 
     #[test]

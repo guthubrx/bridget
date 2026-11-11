@@ -4,7 +4,6 @@
 //! module ne projette ni modèle, ni quota, ni consommation : G5 ne couvre que
 //! la session gérée, le journal et son cycle de vie.
 
-use crate::poison::RecoverPoison;
 use crate::claude_provider_session::{
     ProviderSessionStore, classify_resume_failure, prepare_launch_args,
     session_id_from_system_init, strip_resume_arg,
@@ -15,7 +14,11 @@ use crate::managed_session::{
     ManagedProviderIdentity, ManagedSession, ManagedSessionDescriptor, ManagedTerminal,
     stop_owned_child,
 };
-use crate::protocol::{PresenceMode, ProviderObservation, ChildProviderRequest, ChildProviderRequestId, ChildRequestAnswer, ChildRequestDecision, ChildRequestKind};
+use crate::poison::RecoverPoison;
+use crate::protocol::{
+    ChildProviderRequest, ChildProviderRequestId, ChildRequestAnswer, ChildRequestDecision,
+    ChildRequestKind, PresenceMode, ProviderObservation,
+};
 use crate::transport::{Transport, TransportError};
 use bridget_core::{BridgetMessage, MessageIntent, MessageOrigin};
 use serde::{Deserialize, Serialize};
@@ -358,45 +361,27 @@ impl ClaudeStreamJsonTransport {
                 reason: "équipier Claude arrêté".to_string(),
             });
         }
-        if queue.active.as_ref().is_some_and(|active| !active.terminal_sent)
+        if queue
+            .active
+            .as_ref()
+            .is_some_and(|active| !active.terminal_sent)
             && let Some(active) = queue.active.take()
         {
             let _ = active.completion.send(ManagedTerminal::Cancelled);
         }
         wake.notify_all();
         drop(queue);
-        self.writer
-            .lock()
-            .recover_poison()
-            .take();
-        let mut child = self
-            .child
-            .lock()
-            .recover_poison();
+        self.writer.lock().recover_poison().take();
+        let mut child = self.child.lock().recover_poison();
         terminate_group(&mut child);
         drop(child);
-        if let Some(handle) = self
-            .reader_handle
-            .lock()
-            .recover_poison()
-            .take()
-        {
+        if let Some(handle) = self.reader_handle.lock().recover_poison().take() {
             let _ = handle.join();
         }
-        if let Some(handle) = self
-            .worker_handle
-            .lock()
-            .recover_poison()
-            .take()
-        {
+        if let Some(handle) = self.worker_handle.lock().recover_poison().take() {
             let _ = handle.join();
         }
-        if let Some(journal) = self
-            .journal
-            .lock()
-            .recover_poison()
-            .take()
-        {
+        if let Some(journal) = self.journal.lock().recover_poison().take() {
             journal.stop();
         }
     }
@@ -474,40 +459,64 @@ impl Transport for ClaudeStreamJsonTransport {
 }
 
 impl ManagedSession for ClaudeStreamJsonTransport {
-    fn answer_provider_request(&mut self, answer: &ChildRequestAnswer) -> Result<(), TransportError> {
-        if !self.alive.load(Ordering::SeqCst) { return Err(TransportError::AgentDead); }
+    fn answer_provider_request(
+        &mut self,
+        answer: &ChildRequestAnswer,
+    ) -> Result<(), TransportError> {
+        if !self.alive.load(Ordering::SeqCst) {
+            return Err(TransportError::AgentDead);
+        }
         let mut pending = self.user_inputs.lock().recover_poison();
-        let index = pending.iter().position(|(r,_)|r.provider_session == answer.provider_session && r.turn_id == answer.turn_id && r.provider_request_id == answer.provider_request_id)
-            .ok_or_else(||TransportError::DeliveryFailed("request_unknown".into()))?;
+        let index = pending
+            .iter()
+            .position(|(r, _)| {
+                r.provider_session == answer.provider_session
+                    && r.turn_id == answer.turn_id
+                    && r.provider_request_id == answer.provider_request_id
+            })
+            .ok_or_else(|| TransportError::DeliveryFailed("request_unknown".into()))?;
         let (request, uncertain) = &pending[index];
-        if *uncertain { return Err(TransportError::Io("child_request_write_uncertain: attente déjà incertaine".into())); }
-        if self.queue.0.lock().recover_poison().active.as_ref().is_none_or(|a| a.message_id != request.turn_id) {
+        if *uncertain {
+            return Err(TransportError::Io(
+                "child_request_write_uncertain: attente déjà incertaine".into(),
+            ));
+        }
+        if self
+            .queue
+            .0
+            .lock()
+            .recover_poison()
+            .active
+            .as_ref()
+            .is_none_or(|a| a.message_id != request.turn_id)
+        {
             return Err(TransportError::DeliveryFailed("request_unlinked".into()));
         }
         let frame = claude_user_input_response(request, answer)?;
         pending[index].1 = true;
         let result = (|| -> std::io::Result<()> {
-            let mut writer = self.writer.lock().map_err(|_|std::io::Error::other("writer poisoned"))?;
-            let stdin = writer.as_mut().ok_or_else(||std::io::Error::other("writer closed"))?;
-            writeln!(stdin, "{frame}")?; stdin.flush()
+            let mut writer = self
+                .writer
+                .lock()
+                .map_err(|_| std::io::Error::other("writer poisoned"))?;
+            let stdin = writer
+                .as_mut()
+                .ok_or_else(|| std::io::Error::other("writer closed"))?;
+            writeln!(stdin, "{frame}")?;
+            stdin.flush()
         })();
-        result.map_err(|e|TransportError::Io(format!("child_request_write_uncertain: {e}")))?;
-        pending.remove(index); Ok(())
+        result.map_err(|e| TransportError::Io(format!("child_request_write_uncertain: {e}")))?;
+        pending.remove(index);
+        Ok(())
     }
     fn provider_permissions(&self) -> Option<(String, Value, u64, Option<String>)> {
-        self.permission_observation
-            .lock()
-            .recover_poison()
-            .clone()
+        self.permission_observation.lock().recover_poison().clone()
     }
     fn set_private_profile_instructions(
         &mut self,
         instructions: &str,
     ) -> Result<(), TransportError> {
-        *self
-            .private_profile_instructions
-            .lock()
-            .recover_poison() = Some(instructions.to_string());
+        *self.private_profile_instructions.lock().recover_poison() = Some(instructions.to_string());
         Ok(())
     }
 
@@ -541,10 +550,7 @@ impl ManagedSession for ClaudeStreamJsonTransport {
     }
 
     fn process_id(&self) -> u32 {
-        self.child
-            .lock()
-            .recover_poison()
-            .id()
+        self.child.lock().recover_poison().id()
     }
 
     fn activate_journal(
@@ -557,10 +563,7 @@ impl ManagedSession for ClaudeStreamJsonTransport {
         let failure: JournalFailureSink = Arc::new(move |detail| {
             push_internal(&events, ManagedEventKind::JournalFailed { detail });
         });
-        *self
-            .journal
-            .lock()
-            .recover_poison() =
+        *self.journal.lock().recover_poison() =
             Some(JournalWriter::start_with_live_feed_and_failure(
                 root,
                 agent,
@@ -570,25 +573,20 @@ impl ManagedSession for ClaudeStreamJsonTransport {
             )?);
         // Même racine que le journal : le session_id fournisseur survit ainsi
         // à la mort du wrapper et au redémarrage du daemon.
-        *self
-            .session_store
-            .lock()
-            .recover_poison() =
-            Some(ProviderSessionStore::new(root, agent));
+        *self.session_store.lock().recover_poison() = Some(ProviderSessionStore::new(root, agent));
         Ok(())
     }
 
     fn journal_writer(&self) -> Option<(JournalWriter, String)> {
-        self.journal.lock().ok().and_then(|journal| journal.clone())
+        self.journal
+            .lock()
+            .ok()
+            .and_then(|journal| journal.clone())
             .map(|writer| (writer, self.connection_id.clone()))
     }
 
     fn drain_events(&self) -> Vec<ManagedEvent> {
-        self.events
-            .lock()
-            .recover_poison()
-            .drain(..)
-            .collect()
+        self.events.lock().recover_poison().drain(..).collect()
     }
 
     fn cancel_delivery(&self, message_id: &str, reason: &str) -> bool {
@@ -624,14 +622,8 @@ impl ManagedSession for ClaudeStreamJsonTransport {
             let _ = active.completion.send(ManagedTerminal::Cancelled);
             wake.notify_one();
             self.alive.store(false, Ordering::SeqCst);
-            self.writer
-                .lock()
-                .recover_poison()
-                .take();
-            let mut child = self
-                .child
-                .lock()
-                .recover_poison();
+            self.writer.lock().recover_poison().take();
+            let mut child = self.child.lock().recover_poison();
             terminate_group(&mut child);
             return true;
         }
@@ -1071,19 +1063,12 @@ fn relaunch_after_resume_failure(
     session_store: &SessionStoreHandle,
     notice: String,
 ) -> (ChildStdout, Vec<String>) {
-    if let Some(store) = session_store
-        .lock()
-        .recover_poison()
-        .as_ref()
-    {
+    if let Some(store) = session_store.lock().recover_poison().as_ref() {
         let _ = store.clear();
     }
     push_internal(events, ManagedEventKind::Error { detail: notice });
     {
-        let mut child = bootstrap
-            .child
-            .lock()
-            .recover_poison();
+        let mut child = bootstrap.child.lock().recover_poison();
         terminate_group(&mut child);
     }
     strip_resume_arg(&mut bootstrap.args);
@@ -1101,17 +1086,11 @@ fn relaunch_after_resume_failure(
         return (fallback.expect("repli Claude indisponible"), Vec::new());
     };
     {
-        let mut writer = bootstrap
-            .writer
-            .lock()
-            .recover_poison();
+        let mut writer = bootstrap.writer.lock().recover_poison();
         *writer = Some(spawned.stdin);
     }
     {
-        let mut child = bootstrap
-            .child
-            .lock()
-            .recover_poison();
+        let mut child = bootstrap.child.lock().recover_poison();
         *child = spawned.child;
     }
     (spawned.stdout, Vec::new())
@@ -1151,10 +1130,7 @@ fn bootstrap_resume_in_reader(
                     );
                 }
                 if let Some(session_id) = session_id_from_system_init(&value)
-                    && let Some(store) = session_store
-                        .lock()
-                        .recover_poison()
-                        .as_ref()
+                    && let Some(store) = session_store.lock().recover_poison().as_ref()
                 {
                     let _ = store.store(&session_id);
                 }
@@ -1219,9 +1195,7 @@ fn spawn_worker(
                 let (lock, wake) = &*queue;
                 let mut state = lock.lock().recover_poison();
                 while state.messages.is_empty() && !state.closed {
-                    state = wake
-                        .wait(state)
-                        .recover_poison();
+                    state = wake.wait(state).recover_poison();
                 }
                 if state.closed {
                     return;
@@ -1239,11 +1213,7 @@ fn spawn_worker(
                 continue;
             }
             let (completion, receiver) = mpsc::channel();
-            queue
-                .0
-                .lock()
-                .recover_poison()
-                .active = Some(ActiveTurn {
+            queue.0.lock().recover_poison().active = Some(ActiveTurn {
                 message_id: message.id.clone(),
                 completion,
                 response: String::new(),
@@ -1273,10 +1243,7 @@ fn spawn_worker(
                     "body": message.body,
                 }),
             );
-            let instructions = private_profile_instructions
-                .lock()
-                .recover_poison()
-                .clone();
+            let instructions = private_profile_instructions.lock().recover_poison().clone();
             let terminal = match write_input(&writer, &message, instructions.as_deref()) {
                 Ok(()) => {
                     push_internal(
@@ -1425,12 +1392,29 @@ fn interrupt_terminal_reason(reason: &str) -> bool {
 // success est le repli documenté, jamais le texte d'un assistant ou d'un commit.
 // Une raison présente mais inconnue ou mal typée ne bénéficie pas de ce repli.
 fn known_claude_terminal_reason(reason: &str) -> Option<&str> {
-    matches!(reason, "completed" | "max_turns" | "tool_deferred" | "aborted_streaming"
-        | "aborted_tools" | "hook_stopped" | "stop_hook_prevented" | "background_requested"
-        | "blocking_limit" | "rapid_refill_breaker" | "prompt_too_long" | "image_error"
-        | "model_error" | "api_error" | "malformed_tool_use_exhausted" | "budget_exhausted"
-        | "structured_output_retry_exhausted" | "tool_deferred_unavailable" | "turn_setup_failed")
-        .then_some(reason)
+    matches!(
+        reason,
+        "completed"
+            | "max_turns"
+            | "tool_deferred"
+            | "aborted_streaming"
+            | "aborted_tools"
+            | "hook_stopped"
+            | "stop_hook_prevented"
+            | "background_requested"
+            | "blocking_limit"
+            | "rapid_refill_breaker"
+            | "prompt_too_long"
+            | "image_error"
+            | "model_error"
+            | "api_error"
+            | "malformed_tool_use_exhausted"
+            | "budget_exhausted"
+            | "structured_output_retry_exhausted"
+            | "tool_deferred_unavailable"
+            | "turn_setup_failed"
+    )
+    .then_some(reason)
 }
 
 fn classify_claude_result(
@@ -1540,43 +1524,94 @@ fn claude_result_metadata(value: &Value, terminal: &ManagedTerminal, interrupted
 
 // Même mécanisme que canUseTool de T3 ; seule AskUserQuestion sort du refus des permissions.
 fn claude_user_input(value: &Value, session: &str, turn: &str) -> Option<ChildProviderRequest> {
-    if value.pointer("/request/tool_name")?.as_str()? != "AskUserQuestion" {return None;}
+    if value.pointer("/request/tool_name")?.as_str()? != "AskUserQuestion" {
+        return None;
+    }
     let id = value["request_id"].as_str()?;
     let input = value.pointer("/request/input")?;
-    if serde_json::to_vec(input).ok()?.len() > 16*1024 {return None;}
+    if serde_json::to_vec(input).ok()?.len() > 16 * 1024 {
+        return None;
+    }
     let source = input["questions"].as_array()?;
-    if source.is_empty() || source.len()>16 {return None;}
-    let mut ids = Vec::new(); let mut questions = Vec::new();
+    if source.is_empty() || source.len() > 16 {
+        return None;
+    }
+    let mut ids = Vec::new();
+    let mut questions = Vec::new();
     for q in source {
         let id = q["question"].as_str()?;
-        if id.is_empty() || ids.iter().any(|v|v==id) {return None;}
+        if id.is_empty() || ids.iter().any(|v| v == id) {
+            return None;
+        }
         ids.push(id.to_string());
-        let mut question = q.clone(); question["id"] = json!(id); questions.push(question);
+        let mut question = q.clone();
+        question["id"] = json!(id);
+        questions.push(question);
     }
-    Some(ChildProviderRequest {version:1, provider_session:session.into(), turn_id:turn.into(),
-        provider_request_id:ChildProviderRequestId::String(id.into()), kind:ChildRequestKind::UserInput,
-        details:json!({"method":"AskUserQuestion","input":input,"questions":questions,"secret":false}),
-        offered:vec![ChildRequestDecision::Accept,ChildRequestDecision::Decline,ChildRequestDecision::Cancel], question_ids:ids,truncated:false})
+    Some(ChildProviderRequest {
+        version: 1,
+        provider_session: session.into(),
+        turn_id: turn.into(),
+        provider_request_id: ChildProviderRequestId::String(id.into()),
+        kind: ChildRequestKind::UserInput,
+        details: json!({"method":"AskUserQuestion","input":input,"questions":questions,"secret":false}),
+        offered: vec![
+            ChildRequestDecision::Accept,
+            ChildRequestDecision::Decline,
+            ChildRequestDecision::Cancel,
+        ],
+        question_ids: ids,
+        truncated: false,
+    })
 }
-fn claude_user_input_response(request: &ChildProviderRequest, answer: &ChildRequestAnswer) -> Result<Value,TransportError> {
+fn claude_user_input_response(
+    request: &ChildProviderRequest,
+    answer: &ChildRequestAnswer,
+) -> Result<Value, TransportError> {
     let response = if answer.decision == ChildRequestDecision::Accept {
-        let raw = answer.answer.as_ref().and_then(Value::as_object).ok_or_else(||TransportError::DeliveryFailed("answer_invalid".into()))?;
-        if raw.len() != request.question_ids.len() || serde_json::to_vec(raw).map_or(true,|v|v.len()>32*1024) {return Err(TransportError::DeliveryFailed("answer_invalid".into()));}
+        let raw = answer
+            .answer
+            .as_ref()
+            .and_then(Value::as_object)
+            .ok_or_else(|| TransportError::DeliveryFailed("answer_invalid".into()))?;
+        if raw.len() != request.question_ids.len()
+            || serde_json::to_vec(raw).map_or(true, |v| v.len() > 32 * 1024)
+        {
+            return Err(TransportError::DeliveryFailed("answer_invalid".into()));
+        }
         let mut mapped = serde_json::Map::new();
         for id in &request.question_ids {
-            let a = raw.get(id).ok_or_else(||TransportError::DeliveryFailed("answer_invalid".into()))?;
-            let values = a["selected"].as_array().ok_or_else(||TransportError::DeliveryFailed("answer_invalid".into()))?;
-            let mut selected = values.iter().map(|v|v.as_str().map(str::to_owned)).collect::<Option<Vec<_>>>().ok_or_else(||TransportError::DeliveryFailed("answer_invalid".into()))?;
-            let text = a["text"].as_str().ok_or_else(||TransportError::DeliveryFailed("answer_invalid".into()))?;
-            if !text.is_empty() {selected.push(text.into());}
-            if selected.is_empty() {return Err(TransportError::DeliveryFailed("answer_invalid".into()));}
-            mapped.insert(id.clone(),json!(selected.join(", ")));
+            let a = raw
+                .get(id)
+                .ok_or_else(|| TransportError::DeliveryFailed("answer_invalid".into()))?;
+            let values = a["selected"]
+                .as_array()
+                .ok_or_else(|| TransportError::DeliveryFailed("answer_invalid".into()))?;
+            let mut selected = values
+                .iter()
+                .map(|v| v.as_str().map(str::to_owned))
+                .collect::<Option<Vec<_>>>()
+                .ok_or_else(|| TransportError::DeliveryFailed("answer_invalid".into()))?;
+            let text = a["text"]
+                .as_str()
+                .ok_or_else(|| TransportError::DeliveryFailed("answer_invalid".into()))?;
+            if !text.is_empty() {
+                selected.push(text.into());
+            }
+            if selected.is_empty() {
+                return Err(TransportError::DeliveryFailed("answer_invalid".into()));
+            }
+            mapped.insert(id.clone(), json!(selected.join(", ")));
         }
         let mut input = request.details["input"].clone();
         input["answers"] = Value::Object(mapped);
         json!({"behavior":"allow","updatedInput":input})
-    } else {json!({"behavior":"deny","message":"user_input_cancelled","interrupt":true})};
-    Ok(json!({"type":"control_response","response":{"subtype":"success","request_id":request.provider_request_id,"response":response}}))
+    } else {
+        json!({"behavior":"deny","message":"user_input_cancelled","interrupt":true})
+    };
+    Ok(
+        json!({"type":"control_response","response":{"subtype":"success","request_id":request.provider_request_id,"response":response}}),
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1632,9 +1667,7 @@ fn spawn_reader(
                     .or_else(|| value.get("permission_mode"))
                     .and_then(Value::as_str);
                 let session = value.get("session_id").and_then(Value::as_str);
-                let mut observed = permission_observation
-                    .lock()
-                    .recover_poison();
+                let mut observed = permission_observation.lock().recover_poison();
                 if let Some(mode) = mode {
                     if matches!(
                         mode,
@@ -1688,11 +1721,7 @@ fn spawn_reader(
             }
             if let Some(session_id) = session_id_from_system_init(&value) {
                 provider_session = Some(session_id.clone());
-                if let Some(store) = session_store
-                    .lock()
-                    .recover_poison()
-                    .as_ref()
-                {
+                if let Some(store) = session_store.lock().recover_poison().as_ref() {
                     let _ = store.store(&session_id);
                 }
                 push_source(
@@ -1715,13 +1744,7 @@ fn spawn_reader(
                 .get("type")
                 .and_then(Value::as_str)
                 .unwrap_or("inconnu");
-            if let Some(active) = queue
-                .0
-                .lock()
-                .recover_poison()
-                .active
-                .as_mut()
-            {
+            if let Some(active) = queue.0.lock().recover_poison().active.as_mut() {
                 active.background_tasks.observe(&value);
             }
             for path in confirmed_tool_writes(&value, &mut pending_writes) {
@@ -1789,25 +1812,31 @@ fn spawn_reader(
                         break;
                     }
                     if permission_requests.insert(request_id.to_owned()) {
-                        let turn = queue.0.lock().recover_poison().active.as_ref().map(|a| a.message_id.clone());
-                        if let (Some(session), Some(turn)) = (provider_session.as_deref(), turn.as_deref())
-                            && let Some(request) = claude_user_input(&value, session, turn) {
-                                let mut pending = user_inputs.lock().recover_poison();
-                                pending.retain(|(r,_)|r.turn_id == turn);
-                                if pending.len() < 4 {
-                                    pending.push((request.clone(), false));
-                                    drop(pending);
-                                    push_source(&events, raw, ManagedEventKind::ProviderRequest { request });
-                                    continue;
-                                }
-                            }
-                        if let Some(active) = queue
+                        let turn = queue
                             .0
                             .lock()
                             .recover_poison()
                             .active
-                            .as_mut()
+                            .as_ref()
+                            .map(|a| a.message_id.clone());
+                        if let (Some(session), Some(turn)) =
+                            (provider_session.as_deref(), turn.as_deref())
+                            && let Some(request) = claude_user_input(&value, session, turn)
                         {
+                            let mut pending = user_inputs.lock().recover_poison();
+                            pending.retain(|(r, _)| r.turn_id == turn);
+                            if pending.len() < 4 {
+                                pending.push((request.clone(), false));
+                                drop(pending);
+                                push_source(
+                                    &events,
+                                    raw,
+                                    ManagedEventKind::ProviderRequest { request },
+                                );
+                                continue;
+                            }
+                        }
+                        if let Some(active) = queue.0.lock().recover_poison().active.as_mut() {
                             active.permission_denied = true;
                         }
                         let frame = json!({"type":"control_response","response":{"subtype":"success","request_id":request_id,"response":{"behavior":"deny","message":"provider_permission_denied","interrupt":true}}});
@@ -1827,13 +1856,7 @@ fn spawn_reader(
                             break;
                         }
                     }
-                } else if let Some(active) = queue
-                    .0
-                    .lock()
-                    .recover_poison()
-                    .active
-                    .as_mut()
-                {
+                } else if let Some(active) = queue.0.lock().recover_poison().active.as_mut() {
                     active.permission_denied = true;
                 }
                 continue;
@@ -1890,14 +1913,15 @@ fn spawn_reader(
                             .pointer("/message/content")
                             .and_then(Value::as_array)
                             .is_some_and(|content| !content.is_empty());
-                    if (limited && !active.structured_rate_limit_observed)
-                        || (!limited && accepted)
+                    if (limited && !active.structured_rate_limit_observed) || (!limited && accepted)
                     {
                         assistant_limit_observation = Some(limited);
                     }
                     active.latest_assistant_rate_limited = limited;
-                    active.latest_assistant_api_error = value.get("error").and_then(Value::as_str) == Some("authentication_failed")
-                        || (value.get("error").is_none_or(Value::is_null) && value.get("isApiErrorMessage") == Some(&Value::Bool(true)));
+                    active.latest_assistant_api_error = value.get("error").and_then(Value::as_str)
+                        == Some("authentication_failed")
+                        || (value.get("error").is_none_or(Value::is_null)
+                            && value.get("isApiErrorMessage") == Some(&Value::Bool(true)));
                 }
                 drop(state);
                 // TOOL : le content_block_start arrive tôt avec name mais
@@ -1957,34 +1981,55 @@ fn spawn_reader(
                     .and_then(Value::as_array)
                     .map_or(0, Vec::len);
                 let (interrupted_for_permission, terminal) = {
-                    let state=queue.0.lock().recover_poison();
-                    let active=state.active.as_ref();
-                    let interrupted=active.is_some_and(|active|active.permission_denied);
-                    let terminal=classify_claude_result(&value,interrupted,
-                        active.is_some_and(|active|active.latest_assistant_rate_limited),
-                        active.filter(|active|active.latest_assistant_api_error).map(|active|active.response.as_str()));
-                    (interrupted,terminal)
+                    let state = queue.0.lock().recover_poison();
+                    let active = state.active.as_ref();
+                    let interrupted = active.is_some_and(|active| active.permission_denied);
+                    let terminal = classify_claude_result(
+                        &value,
+                        interrupted,
+                        active.is_some_and(|active| active.latest_assistant_rate_limited),
+                        active
+                            .filter(|active| active.latest_assistant_api_error)
+                            .map(|active| active.response.as_str()),
+                    );
+                    (interrupted, terminal)
                 };
-                let active_id = queue.0.lock().recover_poison()
-                    .active.as_ref().map(|active| active.message_id.clone());
+                let active_id = queue
+                    .0
+                    .lock()
+                    .recover_poison()
+                    .active
+                    .as_ref()
+                    .map(|active| active.message_id.clone());
                 if let Some(message_id) = active_id {
-                    record_or_terminal(&journal, &events, "provider_result", Some(&message_id),
-                        claude_result_metadata(&value, &terminal, interrupted_for_permission));
+                    record_or_terminal(
+                        &journal,
+                        &events,
+                        "provider_result",
+                        Some(&message_id),
+                        claude_result_metadata(&value, &terminal, interrupted_for_permission),
+                    );
                 }
                 if tool_denials > 0 {
                     let mut state = queue.0.lock().recover_poison();
                     if let Some(active) = state.active.as_mut() {
                         if active.response.is_empty()
-                            && let Some(result) = value.get("result").and_then(Value::as_str) {
-                                active.response.push_str(result);
-                            }
+                            && let Some(result) = value.get("result").and_then(Value::as_str)
+                        {
+                            active.response.push_str(result);
+                        }
                         if matches!(terminal, ManagedTerminal::Completed) {
                             active.response.insert_str(0, &format!(
                                 "Bridget : {tool_denials} appel(s) d'outil refusé(s) par les permissions ou les hooks. Les refus sont conservés.\n\n"
                             ));
                         }
-                        record_or_terminal(&journal, &events, "permission_denied", Some(&active.message_id),
-                            json!({"code":"provider_permission_denied","count":tool_denials,"turn_completed":matches!(terminal,ManagedTerminal::Completed)}));
+                        record_or_terminal(
+                            &journal,
+                            &events,
+                            "permission_denied",
+                            Some(&active.message_id),
+                            json!({"code":"provider_permission_denied","count":tool_denials,"turn_completed":matches!(terminal,ManagedTerminal::Completed)}),
+                        );
                     }
                 }
                 // (C) Issue attestée : `terminal_reason` du résultat Claude
@@ -1992,20 +2037,22 @@ fn spawn_reader(
                 // (ex. "end_turn") — attach lit payload.stop_reason.
                 let stop_reason = if matches!(terminal, ManagedTerminal::Completed) {
                     Some("completed".to_owned())
-                } else { value
-                    .get("terminal_reason")
-                    .and_then(Value::as_str)
-                    .map(str::trim)
-                    .filter(|reason| !reason.is_empty())
-                    .map(str::to_string)
-                    .or_else(|| {
-                        value
-                            .get("stop_reason")
-                            .and_then(Value::as_str)
-                            .map(str::trim)
-                            .filter(|reason| !reason.is_empty())
-                            .map(str::to_string)
-                    }) };
+                } else {
+                    value
+                        .get("terminal_reason")
+                        .and_then(Value::as_str)
+                        .map(str::trim)
+                        .filter(|reason| !reason.is_empty())
+                        .map(str::to_string)
+                        .or_else(|| {
+                            value
+                                .get("stop_reason")
+                                .and_then(Value::as_str)
+                                .map(str::trim)
+                                .filter(|reason| !reason.is_empty())
+                                .map(str::to_string)
+                        })
+                };
                 let pending_result_update = {
                     let mut state = queue.0.lock().recover_poison();
                     if let Some(active) = state.active.as_mut() {
@@ -2073,12 +2120,7 @@ fn spawn_reader(
                     detail: "événement Claude rate_limit_event incomplet".to_string(),
                 });
                 if matches!(&event, ManagedEventKind::RateLimitObserved { status, .. } if status == "rejected")
-                    && let Some(active) = queue
-                        .0
-                        .lock()
-                        .recover_poison()
-                        .active
-                        .as_mut()
+                    && let Some(active) = queue.0.lock().recover_poison().active.as_mut()
                 {
                     // Le code assistant ne doit pas ajouter un refus « unknown »
                     // permanent à une fenêtre dont le fournisseur a donné le retour.
@@ -2101,7 +2143,10 @@ fn spawn_reader(
         let mut state = queue.0.lock().recover_poison();
         // Un fournisseur qui sort juste après son résultat ferme stdout avant
         // que le fil de la mission ne relève sa réponse : la lui laisser.
-        if state.active.as_ref().is_some_and(|active| !active.terminal_sent)
+        if state
+            .active
+            .as_ref()
+            .is_some_and(|active| !active.terminal_sent)
             && let Some(active) = state.active.take()
         {
             let _ = active.completion.send(ManagedTerminal::Failed {
@@ -2371,15 +2416,12 @@ fn push_internal(events: &Arc<Mutex<VecDeque<ManagedEvent>>>, kind: ManagedEvent
 }
 
 fn push_source(events: &Arc<Mutex<VecDeque<ManagedEvent>>>, raw: Vec<u8>, kind: ManagedEventKind) {
-    events
-        .lock()
-        .recover_poison()
-        .push_back(ManagedEvent {
-            source: ManagedEventSource::ClaudeStreamJson,
-            origin: ManagedEventOrigin::SourceLine,
-            raw,
-            kind,
-        });
+    events.lock().recover_poison().push_back(ManagedEvent {
+        source: ManagedEventSource::ClaudeStreamJson,
+        origin: ManagedEventOrigin::SourceLine,
+        raw,
+        kind,
+    });
 }
 
 #[cfg(test)]

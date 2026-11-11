@@ -1217,11 +1217,13 @@ impl Store {
         )
         .map_err(sql)?;
         let mut wakes = Vec::with_capacity(targets.len());
-        let mut sleeping=Vec::new();
+        let mut sleeping = Vec::new();
         for target in &targets {
-            if crate::agent_tracking::dormant(&tx,target).map_err(sql)? {
+            if crate::agent_tracking::dormant(&tx, target).map_err(sql)? {
                 sleeping.push(target.clone());
-                wakes.push(json!({"agent_id":target,"state":"not_solicited","reason":"agent_dormant"}));
+                wakes.push(
+                    json!({"agent_id":target,"state":"not_solicited","reason":"agent_dormant"}),
+                );
                 continue;
             }
             tx.execute(
@@ -1251,8 +1253,10 @@ impl Store {
                 "reason": wake.reason,
             }));
         }
-        let mut notices=request.notices.to_vec();
-        if !sleeping.is_empty(){notices.push("dormant_members_ignored");}
+        let mut notices = request.notices.to_vec();
+        if !sleeping.is_empty() {
+            notices.push("dormant_members_ignored");
+        }
         let mut result = json!({
             "status": "posted",
             "thread_id": request.thread_id,
@@ -1263,8 +1267,10 @@ impl Store {
             "wakes": wakes,
         });
         if !sleeping.is_empty() {
-            result["dormant_recipients"]=json!(sleeping);
-            result["next_action"]=json!("Les agents dormants n'ont pas été sollicités. Réveillez leur fiche avant une nouvelle sollicitation ciblée. Ce dépôt reste lisible ; son rejeu ne crée aucun rattrapage. Les autres membres continuent leur travail.");
+            result["dormant_recipients"] = json!(sleeping);
+            result["next_action"] = json!(
+                "Les agents dormants n'ont pas été sollicités. Réveillez leur fiche avant une nouvelle sollicitation ciblée. Ce dépôt reste lisible ; son rejeu ne crée aucun rattrapage. Les autres membres continuent leur travail."
+            );
         }
         if !request.project_warnings.is_empty() {
             result["project_warnings"] = json!(request.project_warnings);

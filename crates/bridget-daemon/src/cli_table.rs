@@ -268,7 +268,7 @@ pub(crate) fn normalize(mut args: Vec<String>) -> Result<Arguments, String> {
     }
     let op = clean.get(2).cloned().unwrap_or_default();
     if (root == "worker" && op != "diagnose")
-        || (root == "agents" && matches!(op.as_str(),"sleep"|"wake"))
+        || (root == "agents" && matches!(op.as_str(), "sleep" | "wake"))
         || (root == "mobile" && matches!(op.as_str(), "pair" | "serve"))
         || (root == "updates" && matches!(op.as_str(), "watch" | "once" | "setup"))
         || (root == "thread" && op == "watch")
@@ -913,10 +913,12 @@ fn sections(family: &str, value: &Value, width: usize, color: bool) -> String {
             _ => scalar.push(vec![key.clone(), text(v)]),
         }
     }
-    if out.is_empty() && scalar.is_empty()
-        && let Some(status) = object.get("status") {
-            scalar.push(vec!["ÉTAT".into(), text(status)]);
-        }
+    if out.is_empty()
+        && scalar.is_empty()
+        && let Some(status) = object.get("status")
+    {
+        scalar.push(vec!["ÉTAT".into(), text(status)]);
+    }
     if !scalar.is_empty() {
         out.push_str(&table(
             &["CHAMP".into(), "VALEUR".into()],
@@ -1008,9 +1010,28 @@ mod tests225 {
     use super::*;
     #[test]
     fn tracking230_table_n_envoie_pas_une_mutation_et_accepte_historique() {
-        assert!(normalize(args(&["bridget","agents","sleep","23000000-0000-4000-8000-000000000001","--table"])).is_err());
-        let history=normalize(args(&["bridget","--table","agents","--dormant","--global"])).unwrap();
-        assert_eq!(history.args,args(&["bridget","agents","--dormant","--global","--json"]));
+        assert!(
+            normalize(args(&[
+                "bridget",
+                "agents",
+                "sleep",
+                "23000000-0000-4000-8000-000000000001",
+                "--table"
+            ]))
+            .is_err()
+        );
+        let history = normalize(args(&[
+            "bridget",
+            "--table",
+            "agents",
+            "--dormant",
+            "--global",
+        ]))
+        .unwrap();
+        assert_eq!(
+            history.args,
+            args(&["bridget", "agents", "--dormant", "--global", "--json"])
+        );
     }
     fn args(s: &[&str]) -> Vec<String> {
         s.iter().map(|v| (*v).into()).collect()

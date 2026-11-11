@@ -126,10 +126,26 @@ struct Relay {
 
 impl Relay {
     fn new(front: &Path, daemon: PathBuf) -> Self {
-        Self::with_worker_capability(front, daemon, Duration::ZERO, false, false, false, Duration::ZERO)
+        Self::with_worker_capability(
+            front,
+            daemon,
+            Duration::ZERO,
+            false,
+            false,
+            false,
+            Duration::ZERO,
+        )
     }
     fn with_ready_delay(front: &Path, daemon: PathBuf, ready_delay: Duration) -> Self {
-        Self::with_worker_capability(front, daemon, ready_delay, false, false, false, Duration::ZERO)
+        Self::with_worker_capability(
+            front,
+            daemon,
+            ready_delay,
+            false,
+            false,
+            false,
+            Duration::ZERO,
+        )
     }
     fn with_ready_delay_lease172(front: &Path, daemon: PathBuf, ready_delay: Duration) -> Self {
         Self::with_worker_capability(front, daemon, ready_delay, true, true, true, Duration::ZERO)
@@ -141,10 +157,26 @@ impl Relay {
     /// daemon réel ni son build. Le worker doit négocier l'enveloppe distincte avant
     /// de recevoir le probe.
     fn with_candidate_probe(front: &Path, daemon: PathBuf) -> Self {
-        Self::with_worker_capability(front, daemon, Duration::ZERO, true, false, false, Duration::ZERO)
+        Self::with_worker_capability(
+            front,
+            daemon,
+            Duration::ZERO,
+            true,
+            false,
+            false,
+            Duration::ZERO,
+        )
     }
     fn with_candidate_probe_v2(front: &Path, daemon: PathBuf) -> Self {
-        Self::with_worker_capability(front, daemon, Duration::ZERO, true, true, false, Duration::ZERO)
+        Self::with_worker_capability(
+            front,
+            daemon,
+            Duration::ZERO,
+            true,
+            true,
+            false,
+            Duration::ZERO,
+        )
     }
     fn with_worker_capability(
         front: &Path,
@@ -1098,10 +1130,7 @@ impl RemoteFixture {
             .output()
             .unwrap();
         let process = String::from_utf8_lossy(&observed.stdout);
-        assert!(
-            fixture_binary201(&process)
-                && !process.to_lowercase().contains("firefox")
-        );
+        assert!(fixture_binary201(&process) && !process.to_lowercase().contains("firefox"));
         assert!(matches!(
             control.request(
                 command,
@@ -1912,7 +1941,10 @@ fn spec201_upgrade183_preserves_remote_worker_and_results() {
         let binary = std::env::var(key).expect("binaire de recette requis");
         assert!(Path::new(&binary).is_absolute() && Path::new(&binary).is_file());
     }
-    for case in ["master-restart-upgrade201", "master-restart-completed-upgrade201"] {
+    for case in [
+        "master-restart-upgrade201",
+        "master-restart-completed-upgrade201",
+    ] {
         real_master_case(case);
     }
 }
@@ -1931,8 +1963,11 @@ fn real_master_case(case: &str) {
     // avant le lancement du daemon qui admet réellement la délégation.
     f.fixture.stop();
     if case.ends_with("upgrade201") {
-        support::private_write(&f.fixture.root.join("test-binary201"),
-            std::env::var("BRIDGET_TEST_OLD_BINARY").unwrap()).unwrap();
+        support::private_write(
+            &f.fixture.root.join("test-binary201"),
+            std::env::var("BRIDGET_TEST_OLD_BINARY").unwrap(),
+        )
+        .unwrap();
     }
     f.relay.take();
     fs::remove_file(&f.front).unwrap();
@@ -2002,12 +2037,16 @@ fn real_master_case(case: &str) {
     } else if case == "late-ready172" {
         f.front = f.fixture.root.join("state/worker.sock");
         f.relay = Some(Relay::with_ready_delay_lease172(
-            &f.front, socket.clone(), Duration::from_secs(6),
+            &f.front,
+            socket.clone(),
+            Duration::from_secs(6),
         ));
     } else if case == "slot-delay172" {
         f.front = f.fixture.root.join("state/worker.sock");
         f.relay = Some(Relay::with_result_slot_delay(
-            &f.front, socket.clone(), Duration::from_secs(4),
+            &f.front,
+            socket.clone(),
+            Duration::from_secs(4),
         ));
     } else if case == "startup-failed" {
         support::private_write(&f.fixture.root.join("fail-init162"), b"fail").unwrap();
@@ -2052,7 +2091,9 @@ fn real_master_case(case: &str) {
         );
     }
     if matches!(case, "worktree172" | "late-ready172") {
-        let NativeDelegationRequest::AutoDelegateV2(auto) = &mut request else { unreachable!() };
+        let NativeDelegationRequest::AutoDelegateV2(auto) = &mut request else {
+            unreachable!()
+        };
         auto.project_id = None;
         auto.request_id = format!("native172-{case}");
     }
@@ -2233,17 +2274,35 @@ fn real_master_case(case: &str) {
     f.fixture.native_groups.push(marker.clone());
     assert!(receipt.permit.is_some());
     if case == "slot-delay172" {
-        assert!(f.relay.as_ref().unwrap().result_slot_delayed.load(Ordering::Acquire));
+        assert!(
+            f.relay
+                .as_ref()
+                .unwrap()
+                .result_slot_delayed
+                .load(Ordering::Acquire)
+        );
         assert_eq!(task["remote_result_slots"].as_array().unwrap().len(), 1);
-        assert!(created["error"].is_null(), "réservation retardée : {created}");
+        assert!(
+            created["error"].is_null(),
+            "réservation retardée : {created}"
+        );
     }
     if matches!(case, "worktree172" | "late-ready172") {
         let permit = receipt.permit.as_ref().unwrap();
-        assert_eq!(permit.expires_at - permit.issued_at, WORKER_RELEASE_LEASE_SECS);
+        assert_eq!(
+            permit.expires_at - permit.issued_at,
+            WORKER_RELEASE_LEASE_SECS
+        );
         assert_eq!(task["remote_placement"]["project_id"], "project162");
     }
     if case == "late-ready172" {
-        assert!(f.relay.as_ref().unwrap().ready_delayed.load(Ordering::Acquire));
+        assert!(
+            f.relay
+                .as_ref()
+                .unwrap()
+                .ready_delayed
+                .load(Ordering::Acquire)
+        );
     }
     assert_eq!(process_birth(marker.pgid).unwrap(), marker.birth);
     // Le transport Codex crée son propre groupe : le wrapper attesté est
@@ -2293,8 +2352,11 @@ fn real_master_case(case: &str) {
             wait_evidence152(&f.fixture, "completed162", &command.instance_id);
         }
         if case.ends_with("upgrade201") {
-            support::private_write(&f.fixture.root.join("test-binary201"),
-                std::env::var("BRIDGET_TEST_NEW_BINARY").unwrap()).unwrap();
+            support::private_write(
+                &f.fixture.root.join("test-binary201"),
+                std::env::var("BRIDGET_TEST_NEW_BINARY").unwrap(),
+            )
+            .unwrap();
         }
         f.start_master_with_one_slot();
         parent = real_master_parent(&mut f, &socket, &host, &origin);
@@ -2492,7 +2554,9 @@ fn fixture168_routes(f: &RemoteFixture) -> (String, String) {
 }
 
 fn probe168(f: &RemoteFixture, epoch: &str, base: &str, head: &str) -> CandidateProbeV2 {
-    CandidateProbeV2 { requires_workspace_write:false, required_tools:Vec::new(),
+    CandidateProbeV2 {
+        requires_workspace_write: false,
+        required_tools: Vec::new(),
         version: WORKER_CANDIDATE_PROBE_V2_VERSION,
         correlation_id: uuid::Uuid::new_v4().to_string(),
         connection_epoch: epoch.into(),
@@ -2624,27 +2688,61 @@ fn assert_no_effects168(f: &RemoteFixture) {
 
 #[test]
 fn worker221_probe_git_blocked_still_answers_start_on_real_worker() {
-    let mut f=RemoteFixture::new_with_candidate_probe_v2();
-    let (base,head)=fixture168_routes(&f);let mut control=f.start_worker();
-    let (command,mut start,_,_)=f.prepare_start(&mut control,"probe-priority");
-    let gate=f.fixture.root.join("probe221-release");let entered=f.fixture.root.join("probe221-entered");
-    struct Release(PathBuf);impl Drop for Release {fn drop(&mut self){let _=fs::write(&self.0,b"release");}}
-    let _release=Release(gate.clone());
-    let git=f.fixture.root.join("bin/git");let real=git.canonicalize().unwrap();
-    let script=format!("#!/usr/bin/python3\nimport os,sys,time\ngate={}\nentered={}\nopen(entered,'w').close()\nlimit=time.monotonic()+8\nwhile not os.path.exists(gate) and time.monotonic()<limit: time.sleep(.01)\nos.execv({},[{},*sys.argv[1:]])\n",
-        serde_json::to_string(&gate).unwrap(),serde_json::to_string(&entered).unwrap(),
-        serde_json::to_string(&real).unwrap(),serde_json::to_string(&real).unwrap());
-    fs::remove_file(&git).unwrap();support::private_write(&git,script).unwrap();fs::set_permissions(&git,fs::Permissions::from_mode(0o700)).unwrap();
-    let mut probe=probe168(&f,&control.epoch,&base,&head);probe.candidates.truncate(1);
-    send_frame(control.reader.get_mut(),&DaemonToWrapper::CandidateProbeV2{probe}).unwrap();
-    let deadline=Instant::now()+Duration::from_secs(3);
-    while !entered.exists(){assert!(Instant::now()<deadline,"la sonde doit entrer dans Git");thread::sleep(Duration::from_millis(10));}
-    start.prepared_token="different-prepared-token".into();
-    let began=Instant::now();let response=control.request(&command,WorkerRequestOperation::Start{start});
-    assert!(matches!(response,WorkerResponseOperation::Rejected{..}),"Start doit être traité et refusé sans nouveau lancement");
-    assert!(began.elapsed()<Duration::from_secs(2),"Start ne doit pas attendre la libération de Git");
-    assert!(!gate.exists());assert_eq!(f.starts(&command.instance_id),0,"aucun fournisseur réel ou simulé avant RELEASE");
-    fs::write(&gate,b"release").unwrap();
+    let mut f = RemoteFixture::new_with_candidate_probe_v2();
+    let (base, head) = fixture168_routes(&f);
+    let mut control = f.start_worker();
+    let (command, mut start, _, _) = f.prepare_start(&mut control, "probe-priority");
+    let gate = f.fixture.root.join("probe221-release");
+    let entered = f.fixture.root.join("probe221-entered");
+    struct Release(PathBuf);
+    impl Drop for Release {
+        fn drop(&mut self) {
+            let _ = fs::write(&self.0, b"release");
+        }
+    }
+    let _release = Release(gate.clone());
+    let git = f.fixture.root.join("bin/git");
+    let real = git.canonicalize().unwrap();
+    let script = format!(
+        "#!/usr/bin/python3\nimport os,sys,time\ngate={}\nentered={}\nopen(entered,'w').close()\nlimit=time.monotonic()+8\nwhile not os.path.exists(gate) and time.monotonic()<limit: time.sleep(.01)\nos.execv({},[{},*sys.argv[1:]])\n",
+        serde_json::to_string(&gate).unwrap(),
+        serde_json::to_string(&entered).unwrap(),
+        serde_json::to_string(&real).unwrap(),
+        serde_json::to_string(&real).unwrap()
+    );
+    fs::remove_file(&git).unwrap();
+    support::private_write(&git, script).unwrap();
+    fs::set_permissions(&git, fs::Permissions::from_mode(0o700)).unwrap();
+    let mut probe = probe168(&f, &control.epoch, &base, &head);
+    probe.candidates.truncate(1);
+    send_frame(
+        control.reader.get_mut(),
+        &DaemonToWrapper::CandidateProbeV2 { probe },
+    )
+    .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while !entered.exists() {
+        assert!(Instant::now() < deadline, "la sonde doit entrer dans Git");
+        thread::sleep(Duration::from_millis(10));
+    }
+    start.prepared_token = "different-prepared-token".into();
+    let began = Instant::now();
+    let response = control.request(&command, WorkerRequestOperation::Start { start });
+    assert!(
+        matches!(response, WorkerResponseOperation::Rejected { .. }),
+        "Start doit être traité et refusé sans nouveau lancement"
+    );
+    assert!(
+        began.elapsed() < Duration::from_secs(2),
+        "Start ne doit pas attendre la libération de Git"
+    );
+    assert!(!gate.exists());
+    assert_eq!(
+        f.starts(&command.instance_id),
+        0,
+        "aucun fournisseur réel ou simulé avant RELEASE"
+    );
+    fs::write(&gate, b"release").unwrap();
 }
 
 #[test]

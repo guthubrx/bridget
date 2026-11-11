@@ -1,12 +1,12 @@
 //! Transport ACP synchrone : un lecteur stdout, un writer sérialisé et un
 //! worker FIFO. Le lecteur est l'unique propriétaire du flux de l'adaptateur.
 
-use crate::poison::RecoverPoison;
 use crate::journal::{JournalLiveFeed, JournalWriter, with_turn_failed_kind};
 use crate::managed_session::{
     ManagedEvent, ManagedEventKind, ManagedEventSource, ManagedProviderIdentity, ManagedSession,
     ManagedSessionDescriptor, ManagedTerminal,
 };
+use crate::poison::RecoverPoison;
 use crate::protocol::{PresenceMode, ProviderObservation};
 use crate::transport::{Transport, TransportError};
 use bridget_core::{BridgetMessage, MessageIntent, MessageOrigin};
@@ -209,10 +209,7 @@ pub struct AcpTransport {
 impl AcpTransport {
     /// PID de l'adaptateur ACP, utilisé pour un marqueur local de filiation.
     pub fn process_id(&self) -> u32 {
-        self.child
-            .lock()
-            .recover_poison()
-            .id()
+        self.child.lock().recover_poison().id()
     }
 
     pub fn spawn(options: AcpOptions) -> Result<Self, TransportError> {
@@ -471,10 +468,7 @@ impl AcpTransport {
     }
 
     pub fn state(&self) -> TurnState {
-        self.state
-            .lock()
-            .recover_poison()
-            .clone()
+        self.state.lock().recover_poison().clone()
     }
 
     pub fn enable_journal(&self, root: impl AsRef<Path>, agent: &str) -> std::io::Result<()> {
@@ -487,22 +481,18 @@ impl AcpTransport {
         agent: &str,
         live_feed: Option<JournalLiveFeed>,
     ) -> std::io::Result<()> {
-        *self.journal.lock().recover_poison() =
-            Some(JournalWriter::start_with_live_feed(
-                root,
-                agent,
-                &self.session_id,
-                self.events.clone(),
-                live_feed,
-            )?);
+        *self.journal.lock().recover_poison() = Some(JournalWriter::start_with_live_feed(
+            root,
+            agent,
+            &self.session_id,
+            self.events.clone(),
+            live_feed,
+        )?);
         Ok(())
     }
 
     pub fn drain_events(&self) -> Vec<AcpEvent> {
-        self.events
-            .lock()
-            .recover_poison()
-            .drain_acp()
+        self.events.lock().recover_poison().drain_acp()
     }
 
     /// Retire atomiquement un message en attente, ou signale au worker que le
@@ -562,36 +552,18 @@ impl AcpTransport {
                 "params": { "sessionId": self.session_id }
             }),
         );
-        self.writer
-            .lock()
-            .recover_poison()
-            .take();
+        self.writer.lock().recover_poison().take();
         let mut child = self.child.lock().recover_poison();
         let _ = child.kill();
         let _ = child.wait();
         drop(child);
-        if let Some(handle) = self
-            .reader_handle
-            .lock()
-            .recover_poison()
-            .take()
-        {
+        if let Some(handle) = self.reader_handle.lock().recover_poison().take() {
             let _ = handle.join();
         }
-        if let Some(handle) = self
-            .worker_handle
-            .lock()
-            .recover_poison()
-            .take()
-        {
+        if let Some(handle) = self.worker_handle.lock().recover_poison().take() {
             let _ = handle.join();
         }
-        if let Some(journal) = self
-            .journal
-            .lock()
-            .recover_poison()
-            .take()
-        {
+        if let Some(journal) = self.journal.lock().recover_poison().take() {
             journal.stop();
         }
     }
@@ -677,10 +649,7 @@ impl ManagedSession for AcpTransport {
         &mut self,
         instructions: &str,
     ) -> Result<(), TransportError> {
-        *self
-            .private_profile_instructions
-            .lock()
-            .recover_poison() = Some(instructions.to_string());
+        *self.private_profile_instructions.lock().recover_poison() = Some(instructions.to_string());
         Ok(())
     }
 
@@ -720,11 +689,7 @@ impl ManagedSession for AcpTransport {
     }
 
     fn drain_events(&self) -> Vec<ManagedEvent> {
-        let mut events = self
-            .events
-            .lock()
-            .recover_poison()
-            .drain_managed();
+        let mut events = self.events.lock().recover_poison().drain_managed();
         if !self.context_published.swap(true, Ordering::SeqCst) {
             events.insert(
                 0,
@@ -932,11 +897,7 @@ fn spawn_worker(worker: TurnWorker) -> thread::JoinHandle<()> {
                 .push_back(AcpEvent::TurnStarted {
                     message_id: message.id.clone(),
                 });
-            worker
-                .reasoning_raw
-                .lock()
-                .recover_poison()
-                .clear();
+            worker.reasoning_raw.lock().recover_poison().clear();
             record_or_terminal(
                 &worker.journal,
                 &worker.events,
@@ -948,11 +909,7 @@ fn spawn_worker(worker: TurnWorker) -> thread::JoinHandle<()> {
                     "body": &message.body,
                 }),
             );
-            worker
-                .response
-                .lock()
-                .recover_poison()
-                .clear();
+            worker.response.lock().recover_poison().clear();
             let instructions = worker
                 .private_profile_instructions
                 .lock()
@@ -989,11 +946,7 @@ alive: &worker.alive,
 cancel_grace: worker.cancel_grace,
 poll_interval: worker.poll_interval,
 });
-            let collected = worker
-                .response
-                .lock()
-                .recover_poison()
-                .clone();
+            let collected = worker.response.lock().recover_poison().clone();
             *worker.state.lock().recover_poison() = TurnState::Idle;
             clear_active_turn(&worker.queue);
             let event = finish_turn(message, collected, result);
@@ -1046,11 +999,7 @@ poll_interval: worker.poll_interval,
             if let Some(observer) = &worker.test_observer {
                 let _ = observer.send(event.clone());
             }
-            worker
-                .events
-                .lock()
-                .recover_poison()
-                .push_back(event);
+            worker.events.lock().recover_poison().push_back(event);
         }
     })
 }
@@ -1065,10 +1014,7 @@ fn record_journal(
     message_id: Option<&str>,
     payload: Value,
 ) -> Result<(), String> {
-    let writer = journal
-        .lock()
-        .recover_poison()
-        .clone();
+    let writer = journal.lock().recover_poison().clone();
     writer.map_or(Ok(()), |writer| writer.enqueue(event, message_id, payload))
 }
 
@@ -1191,15 +1137,12 @@ fn spawn_reader(
                     message_id.as_deref(),
                     json!({ "reason": "ligne ACP invalide" }),
                 );
-                events
-                    .lock()
-                    .recover_poison()
-                    .push_source(
-                        AcpEvent::Error {
-                            detail: "ligne ACP invalide".to_string(),
-                        },
-                        raw_line,
-                    );
+                events.lock().recover_poison().push_source(
+                    AcpEvent::Error {
+                        detail: "ligne ACP invalide".to_string(),
+                    },
+                    raw_line,
+                );
                 continue;
             };
             let current_message = active_message_id(&queue);
@@ -1208,12 +1151,9 @@ fn spawn_reader(
                 tool_memory_message = current_message;
             }
             let rpc_result = rpc_response(&value);
-            let waiter = rpc_result.as_ref().and_then(|(id, _)| {
-                waiters
-                    .lock()
-                    .recover_poison()
-                    .remove(id)
-            });
+            let waiter = rpc_result
+                .as_ref()
+                .and_then(|(id, _)| waiters.lock().recover_poison().remove(id));
             if let (Some((id, result)), Some(waiter)) = (rpc_result.as_ref(), waiter) {
                 complete_request(&completions, id);
                 let _ = waiter.send(result.clone());
@@ -1226,10 +1166,7 @@ fn spawn_reader(
             }
             match value.get("method").and_then(Value::as_str) {
                 Some("session/update") => {
-                    let session_id = active_session
-                        .lock()
-                        .recover_poison()
-                        .clone();
+                    let session_id = active_session.lock().recover_poison().clone();
                     if let (Some(observer), Some(text)) =
                         (&test_observer, update_text(&value, session_id.as_deref()))
                     {
@@ -1246,16 +1183,12 @@ fn spawn_reader(
                             message_id.as_deref(),
                             json!({ "reason": "update ACP ignorée pour une session étrangère" }),
                         );
-                        events
-                            .lock()
-                            .recover_poison()
-                            .push_source(
-                                AcpEvent::Error {
-                                    detail: "update ACP ignorée pour une session étrangère"
-                                        .to_string(),
-                                },
-                                raw_line.clone(),
-                            );
+                        events.lock().recover_poison().push_source(
+                            AcpEvent::Error {
+                                detail: "update ACP ignorée pour une session étrangère".to_string(),
+                            },
+                            raw_line.clone(),
+                        );
                     } else if active_turn_is_cancelled(&queue) {
                         let message_id = active_message_id(&queue);
                         record_or_terminal(
@@ -1265,16 +1198,12 @@ fn spawn_reader(
                             message_id.as_deref(),
                             json!({ "reason": "update ACP ignorée après annulation du tour" }),
                         );
-                        events
-                            .lock()
-                            .recover_poison()
-                            .push_source(
-                                AcpEvent::Error {
-                                    detail: "update ACP ignorée après annulation du tour"
-                                        .to_string(),
-                                },
-                                raw_line.clone(),
-                            );
+                        events.lock().recover_poison().push_source(
+                            AcpEvent::Error {
+                                detail: "update ACP ignorée après annulation du tour".to_string(),
+                            },
+                            raw_line.clone(),
+                        );
                     } else if let Some(text) = update_text(&value, session_id.as_deref()) {
                         let message_id = active_message_id(&queue);
                         record_or_terminal(
@@ -1284,10 +1213,7 @@ fn spawn_reader(
                             message_id.as_deref(),
                             json!({ "kind": "text", "content": text }),
                         );
-                        response
-                            .lock()
-                            .recover_poison()
-                            .push_str(text);
+                        response.lock().recover_poison().push_str(text);
                         let event = AcpEvent::Update {
                             detail: text.to_string(),
                         };
@@ -1300,19 +1226,13 @@ fn spawn_reader(
                         // Variante standard SessionUpdate (effect-acp) : on
                         // accumule pour la ligne terminale event=reasoning.
                         // Pas de journal par chunk — alignement C3 / L3.
-                        reasoning_raw
-                            .lock()
-                            .recover_poison()
-                            .push_str(thought);
-                        events
-                            .lock()
-                            .recover_poison()
-                            .push_source(
-                                AcpEvent::Update {
-                                    detail: format!("reasoning:{thought}"),
-                                },
-                                raw_line.clone(),
-                            );
+                        reasoning_raw.lock().recover_poison().push_str(thought);
+                        events.lock().recover_poison().push_source(
+                            AcpEvent::Update {
+                                detail: format!("reasoning:{thought}"),
+                            },
+                            raw_line.clone(),
+                        );
                     } else if matches!(
                         value
                             .pointer("/params/update/sessionUpdate")
@@ -1384,15 +1304,12 @@ fn spawn_reader(
                         message_id.as_deref(),
                         json!({ "reason": format!("méthode ACP inconnue: {method}") }),
                     );
-                    events
-                        .lock()
-                        .recover_poison()
-                        .push_source(
-                            AcpEvent::Error {
-                                detail: format!("méthode ACP inconnue: {method}"),
-                            },
-                            raw_line.clone(),
-                        );
+                    events.lock().recover_poison().push_source(
+                        AcpEvent::Error {
+                            detail: format!("méthode ACP inconnue: {method}"),
+                        },
+                        raw_line.clone(),
+                    );
                 }
                 Some(method) => {
                     let message_id = active_message_id(&queue);
@@ -1403,15 +1320,12 @@ fn spawn_reader(
                         message_id.as_deref(),
                         json!({ "reason": format!("notification ACP inconnue: {method}") }),
                     );
-                    events
-                        .lock()
-                        .recover_poison()
-                        .push_source(
-                            AcpEvent::Error {
-                                detail: format!("notification ACP inconnue: {method}"),
-                            },
-                            raw_line.clone(),
-                        );
+                    events.lock().recover_poison().push_source(
+                        AcpEvent::Error {
+                            detail: format!("notification ACP inconnue: {method}"),
+                        },
+                        raw_line.clone(),
+                    );
                 }
                 None => {
                     let message_id = active_message_id(&queue);
@@ -1422,15 +1336,12 @@ fn spawn_reader(
                         message_id.as_deref(),
                         json!({ "reason": "message ACP inattendu" }),
                     );
-                    events
-                        .lock()
-                        .recover_poison()
-                        .push_source(
-                            AcpEvent::Error {
-                                detail: "message ACP inattendu".to_string(),
-                            },
-                            raw_line,
-                        );
+                    events.lock().recover_poison().push_source(
+                        AcpEvent::Error {
+                            detail: "message ACP inattendu".to_string(),
+                        },
+                        raw_line,
+                    );
                 }
             }
         }
@@ -1453,12 +1364,9 @@ fn spawn_reader(
             message_id.as_deref(),
             json!({ "reason": "EOF ACP" }),
         );
-        events
-            .lock()
-            .recover_poison()
-            .push_back(AcpEvent::Error {
-                detail: "EOF ACP".to_string(),
-            });
+        events.lock().recover_poison().push_back(AcpEvent::Error {
+            detail: "EOF ACP".to_string(),
+        });
     })
 }
 
@@ -1501,15 +1409,33 @@ struct PromptRequestArgs<'a> {
 }
 
 fn prompt_request(args: PromptRequestArgs<'_>) -> Result<Value, TransportError> {
-    let PromptRequestArgs { writer, waiters, completions, next_id, method, params, timeout, deadline_at, clock, cancellation, cancelled, session_id, child, queue, events, test_observer, prompt_message_id, alive, cancel_grace, poll_interval } = args;
+    let PromptRequestArgs {
+        writer,
+        waiters,
+        completions,
+        next_id,
+        method,
+        params,
+        timeout,
+        deadline_at,
+        clock,
+        cancellation,
+        cancelled,
+        session_id,
+        child,
+        queue,
+        events,
+        test_observer,
+        prompt_message_id,
+        alive,
+        cancel_grace,
+        poll_interval,
+    } = args;
     let id = next_id.fetch_add(1, Ordering::SeqCst);
     let (sender, receiver) = mpsc::channel();
     let (completion_sender, completion_receiver) = mpsc::channel();
     let key = id.to_string();
-    waiters
-        .lock()
-        .recover_poison()
-        .insert(key.clone(), sender);
+    waiters.lock().recover_poison().insert(key.clone(), sender);
     completions
         .lock()
         .recover_poison()
@@ -1518,14 +1444,8 @@ fn prompt_request(args: PromptRequestArgs<'_>) -> Result<Value, TransportError> 
         writer,
         json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params }),
     ) {
-        waiters
-            .lock()
-            .recover_poison()
-            .remove(&key);
-        completions
-            .lock()
-            .recover_poison()
-            .remove(&key);
+        waiters.lock().recover_poison().remove(&key);
+        completions.lock().recover_poison().remove(&key);
         return Err(error);
     }
     // Cette frontière est volontairement immédiatement après write+flush :
@@ -1536,10 +1456,7 @@ fn prompt_request(args: PromptRequestArgs<'_>) -> Result<Value, TransportError> 
     if let Some(observer) = test_observer {
         let _ = observer.send(dispatched.clone());
     }
-    events
-        .lock()
-        .recover_poison()
-        .push_back(dispatched);
+    events.lock().recover_poison().push_back(dispatched);
     let started = std::time::Instant::now();
     loop {
         let timed_out = deadline_at.is_some_and(|deadline| {
@@ -1554,10 +1471,7 @@ fn prompt_request(args: PromptRequestArgs<'_>) -> Result<Value, TransportError> 
             .or_else(|| timed_out.then(|| format!("timeout ACP pour {method}")));
         if let Some(reason) = cancellation_reason {
             cancelled.store(true, Ordering::SeqCst);
-            waiters
-                .lock()
-                .recover_poison()
-                .remove(&key);
+            waiters.lock().recover_poison().remove(&key);
             let _ = write_json(
                 writer,
                 json!({ "jsonrpc": "2.0", "method": "session/cancel", "params": { "sessionId": session_id } }),
@@ -1590,10 +1504,7 @@ fn prompt_request(args: PromptRequestArgs<'_>) -> Result<Value, TransportError> 
         let poll = remaining.min(poll_interval);
         match receiver.recv_timeout(poll) {
             Ok(result) => {
-                completions
-                    .lock()
-                    .recover_poison()
-                    .remove(&key);
+                completions.lock().recover_poison().remove(&key);
                 return result.map_err(TransportError::DeliveryFailed);
             }
             Err(mpsc::RecvTimeoutError::Timeout) => continue,
@@ -1645,10 +1556,7 @@ fn force_stop_transport(
     let _ = child.kill();
     let _ = child.wait();
     fail_waiters(waiters, reason);
-    completions
-        .lock()
-        .recover_poison()
-        .clear();
+    completions.lock().recover_poison().clear();
 }
 
 fn request(
@@ -1661,28 +1569,19 @@ fn request(
     let id = next_id.fetch_add(1, Ordering::SeqCst);
     let (sender, receiver) = mpsc::channel();
     let key = id.to_string();
-    waiters
-        .lock()
-        .recover_poison()
-        .insert(key.clone(), sender);
+    waiters.lock().recover_poison().insert(key.clone(), sender);
     if let Err(error) = write_json(
         writer,
         json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params }),
     ) {
-        waiters
-            .lock()
-            .recover_poison()
-            .remove(&key);
+        waiters.lock().recover_poison().remove(&key);
         return Err(error);
     }
     let result = receiver
         .recv_timeout(REQUEST_TIMEOUT)
         .map_err(|_| TransportError::DeliveryFailed(format!("timeout ACP pour {method}")));
     if result.is_err() {
-        waiters
-            .lock()
-            .recover_poison()
-            .remove(&key);
+        waiters.lock().recover_poison().remove(&key);
     }
     result?.map_err(TransportError::DeliveryFailed)
 }

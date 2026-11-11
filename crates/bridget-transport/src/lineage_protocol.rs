@@ -468,7 +468,10 @@ pub const HUMAN_COMPOSE_BODY_MAX_BYTES: usize = 65536;
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum HumanComposeOperation {
     Read {},
-    Send { body: String, intent: HumanComposeSendIntent },
+    Send {
+        body: String,
+        intent: HumanComposeSendIntent,
+    },
     SelectRuntime {
         model: String,
         #[serde(deserialize_with = "present_nullable")]
@@ -479,7 +482,10 @@ pub enum HumanComposeOperation {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum HumanComposeSendIntent { Queue, Steer }
+pub enum HumanComposeSendIntent {
+    Queue,
+    Steer,
+}
 
 impl HumanComposeOperation {
     /// Bornes locales ; l'existence du tour et des capacités relève du daemon.
@@ -493,14 +499,18 @@ impl HumanComposeOperation {
             Self::Send { body, .. } => {
                 !body.trim().is_empty()
                     && body.len() <= HUMAN_COMPOSE_BODY_MAX_BYTES
-                    && !body.chars().any(|c| c != '\n' && c != '\t' && c.is_control())
+                    && !body
+                        .chars()
+                        .any(|c| c != '\n' && c != '\t' && c.is_control())
             }
             // Même règle que `RuntimeSelection::valid` du plan de contrôle.
-            Self::SelectRuntime { model, effort } => std::iter::once(model)
-                .chain(effort.iter()).all(|s| {
-                    !s.is_empty() && s.len() <= 128
+            Self::SelectRuntime { model, effort } => {
+                std::iter::once(model).chain(effort.iter()).all(|s| {
+                    !s.is_empty()
+                        && s.len() <= 128
                         && s.chars().all(|c| !c.is_control() && !c.is_whitespace())
-                }),
+                })
+            }
         }
     }
 }

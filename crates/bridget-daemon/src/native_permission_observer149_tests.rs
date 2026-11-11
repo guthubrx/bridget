@@ -273,7 +273,10 @@ fn native149_fait_publie_acquitte_le_hook_avant_sa_reprise() {
         ("mcp__bridget__bridget_delegate", "req-149"),
         ("mcp__bridget__bridget_auto_delegate", "req-auto-163"),
         ("mcp__bridget__bridget_task_continue", "req-153-r2"),
-        ("mcp__bridget__bridget_task_repair_workspace", "req-185-repair"),
+        (
+            "mcp__bridget__bridget_task_repair_workspace",
+            "req-185-repair",
+        ),
     ] {
         let root = fixture_root("ack");
         let (emit, rx) = collector();

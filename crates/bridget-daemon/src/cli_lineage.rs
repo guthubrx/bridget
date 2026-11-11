@@ -81,12 +81,27 @@ fn parse_input(args: &[String], input: &mut dyn Read) -> Result<HumanLineageRequ
             // JSON escaping may grow a 64-Kio body sixfold. Bound bytes before parsing.
             const MAX_INPUT: u64 = 6 * 65536 + 4096;
             let mut body = Vec::new();
-            input.take(MAX_INPUT + 1).read_to_end(&mut body).map_err(|_| E::InvalidRequest)?;
-            if body.len() as u64 > MAX_INPUT { return Err(E::InvalidRequest); }
-            let value: ComposerInput = serde_json::from_slice(&body).map_err(|_| E::InvalidRequest)?;
-            if crate::threads::canonical_uuid(&value.request_id).as_deref() != Some(value.request_id.as_str())
-                || !value.operation.bounded(value.expected_round) { return Err(E::InvalidRequest); }
-            A::Compose { task_id, request_id: value.request_id, expected_round: value.expected_round, operation: value.operation }
+            input
+                .take(MAX_INPUT + 1)
+                .read_to_end(&mut body)
+                .map_err(|_| E::InvalidRequest)?;
+            if body.len() as u64 > MAX_INPUT {
+                return Err(E::InvalidRequest);
+            }
+            let value: ComposerInput =
+                serde_json::from_slice(&body).map_err(|_| E::InvalidRequest)?;
+            if crate::threads::canonical_uuid(&value.request_id).as_deref()
+                != Some(value.request_id.as_str())
+                || !value.operation.bounded(value.expected_round)
+            {
+                return Err(E::InvalidRequest);
+            }
+            A::Compose {
+                task_id,
+                request_id: value.request_id,
+                expected_round: value.expected_round,
+                operation: value.operation,
+            }
         }
         "watch" => A::Watch,
         "cancel" => A::Cancel {
@@ -131,9 +146,10 @@ fn parse_input(args: &[String], input: &mut dyn Read) -> Result<HumanLineageRequ
     if let A::List {
         cursor: Some(c), ..
     } = &request
-        && (c.len() > 2048 || c.chars().any(char::is_control)) {
-            return Err(E::InvalidRequest);
-        }
+        && (c.len() > 2048 || c.chars().any(char::is_control))
+    {
+        return Err(E::InvalidRequest);
+    }
     let request = HumanLineageRequest {
         version,
         t3_thread_id,
@@ -148,7 +164,7 @@ pub(super) fn run(args: &[String]) {
     let mut out = std::io::stdout().lock();
     let mut emit = |value: &serde_json::Value| -> std::io::Result<()> {
         if crate::cli_table::active() {
-            crate::cli_table::capture(value.to_string(),true);
+            crate::cli_table::capture(value.to_string(), true);
             return Ok(());
         }
         serde_json::to_writer(&mut out, value)?;
@@ -218,23 +234,45 @@ mod tests {
     use super::*;
 
     fn composer_args() -> Vec<String> {
-        ["compose", "--json", "--t3-thread", "parent", "--project-root", "/project",
-         "--task", "25000000-0000-4000-8000-000000000001", "--input-stdin"]
-            .into_iter().map(String::from).collect()
+        [
+            "compose",
+            "--json",
+            "--t3-thread",
+            "parent",
+            "--project-root",
+            "/project",
+            "--task",
+            "25000000-0000-4000-8000-000000000001",
+            "--input-stdin",
+        ]
+        .into_iter()
+        .map(String::from)
+        .collect()
     }
 
     #[test]
     fn spec258_cli_compose_stdin_ferme_et_borne() {
         for (round, operation) in [
             (0, serde_json::json!({"kind":"read"})),
-            (3, serde_json::json!({"kind":"send","body":"a\nb","intent":"steer"})),
-            (3, serde_json::json!({"kind":"select_runtime","model":"m","effort":null})),
+            (
+                3,
+                serde_json::json!({"kind":"send","body":"a\nb","intent":"steer"}),
+            ),
+            (
+                3,
+                serde_json::json!({"kind":"select_runtime","model":"m","effort":null}),
+            ),
             (3, serde_json::json!({"kind":"interrupt"})),
         ] {
-            let bytes=serde_json::to_vec(&serde_json::json!({"request_id":"25000000-0000-4000-8000-000000000002",
-                "expected_round":round,"operation":operation})).unwrap();
-            let parsed=parse_input(&composer_args(), &mut bytes.as_slice()).unwrap();
-            assert!(matches!(parsed.request, A::Compose{expected_round,..} if expected_round==round));
+            let bytes = serde_json::to_vec(
+                &serde_json::json!({"request_id":"25000000-0000-4000-8000-000000000002",
+                "expected_round":round,"operation":operation}),
+            )
+            .unwrap();
+            let parsed = parse_input(&composer_args(), &mut bytes.as_slice()).unwrap();
+            assert!(
+                matches!(parsed.request, A::Compose{expected_round,..} if expected_round==round)
+            );
         }
         for raw in [
             "{}".to_owned(),
@@ -242,8 +280,10 @@ mod tests {
             serde_json::json!({"request_id":"25000000-0000-4000-8000-000000000002","expected_round":0,"operation":{"kind":"interrupt"}}).to_string(),
             serde_json::json!({"request_id":"25000000-0000-4000-8000-000000000002","expected_round":0,"operation":{"kind":"read"},"agent":"forged"}).to_string(),
         ] { assert!(parse_input(&composer_args(),&mut raw.as_bytes()).is_err()); }
-        let mut args=composer_args(); args.push("--request-id".into()); args.push("forged".into());
-        assert!(parse_input(&args,&mut std::io::empty()).is_err());
+        let mut args = composer_args();
+        args.push("--request-id".into());
+        args.push("forged".into());
+        assert!(parse_input(&args, &mut std::io::empty()).is_err());
     }
 
     fn request_args(action: &str, extra: &[&str]) -> Vec<String> {

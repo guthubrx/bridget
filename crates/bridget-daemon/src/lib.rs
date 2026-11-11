@@ -15,12 +15,12 @@ pub mod communication;
 mod connection_channel;
 pub mod daemon;
 pub(crate) mod decision_service;
-pub mod desired_state;
 mod delivery_spool244;
-mod reply_outbox244;
+pub mod desired_state;
 pub mod disk_hygiene;
 pub mod environment;
 pub mod execution_store;
+mod reply_outbox244;
 pub use execution_store::{
     ConditionalTransition, ExecutionSnapshot, ExecutionStore, QueuedSubmission,
 };
@@ -41,19 +41,20 @@ pub mod managers;
 pub use managed_supervisor::{
     GovernedContinuation, GovernedContinuationSource, reserve_governed_continuation,
 };
+pub(crate) mod agent_tracking;
 pub(crate) mod delegation;
 pub(crate) mod delegation_mcp;
 pub mod mcp;
 pub mod mcp_identity;
-pub(crate) mod mobile;
 pub(crate) mod mcp_scopes;
+pub(crate) mod mobile;
 mod native_permission_observer;
 pub(crate) mod native_permissions;
 mod observation;
 pub mod project_compat;
 pub(crate) mod project_preparation;
-pub(crate) mod provider_limits;
 pub(crate) mod provider_catalogue220;
+pub(crate) mod provider_limits;
 pub(crate) mod provider_program_compat;
 pub mod reaper;
 pub mod receipt_store;
@@ -63,12 +64,11 @@ pub mod registry;
 pub mod remote_worker;
 pub mod reprise;
 pub mod runtime;
-mod service_limits;
 pub(crate) mod sentinel244;
-pub mod store;
-pub(crate) mod agent_tracking;
-pub mod store_schema;
+mod service_limits;
 mod storage_compatibility;
+pub mod store;
+pub mod store_schema;
 pub mod t3code;
 pub mod t3code_contract;
 mod t3code_contract_v2;
@@ -77,17 +77,17 @@ mod t3code_mcp;
 #[cfg(feature = "test-support")]
 pub mod test_sync;
 pub mod threads;
-pub(crate) mod workspace_git;
 mod workspace_failure210;
+pub(crate) mod workspace_git;
 pub mod wrapper;
 
 pub(crate) mod wake_schedules;
 
 pub(crate) mod origin_proof;
 
-mod updates;
 mod client_compatibility;
 mod provider_accounts;
+mod updates;
 
 pub(crate) mod user_input;
 

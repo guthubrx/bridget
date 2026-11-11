@@ -226,9 +226,10 @@ fn run(root: PathBuf, url: String, account: Account, receiver: mpsc::Receiver<()
     let mut previous: Option<Instant> = None;
     while receiver.recv().is_ok() {
         if let Some(last) = previous
-            && let Some(delay) = Duration::from_secs(15).checked_sub(last.elapsed()) {
-                std::thread::sleep(delay);
-            }
+            && let Some(delay) = Duration::from_secs(15).checked_sub(last.elapsed())
+        {
+            std::thread::sleep(delay);
+        }
         while receiver.try_recv().is_ok() {}
         let now = super::http::unix_now();
         let targets = match Store::open(&root.join("mobile-devices.db"))
@@ -301,30 +302,68 @@ mod tests {
         assert_eq!(value["message"]["android"]["ttl"], "300s");
     }
     #[test]
-    fn mobile177_private_fcm_configuration_loads_and_signs_without_external_service(){
-        use std::os::unix::fs::{DirBuilderExt,PermissionsExt};
-        let root=std::env::temp_dir().canonicalize().unwrap().join(format!("bridget177-fcm-{}",uuid::Uuid::new_v4()));
-        std::fs::DirBuilder::new().mode(0o700).create(&root).unwrap();
-        let key=std::process::Command::new("openssl").args(["genpkey","-algorithm","RSA","-pkeyopt","rsa_keygen_bits:2048"]).output().expect("openssl is required to generate a throwaway test key");
+    fn mobile177_private_fcm_configuration_loads_and_signs_without_external_service() {
+        use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+        let root = std::env::temp_dir()
+            .canonicalize()
+            .unwrap()
+            .join(format!("bridget177-fcm-{}", uuid::Uuid::new_v4()));
+        std::fs::DirBuilder::new()
+            .mode(0o700)
+            .create(&root)
+            .unwrap();
+        let key = std::process::Command::new("openssl")
+            .args([
+                "genpkey",
+                "-algorithm",
+                "RSA",
+                "-pkeyopt",
+                "rsa_keygen_bits:2048",
+            ])
+            .output()
+            .expect("openssl is required to generate a throwaway test key");
         assert!(key.status.success());
-        let account=json!({"type":"service_account","project_id":"bridget-fixture","client_email":"fixture@bridget-fixture.iam.gserviceaccount.com",
+        let account = json!({"type":"service_account","project_id":"bridget-fixture","client_email":"fixture@bridget-fixture.iam.gserviceaccount.com",
             "private_key":String::from_utf8(key.stdout).unwrap(),"token_uri":TOKEN_URL});
-        configure(&root,account.to_string().as_bytes()).unwrap();
-        assert!(configured(&root),"a regular private account file must be readable");
-        let loaded=Account::load(&root).unwrap();
-        let jwt=loaded.assertion(100).unwrap();
-        let parts=jwt.split('.').collect::<Vec<_>>();assert_eq!(parts.len(),3);
-        let claims:Value=serde_json::from_slice(&URL_SAFE_NO_PAD.decode(parts[1]).unwrap()).unwrap();
-        assert_eq!(claims["exp"],3700);assert_eq!(claims["aud"],TOKEN_URL);
-        let key=loaded.key().unwrap();
-        ring::signature::UnparsedPublicKey::new(&ring::signature::RSA_PKCS1_2048_8192_SHA256,key.public().as_ref())
-            .verify(format!("{}.{}",parts[0],parts[1]).as_bytes(),&URL_SAFE_NO_PAD.decode(parts[2]).unwrap()).unwrap();
-        let mut bad=account.clone();bad["token_uri"]=json!("https://other.example.net/token");
-        assert!(configure(&root,bad.to_string().as_bytes()).is_err());
-        assert!(configured(&root),"an invalid replacement must preserve the current account");
-        std::fs::set_permissions(root.join("mobile-fcm-account.json"),std::fs::Permissions::from_mode(0o644)).unwrap();
-        assert!(!configured(&root),"a readable-by-others account must be refused");
+        configure(&root, account.to_string().as_bytes()).unwrap();
+        assert!(
+            configured(&root),
+            "a regular private account file must be readable"
+        );
+        let loaded = Account::load(&root).unwrap();
+        let jwt = loaded.assertion(100).unwrap();
+        let parts = jwt.split('.').collect::<Vec<_>>();
+        assert_eq!(parts.len(), 3);
+        let claims: Value =
+            serde_json::from_slice(&URL_SAFE_NO_PAD.decode(parts[1]).unwrap()).unwrap();
+        assert_eq!(claims["exp"], 3700);
+        assert_eq!(claims["aud"], TOKEN_URL);
+        let key = loaded.key().unwrap();
+        ring::signature::UnparsedPublicKey::new(
+            &ring::signature::RSA_PKCS1_2048_8192_SHA256,
+            key.public().as_ref(),
+        )
+        .verify(
+            format!("{}.{}", parts[0], parts[1]).as_bytes(),
+            &URL_SAFE_NO_PAD.decode(parts[2]).unwrap(),
+        )
+        .unwrap();
+        let mut bad = account.clone();
+        bad["token_uri"] = json!("https://other.example.net/token");
+        assert!(configure(&root, bad.to_string().as_bytes()).is_err());
+        assert!(
+            configured(&root),
+            "an invalid replacement must preserve the current account"
+        );
+        std::fs::set_permissions(
+            root.join("mobile-fcm-account.json"),
+            std::fs::Permissions::from_mode(0o644),
+        )
+        .unwrap();
+        assert!(
+            !configured(&root),
+            "a readable-by-others account must be refused"
+        );
         std::fs::remove_dir_all(root).unwrap();
     }
-
 }

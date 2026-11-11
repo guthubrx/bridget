@@ -39,33 +39,65 @@ pub struct NativePermissionProof {
 
 /// Portée de fichiers explicite déjà attestée ; le libellé seul ne suffit pas.
 /// L'authentification et la relecture de ce fait restent obligatoires chez le consommateur.
-pub fn provider_has_unrestricted_source_scope(parent:&ProviderPermissions)->bool {
+pub fn provider_has_unrestricted_source_scope(parent: &ProviderPermissions) -> bool {
     use serde_json::json;
-    if validate_permissions(parent,parent.source=="provider_turn").is_err(){return false;}
-    let policy=&parent.provider_policy;
-    if parent.driver=="codex_app_server" && parent.runtime_mode=="full-access"
-        && policy["sandbox_policy"]["type"]=="dangerFullAccess" {return true;}
-    parent.source=="provider_turn" && parent.driver=="claude_stream_json"
-        && !parent.run_id.is_empty() && !parent.provider_session_id.is_empty() && !parent.provider_instance_id.is_empty()
-        && policy["kind"]=="claude"
-        && policy["permission_callback"]==json!({"kind":"t3_runtime","tool_approval":"allow","plan_exit":"deny"})
-        && parent.runtime_mode=="full-access" && policy["permission_mode"]=="bypassPermissions"
-        && policy["tools"]==json!({"type":"preset","preset":"claude_code"})
-        && policy["allowed_tools"]==json!(["mcp__t3-code__*"])
-        && policy.get("disallowed_tools").is_none_or(|v|v.as_array().is_some_and(Vec::is_empty))
-        && policy["settings_sources"]=="provider_default" && policy.get("launch_context").is_none()
+    if validate_permissions(parent, parent.source == "provider_turn").is_err() {
+        return false;
+    }
+    let policy = &parent.provider_policy;
+    if parent.driver == "codex_app_server"
+        && parent.runtime_mode == "full-access"
+        && policy["sandbox_policy"]["type"] == "dangerFullAccess"
+    {
+        return true;
+    }
+    parent.source == "provider_turn"
+        && parent.driver == "claude_stream_json"
+        && !parent.run_id.is_empty()
+        && !parent.provider_session_id.is_empty()
+        && !parent.provider_instance_id.is_empty()
+        && policy["kind"] == "claude"
+        && policy["permission_callback"]
+            == json!({"kind":"t3_runtime","tool_approval":"allow","plan_exit":"deny"})
+        && parent.runtime_mode == "full-access"
+        && policy["permission_mode"] == "bypassPermissions"
+        && policy["tools"] == json!({"type":"preset","preset":"claude_code"})
+        && policy["allowed_tools"] == json!(["mcp__t3-code__*"])
+        && policy
+            .get("disallowed_tools")
+            .is_none_or(|v| v.as_array().is_some_and(Vec::is_empty))
+        && policy["settings_sources"] == "provider_default"
+        && policy.get("launch_context").is_none()
 }
 
 /// Même périmètre de source dans les enveloppes de transport et leur exécution.
-pub fn provider_allows_source(parent:&ProviderPermissions,cwd:&str)->bool {
-    use std::path::{Path,Component};
-    let valid=|p:&Path|p.is_absolute() && !p.components().any(|c|matches!(c,Component::ParentDir));
-    let path=Path::new(cwd);
-    if !valid(path) || validate_permissions(parent,parent.source=="provider_turn").is_err(){return false;}
-    if path.starts_with(&parent.cwd){return true;}
-    if [parent.provider_policy.get("additional_directories"),parent.provider_policy.pointer("/sandbox_policy/writableRoots")]
-        .into_iter().flatten().filter_map(Value::as_array).flatten().filter_map(Value::as_str)
-        .map(Path::new).any(|root|valid(root)&&path.starts_with(root)){return true;}
+pub fn provider_allows_source(parent: &ProviderPermissions, cwd: &str) -> bool {
+    use std::path::{Component, Path};
+    let valid =
+        |p: &Path| p.is_absolute() && !p.components().any(|c| matches!(c, Component::ParentDir));
+    let path = Path::new(cwd);
+    if !valid(path) || validate_permissions(parent, parent.source == "provider_turn").is_err() {
+        return false;
+    }
+    if path.starts_with(&parent.cwd) {
+        return true;
+    }
+    if [
+        parent.provider_policy.get("additional_directories"),
+        parent
+            .provider_policy
+            .pointer("/sandbox_policy/writableRoots"),
+    ]
+    .into_iter()
+    .flatten()
+    .filter_map(Value::as_array)
+    .flatten()
+    .filter_map(Value::as_str)
+    .map(Path::new)
+    .any(|root| valid(root) && path.starts_with(root))
+    {
+        return true;
+    }
     provider_has_unrestricted_source_scope(parent)
 }
 
@@ -148,9 +180,9 @@ pub fn validate_permissions(fact: &ProviderPermissions, t3: bool) -> Result<(), 
                     || approval["granular"]
                         .as_object()
                         .is_none_or(|o| o.values().any(|v| !v.is_boolean())))
-                {
-                    return Err(fail());
-                }
+            {
+                return Err(fail());
+            }
             if !policy["approvals_reviewer"]
                 .as_str()
                 .is_some_and(|s| matches!(s, "user" | "auto_review" | "guardian_subagent"))
@@ -334,8 +366,14 @@ pub fn validate_permissions(fact: &ProviderPermissions, t3: bool) -> Result<(), 
                     return Err(fail());
                 }
                 if let Some(execution) = context.get("hook_execution") {
-                    if !matches!(execution.as_str(), Some("native_same_host" | "native_remote_equivalent" | "native_remote_guarded"))
-                        || attestation_version != 2
+                    if !matches!(
+                        execution.as_str(),
+                        Some(
+                            "native_same_host"
+                                | "native_remote_equivalent"
+                                | "native_remote_guarded"
+                        )
+                    ) || attestation_version != 2
                         || !context["permission_sources"]
                             .as_array()
                             .is_some_and(|sources| {
@@ -387,9 +425,9 @@ pub fn validate_permissions(fact: &ProviderPermissions, t3: bool) -> Result<(), 
                             })
                             || p.get("disableBypassPermissionsMode")
                                 .is_some_and(|v| v != "disable"))
-                        {
-                            return Err("permission_source_unavailable".into());
-                        }
+                    {
+                        return Err("permission_source_unavailable".into());
+                    }
                 }
             }
         }
@@ -482,7 +520,8 @@ pub fn recheck_permission_context_sources(context: &Value) -> Result<(), String>
 /// Réemploie uniquement une preuve issue du vérificateur fermé. Les lectures
 /// des révisions et des sources ci-dessous restent intégralement exécutées.
 pub fn recheck_permission_context_sources_with_profile(
-    context: &Value, verified: &super::native_hook_profile171::VerifiedGuardedHookProfile,
+    context: &Value,
+    verified: &super::native_hook_profile171::VerifiedGuardedHookProfile,
 ) -> Result<(), String> {
     recheck_permission_context_sources_inner(context, Some(verified))
 }
@@ -513,7 +552,8 @@ fn recheck_cli_revisions(
 }
 
 fn recheck_permission_context_sources_inner(
-    context: &Value, verified: Option<&super::native_hook_profile171::VerifiedGuardedHookProfile>,
+    context: &Value,
+    verified: Option<&super::native_hook_profile171::VerifiedGuardedHookProfile>,
 ) -> Result<(), String> {
     use std::path::Path;
     let changed = || "settings_revision_changed".to_string();
@@ -537,7 +577,11 @@ fn recheck_permission_context_sources_inner(
         .ok_or_else(changed)?;
     let has_hooks = sources.iter().any(|source| source["kind"] == "hook");
     match (has_hooks, context.get("hook_execution")) {
-        (true, Some(value)) if matches!(value.as_str(), Some("native_same_host" | "native_remote_equivalent" | "native_remote_guarded")) && attestation_version == 2 => {}
+        (true, Some(value))
+            if matches!(
+                value.as_str(),
+                Some("native_same_host" | "native_remote_equivalent" | "native_remote_guarded")
+            ) && attestation_version == 2 => {}
         (false, None) => {}
         _ => return Err(changed()),
     }
@@ -545,18 +589,31 @@ fn recheck_permission_context_sources_inner(
     // Recontrôler les dépendances sur cet hôte seulement ; l'origine est
     // reconstituée indépendamment par le maître avec son parent authentifié.
     if context.pointer("/source_equivalence/version") == Some(&Value::from(2)) {
-        if let Some(verified) = verified { verified.profile(context)?; }
-        else { super::native_hook_profile171::recheck_guarded_hook_profile(context)?; }
+        if let Some(verified) = verified {
+            verified.profile(context)?;
+        } else {
+            super::native_hook_profile171::recheck_guarded_hook_profile(context)?;
+        }
     } else if let Some(witness) = context.get("source_equivalence") {
         use std::os::unix::fs::MetadataExt;
-        let manifest = if witness["scope"] == "remote" { &witness["target"] } else { &witness["manifest"] };
+        let manifest = if witness["scope"] == "remote" {
+            &witness["target"]
+        } else {
+            &witness["manifest"]
+        };
         for row in manifest["rows"].as_array().ok_or_else(changed)? {
             for dependency in row["dependencies"].as_array().ok_or_else(changed)? {
                 let path = Path::new(dependency["path"].as_str().ok_or_else(changed)?);
                 let m = std::fs::metadata(path).map_err(|_| changed())?;
-                if !m.is_file() || m.uid() != 0 || m.gid() != 0 || m.mode() & 0o022 != 0
+                if !m.is_file()
+                    || m.uid() != 0
+                    || m.gid() != 0
+                    || m.mode() & 0o022 != 0
                     || m.mode() & 0o7777 != dependency["mode"].as_u64().ok_or_else(changed)? as u32
-                    || permission_source_revision_v2(path, 512 * 1024 * 1024).map_err(|_| changed())? != dependency["revision"] {
+                    || permission_source_revision_v2(path, 512 * 1024 * 1024)
+                        .map_err(|_| changed())?
+                        != dependency["revision"]
+                {
                     return Err(changed());
                 }
             }
@@ -587,15 +644,22 @@ fn recheck_permission_context_sources_inner(
         if actual != source["revision"] {
             // Only a native destination capture can carry this semantic digest.
             // Origin/legacy captures keep their raw revision and still fail changes.
-            let native_marketplace = attestation_version == 2 && kind == "user"
+            let native_marketplace = attestation_version == 2
+                && kind == "user"
                 && context.get("hook_execution").is_none()
                 && context.get("source_equivalence").is_none()
-                && context["config_dir"].as_str().is_some_and(|root|
-                    Path::new(root).join("plugins/known_marketplaces.json") ==
-                    Path::new(source["path"].as_str().unwrap_or("")));
-            if !native_marketplace || permission_marketplace_revision171(
-                Path::new(source["path"].as_str().ok_or_else(changed)?), 16 * 1024 * 1024)
-                .map_err(|_| changed())? != source["revision"] {
+                && context["config_dir"].as_str().is_some_and(|root| {
+                    Path::new(root).join("plugins/known_marketplaces.json")
+                        == Path::new(source["path"].as_str().unwrap_or(""))
+                });
+            if !native_marketplace
+                || permission_marketplace_revision171(
+                    Path::new(source["path"].as_str().ok_or_else(changed)?),
+                    16 * 1024 * 1024,
+                )
+                .map_err(|_| changed())?
+                    != source["revision"]
+            {
                 return Err(changed());
             }
         }
@@ -730,25 +794,37 @@ pub fn permission_source_revision(
 
 // Native Claude refreshes lastUpdated during startup. Preserve all other
 // marketplace fields and the canonical file binding, not this refresh clock.
-pub fn permission_marketplace_revision171(path: &std::path::Path, max_bytes: u64) -> Result<String, String> {
+pub fn permission_marketplace_revision171(
+    path: &std::path::Path,
+    max_bytes: u64,
+) -> Result<String, String> {
     use sha2::{Digest, Sha256};
     use std::io::Read;
     let fail = || "permission_source_unavailable".to_owned();
     let before = permission_source_revision_v2(path, max_bytes)?;
-    if before == "absent" { return Ok(before); }
+    if before == "absent" {
+        return Ok(before);
+    }
     let m = std::fs::symlink_metadata(path).map_err(|_| fail())?;
     if !m.is_file() || std::fs::canonicalize(path).map_err(|_| fail())? != path {
         return Ok(before); // Preserve the existing exact contract for links.
     }
     let mut bytes = Vec::new();
-    std::fs::File::open(path).map_err(|_| fail())?.take(max_bytes + 1)
-        .read_to_end(&mut bytes).map_err(|_| fail())?;
-    if bytes.len() as u64 > max_bytes { return Err(fail()); }
+    std::fs::File::open(path)
+        .map_err(|_| fail())?
+        .take(max_bytes + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|_| fail())?;
+    if bytes.len() as u64 > max_bytes {
+        return Err(fail());
+    }
     let mut value: Value = serde_json::from_slice(&bytes).map_err(|_| fail())?;
     for row in value.as_object_mut().ok_or_else(fail)?.values_mut() {
         let row = row.as_object_mut().ok_or_else(fail)?;
         if let Some(stamp) = row.get("lastUpdated") {
-            if stamp.as_str().is_none_or(|s| s.len() > 64) { return Err(fail()); }
+            if stamp.as_str().is_none_or(|s| s.len() > 64) {
+                return Err(fail());
+            }
             row.remove("lastUpdated");
         }
     }
@@ -756,7 +832,10 @@ pub fn permission_marketplace_revision171(path: &std::path::Path, max_bytes: u64
         return Err("settings_revision_changed".into());
     }
     let binding = serde_json::json!({"kind":"native_marketplace171", "path":path, "value":value});
-    Ok(format!("sha256:{:x}", Sha256::digest(serde_json::to_vec(&binding).map_err(|_| fail())?)))
+    Ok(format!(
+        "sha256:{:x}",
+        Sha256::digest(serde_json::to_vec(&binding).map_err(|_| fail())?)
+    ))
 }
 
 pub fn permission_source_revision_v2(
@@ -969,59 +1048,126 @@ fn canonical_json(value: &Value) -> Result<Vec<u8>, serde_json::Error> {
     }
 }
 
-
 /// Private 171 witness. Equality concerns every declared source, never a parent
 /// digest alone. No executable content or command text is rewritten.
 fn equivalence_keys(value: &Value, names: &[&str]) -> bool {
-    value.as_object().is_some_and(|o| o.len() == names.len()
-        && names.iter().all(|name| o.contains_key(*name)))
+    value
+        .as_object()
+        .is_some_and(|o| o.len() == names.len() && names.iter().all(|name| o.contains_key(*name)))
 }
 fn equivalence_digest_value(value: &Value) -> bool {
-    value.as_str().is_some_and(|s| s.len() == 71 && s.starts_with("sha256:")
-        && s[7..].bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)))
+    value.as_str().is_some_and(|s| {
+        s.len() == 71
+            && s.starts_with("sha256:")
+            && s[7..]
+                .bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    })
 }
 fn equivalence_path(value: &Value) -> bool {
-    value.as_str().is_some_and(|s| !s.is_empty() && s.len() <= 4096
-        && !s.chars().any(char::is_control) && std::path::Path::new(s).is_absolute()
-        && !std::path::Path::new(s).components().any(|c| matches!(c, std::path::Component::ParentDir)))
+    value.as_str().is_some_and(|s| {
+        !s.is_empty()
+            && s.len() <= 4096
+            && !s.chars().any(char::is_control)
+            && std::path::Path::new(s).is_absolute()
+            && !std::path::Path::new(s)
+                .components()
+                .any(|c| matches!(c, std::path::Component::ParentDir))
+    })
 }
 fn equivalence_manifest_valid(manifest: &Value) -> bool {
-    if !equivalence_keys(manifest, &["project_root", "settings_sources", "settings_overrides", "rows"])
-        || !equivalence_path(&manifest["project_root"]) { return false; }
+    if !equivalence_keys(
+        manifest,
+        &[
+            "project_root",
+            "settings_sources",
+            "settings_overrides",
+            "rows",
+        ],
+    ) || !equivalence_path(&manifest["project_root"])
+    {
+        return false;
+    }
     let selected = &manifest["settings_sources"];
-    if selected != "provider_default" && !selected.as_array().is_some_and(|a|
-        a.len() <= 3 && a.iter().all(|v| matches!(v.as_str(), Some("user" | "project" | "local")))
-        && a.iter().enumerate().all(|(i, v)| !a[..i].contains(v))) { return false; }
+    if selected != "provider_default"
+        && !selected.as_array().is_some_and(|a| {
+            a.len() <= 3
+                && a.iter()
+                    .all(|v| matches!(v.as_str(), Some("user" | "project" | "local")))
+                && a.iter().enumerate().all(|(i, v)| !a[..i].contains(v))
+        })
+    {
+        return false;
+    }
     // Inline overrides are not silently merged or promoted into remote evidence.
-    if !manifest["settings_overrides"].is_null() { return false; }
-    manifest["rows"].as_array().is_some_and(|rows| rows.len() <= 128 && rows.iter().all(|row| {
-        if !equivalence_keys(row, &["kind", "path", "revision", "selector", "content_revision", "mode", "owner", "dependencies"])
-            || !matches!(row["kind"].as_str(), Some("user" | "project" | "local" | "managed" | "cli" | "hook"))
-            || !equivalence_path(&row["path"]) { return false; }
-        if row["revision"] == "absent" {
-            return row["content_revision"] == "absent" && row["selector"].is_null()
-                && row["mode"] == 0 && row["owner"] == "absent"
-                && row["dependencies"].as_array().is_some_and(Vec::is_empty);
-        }
-        equivalence_digest_value(&row["revision"]) && equivalence_digest_value(&row["content_revision"])
-            && row["selector"].as_str().is_some_and(|s| !s.is_empty() && s.len() <= 4096 && !s.chars().any(char::is_control))
-            && row["mode"].as_u64().is_some_and(|m| m <= 0o7777)
-            && matches!(row["owner"].as_str(), Some("profile" | "system"))
-            && row["dependencies"].as_array().is_some_and(|deps| deps.len() <= 16 && deps.iter().all(|dep|
-                equivalence_keys(dep, &["path", "revision", "mode", "owner"])
-                && equivalence_path(&dep["path"]) && equivalence_digest_value(&dep["revision"])
-                && dep["mode"].as_u64().is_some_and(|m| m <= 0o7777) && dep["owner"] == "system"))
-    }))
+    if !manifest["settings_overrides"].is_null() {
+        return false;
+    }
+    manifest["rows"].as_array().is_some_and(|rows| {
+        rows.len() <= 128
+            && rows.iter().all(|row| {
+                if !equivalence_keys(
+                    row,
+                    &[
+                        "kind",
+                        "path",
+                        "revision",
+                        "selector",
+                        "content_revision",
+                        "mode",
+                        "owner",
+                        "dependencies",
+                    ],
+                ) || !matches!(
+                    row["kind"].as_str(),
+                    Some("user" | "project" | "local" | "managed" | "cli" | "hook")
+                ) || !equivalence_path(&row["path"])
+                {
+                    return false;
+                }
+                if row["revision"] == "absent" {
+                    return row["content_revision"] == "absent"
+                        && row["selector"].is_null()
+                        && row["mode"] == 0
+                        && row["owner"] == "absent"
+                        && row["dependencies"].as_array().is_some_and(Vec::is_empty);
+                }
+                equivalence_digest_value(&row["revision"])
+                    && equivalence_digest_value(&row["content_revision"])
+                    && row["selector"].as_str().is_some_and(|s| {
+                        !s.is_empty() && s.len() <= 4096 && !s.chars().any(char::is_control)
+                    })
+                    && row["mode"].as_u64().is_some_and(|m| m <= 0o7777)
+                    && matches!(row["owner"].as_str(), Some("profile" | "system"))
+                    && row["dependencies"].as_array().is_some_and(|deps| {
+                        deps.len() <= 16
+                            && deps.iter().all(|dep| {
+                                equivalence_keys(dep, &["path", "revision", "mode", "owner"])
+                                    && equivalence_path(&dep["path"])
+                                    && equivalence_digest_value(&dep["revision"])
+                                    && dep["mode"].as_u64().is_some_and(|m| m <= 0o7777)
+                                    && dep["owner"] == "system"
+                            })
+                    })
+            })
+    })
 }
 
 /// Exhaustive accounting: absent sources remain explicit pairs, not discarded.
 /// Present sources need a unique native selector and byte-identical controls,
 /// modes, owner role and declared dependency revisions on the two hosts.
-pub fn permission_source_equivalence_pairs(origin: &Value, target: &Value) -> Result<Value, String> {
+pub fn permission_source_equivalence_pairs(
+    origin: &Value,
+    target: &Value,
+) -> Result<Value, String> {
     let fail = || "permission_mapping_unavailable".to_owned();
-    if !equivalence_manifest_valid(origin) || !equivalence_manifest_valid(target)
+    if !equivalence_manifest_valid(origin)
+        || !equivalence_manifest_valid(target)
         || origin["settings_sources"] != target["settings_sources"]
-        || origin["settings_overrides"] != target["settings_overrides"] { return Err(fail()); }
+        || origin["settings_overrides"] != target["settings_overrides"]
+    {
+        return Err(fail());
+    }
     let a = origin["rows"].as_array().ok_or_else(fail)?;
     let b = target["rows"].as_array().ok_or_else(fail)?;
     let mut used = std::collections::BTreeSet::new();
@@ -1032,20 +1178,42 @@ pub fn permission_source_equivalence_pairs(origin: &Value, target: &Value) -> Re
             pairs.push(serde_json::json!({"origin":i,"target":null,"disposition":"origin_absent"}));
             continue;
         }
-        let selector = (row["kind"].as_str().ok_or_else(fail)?, row["selector"].as_str().ok_or_else(fail)?);
-        if !selectors.insert(selector) { return Err(fail()); }
-        let matches = b.iter().enumerate().filter(|(_, r)| r["revision"] != "absent"
-            && r["kind"] == row["kind"] && r["selector"] == row["selector"]).collect::<Vec<_>>();
-        if matches.len() != 1 { return Err(fail()); }
+        let selector = (
+            row["kind"].as_str().ok_or_else(fail)?,
+            row["selector"].as_str().ok_or_else(fail)?,
+        );
+        if !selectors.insert(selector) {
+            return Err(fail());
+        }
+        let matches = b
+            .iter()
+            .enumerate()
+            .filter(|(_, r)| {
+                r["revision"] != "absent"
+                    && r["kind"] == row["kind"]
+                    && r["selector"] == row["selector"]
+            })
+            .collect::<Vec<_>>();
+        if matches.len() != 1 {
+            return Err(fail());
+        }
         let (j, other) = matches[0];
-        if !used.insert(j) || ["content_revision", "mode", "owner", "dependencies"].iter().any(|key| row[*key] != other[*key]) {
+        if !used.insert(j)
+            || ["content_revision", "mode", "owner", "dependencies"]
+                .iter()
+                .any(|key| row[*key] != other[*key])
+        {
             return Err(fail());
         }
         pairs.push(serde_json::json!({"origin":i,"target":j,"disposition":"equal"}));
     }
     for (j, row) in b.iter().enumerate() {
-        if used.contains(&j) { continue; }
-        if row["revision"] != "absent" { return Err(fail()); }
+        if used.contains(&j) {
+            continue;
+        }
+        if row["revision"] != "absent" {
+            return Err(fail());
+        }
         pairs.push(serde_json::json!({"origin":null,"target":j,"disposition":"target_absent"}));
     }
     Ok(Value::Array(pairs))
@@ -1054,32 +1222,78 @@ pub fn permission_source_equivalence_pairs(origin: &Value, target: &Value) -> Re
 pub fn validate_permission_source_equivalence(context: &Value) -> Result<(), String> {
     let fail = || "permission_attestation_unavailable".to_owned();
     let Some(witness) = context.get("source_equivalence") else {
-        if matches!(context["hook_execution"].as_str(), Some("native_remote_equivalent" | "native_remote_guarded")) { return Err(fail()); }
+        if matches!(
+            context["hook_execution"].as_str(),
+            Some("native_remote_equivalent" | "native_remote_guarded")
+        ) {
+            return Err(fail());
+        }
         return Ok(());
     };
-    if witness["version"] == 2 { return super::native_hook_profile171::validate_guarded_hook_witness(context); }
-    if context["attestation_version"] != 2 || witness["version"] != 1 { return Err(fail()); }
+    if witness["version"] == 2 {
+        return super::native_hook_profile171::validate_guarded_hook_witness(context);
+    }
+    if context["attestation_version"] != 2 || witness["version"] != 1 {
+        return Err(fail());
+    }
     let manifest = match witness["scope"].as_str() {
         Some("origin") => {
             if !equivalence_keys(witness, &["version", "scope", "manifest"])
-                || context["hook_execution"] != "native_same_host" { return Err(fail()); }
+                || context["hook_execution"] != "native_same_host"
+            {
+                return Err(fail());
+            }
             &witness["manifest"]
         }
         Some("remote") => {
-            if !equivalence_keys(witness, &["version", "scope", "origin", "target", "binding", "pairs"])
-                || context["hook_execution"] != "native_remote_equivalent" { return Err(fail()); }
+            if !equivalence_keys(
+                witness,
+                &["version", "scope", "origin", "target", "binding", "pairs"],
+            ) || context["hook_execution"] != "native_remote_equivalent"
+            {
+                return Err(fail());
+            }
             let binding = &witness["binding"];
-            if !equivalence_keys(binding, &["parent_revision", "parent_run_id", "parent_session_id", "parent_instance_id",
-                "parent_digest", "child_policy_digest", "source_host", "source_root", "remote_root", "mapping_revision", "source_identity"])
-                || binding["parent_revision"].as_u64().is_none_or(|v| v == 0)
+            if !equivalence_keys(
+                binding,
+                &[
+                    "parent_revision",
+                    "parent_run_id",
+                    "parent_session_id",
+                    "parent_instance_id",
+                    "parent_digest",
+                    "child_policy_digest",
+                    "source_host",
+                    "source_root",
+                    "remote_root",
+                    "mapping_revision",
+                    "source_identity",
+                ],
+            ) || binding["parent_revision"].as_u64().is_none_or(|v| v == 0)
                 || binding["mapping_revision"].as_u64().is_none_or(|v| v == 0)
-                || !equivalence_path(&binding["source_root"]) || !equivalence_path(&binding["remote_root"])
-                || !equivalence_digest_value(&binding["parent_digest"]) || !equivalence_digest_value(&binding["child_policy_digest"])
-                || ["parent_run_id","parent_session_id","parent_instance_id","source_host","source_identity"].iter().any(|key|
-                    !binding[*key].as_str().is_some_and(|s| !s.is_empty() && s.len() <= 4096 && !s.chars().any(char::is_control)))
+                || !equivalence_path(&binding["source_root"])
+                || !equivalence_path(&binding["remote_root"])
+                || !equivalence_digest_value(&binding["parent_digest"])
+                || !equivalence_digest_value(&binding["child_policy_digest"])
+                || [
+                    "parent_run_id",
+                    "parent_session_id",
+                    "parent_instance_id",
+                    "source_host",
+                    "source_identity",
+                ]
+                .iter()
+                .any(|key| {
+                    !binding[*key].as_str().is_some_and(|s| {
+                        !s.is_empty() && s.len() <= 4096 && !s.chars().any(char::is_control)
+                    })
+                })
                 || witness["origin"]["project_root"] != binding["source_root"]
                 || witness["target"]["project_root"] != binding["remote_root"]
-                || permission_source_equivalence_pairs(&witness["origin"], &witness["target"]).map_err(|_| fail())? != witness["pairs"] {
+                || permission_source_equivalence_pairs(&witness["origin"], &witness["target"])
+                    .map_err(|_| fail())?
+                    != witness["pairs"]
+            {
                 return Err(fail());
             }
             &witness["target"]
@@ -1088,11 +1302,23 @@ pub fn validate_permission_source_equivalence(context: &Value) -> Result<(), Str
     };
     if !equivalence_manifest_valid(manifest)
         || manifest["settings_sources"] != context["settings_sources"]
-        || manifest["settings_overrides"] != context.get("settings_overrides").cloned().unwrap_or(Value::Null) { return Err(fail()); }
+        || manifest["settings_overrides"]
+            != context
+                .get("settings_overrides")
+                .cloned()
+                .unwrap_or(Value::Null)
+    {
+        return Err(fail());
+    }
     let rows = manifest["rows"].as_array().ok_or_else(fail)?;
     let sources = context["permission_sources"].as_array().ok_or_else(fail)?;
-    if rows.len() != sources.len() || rows.iter().zip(sources).any(|(row, source)|
-        ["kind","path","revision"].iter().any(|key| row[*key] != source[*key])) {
+    if rows.len() != sources.len()
+        || rows.iter().zip(sources).any(|(row, source)| {
+            ["kind", "path", "revision"]
+                .iter()
+                .any(|key| row[*key] != source[*key])
+        })
+    {
         return Err(fail());
     }
     Ok(())
@@ -1114,17 +1340,26 @@ mod executable_revision183_tests {
             assert_eq!(path, Path::new("/cli"));
             reads += 1;
             Ok("revision-a".into())
-        }).unwrap();
+        })
+        .unwrap();
         assert_eq!(reads, 1);
         context["resolved_cli_revision"] = Value::from("revision-b");
-        assert_eq!(recheck_cli_revisions(&context, |_| Ok("revision-a".into())),
-            Err("settings_revision_changed".into()));
+        assert_eq!(
+            recheck_cli_revisions(&context, |_| Ok("revision-a".into())),
+            Err("settings_revision_changed".into())
+        );
         context["resolved_cli_path"] = Value::from("/wrapper-target");
         let mut paths = Vec::new();
         recheck_cli_revisions(&context, |path| {
             paths.push(path.to_path_buf());
-            Ok(if path == Path::new("/cli") { "revision-a" } else { "revision-b" }.into())
-        }).unwrap();
+            Ok(if path == Path::new("/cli") {
+                "revision-a"
+            } else {
+                "revision-b"
+            }
+            .into())
+        })
+        .unwrap();
         assert_eq!(paths, [Path::new("/cli"), Path::new("/wrapper-target")]);
     }
 
@@ -1139,36 +1374,66 @@ mod executable_revision183_tests {
         });
         recheck_cli_revisions(&context, |p| permission_source_revision(p, 512)).unwrap();
         std::fs::write(&path, b"modified").unwrap();
-        assert_eq!(recheck_cli_revisions(&context, |p| permission_source_revision(p, 512)),
-            Err("settings_revision_changed".into()));
+        assert_eq!(
+            recheck_cli_revisions(&context, |p| permission_source_revision(p, 512)),
+            Err("settings_revision_changed".into())
+        );
         std::fs::remove_file(&path).unwrap();
-        assert_eq!(recheck_cli_revisions(&context, |p| permission_source_revision(p, 512)),
-            Err("settings_revision_changed".into()));
+        assert_eq!(
+            recheck_cli_revisions(&context, |p| permission_source_revision(p, 512)),
+            Err("settings_revision_changed".into())
+        );
     }
 }
 
-#[cfg(test)] mod source_scope244_tests {
+#[cfg(test)]
+mod source_scope244_tests {
     use super::*;
     use crate::protocol::*;
     use serde_json::json;
-    #[test] fn spec244_parix_enveloppes_acceptent_la_portee_native_deja_complete() {
+    #[test]
+    fn spec244_parix_enveloppes_acceptent_la_portee_native_deja_complete() {
         let parent:ProviderPermissions=serde_json::from_value(json!({"version":1,"source":"provider_turn","run_id":"run244",
             "provider_session_id":"session244","provider_instance_id":"codex","revision":1,"driver":"codex_app_server",
             "cwd":"/source/opus2d","runtime_mode":"full-access","interaction_mode":"default",
             "provider_policy":{"kind":"codex","approval_policy":"never","approvals_reviewer":"user","sandbox_policy":{"type":"dangerFullAccess"}}})).unwrap();
-        let source=WorkerSourceBase{cwd:"/source/parix".into(),expected_base_commit:Some("a".repeat(40)),
-            workspace:Some(WorkspaceRequest::CommitView{}),workload:AutoDelegateWorkload::General};
-        let mut request=OriginProofRequest{version:1,correlation_id:uuid::Uuid::new_v4().to_string(),connection_epoch:"epoch244".into(),
-            worker:WorkerIdentity{machine_id:"origin244".into(),worker_id:uuid::Uuid::new_v4().to_string(),provisioning_revision:1},
-            expires_at_ms:100000,request:OriginProofOperation::Sources{parent:parent.clone(),source:Some(source.clone())}};
+        let source = WorkerSourceBase {
+            cwd: "/source/parix".into(),
+            expected_base_commit: Some("a".repeat(40)),
+            workspace: Some(WorkspaceRequest::CommitView {}),
+            workload: AutoDelegateWorkload::General,
+        };
+        let mut request = OriginProofRequest {
+            version: 1,
+            correlation_id: uuid::Uuid::new_v4().to_string(),
+            connection_epoch: "epoch244".into(),
+            worker: WorkerIdentity {
+                machine_id: "origin244".into(),
+                worker_id: uuid::Uuid::new_v4().to_string(),
+                provisioning_revision: 1,
+            },
+            expires_at_ms: 100000,
+            request: OriginProofOperation::Sources {
+                parent: parent.clone(),
+                source: Some(source.clone()),
+            },
+        };
         request.validate_shape_detailed().unwrap();
-        request.request=OriginProofOperation::PrepareProject{parent:parent.clone(),source,target_machine:"sys244".into(),project_id:None,return_context:true};
+        request.request = OriginProofOperation::PrepareProject {
+            parent: parent.clone(),
+            source,
+            target_machine: "sys244".into(),
+            project_id: None,
+            return_context: true,
+        };
         request.validate_shape_detailed().unwrap();
-        let mut restricted=parent.clone();restricted.provider_policy["sandbox_policy"]=json!({"type":"readOnly"});
-        assert!(!provider_allows_source(&restricted,"/source/parix"));
-        restricted.provider_policy["sandbox_policy"]=json!({"type":"workspaceWrite","writableRoots":["/source/parix"]});
-        assert!(provider_allows_source(&restricted,"/source/parix"));
-        assert!(!provider_allows_source(&restricted,"/source/parix-voisin"));
-        assert!(!provider_allows_source(&parent,"/source/parix/../autre"));
+        let mut restricted = parent.clone();
+        restricted.provider_policy["sandbox_policy"] = json!({"type":"readOnly"});
+        assert!(!provider_allows_source(&restricted, "/source/parix"));
+        restricted.provider_policy["sandbox_policy"] =
+            json!({"type":"workspaceWrite","writableRoots":["/source/parix"]});
+        assert!(provider_allows_source(&restricted, "/source/parix"));
+        assert!(!provider_allows_source(&restricted, "/source/parix-voisin"));
+        assert!(!provider_allows_source(&parent, "/source/parix/../autre"));
     }
 }

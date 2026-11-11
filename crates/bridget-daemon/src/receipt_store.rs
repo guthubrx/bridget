@@ -1,7 +1,7 @@
 //! Reçus durables de remise idempotente côté wrapper.
 
-use bridget_transport::poison::RecoverPoison;
 use bridget_transport::fsutil::{create_private_dir, open_private_file, write_private_file_atomic};
+use bridget_transport::poison::RecoverPoison;
 use std::fs;
 use std::io;
 use std::os::fd::AsRawFd;
@@ -127,10 +127,7 @@ impl ReceiptStore {
         expires_at: i64,
         now: i64,
     ) -> Result<ReceiptDecision, ReceiptError> {
-        let _transition = self
-            .transition_lock
-            .lock()
-            .recover_poison();
+        let _transition = self.transition_lock.lock().recover_poison();
         validate_token(delivery_id).map_err(|_| ReceiptError::InvalidDeliveryId)?;
         if expires_at <= now {
             return Err(ReceiptError::InvalidExpiry);
@@ -171,10 +168,7 @@ impl ReceiptStore {
         delivery_id: &str,
         now: i64,
     ) -> Result<ReceiptDecision, ReceiptError> {
-        let _transition = self
-            .transition_lock
-            .lock()
-            .recover_poison();
+        let _transition = self.transition_lock.lock().recover_poison();
         validate_token(delivery_id).map_err(|_| ReceiptError::InvalidDeliveryId)?;
         if self.is_quarantined(now)? || !self.directory_is_healthy() {
             return Ok(ReceiptDecision::Indeterminate);
@@ -204,17 +198,18 @@ impl ReceiptStore {
 
     pub(crate) fn is_acknowledged(&self, delivery_id: &str, now: i64) -> bool {
         let _transition = self.transition_lock.lock().recover_poison();
-        if validate_token(delivery_id).is_err() || !self.directory_is_healthy()
-            || self.is_quarantined(now).unwrap_or(true) { return false; }
+        if validate_token(delivery_id).is_err()
+            || !self.directory_is_healthy()
+            || self.is_quarantined(now).unwrap_or(true)
+        {
+            return false;
+        }
         matches!(fs::read(self.entry_path(delivery_id)).ok().and_then(|bytes|parse_entry(&bytes).ok()),
             Some(ReceiptEntry::Acked { expires_at }) if expires_at > now)
     }
 
     pub fn purge_expired(&self, now: i64) -> Result<usize, ReceiptError> {
-        let _transition = self
-            .transition_lock
-            .lock()
-            .recover_poison();
+        let _transition = self.transition_lock.lock().recover_poison();
         // La purge est atomique par entrée : le sentinel conserve un horizon
         // conservateur entre deux suppressions, donc un crash ne peut pas
         // transformer un reçu disparu en nouvelle injection.

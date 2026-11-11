@@ -885,11 +885,19 @@ fn native149_developpement_d_un_parent_lecteur_refuse_sans_tache_ni_invitation()
     .unwrap_err();
     assert_eq!(erreur, "permission_not_inherited");
     // Le refus conserve son code et donne désormais un guidage explicite.
-    let result=failure("permission_not_inherited");
-    assert_eq!(result["status"],"refused");
-    assert_eq!(result["code"],"permission_not_inherited");
-    assert!(result["detail"]["recovery"].as_str().is_some_and(|v|!v.is_empty()));
-    assert!(result["detail"]["human_action"].as_str().is_some_and(|v|!v.is_empty()));
+    let result = failure("permission_not_inherited");
+    assert_eq!(result["status"], "refused");
+    assert_eq!(result["code"], "permission_not_inherited");
+    assert!(
+        result["detail"]["recovery"]
+            .as_str()
+            .is_some_and(|v| !v.is_empty())
+    );
+    assert!(
+        result["detail"]["human_action"]
+            .as_str()
+            .is_some_and(|v| !v.is_empty())
+    );
     assert!(
         st.delegation_store.tasks().unwrap().is_empty(),
         "aucune tâche insérée"
@@ -1082,10 +1090,12 @@ fn native149_un_fait_d_autre_demande_ne_donne_aucun_droit() {
 fn tache_enregistree(
     definition: bridget_transport::protocol::ResolvedAgentDefinition,
 ) -> crate::delegation::Task {
-    crate::delegation::Task { service_tier: None, admission_authority_version: None,
+    crate::delegation::Task {
+        service_tier: None,
+        admission_authority_version: None,
         remote_placement: None,
         remote_prepared: false,
-        commit_view_prepare:None,
+        commit_view_prepare: None,
         start_recovery: None,
         workspace_repairs: Vec::new(),
         remote_result_slots: Vec::new(),

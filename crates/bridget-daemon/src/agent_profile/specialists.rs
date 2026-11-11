@@ -99,10 +99,11 @@ fn slug(s: &str) -> bool {
 fn specialist_projection(record: &SpecialistRecord, principal: &SpecialistPrincipal) -> Value {
     let mut view = json!(record);
     if !principal.owns(&record.agent_id)
-        && let Some(object) = view.as_object_mut() {
-            object.remove("grant");
-            object.remove("owner");
-        }
+        && let Some(object) = view.as_object_mut()
+    {
+        object.remove("grant");
+        object.remove("owner");
+    }
     view
 }
 fn valid_uuid(s: &str) -> bool {
@@ -221,10 +222,14 @@ impl AgentProfileStore {
     /// un fichier ni rejouer le schéma (~4,5 ms sous le verrou par tour avant).
     /// Table absente ou fiche illisible : pas de capture, comme avant.
     pub(crate) fn captures_history(conn: &rusqlite::Connection, id: &str) -> bool {
-        conn.query_row("SELECT record_json FROM specialists WHERE agent_id=?1", [id], |r| r.get::<_, String>(0))
-            .ok()
-            .and_then(|json| serde_json::from_str::<SpecialistRecord>(&json).ok())
-            .is_some_and(|record| record.capture_history)
+        conn.query_row(
+            "SELECT record_json FROM specialists WHERE agent_id=?1",
+            [id],
+            |r| r.get::<_, String>(0),
+        )
+        .ok()
+        .and_then(|json| serde_json::from_str::<SpecialistRecord>(&json).ok())
+        .is_some_and(|record| record.capture_history)
     }
     pub fn get_specialist(&self, id: &str) -> Result<Option<SpecialistRecord>, SpecialistError> {
         let row: Option<String> = self
@@ -337,9 +342,10 @@ impl AgentProfileStore {
                 }
                 if let Some(id) = raw["specialist_agent_id"].as_str()
                     && let Some(record) = self.get_specialist(id)?
-                        && !permits_scope(&record.scope) {
-                            return Err(SpecialistError("role_scope_denied"));
-                        }
+                    && !permits_scope(&record.scope)
+                {
+                    return Err(SpecialistError("role_scope_denied"));
+                }
             }
         }
         let canonical = Sha256::digest(serde_json::to_vec(q)?).to_vec();
@@ -1191,15 +1197,19 @@ mod tests {
         let mut store = AgentProfileStore::open(&root.join("s.db")).unwrap();
         let agent = Uuid::new_v4().to_string();
         let p = SpecialistPrincipal {
-            agent_id: Some(agent.clone()), human_approval_ref: None,
+            agent_id: Some(agent.clone()),
+            human_approval_ref: None,
             allowed_projects: vec!["bridget".into()],
         };
         let declare = serde_json::from_value(json!({"version":1,"action":"declare_roles",
             "request_id":"names-declare","expected_revision":0,
             "roles":[{"role_id":"patate","label":"Patate",
-                "scope":{"projects":["bridget"],"transversal":false}}]})).unwrap();
+                "scope":{"projects":["bridget"],"transversal":false}}]}))
+        .unwrap();
         store.specialist_apply(&declare, &p, 10).unwrap();
-        store.rename_display_name(&agent, "bridge1016", |_| false).unwrap();
+        store
+            .rename_display_name(&agent, "bridge1016", |_| false)
+            .unwrap();
         let before = store.get_specialist(&agent).unwrap().unwrap();
         let queries = [
             json!({"version":1,"action":"list"}),
@@ -1212,18 +1222,24 @@ mod tests {
             for value in &queries {
                 let q = serde_json::from_value(value.clone()).unwrap();
                 let v = store.specialist_apply(&q, &p, 11).unwrap();
-                let item = if value["action"] == "get" { &v["data"] }
-                    else { &v["data"]["items"][0] };
+                let item = if value["action"] == "get" {
+                    &v["data"]
+                } else {
+                    &v["data"]["items"][0]
+                };
                 assert_eq!(item["display_name"], name);
                 assert_eq!(item["specialist"]["agent_id"], agent);
                 assert_eq!(item["roles"][0]["role_id"], "patate");
-                assert_eq!(serde_json::to_value(store.get_specialist(&agent).unwrap().unwrap()).unwrap(),
-                    serde_json::to_value(&before).unwrap());
+                assert_eq!(
+                    serde_json::to_value(store.get_specialist(&agent).unwrap().unwrap()).unwrap(),
+                    serde_json::to_value(&before).unwrap()
+                );
             }
         }
         // L'enrichissement intervient après le filtre d'autorisation, sans fuite du nom.
         let other = SpecialistPrincipal {
-            agent_id: Some(Uuid::new_v4().to_string()), human_approval_ref: None,
+            agent_id: Some(Uuid::new_v4().to_string()),
+            human_approval_ref: None,
             allowed_projects: vec!["autre-projet".into()],
         };
         let q = serde_json::from_value(queries[0].clone()).unwrap();

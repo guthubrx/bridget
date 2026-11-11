@@ -1,9 +1,12 @@
 //! Administration mobile locale : rôle, capacité et UID avant tout accès privé.
-use bridget_transport::poison::RecoverPoison;
 use super::*;
+use bridget_transport::poison::RecoverPoison;
 use bridget_transport::protocol::{MobileAdministrationRequest, MobileAdministrationResult};
 
-pub(super) fn project_update_status(value: serde_json::Value, state: &Arc<Mutex<DaemonState>>) -> serde_json::Value {
+pub(super) fn project_update_status(
+    value: serde_json::Value,
+    state: &Arc<Mutex<DaemonState>>,
+) -> serde_json::Value {
     let st = state.lock().recover_poison();
     let mut machines = std::collections::BTreeSet::new();
     machines.insert(st.host.clone());
@@ -22,7 +25,8 @@ pub(super) fn handle(
         let valid = st.connection_roles.get(conn_id) == Some(&ConnectionRole::Client)
             && !st.auxiliary_connections.contains(conn_id)
             && !st.conn_names.contains_key(conn_id)
-            && st.peer_uids.get(conn_id).copied() == Some(bridget_transport::fsutil::effective_uid())
+            && st.peer_uids.get(conn_id).copied()
+                == Some(bridget_transport::fsutil::effective_uid())
             && st.client_negotiations.get(conn_id).is_some_and(|n| {
                 n.version == CLIENT_CONTRACT_VERSION
                     && n.capabilities.as_slice() == [ClientCapability::MobileAdministrationV1]
@@ -70,19 +74,18 @@ pub(super) fn handle(
                         || !st.pending_origin_proofs.is_empty()
                         || !st.pending_candidate_probes_v2.is_empty()
                         || !st.pending_attach_sends.is_empty()
-                        || st.active_waits.load(Ordering::Acquire)!=0
-                        || crate::user_input::has_active(st.store.connection(),unix_now_secs()).map_err(|_|"update_activity_unknown")?
+                        || st.active_waits.load(Ordering::Acquire) != 0
+                        || crate::user_input::has_active(st.store.connection(), unix_now_secs())
+                            .map_err(|_| "update_activity_unknown")?
                     {
                         return Err("update_missions_active_or_unconfirmed");
                     }
                     st.update_gate.prepare(token)
                 }
-                Q::Finish { token } => state
-                    .lock()
-                    .recover_poison()
-                    .update_gate
-                    .finish(token),
-                _ => crate::updates::policy(&root, &request).map(|v| project_update_status(v, state)),
+                Q::Finish { token } => state.lock().recover_poison().update_gate.finish(token),
+                _ => {
+                    crate::updates::policy(&root, &request).map(|v| project_update_status(v, state))
+                }
             }
         })();
         return DaemonToWrapper::MobileAdministrationResult {
@@ -99,9 +102,7 @@ pub(super) fn handle(
                 Ok(found) => MobileAdministrationResult::Updates {
                     value: serde_json::json!({"status":"ok","granted":found,"device_id":device_id}),
                 },
-                Err(e) => MobileAdministrationResult::Error {
-                    code: e.into(),
-                },
+                Err(e) => MobileAdministrationResult::Error { code: e.into() },
             },
         };
     }
@@ -118,10 +119,7 @@ pub(super) fn handle(
         )
     {
         let notifier = crate::mobile::notifications::Notifier::start(&root);
-        state
-            .lock()
-            .recover_poison()
-            .mobile_notifier = notifier;
+        state.lock().recover_poison().mobile_notifier = notifier;
     }
     DaemonToWrapper::MobileAdministrationResult { result }
 }

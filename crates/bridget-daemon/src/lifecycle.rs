@@ -27,7 +27,7 @@ pub type SourceEnvironment = BTreeMap<String, OsString>;
 
 #[derive(Debug, Clone)]
 pub struct PreparedSpawn {
-    pub(crate) specialist_authority:Option<SpecialistLaunchAuthority>,
+    pub(crate) specialist_authority: Option<SpecialistLaunchAuthority>,
     pub lease: SpawnLease,
     pub agent_type: String,
     pub command: String,
@@ -88,13 +88,18 @@ fn validate_provider_observation(
     {
         return Err(refusal("empreinte du binaire fournisseur observé"));
     }
-    let actual_digest = crate::provider_program_compat::program_digest(Path::new(&observed.binary_path))
-        .map_err(|_| refusal("binaire fournisseur observé lisible"))?;
+    let actual_digest =
+        crate::provider_program_compat::program_digest(Path::new(&observed.binary_path))
+            .map_err(|_| refusal("binaire fournisseur observé lisible"))?;
     if actual_digest != observed.binary_digest {
         if definition.protocol != "codex_app_server" {
             return Err(refusal("compatibilité du programme modifié non vérifiée"));
         }
-        if let Err(code)=crate::provider_program_compat::validate_upgrade(&definition.command,source,&actual_digest) {
+        if let Err(code) = crate::provider_program_compat::validate_upgrade(
+            &definition.command,
+            source,
+            &actual_digest,
+        ) {
             crate::provider_program_compat::record_failure(code);
             return Err(refusal(code));
         }
@@ -424,7 +429,7 @@ pub(crate) fn prepare_spawn_parts(
         );
     }
     Ok(PreparedSpawn {
-        specialist_authority:None,
+        specialist_authority: None,
         lease,
         agent_type: agent_type.to_string(),
         command: definition.command.clone(),
@@ -442,73 +447,130 @@ pub(crate) fn prepare_spawn_parts(
 /// Sélection logique dans les seules racines du parent déjà attestées.
 /// Aucune I/O : le maître ne doit pas ouvrir un chemin de la machine source.
 /// Les appelants physiques vérifient canonicalisation, existence et protections.
-pub(crate) fn source_root(parent:&bridget_transport::protocol::ProviderPermissions,cwd:&Path)
-    ->Result<PathBuf,String> {
-    let valid=|path:&Path|path.is_absolute() && !path.components().any(|c|matches!(c,std::path::Component::ParentDir));
-    if !valid(cwd) {return Err("cwd_outside_parent_project".into());}
-    let root=Path::new(&parent.cwd);
-    if valid(root) && cwd.starts_with(root) {return Ok(root.to_path_buf());}
-    let additional=[parent.provider_policy.get("additional_directories"),
-        parent.provider_policy.pointer("/sandbox_policy/writableRoots")];
-    additional.into_iter().flatten().filter_map(|v|v.as_array()).flatten()
-        .filter_map(|v|v.as_str()).map(Path::new).filter(|root|valid(root)&&cwd.starts_with(root))
-        .max_by_key(|root|root.components().count()).map(Path::to_path_buf)
-        .or_else(||crate::native_permissions::unrestricted_source_scope(parent).then(||cwd.to_path_buf()))
-        .ok_or_else(||"cwd_outside_parent_project".into())
+pub(crate) fn source_root(
+    parent: &bridget_transport::protocol::ProviderPermissions,
+    cwd: &Path,
+) -> Result<PathBuf, String> {
+    let valid = |path: &Path| {
+        path.is_absolute()
+            && !path
+                .components()
+                .any(|c| matches!(c, std::path::Component::ParentDir))
+    };
+    if !valid(cwd) {
+        return Err("cwd_outside_parent_project".into());
+    }
+    let root = Path::new(&parent.cwd);
+    if valid(root) && cwd.starts_with(root) {
+        return Ok(root.to_path_buf());
+    }
+    let additional = [
+        parent.provider_policy.get("additional_directories"),
+        parent
+            .provider_policy
+            .pointer("/sandbox_policy/writableRoots"),
+    ];
+    additional
+        .into_iter()
+        .flatten()
+        .filter_map(|v| v.as_array())
+        .flatten()
+        .filter_map(|v| v.as_str())
+        .map(Path::new)
+        .filter(|root| valid(root) && cwd.starts_with(root))
+        .max_by_key(|root| root.components().count())
+        .map(Path::to_path_buf)
+        .or_else(|| {
+            crate::native_permissions::unrestricted_source_scope(parent).then(|| cwd.to_path_buf())
+        })
+        .ok_or_else(|| "cwd_outside_parent_project".into())
 }
 
 /// Une vue exporte la racine de A, pas un sous-arbre hérité d'un cwd.
 /// La racine Git doit donc appartenir au périmètre du parent attesté.
 /// Git est lu sur la machine source et hors mutex du maître.
 pub(crate) fn validate_parent_source_base(
-    parent:&bridget_transport::protocol::ProviderPermissions,
-    request:&bridget_transport::protocol::WorkerSourceBase,
-)->Result<(),String> {
-    let selected=source_root(parent,Path::new(&request.cwd))?;
-    if selected!=Path::new(&parent.cwd) && !crate::native_permissions::unrestricted_source_scope(parent)
-        && std::fs::canonicalize(&selected).ok().as_deref()!=Some(selected.as_path()) {
+    parent: &bridget_transport::protocol::ProviderPermissions,
+    request: &bridget_transport::protocol::WorkerSourceBase,
+) -> Result<(), String> {
+    let selected = source_root(parent, Path::new(&request.cwd))?;
+    if selected != Path::new(&parent.cwd)
+        && !crate::native_permissions::unrestricted_source_scope(parent)
+        && std::fs::canonicalize(&selected).ok().as_deref() != Some(selected.as_path())
+    {
         return Err("cwd_outside_parent_project".into());
     }
-    if matches!(request.workspace,Some(bridget_transport::protocol::WorkspaceRequest::CommitView {})) {
-        let allowed=std::fs::canonicalize(source_root(parent,Path::new(&request.cwd))?)
-            .map_err(|_|"workspace_preflight_technical")?;
-        let cwd=std::fs::canonicalize(&request.cwd)
-            .map_err(|_|"workspace_preflight_technical")?;
-        if !cwd.starts_with(&allowed) {return Err("cwd_outside_parent_project".into());}
-        let out=crate::workspace_git::run_git(&cwd,&["rev-parse","--show-toplevel"],
-            crate::workspace_git::READ_TIMEOUT)?;
-        if !out.success() || out.truncated {return Err("workspace_git_required".into());}
-        let top=std::fs::canonicalize(out.stdout.trim_end_matches(['\r','\n']))
-            .map_err(|_|"workspace_preflight_technical")?;
-        if !top.starts_with(&allowed) {return Err("cwd_outside_parent_project".into());}
+    if matches!(
+        request.workspace,
+        Some(bridget_transport::protocol::WorkspaceRequest::CommitView {})
+    ) {
+        let allowed = std::fs::canonicalize(source_root(parent, Path::new(&request.cwd))?)
+            .map_err(|_| "workspace_preflight_technical")?;
+        let cwd =
+            std::fs::canonicalize(&request.cwd).map_err(|_| "workspace_preflight_technical")?;
+        if !cwd.starts_with(&allowed) {
+            return Err("cwd_outside_parent_project".into());
+        }
+        let out = crate::workspace_git::run_git(
+            &cwd,
+            &["rev-parse", "--show-toplevel"],
+            crate::workspace_git::READ_TIMEOUT,
+        )?;
+        if !out.success() || out.truncated {
+            return Err("workspace_git_required".into());
+        }
+        let top = std::fs::canonicalize(out.stdout.trim_end_matches(['\r', '\n']))
+            .map_err(|_| "workspace_preflight_technical")?;
+        if !top.starts_with(&allowed) {
+            return Err("cwd_outside_parent_project".into());
+        }
     }
     validate_source_base(request)
 }
 
-pub(crate) fn validate_source_base(request: &bridget_transport::protocol::WorkerSourceBase) -> Result<(), String> {
-    if matches!(request.workspace, Some(bridget_transport::protocol::WorkspaceRequest::CommitView {})) {
+pub(crate) fn validate_source_base(
+    request: &bridget_transport::protocol::WorkerSourceBase,
+) -> Result<(), String> {
+    if matches!(
+        request.workspace,
+        Some(bridget_transport::protocol::WorkspaceRequest::CommitView {})
+    ) {
         // Fait de source seulement : les portes d'admission, de client et de
         // création worker restent indépendantes. Lire A ne qualifie pas HEAD B.
-        let expected=request.expected_base_commit.as_ref()
+        let expected = request
+            .expected_base_commit
+            .as_ref()
             .ok_or("expected_base_commit_required")?;
-        let actual=crate::workspace_git::resolve_source_commit(
-            Path::new(&request.cwd),Some(expected),
-        ).map_err(|error|error.into_admission(true))?;
-        if &actual!=expected {return Err("expected_base_commit_mismatch".into());}
+        let actual =
+            crate::workspace_git::resolve_source_commit(Path::new(&request.cwd), Some(expected))
+                .map_err(|error| error.into_admission(true))?;
+        if &actual != expected {
+            return Err("expected_base_commit_mismatch".into());
+        }
         return Ok(());
     }
     use bridget_transport::protocol::AutoDelegateWorkload;
     // La branche demandée est la source d'un worktree. Le checkout du parent
     // reste intact et peut être sur une autre branche. Les contraintes de
     // création sont vérifiées sur la machine qui crée réellement le worktree.
-    if let Some(bridget_transport::protocol::WorkspaceRequest::Worktree { base_ref, branch }) = &request.workspace {
-        let expected = request.expected_base_commit.as_ref()
+    if let Some(bridget_transport::protocol::WorkspaceRequest::Worktree { base_ref, branch }) =
+        &request.workspace
+    {
+        let expected = request
+            .expected_base_commit
+            .as_ref()
             .ok_or("expected_base_commit_required")?;
-        if let Some(branch) = branch { crate::workspace_git::validate_branch(branch)?; }
+        if let Some(branch) = branch {
+            crate::workspace_git::validate_branch(branch)?;
+        }
         let actual = crate::workspace_git::resolve_source_commit(
-            Path::new(&request.cwd), base_ref.as_deref(),
-        ).map_err(|error| error.into_admission(true))?;
-        if &actual != expected { return Err("expected_base_commit_mismatch".into()); }
+            Path::new(&request.cwd),
+            base_ref.as_deref(),
+        )
+        .map_err(|error| error.into_admission(true))?;
+        if &actual != expected {
+            return Err("expected_base_commit_mismatch".into());
+        }
         return Ok(());
     }
     let actual = crate::lifecycle::source_base_commit(Path::new(&request.cwd))?;
@@ -517,7 +579,10 @@ pub(crate) fn validate_source_base(request: &bridget_transport::protocol::Worker
         (None, Some(_)) => return Err("expected_base_commit_outside_git".into()),
         (None, None)
             if request.workload == AutoDelegateWorkload::Compilation
-                || matches!(request.workspace, Some(bridget_transport::protocol::WorkspaceRequest::Worktree { .. })) =>
+                || matches!(
+                    request.workspace,
+                    Some(bridget_transport::protocol::WorkspaceRequest::Worktree { .. })
+                ) =>
         {
             return Err("workspace_git_required".into());
         }
@@ -529,7 +594,6 @@ pub(crate) fn validate_source_base(request: &bridget_transport::protocol::Worker
 
     Ok(())
 }
-
 
 /// Preuve168 de la source Git. O(d+B), d ancêtres du cwd, B sortie Git bornée.
 /// Une absence Git exige des métadonnées absentes sur tous les ancêtres.
@@ -647,7 +711,7 @@ pub fn build_environment(
         validate_provider_profile_directory(profile, "Claude")?;
         env.insert("CLAUDE_CONFIG_DIR".to_string(), OsString::from(profile));
         if definition.capabilities.account_profiles {
-            let anthropic=Path::new(profile).join("anthropic");
+            let anthropic = Path::new(profile).join("anthropic");
             validate_provider_profile_directory(&anthropic.to_string_lossy(), "Anthropic")?;
             env.insert("ANTHROPIC_CONFIG_DIR".into(), anthropic.into_os_string());
         }
@@ -659,7 +723,10 @@ pub fn build_environment(
     Ok(env)
 }
 
-pub(crate) fn validate_provider_profile_directory(profile: &str, provider: &str) -> Result<(), SpawnRefusal> {
+pub(crate) fn validate_provider_profile_directory(
+    profile: &str,
+    provider: &str,
+) -> Result<(), SpawnRefusal> {
     let path = Path::new(profile);
     let metadata = fs::symlink_metadata(path).map_err(|err| SpawnRefusal::EnvUnfit {
         detail: format!("profil {provider} indisponible {}: {err}", path.display()),
@@ -820,78 +887,167 @@ fn decision_from_issue(issue: SpawnCommandIssue, quota: usize) -> SpawnDecision 
 #[path = "lifecycle_tests.rs"]
 mod tests;
 
-
 #[derive(Debug, Clone)]
 pub(crate) struct SpecialistLaunchAuthority {
-    pub db_path:PathBuf,pub agent_id:String,pub grant_id:String,pub grant_revision:u64,
-    pub profile_revision:u64,pub profile_id:String,pub project_id:String,
-    pub submission_id:String,pub human_approval_ref:Option<String>,
+    pub db_path: PathBuf,
+    pub agent_id: String,
+    pub grant_id: String,
+    pub grant_revision: u64,
+    pub profile_revision: u64,
+    pub profile_id: String,
+    pub project_id: String,
+    pub submission_id: String,
+    pub human_approval_ref: Option<String>,
 }
-pub(crate) struct SpecialistReleaseGuard {connection:rusqlite::Connection}
+pub(crate) struct SpecialistReleaseGuard {
+    connection: rusqlite::Connection,
+}
 impl SpecialistLaunchAuthority {
     /// Le verrou SQL est commun aux mutations humaines et au dernier RELEASE.
     /// Il est acquis après BootstrapReady ; aucun démarrage fournisseur sous une autorité périmée.
-    pub(crate) fn lock(&self)->Result<SpecialistReleaseGuard,crate::managed_process::ManagedProcessError> {
+    pub(crate) fn lock(
+        &self,
+    ) -> Result<SpecialistReleaseGuard, crate::managed_process::ManagedProcessError> {
         use sha2::{Digest, Sha256};
-        let invalid=|code:&str|crate::managed_process::ManagedProcessError::InvalidStatus(code.into());
-        let conn=rusqlite::Connection::open(&self.db_path).map_err(|_|invalid("specialist_authority_unavailable"))?;
-        conn.busy_timeout(std::time::Duration::from_secs(2)).map_err(|_|invalid("specialist_authority_unavailable"))?;
-        conn.execute_batch("BEGIN IMMEDIATE").map_err(|_|invalid("specialist_authority_unavailable"))?;
-        let body:String=conn.query_row("SELECT record_json FROM specialists WHERE agent_id=?1",[&self.agent_id],|r|r.get(0)).map_err(|_|invalid("mandate_required"))?;
-        let record:crate::agent_profile::specialists::SpecialistRecord=serde_json::from_str(&body).map_err(|_|invalid("specialist_authority_unavailable"))?;
-        let grant=record.grant.as_ref().ok_or_else(||invalid("mandate_required"))?;
+        let invalid =
+            |code: &str| crate::managed_process::ManagedProcessError::InvalidStatus(code.into());
+        let conn = rusqlite::Connection::open(&self.db_path)
+            .map_err(|_| invalid("specialist_authority_unavailable"))?;
+        conn.busy_timeout(std::time::Duration::from_secs(2))
+            .map_err(|_| invalid("specialist_authority_unavailable"))?;
+        conn.execute_batch("BEGIN IMMEDIATE")
+            .map_err(|_| invalid("specialist_authority_unavailable"))?;
+        let body: String = conn
+            .query_row(
+                "SELECT record_json FROM specialists WHERE agent_id=?1",
+                [&self.agent_id],
+                |r| r.get(0),
+            )
+            .map_err(|_| invalid("mandate_required"))?;
+        let record: crate::agent_profile::specialists::SpecialistRecord =
+            serde_json::from_str(&body).map_err(|_| invalid("specialist_authority_unavailable"))?;
+        let grant = record
+            .grant
+            .as_ref()
+            .ok_or_else(|| invalid("mandate_required"))?;
         let (canonical,role_official):(Vec<u8>,Option<bool>)=conn.query_row(
             "SELECT canonical_bytes,json_extract(profile_snapshot,'$.role_official') FROM specialist_requests WHERE native_submission_id=?1 AND selected_agent_id=?2",
             rusqlite::params![self.submission_id,self.agent_id],|r|Ok((r.get(0)?,r.get(1)?))).map_err(|_|invalid("specialist_authority_unavailable"))?;
-        let canonical:serde_json::Value=serde_json::from_slice(&canonical).map_err(|_|invalid("specialist_authority_unavailable"))?;
-        let role=canonical["role_id"].as_str().ok_or_else(||invalid("role_changed"))?;
-        let (scope,official):(String,bool)=conn.query_row(
-            "SELECT scope_json,official FROM specialist_roles WHERE agent_id=?1 AND role_id=?2",
-            rusqlite::params![self.agent_id,role],|r|Ok((r.get(0)?,r.get(1)?))).map_err(|_|invalid("role_changed"))?;
-        let scope:bridget_transport::specialists::SpecialistScope=serde_json::from_str(&scope).map_err(|_|invalid("role_changed"))?;
-        if !scope.permits(&self.project_id)||(role_official==Some(true)&&!official){return Err(invalid("role_changed"));}
+        let canonical: serde_json::Value = serde_json::from_slice(&canonical)
+            .map_err(|_| invalid("specialist_authority_unavailable"))?;
+        let role = canonical["role_id"]
+            .as_str()
+            .ok_or_else(|| invalid("role_changed"))?;
+        let (scope, official): (String, bool) = conn
+            .query_row(
+                "SELECT scope_json,official FROM specialist_roles WHERE agent_id=?1 AND role_id=?2",
+                rusqlite::params![self.agent_id, role],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .map_err(|_| invalid("role_changed"))?;
+        let scope: bridget_transport::specialists::SpecialistScope =
+            serde_json::from_str(&scope).map_err(|_| invalid("role_changed"))?;
+        if !scope.permits(&self.project_id) || (role_official == Some(true) && !official) {
+            return Err(invalid("role_changed"));
+        }
 
-        let human_request=if let Some(expected)=&self.human_approval_ref {
+        let human_request = if let Some(expected) = &self.human_approval_ref {
             let (snapshot,canonical,selected,grant_revision):(String,Vec<u8>,String,u64)=conn.query_row(
                 "SELECT profile_snapshot,canonical_bytes,selected_agent_id,grant_revision FROM specialist_requests WHERE native_submission_id=?1",
                 [&self.submission_id],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).map_err(|_|invalid("specialist_authority_unavailable"))?;
-            let snapshot:serde_json::Value=serde_json::from_str(&snapshot).map_err(|_|invalid("specialist_authority_unavailable"))?;
-            let hash=format!("{:x}",Sha256::digest(canonical));
-            let parts=expected.rsplit_once(':').ok_or_else(||invalid("human_principal_required"))?;
-            let native_question=parts.0.strip_prefix("user-input:").and_then(|id|crate::user_input::get(&conn,id).ok().flatten());
-            let question_approved=native_question.as_ref().is_some_and(|q|
-                matches!(q["state"].as_str(),Some("submitted"|"applied"))&&q["callback"]["kind"]=="specialist_approval"
-                &&q["callback"]["digest"]==hash&&q["answers"]["specialist_approval"]["selected"]==serde_json::json!(["approve"])
-                &&q["expires_at"].as_i64().is_some_and(|deadline|deadline>std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs() as i64));
-            let known=crate::referent_control::human_principal_actor(parts.0).is_some()
-                ||parts.0.strip_prefix("mobile:").is_some_and(|id|uuid::Uuid::parse_str(id).is_ok())||question_approved;
-            known&&parts.1==hash&&snapshot["human_approval_ref"]==expected.as_str()&&selected==self.agent_id&&grant_revision==self.grant_revision
-        }else{false};
-        if !record.enabled||(!record.auto_start&&!human_request)||(!record.durable&&!human_request)||record.profile_revision!=self.profile_revision
-            ||record.profile_id.as_deref()!=Some(self.profile_id.as_str())
-            ||grant.profile_id!=record.profile_id||grant.profile_revision!=record.profile_revision
-            ||grant.grant_id!=self.grant_id||grant.revision!=self.grant_revision||grant.revoked_at.is_some()
-            ||!grant.allowed_projects.permits(&self.project_id) {
+            let snapshot: serde_json::Value = serde_json::from_str(&snapshot)
+                .map_err(|_| invalid("specialist_authority_unavailable"))?;
+            let hash = format!("{:x}", Sha256::digest(canonical));
+            let parts = expected
+                .rsplit_once(':')
+                .ok_or_else(|| invalid("human_principal_required"))?;
+            let native_question = parts
+                .0
+                .strip_prefix("user-input:")
+                .and_then(|id| crate::user_input::get(&conn, id).ok().flatten());
+            let question_approved = native_question.as_ref().is_some_and(|q| {
+                matches!(q["state"].as_str(), Some("submitted" | "applied"))
+                    && q["callback"]["kind"] == "specialist_approval"
+                    && q["callback"]["digest"] == hash
+                    && q["answers"]["specialist_approval"]["selected"]
+                        == serde_json::json!(["approve"])
+                    && q["expires_at"].as_i64().is_some_and(|deadline| {
+                        deadline
+                            > std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .unwrap_or_default()
+                                .as_secs() as i64
+                    })
+            });
+            let known = crate::referent_control::human_principal_actor(parts.0).is_some()
+                || parts
+                    .0
+                    .strip_prefix("mobile:")
+                    .is_some_and(|id| uuid::Uuid::parse_str(id).is_ok())
+                || question_approved;
+            known
+                && parts.1 == hash
+                && snapshot["human_approval_ref"] == expected.as_str()
+                && selected == self.agent_id
+                && grant_revision == self.grant_revision
+        } else {
+            false
+        };
+        if !record.enabled
+            || (!record.auto_start && !human_request)
+            || (!record.durable && !human_request)
+            || record.profile_revision != self.profile_revision
+            || record.profile_id.as_deref() != Some(self.profile_id.as_str())
+            || grant.profile_id != record.profile_id
+            || grant.profile_revision != record.profile_revision
+            || grant.grant_id != self.grant_id
+            || grant.revision != self.grant_revision
+            || grant.revoked_at.is_some()
+            || !grant.allowed_projects.permits(&self.project_id)
+        {
             return Err(invalid("mandate_changed"));
         }
-        let control=crate::referent_control::read(&conn).map_err(|_|invalid("control_state_unavailable"))?;
-        if control.paused {return Err(invalid("referent_paused"));}
-        Ok(SpecialistReleaseGuard{connection:conn})
+        let control = crate::referent_control::read(&conn)
+            .map_err(|_| invalid("control_state_unavailable"))?;
+        if control.paused {
+            return Err(invalid("referent_paused"));
+        }
+        Ok(SpecialistReleaseGuard { connection: conn })
     }
 }
 impl SpecialistReleaseGuard {
-    pub(crate) fn finish(self)->Result<(),crate::managed_process::ManagedProcessError> {
-        self.connection.execute_batch("COMMIT").map_err(|_|crate::managed_process::ManagedProcessError::InvalidStatus("specialist_authority_unavailable".into()))
+    pub(crate) fn finish(self) -> Result<(), crate::managed_process::ManagedProcessError> {
+        self.connection.execute_batch("COMMIT").map_err(|_| {
+            crate::managed_process::ManagedProcessError::InvalidStatus(
+                "specialist_authority_unavailable".into(),
+            )
+        })
     }
 }
 
 /// Nouvelle mission de spécialiste sous mandat courant : la relance historique
 /// conserve son ancienne définition, cette frontière emploie la cible qualifiée courante.
-pub(crate) fn submit_specialist_relaunch(supervisor:&FleetSupervisor,registry:&AgentRegistry,source:&SourceEnvironment,
-    order:&SpawnOrder,now:i64,hosts:&SpawnHosts)->Result<SpawnDecision,FleetError>{
-    if order.persistent||order.requested_name.as_ref().is_none_or(|id|uuid::Uuid::parse_str(id).is_err())
-        ||!order.command_id.starts_with("specialist-")||order.posture.is_none() {
-        return Err(FleetError::InvalidOrder("specialist_launch_authority_required"));
+pub(crate) fn submit_specialist_relaunch(
+    supervisor: &FleetSupervisor,
+    registry: &AgentRegistry,
+    source: &SourceEnvironment,
+    order: &SpawnOrder,
+    now: i64,
+    hosts: &SpawnHosts,
+) -> Result<SpawnDecision, FleetError> {
+    if order.persistent
+        || order
+            .requested_name
+            .as_ref()
+            .is_none_or(|id| uuid::Uuid::parse_str(id).is_err())
+        || !order.command_id.starts_with("specialist-")
+        || order.posture.is_none()
+    {
+        return Err(FleetError::InvalidOrder(
+            "specialist_launch_authority_required",
+        ));
     }
-    submit_spawn_with_policy(supervisor,registry,source,order,now,false,hosts,true,false)
+    submit_spawn_with_policy(
+        supervisor, registry, source, order, now, false, hosts, true, false,
+    )
 }

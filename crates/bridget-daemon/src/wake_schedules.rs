@@ -296,12 +296,14 @@ pub(crate) fn calculate_cadence(
             let mut next_date = None;
             // L'échéance déjà calculée reste due après minuit et après une
             // nouvelle zone ; seules les échéances futures sont recalculées.
-            if schedule.next_at <= now && now.saturating_sub(schedule.next_at) <= 600
+            if schedule.next_at <= now
+                && now.saturating_sub(schedule.next_at) <= 600
                 && let Some(civil_date) = schedule.next_calendar_date.as_ref()
-                    && schedule.previous_calendar_date.as_deref() != Some(civil_date.as_str()) {
-                        due = Some(schedule.next_at);
-                        due_date = Some(civil_date.clone());
-                    }
+                && schedule.previous_calendar_date.as_deref() != Some(civil_date.as_str())
+            {
+                due = Some(schedule.next_at);
+                due_date = Some(civil_date.clone());
+            }
             for offset in 0..8 {
                 let epoch = base
                     .checked_add(offset * 86400)

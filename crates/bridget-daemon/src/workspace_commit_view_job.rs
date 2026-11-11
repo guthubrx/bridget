@@ -11,8 +11,15 @@ use std::ffi::OsString;
 pub(crate) use bridget_transport::protocol::CommitViewFailure as ExportFailure;
 pub(crate) fn failure(error: &str) -> ExportFailure {
     if let Some(encoded) = error.strip_prefix("workspace_commit_view_limit:") {
-        return serde_json::from_str::<ExportFailure>(encoded).ok()
-            .filter(|f| matches!(f, ExportFailure::MeasuredLimit { .. }) && f.validate(bridget_transport::protocol::WorkerRefusal::WorkspacePrepareFailed).is_ok())
+        return serde_json::from_str::<ExportFailure>(encoded)
+            .ok()
+            .filter(|f| {
+                matches!(f, ExportFailure::MeasuredLimit { .. })
+                    && f.validate(
+                        bridget_transport::protocol::WorkerRefusal::WorkspacePrepareFailed,
+                    )
+                    .is_ok()
+            })
             .unwrap_or(ExportFailure::Unknown);
     }
     match error.split(':').next().unwrap_or("") {
@@ -23,7 +30,7 @@ pub(crate) fn failure(error: &str) -> ExportFailure {
     match error.strip_prefix("workspace_commit_view_unavailable:cause=") {
         Some("git_timeout" | "view_link_timeout" | "view_audit_timeout") => ExportFailure::TimedOut,
         Some("preparation_expired") => ExportFailure::PreparationExpired,
-        Some("git_object_unavailable"|"commit_unavailable") => ExportFailure::ObjectUnavailable,
+        Some("git_object_unavailable" | "commit_unavailable") => ExportFailure::ObjectUnavailable,
         Some("destination_inside_source") => ExportFailure::DestinationInsideRepository,
         Some("destination_volume_mismatch") => ExportFailure::DestinationVolumeMismatch,
         Some("destination_unavailable") => ExportFailure::DestinationUnavailable,
@@ -31,17 +38,19 @@ pub(crate) fn failure(error: &str) -> ExportFailure {
         Some("storage_space_unavailable") => ExportFailure::StorageSpaceUnknown,
         Some("link_outside_view") => ExportFailure::LinkOutsideView,
         Some("link_cycle") => ExportFailure::LinkCycle,
-        Some(
-            "path_unsupported"
-            | "link_unsupported"
-,
-        ) => ExportFailure::UnsupportedPath,
+        Some("path_unsupported" | "link_unsupported") => ExportFailure::UnsupportedPath,
         Some("view_integrity_failed" | "view_identity_changed" | "git_object_integrity_failed") => {
             ExportFailure::IntegrityFailed
         }
-        Some("byte_count_overflow" | "byte_limit" | "view_entry_limit" | "link_metadata_limit" | "proof_byte_limit" | "tree_limit" | "entry_limit") => {
-            ExportFailure::ByteLimit
-        }
+        Some(
+            "byte_count_overflow"
+            | "byte_limit"
+            | "view_entry_limit"
+            | "link_metadata_limit"
+            | "proof_byte_limit"
+            | "tree_limit"
+            | "entry_limit",
+        ) => ExportFailure::ByteLimit,
         Some("export_busy") => ExportFailure::OperationCapacity,
         Some("source_identity_changed") => ExportFailure::SourceIdentityChanged,
         Some("source_unavailable" | "source_inventory_unavailable") => {
@@ -148,30 +157,37 @@ impl ViewProofs {
 
 /// Le sous-mode refuse un appel ordinaire avant de lire une preuve. L'identité
 /// et le FD sont ceux du bootstrap ; aucune valeur de notice ne fait autorité.
-pub(crate) fn run_commit_view_plan(args:&[String])->Result<(),String> {
-    let mut reporter=ManagedStatusReporter::from_environment()
-        .map_err(|_|refusal("managed_context_required"))?
-        .ok_or_else(||refusal("managed_context_required"))?;
-    let result=(||{
-        let [root,key]=args else {return Err(refusal("proof_binding_invalid"));};
-        let proofs=ViewProofs::open(Path::new(root))?;
-        let seed=proofs.load_plan(key)?;
-        if reporter.identity()!=&ViewJobRequest::Export.identity_for_binding(&seed.binding)? {
+pub(crate) fn run_commit_view_plan(args: &[String]) -> Result<(), String> {
+    let mut reporter = ManagedStatusReporter::from_environment()
+        .map_err(|_| refusal("managed_context_required"))?
+        .ok_or_else(|| refusal("managed_context_required"))?;
+    let result = (|| {
+        let [root, key] = args else {
+            return Err(refusal("proof_binding_invalid"));
+        };
+        let proofs = ViewProofs::open(Path::new(root))?;
+        let seed = proofs.load_plan(key)?;
+        if reporter.identity() != &ViewJobRequest::Export.identity_for_binding(&seed.binding)? {
             return Err(refusal("proof_binding_mismatch"));
         }
-        let intent=seed.planned_intent()?;
-        seed.matches(&intent)?;seed.live()?;
+        let intent = seed.planned_intent()?;
+        seed.matches(&intent)?;
+        seed.live()?;
         proofs.write_intent(&intent)?;
-        export(&intent.source,&intent.manifest,&intent.destination()?)?;
+        export(&intent.source, &intent.manifest, &intent.destination()?)?;
         seed.check_source()?;
         proofs.publish(&intent)?;
         seed.live()
     })();
     match result {
-        Ok(())=>{reporter.startup_succeeded();Ok(())}
-        Err(error)=>{
-            let reason=serde_json::to_string(&failure(&error)).map_err(|_|refusal("proof_invalid"))?;
-            let _=reporter.startup_failed("workspace_commit_view",reason);
+        Ok(()) => {
+            reporter.startup_succeeded();
+            Ok(())
+        }
+        Err(error) => {
+            let reason =
+                serde_json::to_string(&failure(&error)).map_err(|_| refusal("proof_invalid"))?;
+            let _ = reporter.startup_failed("workspace_commit_view", reason);
             Err(error)
         }
     }
@@ -295,70 +311,141 @@ impl ViewJob {
         } else {
             proofs.publication(intent).map_err(|e| plain(failure(&e)))?;
         }
-        let args=match request {
-            ViewJobRequest::Export=>vec!["workspace-view-export".into(),proofs.path.to_string_lossy().into(),intent.binding.key().map_err(|e|plain(failure(&e)))?],
-            ViewJobRequest::Materialize{..}=>vec!["workspace-view-materialize".into(),proofs.path.to_string_lossy().into(),intent.binding.key().map_err(|e|plain(failure(&e)))?,
-                request.encoded().map_err(|e|plain(failure(&e)))?],
+        let args = match request {
+            ViewJobRequest::Export => vec![
+                "workspace-view-export".into(),
+                proofs.path.to_string_lossy().into(),
+                intent.binding.key().map_err(|e| plain(failure(&e)))?,
+            ],
+            ViewJobRequest::Materialize { .. } => vec![
+                "workspace-view-materialize".into(),
+                proofs.path.to_string_lossy().into(),
+                intent.binding.key().map_err(|e| plain(failure(&e)))?,
+                request.encoded().map_err(|e| plain(failure(&e)))?,
+            ],
         };
-        Self::start_launch(proofs,&intent.binding,identity,args,executable,environment,before_spawn,authorize_release)
+        Self::start_launch(
+            proofs,
+            &intent.binding,
+            identity,
+            args,
+            executable,
+            environment,
+            before_spawn,
+            authorize_release,
+        )
     }
 
     pub(crate) fn start_plan_registered(
-        proofs:&ViewProofs,seed:&ViewPlan,executable:&Path,environment:&BTreeMap<String,OsString>,
-        before_spawn:impl FnOnce()->Result<(),ExportFailure>,
-        authorize_release:impl FnOnce(&ManagedMarker)->Result<(),ExportFailure>,
-    )->Result<Self,(ExportFailure,Option<Self>)> {
-        let plain=|cause|(cause,None);
-        seed.live().map_err(|e|plain(failure(&e)))?;
-        let key=seed.binding.key().map_err(|e|plain(failure(&e)))?;
-        if proofs.load_plan(&key).map_err(|e|plain(failure(&e)))?!=*seed
-            || proofs.read(&format!("{key}.intent.json"),MAX_INTENT).map_err(|e|plain(failure(&e)))?.is_some()
-            || fs::symlink_metadata(seed.data_root.join(&key)).is_ok() {
+        proofs: &ViewProofs,
+        seed: &ViewPlan,
+        executable: &Path,
+        environment: &BTreeMap<String, OsString>,
+        before_spawn: impl FnOnce() -> Result<(), ExportFailure>,
+        authorize_release: impl FnOnce(&ManagedMarker) -> Result<(), ExportFailure>,
+    ) -> Result<Self, (ExportFailure, Option<Self>)> {
+        let plain = |cause| (cause, None);
+        seed.live().map_err(|e| plain(failure(&e)))?;
+        let key = seed.binding.key().map_err(|e| plain(failure(&e)))?;
+        if proofs.load_plan(&key).map_err(|e| plain(failure(&e)))? != *seed
+            || proofs
+                .read(&format!("{key}.intent.json"), MAX_INTENT)
+                .map_err(|e| plain(failure(&e)))?
+                .is_some()
+            || fs::symlink_metadata(seed.data_root.join(&key)).is_ok()
+        {
             return Err(plain(ExportFailure::ProofUnavailable));
         }
-        let identity=ViewJobRequest::Export.identity_for_binding(&seed.binding).map_err(|e|plain(failure(&e)))?;
-        Self::start_launch(proofs,&seed.binding,identity,
-            vec!["workspace-view-plan".into(),proofs.path.to_string_lossy().into(),key],
-            executable,environment,before_spawn,authorize_release)
+        let identity = ViewJobRequest::Export
+            .identity_for_binding(&seed.binding)
+            .map_err(|e| plain(failure(&e)))?;
+        Self::start_launch(
+            proofs,
+            &seed.binding,
+            identity,
+            vec![
+                "workspace-view-plan".into(),
+                proofs.path.to_string_lossy().into(),
+                key,
+            ],
+            executable,
+            environment,
+            before_spawn,
+            authorize_release,
+        )
     }
 
     fn start_launch(
-        proofs:&ViewProofs,binding:&ViewBinding,identity:ManagedIdentity,args:Vec<String>,
-        executable:&Path,environment:&BTreeMap<String,OsString>,
-        before_spawn:impl FnOnce()->Result<(),ExportFailure>,
-        authorize_release:impl FnOnce(&ManagedMarker)->Result<(),ExportFailure>,
-    )->Result<Self,(ExportFailure,Option<Self>)> {
-        let plain=|cause|(cause,None);
-        let key=binding.key().map_err(|e|plain(failure(&e)))?;
-        let lease=proofs.lease(&key).map_err(|e|plain(failure(&e)))?;
-        let name=format!("view-{key}");
-        if proofs.read(&format!("{name}.json"),2048).map_err(|e|plain(failure(&e)))?.is_some() {
+        proofs: &ViewProofs,
+        binding: &ViewBinding,
+        identity: ManagedIdentity,
+        args: Vec<String>,
+        executable: &Path,
+        environment: &BTreeMap<String, OsString>,
+        before_spawn: impl FnOnce() -> Result<(), ExportFailure>,
+        authorize_release: impl FnOnce(&ManagedMarker) -> Result<(), ExportFailure>,
+    ) -> Result<Self, (ExportFailure, Option<Self>)> {
+        let plain = |cause| (cause, None);
+        let key = binding.key().map_err(|e| plain(failure(&e)))?;
+        let lease = proofs.lease(&key).map_err(|e| plain(failure(&e)))?;
+        let name = format!("view-{key}");
+        if proofs
+            .read(&format!("{name}.json"), 2048)
+            .map_err(|e| plain(failure(&e)))?
+            .is_some()
+        {
             return Err(plain(ExportFailure::StopUnconfirmed));
         }
-        let markers=ManagedMarkerStore::at_directory(&proofs.path);
-        let mut env=BTreeMap::new();
-        for name in ["PATH","HOME","TMPDIR"] {
-            if let Some(value)=environment.get(name) {env.insert(name.into(),value.clone());}
+        let markers = ManagedMarkerStore::at_directory(&proofs.path);
+        let mut env = BTreeMap::new();
+        for name in ["PATH", "HOME", "TMPDIR"] {
+            if let Some(value) = environment.get(name) {
+                env.insert(name.into(), value.clone());
+            }
         }
-        env.insert("LC_ALL".into(),OsString::from("C"));
+        env.insert("LC_ALL".into(), OsString::from("C"));
         #[allow(unused_mut)]
-        let mut launch=ManagedLaunch {bootstrap_executable:executable.into(),wrapper_executable:executable.into(),
-            wrapper_args:args,identity,cwd:proofs.path.clone(),env};
+        let mut launch = ManagedLaunch {
+            bootstrap_executable: executable.into(),
+            wrapper_executable: executable.into(),
+            wrapper_args: args,
+            identity,
+            cwd: proofs.path.clone(),
+            env,
+        };
         #[cfg(test)]
-        let native_recipe=environment.get("B221_VIEW_NATIVE_BINARY").is_some_and(|value|value=="1");
-        #[cfg(test)] if !native_recipe {
-            let planning=launch.wrapper_args[0]=="workspace-view-plan";
-            let encoded=if !planning && launch.wrapper_args.len()==4 {launch.wrapper_args[3].clone()} else {
+        let native_recipe = environment
+            .get("B221_VIEW_NATIVE_BINARY")
+            .is_some_and(|value| value == "1");
+        #[cfg(test)]
+        if !native_recipe {
+            let planning = launch.wrapper_args[0] == "workspace-view-plan";
+            let encoded = if !planning && launch.wrapper_args.len() == 4 {
+                launch.wrapper_args[3].clone()
+            } else {
                 ViewJobRequest::Export.encoded().unwrap()
             };
-            launch.wrapper_args=vec!["--exact".into(),"workspace_git::commit_view::tests::c19_export_child".into(),
-                "--ignored".into(),"--nocapture".into(),"--test-threads=1".into()];
-            launch.env.insert("B221_VIEW_PROOFS".into(),proofs.path.as_os_str().into());
-            launch.env.insert("B221_VIEW_KEY".into(),key.into());
-            launch.env.insert("B221_VIEW_REQUEST".into(),encoded.into());
-            if planning {launch.env.insert("B221_VIEW_PLAN".into(),"1".into());}
-            for name in ["B221_VIEW_TEST_STALL","B221_VIEW_TEST_NO_READY"] {
-                if let Some(value)=environment.get(name) {launch.env.insert(name.into(),value.clone());}
+            launch.wrapper_args = vec![
+                "--exact".into(),
+                "workspace_git::commit_view::tests::c19_export_child".into(),
+                "--ignored".into(),
+                "--nocapture".into(),
+                "--test-threads=1".into(),
+            ];
+            launch
+                .env
+                .insert("B221_VIEW_PROOFS".into(), proofs.path.as_os_str().into());
+            launch.env.insert("B221_VIEW_KEY".into(), key.into());
+            launch
+                .env
+                .insert("B221_VIEW_REQUEST".into(), encoded.into());
+            if planning {
+                launch.env.insert("B221_VIEW_PLAN".into(), "1".into());
+            }
+            for name in ["B221_VIEW_TEST_STALL", "B221_VIEW_TEST_NO_READY"] {
+                if let Some(value) = environment.get(name) {
+                    launch.env.insert(name.into(), value.clone());
+                }
             }
         }
         // Le reçu doit distinguer une réservation sans processus du trou
@@ -370,8 +457,10 @@ impl ViewJob {
         #[cfg(test)]
         let bootstrap = if native_recipe {
             crate::managed_process::spawn_managed_bootstrap(&launch)
-                .map_err(|_|plain(ExportFailure::StartupUnavailable))?
-        } else {crate::managed_process::tests::spawn_catalogue_test_bootstrap(&launch)};
+                .map_err(|_| plain(ExportFailure::StartupUnavailable))?
+        } else {
+            crate::managed_process::tests::spawn_catalogue_test_bootstrap(&launch)
+        };
         let deadline = Instant::now() + Duration::from_secs(2);
         let ready = match bootstrap
             .wait_ready_or_cancel_retained(|| Instant::now() >= deadline, Duration::from_millis(10))

@@ -477,52 +477,121 @@ pub(crate) fn read_journal_excerpt(
 }
 /// O(octets), instantané Attach existant <=60 Kio ; page mobile <=16 Kio et 100 entrées.
 pub(crate) fn lineage_journal_remote_page(
-    socket: &Path, agent: &str, after: u64, limit: u32,
+    socket: &Path,
+    agent: &str,
+    after: u64,
+    limit: u32,
 ) -> Result<serde_json::Value, bridget_transport::protocol::HumanLineageError> {
     use bridget_transport::protocol::HumanLineageError as E;
-    if !(1..=100).contains(&limit) { return Err(E::InvalidRequest); }
-    let excerpt=read_journal_excerpt(socket,agent,AttachWindow::Seq(after.saturating_add(1)))
-        .map_err(|_|E::JournalUnavailable)?;
-    if excerpt.notices.iter().any(|n|!n.starts_with("journal_gap:") && !n.starts_with("excerpt_limit:")) {
+    if !(1..=100).contains(&limit) {
+        return Err(E::InvalidRequest);
+    }
+    let excerpt = read_journal_excerpt(socket, agent, AttachWindow::Seq(after.saturating_add(1)))
+        .map_err(|_| E::JournalUnavailable)?;
+    if excerpt
+        .notices
+        .iter()
+        .any(|n| !n.starts_with("journal_gap:") && !n.starts_with("excerpt_limit:"))
+    {
         return Err(E::JournalUnavailable);
     }
-    let mut events=Vec::new();let mut bytes=0usize;let mut next=after;
+    let mut events = Vec::new();
+    let mut bytes = 0usize;
+    let mut next = after;
     for event in excerpt.entries {
-        let seq=event["seq"].as_u64().ok_or(E::JournalUnavailable)?;
-        if seq<=next {continue;}
-        if seq>next.saturating_add(1) {
-            return Ok(lineage_journal_result(agent,events,seq-1,false,
-                Some(serde_json::json!({"from_seq":next.saturating_add(1),"to_seq":seq-1,"reason":"journal_gap"}))));
+        let seq = event["seq"].as_u64().ok_or(E::JournalUnavailable)?;
+        if seq <= next {
+            continue;
         }
-        let size=serde_json::to_vec(&event).map_err(|_|E::JournalUnavailable)?.len();
-        if events.len()>=limit as usize || !events.is_empty() && bytes+size>16*1024 {
-            return Ok(lineage_journal_result(agent,events,next,false,None));
+        if seq > next.saturating_add(1) {
+            return Ok(lineage_journal_result(
+                agent,
+                events,
+                seq - 1,
+                false,
+                Some(
+                    serde_json::json!({"from_seq":next.saturating_add(1),"to_seq":seq-1,"reason":"journal_gap"}),
+                ),
+            ));
         }
-        if size>16*1024 {
-            return Ok(lineage_journal_result(agent,events,seq,false,
-                Some(serde_json::json!({"from_seq":seq,"to_seq":seq,"reason":"entry_too_large"}))));
+        let size = serde_json::to_vec(&event)
+            .map_err(|_| E::JournalUnavailable)?
+            .len();
+        if events.len() >= limit as usize || !events.is_empty() && bytes + size > 16 * 1024 {
+            return Ok(lineage_journal_result(agent, events, next, false, None));
         }
-        bytes+=size;next=seq;events.push(event);
+        if size > 16 * 1024 {
+            return Ok(lineage_journal_result(
+                agent,
+                events,
+                seq,
+                false,
+                Some(serde_json::json!({"from_seq":seq,"to_seq":seq,"reason":"entry_too_large"})),
+            ));
+        }
+        bytes += size;
+        next = seq;
+        events.push(event);
     }
-    if let Some(through)=excerpt.through_seq.filter(|v|*v>next) {
-        return Ok(lineage_journal_result(agent,events,through,true,
-            Some(serde_json::json!({"from_seq":next.saturating_add(1),"to_seq":through,"reason":"journal_gap"}))));
+    if let Some(through) = excerpt.through_seq.filter(|v| *v > next) {
+        return Ok(lineage_journal_result(
+            agent,
+            events,
+            through,
+            true,
+            Some(
+                serde_json::json!({"from_seq":next.saturating_add(1),"to_seq":through,"reason":"journal_gap"}),
+            ),
+        ));
     }
-    if events.is_empty() && let Some(seq)=excerpt.next_seq.filter(|v|*v>next) {
-        return Ok(lineage_journal_result(agent,events,seq,false,
-            Some(serde_json::json!({"from_seq":next.saturating_add(1),"to_seq":seq,"reason":"entry_too_large"}))));
+    if events.is_empty()
+        && let Some(seq) = excerpt.next_seq.filter(|v| *v > next)
+    {
+        return Ok(lineage_journal_result(
+            agent,
+            events,
+            seq,
+            false,
+            Some(
+                serde_json::json!({"from_seq":next.saturating_add(1),"to_seq":seq,"reason":"entry_too_large"}),
+            ),
+        ));
     }
     // Une confirmation sans séquence signifie un instantané vide, pas un suivi terminé.
-    Ok(lineage_journal_result(agent,events,next,excerpt.snapshot_caught_up,None))
+    Ok(lineage_journal_result(
+        agent,
+        events,
+        next,
+        excerpt.snapshot_caught_up,
+        None,
+    ))
 }
 
 /// Lit une seule entrée de fin via Attach, sans charger l’historique dans le client.
-pub(crate) fn journal_tail_start(socket: &Path, agent: &str, limit: u32) -> Result<u64, bridget_transport::protocol::HumanLineageError> {
+pub(crate) fn journal_tail_start(
+    socket: &Path,
+    agent: &str,
+    limit: u32,
+) -> Result<u64, bridget_transport::protocol::HumanLineageError> {
     use bridget_transport::protocol::HumanLineageError as E;
-    if !(1..=50).contains(&limit) { return Err(E::InvalidRequest); }
-    let excerpt=read_journal_excerpt(socket,agent,AttachWindow::Tail(1)).map_err(|_|E::JournalUnavailable)?;
-    if excerpt.notices.iter().any(|n|!n.starts_with("excerpt_limit:")) { return Err(E::JournalUnavailable); }
-    Ok(excerpt.last_seq.or(excerpt.through_seq).or(excerpt.next_seq).unwrap_or(0).saturating_sub(limit as u64))
+    if !(1..=50).contains(&limit) {
+        return Err(E::InvalidRequest);
+    }
+    let excerpt = read_journal_excerpt(socket, agent, AttachWindow::Tail(1))
+        .map_err(|_| E::JournalUnavailable)?;
+    if excerpt
+        .notices
+        .iter()
+        .any(|n| !n.starts_with("excerpt_limit:"))
+    {
+        return Err(E::JournalUnavailable);
+    }
+    Ok(excerpt
+        .last_seq
+        .or(excerpt.through_seq)
+        .or(excerpt.next_seq)
+        .unwrap_or(0)
+        .saturating_sub(limit as u64))
 }
 
 const SEND_ISSUE_TIMEOUT: Duration = Duration::from_secs(60);
@@ -560,7 +629,10 @@ struct RawTerminal {
     restored: bool,
 }
 
-#[expect(dead_code, reason = "code réservé à la boucle T806b, conservé par décision D12 (programme 260) : API utilisée par la boucle T806b et les pseudo-TTY de T806a")]
+#[expect(
+    dead_code,
+    reason = "code réservé à la boucle T806b, conservé par décision D12 (programme 260) : API utilisée par la boucle T806b et les pseudo-TTY de T806a"
+)]
 impl RawTerminal {
     fn enable_for_fd(fd: RawFd) -> Result<Option<Self>, String> {
         Self::enable_for_fds(fd, fd)

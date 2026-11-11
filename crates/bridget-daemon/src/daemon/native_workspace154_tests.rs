@@ -446,10 +446,17 @@ fn native154_creation_refus_avant_ecriture_par_cas() {
             "outside" => {
                 // Le parent complet autorise désormais réellement les autres
                 // dossiers. Ce témoin négatif doit porter une restriction réelle.
-                let mut st=fixture.state.lock().unwrap();
-                insert_fact(&mut st,codex_fact(fixture.root.to_str().unwrap(),
-                    json!({"type":"workspaceWrite","networkAccess":false,
-                        "writableRoots":[fixture.root],"excludeSlashTmp":true,"excludeTmpdirEnvVar":true}),"never"),None);
+                let mut st = fixture.state.lock().unwrap();
+                insert_fact(
+                    &mut st,
+                    codex_fact(
+                        fixture.root.to_str().unwrap(),
+                        json!({"type":"workspaceWrite","networkAccess":false,
+                        "writableRoots":[fixture.root],"excludeSlashTmp":true,"excludeTmpdirEnvVar":true}),
+                        "never",
+                    ),
+                    None,
+                );
                 drop(st);
                 if let NativeDelegationRequest::Delegate { cwd, .. } = &mut request {
                     *cwd = fixture
@@ -656,9 +663,10 @@ fn native154_isolation_sous_dossier_deux_branches_et_lancement_par_paire() {
         }
         let mut request = request154(&cwd, "first", Some(json!({"strategy":"worktree"})));
         if pair == "codex-claude"
-            && let NativeDelegationRequest::Delegate { agent_type, .. } = &mut request {
-                *agent_type = "claude-child".into();
-            }
+            && let NativeDelegationRequest::Delegate { agent_type, .. } = &mut request
+        {
+            *agent_type = "claude-child".into();
+        }
         let first = call154(&fixture, request);
         let mut task = task154(&fixture, &first);
         let expected = cwd.join(".worktrees").join(&task.task_id[..8]).join("sub");
@@ -1051,8 +1059,18 @@ fn spec241_retained_worktrees_do_not_replace_unique_admission_claims() {
         call154(&fixture, request.clone())["code"],
         "workspace_creation_in_progress"
     );
-    let extra=call154(&fixture,request154(&fixture.root,"over128",Some(json!({"strategy":"worktree"}))));
-    assert!(extra.get("task_id").is_some(),"une autre clé reste admissible : {extra}");
+    let extra = call154(
+        &fixture,
+        request154(
+            &fixture.root,
+            "over128",
+            Some(json!({"strategy":"worktree"})),
+        ),
+    );
+    assert!(
+        extra.get("task_id").is_some(),
+        "une autre clé reste admissible : {extra}"
+    );
     let record = crate::workspace_git::create(&plan, &reserved.task_id).unwrap();
     let view = {
         let mut st = fixture.state.lock().unwrap();
@@ -1250,8 +1268,20 @@ fn native154_creation_quarante_appels_trois_proprietaires() {
     }
     let prefilled = 120; // Plus de 128 checkouts après admissions : aucun quota de rétention.
     for index in 0..prefilled {
-        let path = fixture.root.join(".worktrees").join(format!("prefilled-{index}"));
-        git154(&fixture.root, &["worktree", "add", "--detach", path.to_str().unwrap(), "HEAD"]);
+        let path = fixture
+            .root
+            .join(".worktrees")
+            .join(format!("prefilled-{index}"));
+        git154(
+            &fixture.root,
+            &[
+                "worktree",
+                "add",
+                "--detach",
+                path.to_str().unwrap(),
+                "HEAD",
+            ],
+        );
     }
     let barrier = Arc::new(std::sync::Barrier::new(41));
     let mut workers = Vec::new();
@@ -2611,10 +2641,15 @@ fn native175_conservation_expliquee_sans_mutation_ni_autorisation_de_retrait() {
                 .as_str()
                 .is_some_and(|value| !value.is_empty())
         );
-        assert!(!before.guarded, "la fixture conserve son admission non gardée");
+        assert!(
+            !before.guarded,
+            "la fixture conserve son admission non gardée"
+        );
         assert_eq!(before.continuation_guard_open(), continuable);
-        assert_eq!(view["continuable"], false,
-            "un délai seul ne rend pas une admission non gardée reprenable");
+        assert_eq!(
+            view["continuable"], false,
+            "un délai seul ne rend pas une admission non gardée reprenable"
+        );
         assert!(view["workspace"].get("toplevel").is_none());
         let after = fixture
             .state

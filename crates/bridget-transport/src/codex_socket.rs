@@ -1,7 +1,7 @@
 //! Cadrage WebSocket sur Unix du Codex local. Aucun RPC ni événement métier
 //! n'est reconstruit ici : une trame texte reste ses octets d'origine.
-use crate::poison::RecoverPoison;
 use crate::jsonl::{MAX_DAEMON_FRAME_BYTES, connect_nonblocking};
+use crate::poison::RecoverPoison;
 use std::io::{self, Write};
 use std::net::Shutdown;
 use std::os::fd::{AsRawFd, RawFd};

@@ -149,5 +149,8 @@ fn le_noyau_ne_compile_plus_de_serveur_http_ni_de_renderer() {
         .filter(|path| !path.starts_with(src.join("mobile")))
         .filter(|path| fs::read_to_string(path).unwrap().contains("axum::"))
         .collect();
-    assert!(outside.is_empty(), "axum hors du compagnon mobile : {outside:?}");
+    assert!(
+        outside.is_empty(),
+        "axum hors du compagnon mobile : {outside:?}"
+    );
 }

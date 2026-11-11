@@ -27,7 +27,8 @@ fn lineage149_actions_snake_case_roundtrip_et_fermeture() {
         json!({"action":"cancel","task_id":"14900000-0000-4000-8000-000000000001","request_id":"49000000-0000-4000-8000-000000000002"}),
     ];
     for demande in demandes {
-        let action: HumanLineageAction = serde_json::from_value(demande.clone()).unwrap_or_else(|_| panic!("{}", demande.to_string()));
+        let action: HumanLineageAction = serde_json::from_value(demande.clone())
+            .unwrap_or_else(|_| panic!("{}", demande.to_string()));
         // Round-trip sémantique : le fil ne peut pas dériver du contrat.
         let line = encode(&action).unwrap();
         assert_eq!(
@@ -67,28 +68,45 @@ fn lineage149_capacite_exigee_par_action() {
     assert_eq!(action.capability(), ClientCapability::HumanLineageViewV1);
     let show = json!({"action":"show","task_id":"14900000-0000-4000-8000-000000000001","offset":0,"limit":100});
     assert_eq!(
-        serde_json::from_value::<HumanLineageAction>(show).unwrap().capability(),
+        serde_json::from_value::<HumanLineageAction>(show)
+            .unwrap()
+            .capability(),
         ClientCapability::HumanLineageViewV1
     );
     let journal = json!({"action":"journal","task_id":"14900000-0000-4000-8000-000000000001","after_seq":0,"limit":50,"follow":false});
     assert_eq!(
-        serde_json::from_value::<HumanLineageAction>(journal).unwrap().capability(),
+        serde_json::from_value::<HumanLineageAction>(journal)
+            .unwrap()
+            .capability(),
         ClientCapability::HumanLineageViewV1
     );
     let watch = json!({"action":"watch"});
     assert_eq!(
-        serde_json::from_value::<HumanLineageAction>(watch).unwrap().capability(),
+        serde_json::from_value::<HumanLineageAction>(watch)
+            .unwrap()
+            .capability(),
         ClientCapability::HumanLineageWatchV1
     );
     let cancel = json!({"action":"cancel","task_id":"14900000-0000-4000-8000-000000000001","request_id":"49000000-0000-4000-8000-000000000002"});
     assert_eq!(
-        serde_json::from_value::<HumanLineageAction>(cancel).unwrap().capability(),
+        serde_json::from_value::<HumanLineageAction>(cancel)
+            .unwrap()
+            .capability(),
         ClientCapability::HumanLineageCancelV1
     );
     // Les noms filaires exacts : la négociation client les annonce ainsi.
-    assert_eq!(serde_json::to_value(ClientCapability::HumanLineageViewV1).unwrap(), "human_lineage_view_v1");
-    assert_eq!(serde_json::to_value(ClientCapability::HumanLineageWatchV1).unwrap(), "human_lineage_watch_v1");
-    assert_eq!(serde_json::to_value(ClientCapability::HumanLineageCancelV1).unwrap(), "human_lineage_cancel_v1");
+    assert_eq!(
+        serde_json::to_value(ClientCapability::HumanLineageViewV1).unwrap(),
+        "human_lineage_view_v1"
+    );
+    assert_eq!(
+        serde_json::to_value(ClientCapability::HumanLineageWatchV1).unwrap(),
+        "human_lineage_watch_v1"
+    );
+    assert_eq!(
+        serde_json::to_value(ClientCapability::HumanLineageCancelV1).unwrap(),
+        "human_lineage_cancel_v1"
+    );
 }
 
 /// Forme d'écriture `compose` : opération fermée, capacité dédiée, bornes
@@ -123,16 +141,40 @@ fn spec258_compose_decode_les_quatre_operations_avec_capacite_dediee() {
 
 #[test]
 fn spec258_catalogue_capacite_absente_legacy_et_lecture_sans_effet() {
-    let legacy=json!({"type":"ObservationCapabilities","events":[]});
-    assert!(matches!(serde_json::from_value::<WrapperToDaemon>(legacy.clone()).unwrap(),WrapperToDaemon::ObservationCapabilities{runtime_catalogue:false,..}));
-    assert_eq!(serde_json::to_value(WrapperToDaemon::ObservationCapabilities{events:Vec::new(),runtime_catalogue:false}).unwrap(),legacy);
+    let legacy = json!({"type":"ObservationCapabilities","events":[]});
+    assert!(matches!(
+        serde_json::from_value::<WrapperToDaemon>(legacy.clone()).unwrap(),
+        WrapperToDaemon::ObservationCapabilities {
+            runtime_catalogue: false,
+            ..
+        }
+    ));
+    assert_eq!(
+        serde_json::to_value(WrapperToDaemon::ObservationCapabilities {
+            events: Vec::new(),
+            runtime_catalogue: false
+        })
+        .unwrap(),
+        legacy
+    );
     #[derive(serde::Deserialize)]
-    #[serde(tag="type")]
-    enum Legacy { ObservationCapabilities {events:Vec<bridget_transport::protocol::ObservationKind>} }
-    let new=json!({"type":"ObservationCapabilities","events":[],"runtime_catalogue":true});
-    let Legacy::ObservationCapabilities{events}=serde_json::from_value(new).unwrap();assert!(events.is_empty());
-    for invalid in [json!({"status":"observed","models":[],"selection":{"model":"forged"}}),json!({"status":"mystery"})] {
-        assert!(serde_json::from_value::<bridget_transport::protocol::RuntimeCatalogueOutcome>(invalid).is_err());
+    #[serde(tag = "type")]
+    enum Legacy {
+        ObservationCapabilities {
+            events: Vec<bridget_transport::protocol::ObservationKind>,
+        },
+    }
+    let new = json!({"type":"ObservationCapabilities","events":[],"runtime_catalogue":true});
+    let Legacy::ObservationCapabilities { events } = serde_json::from_value(new).unwrap();
+    assert!(events.is_empty());
+    for invalid in [
+        json!({"status":"observed","models":[],"selection":{"model":"forged"}}),
+        json!({"status":"mystery"}),
+    ] {
+        assert!(
+            serde_json::from_value::<bridget_transport::protocol::RuntimeCatalogueOutcome>(invalid)
+                .is_err()
+        );
     }
 }
 
@@ -172,16 +214,32 @@ fn spec258_compose_bornes_locales_fermees() {
             .unwrap()
     };
     assert!(bornes(json!({"kind":"interrupt"})));
-    assert!(bornes(json!({"kind":"send","body":"a\tb\nc","intent":"queue"})));
-    assert!(bornes(json!({"kind":"select_runtime","model":"m","effort":"high"})));
-    assert!(!bornes(json!({"kind":"send","body":"   ","intent":"queue"})));
-    assert!(!bornes(json!({"kind":"send","body":"a\u{0007}b","intent":"steer"})));
+    assert!(bornes(
+        json!({"kind":"send","body":"a\tb\nc","intent":"queue"})
+    ));
+    assert!(bornes(
+        json!({"kind":"select_runtime","model":"m","effort":"high"})
+    ));
+    assert!(!bornes(
+        json!({"kind":"send","body":"   ","intent":"queue"})
+    ));
+    assert!(!bornes(
+        json!({"kind":"send","body":"a\u{0007}b","intent":"steer"})
+    ));
     let trop_long = "x".repeat(HUMAN_COMPOSE_BODY_MAX_BYTES + 1);
-    assert!(!bornes(json!({"kind":"send","body":trop_long,"intent":"queue"})));
+    assert!(!bornes(
+        json!({"kind":"send","body":trop_long,"intent":"queue"})
+    ));
     let limite = "x".repeat(HUMAN_COMPOSE_BODY_MAX_BYTES);
-    assert!(bornes(json!({"kind":"send","body":limite,"intent":"queue"})));
-    assert!(!bornes(json!({"kind":"select_runtime","model":"","effort":"high"})));
-    assert!(!bornes(json!({"kind":"select_runtime","model":"m","effort":"hi gh"})));
+    assert!(bornes(
+        json!({"kind":"send","body":limite,"intent":"queue"})
+    ));
+    assert!(!bornes(
+        json!({"kind":"select_runtime","model":"","effort":"high"})
+    ));
+    assert!(!bornes(
+        json!({"kind":"select_runtime","model":"m","effort":"hi gh"})
+    ));
 }
 
 #[test]
@@ -201,15 +259,15 @@ fn spec258_compose_lecture_de_ronde_et_mutations_exigent_une_ronde_constatee() {
     assert!(avec_ronde(0, json!({"kind":"read"})).unwrap());
     assert!(!avec_ronde(3, json!({"kind":"read"})).unwrap());
     assert!(!avec_ronde(0, json!({"kind":"interrupt"})).unwrap());
+    assert!(!avec_ronde(0, json!({"kind":"send","body":"x","intent":"queue"})).unwrap());
     assert!(
-        !avec_ronde(0, json!({"kind":"send","body":"x","intent":"queue"})).unwrap()
+        avec_ronde(
+            1,
+            json!({"kind":"select_runtime","model":"m","effort":"high"})
+        )
+        .unwrap()
     );
-    assert!(
-        avec_ronde(1, json!({"kind":"select_runtime","model":"m","effort":"high"})).unwrap()
-    );
-    assert!(
-        avec_ronde(u32::MAX as u64 + 1, json!({"kind":"read"})).is_err()
-    );
+    assert!(avec_ronde(u32::MAX as u64 + 1, json!({"kind":"read"})).is_err());
 }
 
 #[test]
@@ -253,7 +311,8 @@ fn lineage149_evenements_watch_fermes() {
         json!({"status":"error","version":1,"code":"binding_unavailable"}),
     ];
     for evenement in evenements {
-        let event: HumanLineageWatchEvent = serde_json::from_value(evenement.clone()).unwrap_or_else(|_| panic!("{}", evenement.to_string()));
+        let event: HumanLineageWatchEvent = serde_json::from_value(evenement.clone())
+            .unwrap_or_else(|_| panic!("{}", evenement.to_string()));
         let line = encode(&event).unwrap();
         assert_eq!(
             serde_json::to_value(decode::<HumanLineageWatchEvent>(&line).unwrap()).unwrap(),
@@ -284,7 +343,10 @@ fn lineage149_codes_erreur_fermes_et_result() {
         ("task_unavailable", HumanLineageError::TaskUnavailable),
         ("snapshot_changed", HumanLineageError::SnapshotChanged),
         ("journal_unavailable", HumanLineageError::JournalUnavailable),
-        ("result_offset_invalid", HumanLineageError::ResultOffsetInvalid),
+        (
+            "result_offset_invalid",
+            HumanLineageError::ResultOffsetInvalid,
+        ),
         ("envelope_mismatch", HumanLineageError::EnvelopeMismatch),
         ("resource_limit", HumanLineageError::ResourceLimit),
         ("store_unavailable", HumanLineageError::StoreUnavailable),
@@ -298,7 +360,10 @@ fn lineage149_codes_erreur_fermes_et_result() {
         assert_eq!(result["status"], "error");
         assert_eq!(result["code"], nom);
         // Seule la panne de magasin est rejouable.
-        assert_eq!(result["retryable"], code == HumanLineageError::StoreUnavailable);
+        assert_eq!(
+            result["retryable"],
+            code == HumanLineageError::StoreUnavailable
+        );
         for cle in ["version", "status", "code", "retryable"] {
             assert!(result.get(cle).is_some(), "result sans {cle}");
         }
@@ -314,7 +379,8 @@ fn lineage149_enveloppes_wire_humaines() {
         "request":{"version":1,"t3_thread_id":"fil-149","project_root":"/projet",
             "request":{"action":"list","limit":50,"cursor":null}}
     });
-    let demande = decode::<WrapperToDaemon>(&requete.to_string()).unwrap_or_else(|_| panic!("{}", requete.to_string()));
+    let demande = decode::<WrapperToDaemon>(&requete.to_string())
+        .unwrap_or_else(|_| panic!("{}", requete.to_string()));
     let line = encode(&demande).unwrap();
     assert_eq!(
         serde_json::to_value(decode::<WrapperToDaemon>(&line).unwrap()).unwrap(),
@@ -331,7 +397,8 @@ fn lineage149_enveloppes_wire_humaines() {
     let resultat = json!({"type":"HumanLineageResult","result":{"version":1,"status":"ok"}});
     let reponse = decode::<DaemonToWrapper>(&resultat.to_string()).unwrap();
     assert_eq!(
-        serde_json::to_value(decode::<DaemonToWrapper>(&encode(&reponse).unwrap()).unwrap()).unwrap(),
+        serde_json::to_value(decode::<DaemonToWrapper>(&encode(&reponse).unwrap()).unwrap())
+            .unwrap(),
         resultat
     );
     let relu: Value = serde_json::from_str(&encode(&reponse).unwrap()).unwrap();

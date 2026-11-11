@@ -1808,21 +1808,59 @@ fn une_remise_en_quarantaine_ne_remonte_plus_comme_une_remise_en_vol() {
 
 #[test]
 fn spec244_accuse_positif_resout_l_incertitude_sans_rejouer() {
-    let mut store=IdempotencyStore::open_in_memory().unwrap();
-    assert!(matches!(reserve(&store,b"canon"),Reservation::Prepared{..}));
-    let delivery=SendDelivery {delivery_id:"preuve-244".into(),recipient_instance_id:"instance-1".into(),
-        delivery_generation:4,expires_at:NOW+HORIZON,message_bytes:sample_message_bytes("message-1","peer-1")};
-    store.begin_send_delivery(&key(),&delivery).unwrap();
-    store.mark_delivery_indeterminate("preuve-244","instance-1",4).unwrap();
-    assert!(store.dispatching_deliveries_for_instance("instance-1",NOW).unwrap().is_empty());
-    assert_eq!(store.unknown_delivery_receipts("instance-1",NOW).unwrap(),vec![("preuve-244".into(),4)]);
-    assert!(store.unknown_delivery_receipts("foreign",NOW).unwrap().is_empty());
-    assert!(store.acknowledge_send_delivery_at("preuve-244","foreign",4,NOW).is_err());
-    assert!(store.acknowledge_send_delivery_at("preuve-244","instance-1",5,NOW).is_err());
-    store.acknowledge_send_delivery_at("preuve-244","instance-1",4,NOW).unwrap();
-    assert_eq!(delivery_phase(&store,"preuve-244"),"acked");
-    assert!(matches!(store.lookup(&key(),NOW).unwrap(),LookupResult::Accepted{..}));
-    store.acknowledge_send_delivery_at("preuve-244","instance-1",4,NOW).unwrap();
+    let mut store = IdempotencyStore::open_in_memory().unwrap();
+    assert!(matches!(
+        reserve(&store, b"canon"),
+        Reservation::Prepared { .. }
+    ));
+    let delivery = SendDelivery {
+        delivery_id: "preuve-244".into(),
+        recipient_instance_id: "instance-1".into(),
+        delivery_generation: 4,
+        expires_at: NOW + HORIZON,
+        message_bytes: sample_message_bytes("message-1", "peer-1"),
+    };
+    store.begin_send_delivery(&key(), &delivery).unwrap();
+    store
+        .mark_delivery_indeterminate("preuve-244", "instance-1", 4)
+        .unwrap();
+    assert!(
+        store
+            .dispatching_deliveries_for_instance("instance-1", NOW)
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(
+        store.unknown_delivery_receipts("instance-1", NOW).unwrap(),
+        vec![("preuve-244".into(), 4)]
+    );
+    assert!(
+        store
+            .unknown_delivery_receipts("foreign", NOW)
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        store
+            .acknowledge_send_delivery_at("preuve-244", "foreign", 4, NOW)
+            .is_err()
+    );
+    assert!(
+        store
+            .acknowledge_send_delivery_at("preuve-244", "instance-1", 5, NOW)
+            .is_err()
+    );
+    store
+        .acknowledge_send_delivery_at("preuve-244", "instance-1", 4, NOW)
+        .unwrap();
+    assert_eq!(delivery_phase(&store, "preuve-244"), "acked");
+    assert!(matches!(
+        store.lookup(&key(), NOW).unwrap(),
+        LookupResult::Accepted { .. }
+    ));
+    store
+        .acknowledge_send_delivery_at("preuve-244", "instance-1", 4, NOW)
+        .unwrap();
 }
 
 /// ORACLE C1 — chemin MIGRATION, enveloppe ABSENTE.
@@ -2289,7 +2327,10 @@ fn two_concurrent_reservations_have_one_winner() {
     // Le contrat testé est la réservation concurrente, pas l'ouverture du
     // schéma. Une erreur d'ouverture dans un thread avant barrier.wait()
     // laissait l'autre attendre sans fin, sans rendre le panic du test.
-    let stores = [IdempotencyStore::open(&db_path).unwrap(), IdempotencyStore::open(&db_path).unwrap()];
+    let stores = [
+        IdempotencyStore::open(&db_path).unwrap(),
+        IdempotencyStore::open(&db_path).unwrap(),
+    ];
     for store in stores {
         let barrier = barrier.clone();
         handles.push(thread::spawn(move || {
@@ -2855,7 +2896,7 @@ fn guidance156_store_file_rowid_apres_reaffectation() {
             .conn
             .prepare("SELECT delivery_id,rowid FROM send_deliveries ORDER BY rowid")
             .unwrap();
-        
+
         query
             .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
             .unwrap()
@@ -2873,7 +2914,7 @@ fn guidance156_store_file_rowid_apres_reaffectation() {
             .conn
             .prepare("SELECT delivery_id,rowid FROM send_deliveries ORDER BY rowid")
             .unwrap();
-        
+
         query
             .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
             .unwrap()
@@ -3086,16 +3127,15 @@ fn held159_migration_fixture() -> (TempDbGuard, Connection) {
 fn held159_migration_rows(conn: &Connection, sql: &str) -> Vec<Vec<rusqlite::types::Value>> {
     let mut stmt = conn.prepare(sql).unwrap();
     let count = stmt.column_count();
-    
-    stmt
-        .query_map([], |row| {
-            (0..count)
-                .map(|index| row.get::<_, rusqlite::types::Value>(index))
-                .collect::<rusqlite::Result<Vec<_>>>()
-        })
-        .unwrap()
-        .collect::<rusqlite::Result<Vec<_>>>()
-        .unwrap()
+
+    stmt.query_map([], |row| {
+        (0..count)
+            .map(|index| row.get::<_, rusqlite::types::Value>(index))
+            .collect::<rusqlite::Result<Vec<_>>>()
+    })
+    .unwrap()
+    .collect::<rusqlite::Result<Vec<_>>>()
+    .unwrap()
 }
 
 #[test]
@@ -5795,56 +5835,160 @@ fn edit159_promote_pause_agent_refuse() {
 
 #[test]
 fn spec235_scoped_spawn_reads_preserve_identity_and_isolate_other_definitions() {
-    let mut store=IdempotencyStore::open_in_memory().unwrap();
-    let scope=spawn_key().issuer_scope;
-    for (id,name,instance,generation) in [
-        ("selected235","child235","instance235",1),
-        ("unrelated235","other235","other-instance235",2),
+    let mut store = IdempotencyStore::open_in_memory().unwrap();
+    let scope = spawn_key().issuer_scope;
+    for (id, name, instance, generation) in [
+        ("selected235", "child235", "instance235", 1),
+        ("unrelated235", "other235", "other-instance235", 2),
     ] {
-        let key=IdempotencyKey::new(&scope,OperationKind::Spawn,id).unwrap();
-        store.reserve_spawn(&key,b"canon-spawn",NOW,HORIZON,NOW,30,name,generation,false,NOW+60,instance).unwrap();
+        let key = IdempotencyKey::new(&scope, OperationKind::Spawn, id).unwrap();
+        store
+            .reserve_spawn(
+                &key,
+                b"canon-spawn",
+                NOW,
+                HORIZON,
+                NOW,
+                30,
+                name,
+                generation,
+                false,
+                NOW + 60,
+                instance,
+            )
+            .unwrap();
     }
-    let expected=store.spawn_commands(&scope).unwrap().into_iter().find(|c|c.command_id=="selected235").unwrap();
+    let expected = store
+        .spawn_commands(&scope)
+        .unwrap()
+        .into_iter()
+        .find(|c| c.command_id == "selected235")
+        .unwrap();
     // Une définition étrangère illisible ne doit pas contaminer la commande ciblée.
     store.conn.execute("UPDATE spawn_commands SET resolved_definition_json='{' WHERE command_id='unrelated235'",[]).unwrap();
     assert!(store.spawn_commands(&scope).is_err());
-    assert_eq!(store.spawn_command(&scope,"selected235").unwrap(),Some(expected.clone()));
-    assert_eq!(store.spawn_commands_for_instance(&scope,"child235","instance235").unwrap(),vec![expected]);
-    assert!(store.spawn_command(&scope,"unrelated235").is_err());
-    assert!(store.spawn_commands_for_instance(&scope,"other235","other-instance235").is_err());
-    assert!(store.spawn_command(&scope,"absent235").unwrap().is_none());
-    assert!(store.spawn_commands_for_instance(&scope,"child235","other-instance235").unwrap().is_empty());
-    assert!(store.spawn_commands_for_instance(&scope,"other235","instance235").unwrap().is_empty());
-    assert!(store.spawn_command("supervisor_235_other_scope","selected235").unwrap().is_none());
+    assert_eq!(
+        store.spawn_command(&scope, "selected235").unwrap(),
+        Some(expected.clone())
+    );
+    assert_eq!(
+        store
+            .spawn_commands_for_instance(&scope, "child235", "instance235")
+            .unwrap(),
+        vec![expected]
+    );
+    assert!(store.spawn_command(&scope, "unrelated235").is_err());
+    assert!(
+        store
+            .spawn_commands_for_instance(&scope, "other235", "other-instance235")
+            .is_err()
+    );
+    assert!(store.spawn_command(&scope, "absent235").unwrap().is_none());
+    assert!(
+        store
+            .spawn_commands_for_instance(&scope, "child235", "other-instance235")
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        store
+            .spawn_commands_for_instance(&scope, "other235", "instance235")
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        store
+            .spawn_command("supervisor_235_other_scope", "selected235")
+            .unwrap()
+            .is_none()
+    );
 }
 
 #[test]
 fn spec251_information_commit_rollback_reouverture_et_collision() {
-    let path=TempDbGuard::new("information251");
-    let mut message=bridget_core::BridgetMessage::new("from251","to251","Information conservée");
-    message.id=key().idempotency_key.clone();message.intent=Some(bridget_core::MessageIntent::StoreOnly);
-    let canonical=crate::communication::canonical_send(&key().issuer_scope,&message.id,&message,NOW);
+    let path = TempDbGuard::new("information251");
+    let mut message =
+        bridget_core::BridgetMessage::new("from251", "to251", "Information conservée");
+    message.id = key().idempotency_key.clone();
+    message.intent = Some(bridget_core::MessageIntent::StoreOnly);
+    let canonical =
+        crate::communication::canonical_send(&key().issuer_scope, &message.id, &message, NOW);
     {
-        let mut store=IdempotencyStore::open(path.path()).unwrap();
-        assert!(matches!(reserve(&store,&canonical),Reservation::Prepared{..}));
+        let mut store = IdempotencyStore::open(path.path()).unwrap();
+        assert!(matches!(
+            reserve(&store, &canonical),
+            Reservation::Prepared { .. }
+        ));
         store.conn.execute_batch("CREATE TRIGGER fail_info251 BEFORE INSERT ON ledger BEGIN SELECT RAISE(ABORT,'panne injectée'); END").unwrap();
-        assert!(store.store_information(&key(),&message,NOW).is_err());
-        assert!(matches!(store.lookup(&key(),NOW).unwrap(),LookupResult::OutcomeUnknown{..}));
-        assert_eq!(store.conn.query_row("SELECT COUNT(*) FROM ledger",[],|r|r.get::<_,i64>(0)).unwrap(),0);
-        store.conn.execute_batch("DROP TRIGGER fail_info251").unwrap();
-        store.store_information(&key(),&message,NOW).unwrap();
+        assert!(store.store_information(&key(), &message, NOW).is_err());
+        assert!(matches!(
+            store.lookup(&key(), NOW).unwrap(),
+            LookupResult::OutcomeUnknown { .. }
+        ));
+        assert_eq!(
+            store
+                .conn
+                .query_row("SELECT COUNT(*) FROM ledger", [], |r| r.get::<_, i64>(0))
+                .unwrap(),
+            0
+        );
+        store
+            .conn
+            .execute_batch("DROP TRIGGER fail_info251")
+            .unwrap();
+        store.store_information(&key(), &message, NOW).unwrap();
     }
-    let mut store=IdempotencyStore::open(path.path()).unwrap();
-    assert!(matches!(reserve(&store,&canonical),Reservation::Replayed(LookupResult::Accepted{..})));
+    let mut store = IdempotencyStore::open(path.path()).unwrap();
+    assert!(matches!(
+        reserve(&store, &canonical),
+        Reservation::Replayed(LookupResult::Accepted { .. })
+    ));
     assert!(store.send_delivery(&key()).unwrap().is_none());
-    assert_eq!(store.conn.query_row("SELECT body FROM ledger WHERE id='message-1'",[],|r|r.get::<_,String>(0)).unwrap(),message.body);
-    let other=IdempotencyKey::new("012_scope_251ccccccccc",OperationKind::Send,"message-1").unwrap();
-    store.reserve(&other,b"other-scope",NOW,HORIZON,NOW,30).unwrap();
-    assert!(matches!(store.store_information(&other,&message,NOW),Err(IdempotencyError::InformationCollision)),"collision constatée, sans remplacer le corps");
-    assert!(matches!(store.lookup(&other,NOW).unwrap(),LookupResult::OutcomeUnknown{..}));
-    assert_eq!(store.conn.query_row("SELECT COUNT(*) FROM ledger",[],|r|r.get::<_,i64>(0)).unwrap(),1);
-    let delivery=SendDelivery{delivery_id:"bad-delivery251".into(),recipient_instance_id:"instance".into(),delivery_generation:1,
-        expires_at:NOW+HORIZON,message_bytes:serde_json::to_vec(&message).unwrap()};
-    assert!(matches!(store.begin_send_delivery(&other,&delivery),Err(IdempotencyError::InvalidDelivery)));
-    assert!(store.send_delivery(&other).unwrap().is_none(),"aucun transport ne peut créer cette saga");
+    assert_eq!(
+        store
+            .conn
+            .query_row("SELECT body FROM ledger WHERE id='message-1'", [], |r| {
+                r.get::<_, String>(0)
+            })
+            .unwrap(),
+        message.body
+    );
+    let other =
+        IdempotencyKey::new("012_scope_251ccccccccc", OperationKind::Send, "message-1").unwrap();
+    store
+        .reserve(&other, b"other-scope", NOW, HORIZON, NOW, 30)
+        .unwrap();
+    assert!(
+        matches!(
+            store.store_information(&other, &message, NOW),
+            Err(IdempotencyError::InformationCollision)
+        ),
+        "collision constatée, sans remplacer le corps"
+    );
+    assert!(matches!(
+        store.lookup(&other, NOW).unwrap(),
+        LookupResult::OutcomeUnknown { .. }
+    ));
+    assert_eq!(
+        store
+            .conn
+            .query_row("SELECT COUNT(*) FROM ledger", [], |r| r.get::<_, i64>(0))
+            .unwrap(),
+        1
+    );
+    let delivery = SendDelivery {
+        delivery_id: "bad-delivery251".into(),
+        recipient_instance_id: "instance".into(),
+        delivery_generation: 1,
+        expires_at: NOW + HORIZON,
+        message_bytes: serde_json::to_vec(&message).unwrap(),
+    };
+    assert!(matches!(
+        store.begin_send_delivery(&other, &delivery),
+        Err(IdempotencyError::InvalidDelivery)
+    ));
+    assert!(
+        store.send_delivery(&other).unwrap().is_none(),
+        "aucun transport ne peut créer cette saga"
+    );
 }

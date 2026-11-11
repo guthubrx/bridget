@@ -213,7 +213,9 @@ pub fn validate_private_directory_if_present(path: &Path) -> Result<(), String> 
     validate_path(path)?;
     match fs::symlink_metadata(path) {
         Ok(metadata) => {
-            if !metadata.is_dir() || !is_private_owned(&metadata, bridget_transport::fsutil::effective_uid()) {
+            if !metadata.is_dir()
+                || !is_private_owned(&metadata, bridget_transport::fsutil::effective_uid())
+            {
                 return Err(format!(
                     "répertoire privé 0700 appartenant à l'utilisateur requis : {}",
                     path.display()
@@ -297,7 +299,9 @@ pub fn validate_state_file(path: &Path, socket: bool) -> Result<(), String> {
             } else {
                 metadata.is_file()
             };
-            if !valid_type || !is_private_owned(&metadata, bridget_transport::fsutil::effective_uid()) {
+            if !valid_type
+                || !is_private_owned(&metadata, bridget_transport::fsutil::effective_uid())
+            {
                 return Err(format!(
                     "état privé de type/propriétaire valide requis : {}",
                     path.display()

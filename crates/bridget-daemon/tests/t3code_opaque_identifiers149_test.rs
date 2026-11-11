@@ -306,7 +306,12 @@ fn spec149_v2_thread_id_is_encoded_and_original_reaches_parse_detail() {
         let mock = Mock::start(Protocol::V2, &id);
         let client = mock.client();
         // 20 : route bornée au format compact (session 221) ; 21 : route complète. Le fil servi garde l'id d'origine.
-        for (limit, tail) in [(1u32, "/bounded?compactTurnItems=1"), (20, "/bounded?compactTurnItems=1"), (21, ""), (200, "")] {
+        for (limit, tail) in [
+            (1u32, "/bounded?compactTurnItems=1"),
+            (20, "/bounded?compactTurnItems=1"),
+            (21, ""),
+            (200, ""),
+        ] {
             let detail = client
                 .thread_detail(&id, limit)
                 .unwrap_or_else(|e| panic!("refus inattendu de {id:?} limite {limit} : {e:?}"));

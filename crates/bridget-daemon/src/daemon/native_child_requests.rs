@@ -1,7 +1,7 @@
 //! Demandes155 : identité attestée, décision durable et clôture fournisseur.
-use bridget_transport::poison::RecoverPoison;
 use super::*;
 use crate::delegation::{ChildRequest, Task};
+use bridget_transport::poison::RecoverPoison;
 use bridget_transport::protocol::{
     ChildProviderRequest, ChildProviderRequestId, ChildRequestAnswer, ChildRequestClosedState,
     ChildRequestDecision, ChildRequestVerdict,
@@ -140,7 +140,11 @@ pub(super) fn valid_delivery(
     let conn = route.connection_id.clone();
     match live_connection_identity(st, &conn) {
         Some(identity) if identity == (task.child.clone(), row.child_instance.clone()) => {}
-        None if st.conn_instances.get(&conn).is_none_or(|instance| instance == &row.child_instance) => {
+        None if st
+            .conn_instances
+            .get(&conn)
+            .is_none_or(|instance| instance == &row.child_instance) =>
+        {
             return Err(disconnected);
         }
         _ => return Err("instance_changed"),
@@ -157,7 +161,8 @@ pub(super) fn valid_delivery(
     }
     if task.remote_placement.is_some() {
         // Les lectures de sources sur destination sont réservées à emit, hors mutex.
-        native_delegation::recheck_remote_dispatch(st, task, task).map_err(delivery_check_reason)?;
+        native_delegation::recheck_remote_dispatch(st, task, task)
+            .map_err(delivery_check_reason)?;
     } else {
         native_delegation::native_launch_registry(st, task).map_err(delivery_check_reason)?;
     }
@@ -342,7 +347,9 @@ fn publish_human(
     if !created {
         return Ok(None);
     }
-    if let Some(notifier)=&st.mobile_notifier { notifier.changed(); }
+    if let Some(notifier) = &st.mobile_notifier {
+        notifier.changed();
+    }
     #[cfg(test)]
     let channel = if st.fixture_root.is_some() {
         None
@@ -941,9 +948,10 @@ pub(super) fn tick(state: &Arc<Mutex<DaemonState>>) {
                 continue;
             }
             if let (Ok(conn), Ok(frame)) = (validity, persisted_answer(&row))
-                && let Some(writer) = st.connections.get(&conn) {
-                    outgoing.push((row.request_id.clone(), conn, writer.clone(), frame));
-                }
+                && let Some(writer) = st.connections.get(&conn)
+            {
+                outgoing.push((row.request_id.clone(), conn, writer.clone(), frame));
+            }
         }
     }
     for (id, conn, writer, frame) in outgoing {
@@ -1083,14 +1091,16 @@ fn emit(
     if result.is_err() && had_emit_permit {
         let st = state.lock().recover_poison();
         if let Ok(Some(row)) = st.delegation_store.get_child_request(id)
-            && row.delivery_state == "sent" && !receipt {
-                let _ = st.delegation_store.settle_sent_child_request(
-                    id,
-                    "unknown",
-                    Some("instance_changed"),
-                    unix_timestamp(),
-                );
-            }
+            && row.delivery_state == "sent"
+            && !receipt
+        {
+            let _ = st.delegation_store.settle_sent_child_request(
+                id,
+                "unknown",
+                Some("instance_changed"),
+                unix_timestamp(),
+            );
+        }
     }
 }
 

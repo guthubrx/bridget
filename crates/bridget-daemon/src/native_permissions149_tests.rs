@@ -17,92 +17,188 @@ static FIXTURE_SEQ: AtomicU64 = AtomicU64::new(0);
 
 #[test]
 fn spec244_parix_source_globale_reste_autorisee_sur_une_autre_machine() {
-    let (_root,env,mapping,protected)=remote162_fixture("244-parix");
-    let parent=codex_fact("/origin162/opus2d",json!({"type":"dangerFullAccess"}),"never");
-    assert!(crate::lifecycle::source_root(&parent,&mapping.source_root).is_ok());
-    let (policy,posture)=project_remote_permissions(&parent,&codex_definition(),&mapping,&mapping.remote_root,
-        &env,Some(SpawnPosture::Discovery),&protected).unwrap();
-    assert_eq!(posture,SpawnPosture::Discovery);assert_eq!(policy["sandbox_policy"]["type"],"readOnly");
-    let mut restricted=parent.clone();restricted.provider_policy["sandbox_policy"]=json!({"type":"readOnly"});
-    assert!(project_remote_permissions(&restricted,&codex_definition(),&mapping,&mapping.remote_root,
-        &env,Some(SpawnPosture::Discovery),&protected).is_err());
+    let (_root, env, mapping, protected) = remote162_fixture("244-parix");
+    let parent = codex_fact(
+        "/origin162/opus2d",
+        json!({"type":"dangerFullAccess"}),
+        "never",
+    );
+    assert!(crate::lifecycle::source_root(&parent, &mapping.source_root).is_ok());
+    let (policy, posture) = project_remote_permissions(
+        &parent,
+        &codex_definition(),
+        &mapping,
+        &mapping.remote_root,
+        &env,
+        Some(SpawnPosture::Discovery),
+        &protected,
+    )
+    .unwrap();
+    assert_eq!(posture, SpawnPosture::Discovery);
+    assert_eq!(policy["sandbox_policy"]["type"], "readOnly");
+    let mut restricted = parent.clone();
+    restricted.provider_policy["sandbox_policy"] = json!({"type":"readOnly"});
+    assert!(
+        project_remote_permissions(
+            &restricted,
+            &codex_definition(),
+            &mapping,
+            &mapping.remote_root,
+            &env,
+            Some(SpawnPosture::Discovery),
+            &protected
+        )
+        .is_err()
+    );
 }
 
 #[test]
 fn spec241_same_host_preserves_attested_extra_directory_without_remote_mapping() {
-    let (root,env,mut mapping,protected)=remote162_fixture("241-local-directory");
-    mapping.source_root=mapping.remote_root.clone();
-    let extra=root.join("attachments");fs::create_dir(&extra).unwrap();
-    let parent=codex_fact(mapping.source_root.to_str().unwrap(),json!({
-        "type":"workspaceWrite","networkAccess":false,
-        "writableRoots":[mapping.source_root,extra],"excludeSlashTmp":true,"excludeTmpdirEnvVar":true
-    }),"never");
-    let before=serde_json::to_vec(&parent).unwrap();
-    let project=|fact:&ProviderPermissions,local| {
-        let mut operation=PermissionReadOperation::default();
-        project_remote_permissions_in_operation(fact,&codex_definition(),&mapping,
-            &mapping.remote_root,&env,Some(SpawnPosture::Development),&protected,&mut operation,false,local)
+    let (root, env, mut mapping, protected) = remote162_fixture("241-local-directory");
+    mapping.source_root = mapping.remote_root.clone();
+    let extra = root.join("attachments");
+    fs::create_dir(&extra).unwrap();
+    let parent = codex_fact(
+        mapping.source_root.to_str().unwrap(),
+        json!({
+            "type":"workspaceWrite","networkAccess":false,
+            "writableRoots":[mapping.source_root,extra],"excludeSlashTmp":true,"excludeTmpdirEnvVar":true
+        }),
+        "never",
+    );
+    let before = serde_json::to_vec(&parent).unwrap();
+    let project = |fact: &ProviderPermissions, local| {
+        let mut operation = PermissionReadOperation::default();
+        project_remote_permissions_in_operation(
+            fact,
+            &codex_definition(),
+            &mapping,
+            &mapping.remote_root,
+            &env,
+            Some(SpawnPosture::Development),
+            &protected,
+            &mut operation,
+            false,
+            local,
+        )
     };
-    assert!(project(&parent,false).is_err(),"une autre machine exige sa correspondance explicite");
-    let (policy,posture)=project(&parent,true).expect("le dossier est déjà autorisé et local");
-    assert_eq!(posture,SpawnPosture::Development);
-    assert_eq!(policy["sandbox_policy"]["writableRoots"],parent.provider_policy["sandbox_policy"]["writableRoots"]);
-    assert_eq!(serde_json::to_vec(&parent).unwrap(),before);
-    assert!(mapping.additional_root.is_none(),"pas de mutation du registre");
+    assert!(
+        project(&parent, false).is_err(),
+        "une autre machine exige sa correspondance explicite"
+    );
+    let (policy, posture) = project(&parent, true).expect("le dossier est déjà autorisé et local");
+    assert_eq!(posture, SpawnPosture::Development);
+    assert_eq!(
+        policy["sandbox_policy"]["writableRoots"],
+        parent.provider_policy["sandbox_policy"]["writableRoots"]
+    );
+    assert_eq!(serde_json::to_vec(&parent).unwrap(), before);
+    assert!(
+        mapping.additional_root.is_none(),
+        "pas de mutation du registre"
+    );
     // Même forme que le parent natif signalé : Claude, périmètre complet,
     // pièces jointes autorisées, puis enfant Codex sur la même machine.
-    let mut native=parent.clone();native.driver="claude_stream_json".into();
-    native.source="provider_turn".into();
-    native.runtime_mode="full-access".into();
-    native.provider_policy=json!({"kind":"claude","permission_mode":"bypassPermissions",
+    let mut native = parent.clone();
+    native.driver = "claude_stream_json".into();
+    native.source = "provider_turn".into();
+    native.runtime_mode = "full-access".into();
+    native.provider_policy = json!({"kind":"claude","permission_mode":"bypassPermissions",
         "allow_dangerously_skip_permissions":true,"tools":{"type":"preset","preset":"claude_code"},
         "allowed_tools":["mcp__t3-code__*"],"settings_sources":"provider_default",
         "additional_directories":[mapping.source_root,extra],
         "permission_callback":{"kind":"t3_runtime","tool_approval":"allow","plan_exit":"deny"}});
-    let mut target=codex_definition();target.mcp.interactive="codex".into();
-    let mut operation=PermissionReadOperation::default();
-    let (native_policy,_)=project_remote_permissions_in_operation(&native,&target,&mapping,
-        &mapping.remote_root,&env,Some(SpawnPosture::Development),&protected,&mut operation,false,true)
-        .expect("les pièces jointes autorisées ne bloquent pas le parent natif");
-    assert_eq!(native_policy["sandbox_policy"]["type"],"dangerFullAccess");
-    let mut invalid=parent.clone();
-    invalid.provider_policy["sandbox_policy"]["writableRoots"]=json!([protected[0]]);
-    assert!(project(&invalid,true).is_err());
-    invalid.provider_policy["sandbox_policy"]["writableRoots"]=json!([root.join("missing")]);
-    assert!(project(&invalid,true).is_err());
-    let link=root.join("alias");std::os::unix::fs::symlink(&extra,&link).unwrap();
-    invalid.provider_policy["sandbox_policy"]["writableRoots"]=json!([link]);
-    assert!(project(&invalid,true).is_err(),"pas de nouvelle autorité via un alias");
+    let mut target = codex_definition();
+    target.mcp.interactive = "codex".into();
+    let mut operation = PermissionReadOperation::default();
+    let (native_policy, _) = project_remote_permissions_in_operation(
+        &native,
+        &target,
+        &mapping,
+        &mapping.remote_root,
+        &env,
+        Some(SpawnPosture::Development),
+        &protected,
+        &mut operation,
+        false,
+        true,
+    )
+    .expect("les pièces jointes autorisées ne bloquent pas le parent natif");
+    assert_eq!(native_policy["sandbox_policy"]["type"], "dangerFullAccess");
+    let mut invalid = parent.clone();
+    invalid.provider_policy["sandbox_policy"]["writableRoots"] = json!([protected[0]]);
+    assert!(project(&invalid, true).is_err());
+    invalid.provider_policy["sandbox_policy"]["writableRoots"] = json!([root.join("missing")]);
+    assert!(project(&invalid, true).is_err());
+    let link = root.join("alias");
+    std::os::unix::fs::symlink(&extra, &link).unwrap();
+    invalid.provider_policy["sandbox_policy"]["writableRoots"] = json!([link]);
+    assert!(
+        project(&invalid, true).is_err(),
+        "pas de nouvelle autorité via un alias"
+    );
 }
 
 #[test]
 fn spec241_non_git_source_uses_existing_file_authority_without_new_permissions() {
-    let (root,env,mut mapping,protected)=remote162_fixture("241-source");
-    let project=mapping.remote_root.clone();
+    let (root, env, mut mapping, protected) = remote162_fixture("241-source");
+    let project = mapping.remote_root.clone();
     // La fixture de permissions possède un .git sentinelle. La source hors Git
     // est un dossier frère ; sa véritable absence de dépôt doit être vérifiée.
-    let external=root.parent().unwrap().join(format!("b241-review-{}",uuid::Uuid::new_v4()));
+    let external = root
+        .parent()
+        .unwrap()
+        .join(format!("b241-review-{}", uuid::Uuid::new_v4()));
     fs::create_dir(&external).unwrap();
-    let mut parent=codex_fact(project.to_str().unwrap(),json!({"type":"readOnly","networkAccess":false}),"never");
-    assert!(crate::lifecycle::source_root(&parent,&external).is_err(),"le libellé full-access ne suffit pas");
-    parent.provider_policy["sandbox_policy"]=json!({"type":"workspaceWrite","networkAccess":false,
+    let mut parent = codex_fact(
+        project.to_str().unwrap(),
+        json!({"type":"readOnly","networkAccess":false}),
+        "never",
+    );
+    assert!(
+        crate::lifecycle::source_root(&parent, &external).is_err(),
+        "le libellé full-access ne suffit pas"
+    );
+    parent.provider_policy["sandbox_policy"] = json!({"type":"workspaceWrite","networkAccess":false,
         "writableRoots":[project,external],"excludeSlashTmp":true,"excludeTmpdirEnvVar":true});
-    assert_eq!(crate::lifecycle::source_root(&parent,&external).unwrap(),external);
-    let source=bridget_transport::protocol::WorkerSourceBase {cwd:external.to_string_lossy().into_owned(),
-        expected_base_commit:None,workspace:Some(bridget_transport::protocol::WorkspaceRequest::Shared{}),
-        workload:bridget_transport::protocol::AutoDelegateWorkload::General};
-    crate::lifecycle::validate_parent_source_base(&parent,&source).unwrap();
-    mapping.source_root=external.clone();mapping.remote_root=external.clone();
-    let frozen=serde_json::to_vec(&parent).unwrap();
-    let mut operation=PermissionReadOperation::default();
-    let (_,posture)=project_remote_permissions_in_operation(&parent,&codex_definition(),&mapping,
-        &external,&env,Some(SpawnPosture::Discovery),&protected,&mut operation,false,true).unwrap();
-    assert_eq!(posture,SpawnPosture::Discovery);assert_eq!(serde_json::to_vec(&parent).unwrap(),frozen);
+    assert_eq!(
+        crate::lifecycle::source_root(&parent, &external).unwrap(),
+        external
+    );
+    let source = bridget_transport::protocol::WorkerSourceBase {
+        cwd: external.to_string_lossy().into_owned(),
+        expected_base_commit: None,
+        workspace: Some(bridget_transport::protocol::WorkspaceRequest::Shared {}),
+        workload: bridget_transport::protocol::AutoDelegateWorkload::General,
+    };
+    crate::lifecycle::validate_parent_source_base(&parent, &source).unwrap();
+    mapping.source_root = external.clone();
+    mapping.remote_root = external.clone();
+    let frozen = serde_json::to_vec(&parent).unwrap();
+    let mut operation = PermissionReadOperation::default();
+    let (_, posture) = project_remote_permissions_in_operation(
+        &parent,
+        &codex_definition(),
+        &mapping,
+        &external,
+        &env,
+        Some(SpawnPosture::Discovery),
+        &protected,
+        &mut operation,
+        false,
+        true,
+    )
+    .unwrap();
+    assert_eq!(posture, SpawnPosture::Discovery);
+    assert_eq!(serde_json::to_vec(&parent).unwrap(), frozen);
     assert!(!external.join(".git").exists());
-    parent.provider_policy["sandbox_policy"]=json!({"type":"dangerFullAccess"});
-    assert_eq!(crate::lifecycle::source_root(&parent,&external).unwrap(),external,
-        "une permission explicite sur tout le système de fichiers couvre ce dossier");
-    assert!(crate::lifecycle::source_root(&parent,&external.join("../unrelated")).is_err());
+    parent.provider_policy["sandbox_policy"] = json!({"type":"dangerFullAccess"});
+    assert_eq!(
+        crate::lifecycle::source_root(&parent, &external).unwrap(),
+        external,
+        "une permission explicite sur tout le système de fichiers couvre ce dossier"
+    );
+    assert!(crate::lifecycle::source_root(&parent, &external.join("../unrelated")).is_err());
     fs::remove_dir_all(external).unwrap();
 }
 
@@ -134,31 +230,51 @@ fn remote162_fixture(
 
 #[test]
 fn spec221_c19_view_projects_linked_parent_without_creating_its_checkout_or_gaining_rights() {
-    let (_root,env,mapping,protected)=remote162_fixture("c19-linked-permissions");
-    let linked="/origin162/project/.worktrees/source";
-    let mut parent=codex_fact(linked,json!({"type":"workspaceWrite","networkAccess":false,
+    let (_root, env, mapping, protected) = remote162_fixture("c19-linked-permissions");
+    let linked = "/origin162/project/.worktrees/source";
+    let mut parent = codex_fact(
+        linked,
+        json!({"type":"workspaceWrite","networkAccess":false,
         "writableRoots":[linked,"/origin162/project/src"],
-        "excludeSlashTmp":true,"excludeTmpdirEnvVar":true}),"never");
-    let before=serde_json::to_vec(&parent).unwrap();
-    let project=|parent:&ProviderPermissions,view:bool,posture:SpawnPosture| {
-        let mut operation=PermissionReadOperation::default();
-        project_remote_permissions_in_operation(parent,&codex_definition(),&mapping,
-            &mapping.remote_root,&env,Some(posture),&protected,&mut operation,view,false)
+        "excludeSlashTmp":true,"excludeTmpdirEnvVar":true}),
+        "never",
+    );
+    let before = serde_json::to_vec(&parent).unwrap();
+    let project = |parent: &ProviderPermissions, view: bool, posture: SpawnPosture| {
+        let mut operation = PermissionReadOperation::default();
+        project_remote_permissions_in_operation(
+            parent,
+            &codex_definition(),
+            &mapping,
+            &mapping.remote_root,
+            &env,
+            Some(posture),
+            &protected,
+            &mut operation,
+            view,
+            false,
+        )
     };
-    assert!(project(&parent,false,SpawnPosture::Discovery).is_err(),
-        "le mapping historique exige le dossier lié absent");
-    let (policy,posture)=project(&parent,true,SpawnPosture::Discovery).unwrap();
-    assert_eq!(posture,SpawnPosture::Discovery);
-    assert_eq!(policy["sandbox_policy"],json!({"type":"readOnly","networkAccess":false}));
-    assert_eq!(policy["approval_policy"],"never");
+    assert!(
+        project(&parent, false, SpawnPosture::Discovery).is_err(),
+        "le mapping historique exige le dossier lié absent"
+    );
+    let (policy, posture) = project(&parent, true, SpawnPosture::Discovery).unwrap();
+    assert_eq!(posture, SpawnPosture::Discovery);
+    assert_eq!(
+        policy["sandbox_policy"],
+        json!({"type":"readOnly","networkAccess":false})
+    );
+    assert_eq!(policy["approval_policy"], "never");
     assert!(!mapping.remote_root.join(".worktrees/source").exists());
-    assert_eq!(serde_json::to_vec(&parent).unwrap(),before);
-    assert!(project(&parent,true,SpawnPosture::Development).is_err());
-    parent.provider_policy["sandbox_policy"]["writableRoots"]=json!(["/origin162/project-evil"]);
-    assert!(project(&parent,true,SpawnPosture::Discovery).is_err());
-    parent.provider_policy["sandbox_policy"]["writableRoots"]=json!([format!("{linked}/blocked")]);
-    std::os::unix::fs::symlink(&protected[0],mapping.remote_root.join("blocked")).unwrap();
-    assert!(project(&parent,true,SpawnPosture::Discovery).is_err());
+    assert_eq!(serde_json::to_vec(&parent).unwrap(), before);
+    assert!(project(&parent, true, SpawnPosture::Development).is_err());
+    parent.provider_policy["sandbox_policy"]["writableRoots"] = json!(["/origin162/project-evil"]);
+    assert!(project(&parent, true, SpawnPosture::Discovery).is_err());
+    parent.provider_policy["sandbox_policy"]["writableRoots"] =
+        json!([format!("{linked}/blocked")]);
+    std::os::unix::fs::symlink(&protected[0], mapping.remote_root.join("blocked")).unwrap();
+    assert!(project(&parent, true, SpawnPosture::Discovery).is_err());
 }
 
 #[test]
@@ -682,7 +798,10 @@ fn native149_codex_complet_devise_bypass_sans_yolo() {
     assert_eq!(args[position + 1], "bypassPermissions");
     // Lot 171 : Claude 2.1.251 (Cartae) refuse --permission-prompts. Hors
     // contrat de hooks attesté, le mode de droits seul est transmis.
-    assert!(!args.iter().any(|arg| arg == "--permission-prompts"), "{args:?}");
+    assert!(
+        !args.iter().any(|arg| arg == "--permission-prompts"),
+        "{args:?}"
+    );
     assert!(
         args.contains(&"mission-149".to_string()),
         "les arguments métier restent"
@@ -1570,7 +1689,7 @@ fn native171_manifestless_plugin_and_hook_revision_recheck() {
 /// vers la cible, refus hors des deux racines, aucune traduction partielle.
 #[test]
 fn native171_additional_root_mapping_translates_and_refuses_without_private_inputs() {
-    use std::os::unix::fs::{symlink, PermissionsExt};
+    use std::os::unix::fs::{PermissionsExt, symlink};
     let (root, _) = fixture_root("additional-root171");
     let remote = root.join("project");
     fs::create_dir(&remote).unwrap();
@@ -1609,7 +1728,11 @@ fn native171_additional_root_mapping_translates_and_refuses_without_private_inpu
         mapped_permission_directory171(&mapping, Path::new("/origin171/attachments/sub")).unwrap(),
         extra_remote.join("sub")
     );
-    for outside in ["/origin171", "/origin171/attachments-other", "/origin171/attachments/../outside"] {
+    for outside in [
+        "/origin171",
+        "/origin171/attachments-other",
+        "/origin171/attachments/../outside",
+    ] {
         assert_eq!(
             mapped_permission_directory171(&mapping, Path::new(outside)),
             Err("permission_mapping_unavailable".into())
@@ -1640,7 +1763,10 @@ fn native171_additional_root_mapping_translates_and_refuses_without_private_inpu
     verify_permission_directory171(&extra_remote, uid, 0o700, &protected).unwrap();
     assert!(verify_permission_directory171(&extra_remote, uid + 1, 0o700, &protected).is_err());
     assert!(verify_permission_directory171(&extra_remote, uid, 0o755, &protected).is_err());
-    assert!(verify_permission_directory171(&extra_remote.join("absent171"), uid, 0o700, &protected).is_err());
+    assert!(
+        verify_permission_directory171(&extra_remote.join("absent171"), uid, 0o700, &protected)
+            .is_err()
+    );
     let mut blocked = protected.clone();
     blocked.push(extra_remote.clone());
     assert!(verify_permission_directory171(&extra_remote, uid, 0o700, &blocked).is_err());
@@ -1651,7 +1777,7 @@ fn native171_additional_root_mapping_translates_and_refuses_without_private_inpu
 
 #[test]
 fn native171_configured_absolute_claude_reduced_path_preserves_identity_and_rechecks() {
-    use std::os::unix::fs::{symlink, PermissionsExt};
+    use std::os::unix::fs::{PermissionsExt, symlink};
     let (root, _) = fixture_root("absolute-configured-reduced-path171");
     let config = root.join(".claude");
     fs::create_dir(&config).unwrap();
@@ -1672,56 +1798,118 @@ fn native171_configured_absolute_claude_reduced_path_preserves_identity_and_rech
     // its current executable directory. No user-bin or hook PATH is injected.
     let reduced = "/home/moi/.local/lib/bridget-tools/git-2.56.0/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin:/snap/bin";
     let source = SourceEnvironment::from([
-        ("HOME".into(), root.as_os_str().to_owned()), ("PATH".into(), reduced.into()),
+        ("HOME".into(), root.as_os_str().to_owned()),
+        ("PATH".into(), reduced.into()),
     ]);
     let operation_environment = build_environment(&definition, &source).unwrap();
-    assert_eq!(source.get("PATH").unwrap(), &std::ffi::OsString::from(reduced));
+    assert_eq!(
+        source.get("PATH").unwrap(),
+        &std::ffi::OsString::from(reduced)
+    );
     assert!(!std::env::split_paths(operation_environment.get("PATH").unwrap()).any(|p| p == bin));
-    assert_eq!(resolved("claude", &operation_environment), Err("permission_source_unavailable".into()));
+    assert_eq!(
+        resolved("claude", &operation_environment),
+        Err("permission_source_unavailable".into())
+    );
     let context = capture_context(&definition, &root, &source).unwrap();
     assert_eq!(context["cli_path"], json!(fs::canonicalize(&real).unwrap()));
-    assert_eq!(context["resolved_cli_path"], json!(fs::canonicalize(&real).unwrap()));
-    assert_eq!(context["cli_revision"], json!(executable_revision(&real).unwrap()));
+    assert_eq!(
+        context["resolved_cli_path"],
+        json!(fs::canonicalize(&real).unwrap())
+    );
+    assert_eq!(
+        context["cli_revision"],
+        json!(executable_revision(&real).unwrap())
+    );
     assert_eq!(context["resolved_cli_revision"], context["cli_revision"]);
     recheck_context(&context, &definition, &root, &source).unwrap();
     // No fallback or permission added to a bare or foreign configured command.
-    let mut bare = definition.clone();bare.command = "claude".into();
-    assert_eq!(capture_context(&bare, &root, &source), Err("permission_source_unavailable".into()));
-    let mut wrong = definition.clone();wrong.command = "/bin/echo".into();
-    assert_eq!(capture_context(&wrong, &root, &source), Err("permission_source_unavailable".into()));
-    let foreign_bin = root.join("foreign/bin");fs::create_dir_all(&foreign_bin).unwrap();
-    let foreign = foreign_bin.join("claude");fs::copy(&real, &foreign).unwrap();
+    let mut bare = definition.clone();
+    bare.command = "claude".into();
+    assert_eq!(
+        capture_context(&bare, &root, &source),
+        Err("permission_source_unavailable".into())
+    );
+    let mut wrong = definition.clone();
+    wrong.command = "/bin/echo".into();
+    assert_eq!(
+        capture_context(&wrong, &root, &source),
+        Err("permission_source_unavailable".into())
+    );
+    let foreign_bin = root.join("foreign/bin");
+    fs::create_dir_all(&foreign_bin).unwrap();
+    let foreign = foreign_bin.join("claude");
+    fs::copy(&real, &foreign).unwrap();
     fs::set_permissions(&foreign, fs::Permissions::from_mode(0o755)).unwrap();
-    let mut foreign_definition = definition.clone();foreign_definition.command = foreign.to_string_lossy().into_owned();
-    assert_eq!(recheck_context(&context, &foreign_definition, &root, &source), Err("settings_revision_changed".into()));
-    fs::remove_file(&configured).unwrap();symlink(&foreign, &configured).unwrap();
-    assert_eq!(recheck_context(&context, &definition, &root, &source), Err("settings_revision_changed".into()));
-    fs::remove_file(&configured).unwrap();symlink(&real, &configured).unwrap();
+    let mut foreign_definition = definition.clone();
+    foreign_definition.command = foreign.to_string_lossy().into_owned();
+    assert_eq!(
+        recheck_context(&context, &foreign_definition, &root, &source),
+        Err("settings_revision_changed".into())
+    );
+    fs::remove_file(&configured).unwrap();
+    symlink(&foreign, &configured).unwrap();
+    assert_eq!(
+        recheck_context(&context, &definition, &root, &source),
+        Err("settings_revision_changed".into())
+    );
+    fs::remove_file(&configured).unwrap();
+    symlink(&real, &configured).unwrap();
     fs::set_permissions(&real, fs::Permissions::from_mode(0o777)).unwrap();
-    assert_eq!(capture_context(&definition, &root, &source), Err("permission_source_unavailable".into()));
-    assert_eq!(recheck_context(&context, &definition, &root, &source), Err("settings_revision_changed".into()));
+    assert_eq!(
+        capture_context(&definition, &root, &source),
+        Err("permission_source_unavailable".into())
+    );
+    assert_eq!(
+        recheck_context(&context, &definition, &root, &source),
+        Err("settings_revision_changed".into())
+    );
     fs::set_permissions(&real, fs::Permissions::from_mode(0o755)).unwrap();
-    let original = fs::read(&real).unwrap();let mut mutated = original.clone();mutated.push(0);fs::write(&real, &mutated).unwrap();
-    assert_eq!(recheck_context(&context, &definition, &root, &source), Err("settings_revision_changed".into()));
-    fs::write(&real, &original).unwrap();recheck_context(&context, &definition, &root, &source).unwrap();
-    let mut injected = operation_environment.clone();injected.insert("BASH_ENV".into(), "/not-authorized171".into());
-    assert_eq!(capture_context_with_env(&definition, &root, &injected), Err("permission_source_unavailable".into()));
+    let original = fs::read(&real).unwrap();
+    let mut mutated = original.clone();
+    mutated.push(0);
+    fs::write(&real, &mutated).unwrap();
+    assert_eq!(
+        recheck_context(&context, &definition, &root, &source),
+        Err("settings_revision_changed".into())
+    );
+    fs::write(&real, &original).unwrap();
+    recheck_context(&context, &definition, &root, &source).unwrap();
+    let mut injected = operation_environment.clone();
+    injected.insert("BASH_ENV".into(), "/not-authorized171".into());
+    assert_eq!(
+        capture_context_with_env(&definition, &root, &injected),
+        Err("permission_source_unavailable".into())
+    );
     // Hook dependencies still need their own closed resolution; this change
     // neither adds a PATH directory nor suppresses a missing native hook tool.
     fs::write(config.join("settings.json"), r#"{"hooks":{"PreToolUse":[{"hooks":[{"type":"command","command":"missing-native-hook171"}]}]}}"#).unwrap();
-    assert_eq!(capture_context(&definition, &root, &source), Err("permission_source_unavailable".into()));
+    assert_eq!(
+        capture_context(&definition, &root, &source),
+        Err("permission_source_unavailable".into())
+    );
     fs::remove_file(config.join("settings.json")).unwrap();
     fs::write(&real, b"#!/bin/sh\nexit 0\n").unwrap();
-    assert_eq!(capture_context(&definition, &root, &source), Err("permission_source_unavailable".into()));
+    assert_eq!(
+        capture_context(&definition, &root, &source),
+        Err("permission_source_unavailable".into())
+    );
     fs::remove_dir_all(root).unwrap();
 }
-
 
 #[test]
 fn native171_remote_uses_destination_configuration_without_cloning_origin() {
     let (root, env, mapping, protected) = remote162_fixture("native-host");
     let cwd = mapping.remote_root.join("src");
-    let mut parent = claude_fact(&root, &cwd, &env, "bypassPermissions", "native_wrapper", "allow", false);
+    let mut parent = claude_fact(
+        &root,
+        &cwd,
+        &env,
+        "bypassPermissions",
+        "native_wrapper",
+        "allow",
+        false,
+    );
     parent.cwd = "/origin162/project/src".into();
     parent.provider_policy["launch_context"]["cli_path"] = json!("/another-computer/claude");
     parent.provider_policy["disallowed_tools"] = json!(["WebFetch"]);
@@ -1730,109 +1918,291 @@ fn native171_remote_uses_destination_configuration_without_cloning_origin() {
     fs::create_dir_all(root.join("plugins")).unwrap();
     let settings = json!({"enabledPlugins":{"example@market":true},
         "hooks":{"PreToolUse":[{"hooks":[{"type":"command","command":"printf NATIVE_HOOK"}]}]}});
-    fs::write(root.join("settings.json"), serde_json::to_vec(&settings).unwrap()).unwrap();
+    fs::write(
+        root.join("settings.json"),
+        serde_json::to_vec(&settings).unwrap(),
+    )
+    .unwrap();
     fs::write(root.join("plugins/installed_plugins.json"),
         r#"{"version":2,"plugins":{"example@market":[{"scope":"user","installPath":"/another-computer/plugin"}]}}"#).unwrap();
     let marketplaces = root.join("plugins/known_marketplaces.json");
     let mut catalogue = json!({"market":{"source":{"source":"github","repo":"example/plugins"},
         "installLocation":"/another-computer/market", "lastUpdated":"2026-10-17T04:00:18.085Z"}});
     fs::write(&marketplaces, serde_json::to_vec(&catalogue).unwrap()).unwrap();
-    let definition = claude_definition(&root, &["--permission-mode", "dontAsk", "--disallowedTools", "WebSearch"]);
-    let (policy, _) = project_remote_permissions(&parent, &definition, &mapping, &cwd, &env,
-        Some(SpawnPosture::Development), &protected).unwrap();
+    let definition = claude_definition(
+        &root,
+        &[
+            "--permission-mode",
+            "dontAsk",
+            "--disallowedTools",
+            "WebSearch",
+        ],
+    );
+    let (policy, _) = project_remote_permissions(
+        &parent,
+        &definition,
+        &mapping,
+        &cwd,
+        &env,
+        Some(SpawnPosture::Development),
+        &protected,
+    )
+    .unwrap();
     assert_eq!(policy["permission_mode"], "dontAsk");
     assert_eq!(policy["disallowed_tools"], json!(["WebFetch", "WebSearch"]));
     assert_eq!(policy["launch_context"]["config_dir"], json!(root));
     // Exercise the final entry point used by the real wrapper.
     recheck_context(&policy["launch_context"], &definition, &cwd, &env).unwrap();
     assert!(policy["launch_context"].get("source_equivalence").is_none());
-    assert!(policy["launch_context"]["permission_sources"].as_array().unwrap().iter()
-        .all(|s| s["path"].as_str().unwrap() != "/another-computer/plugin"));
+    assert!(
+        policy["launch_context"]["permission_sources"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|s| s["path"].as_str().unwrap() != "/another-computer/plugin")
+    );
     let mut args = definition.args.clone();
     apply_child_arguments("claude_stream_json", &policy, &mut args).unwrap();
     assert!(!args.iter().any(|a| a == "--permission-prompts"));
-    assert!(args.windows(2).any(|a| a == ["--permission-mode", "dontAsk"]));
-    assert!(!args.iter().any(|a| a == "--plugin-dir" || a == "--settings" || a == "--setting-sources"));
-    recheck_remote_child_permissions(&policy, &definition, &cwd, &env, &protected, Some(&mapping), Some(&parent)).unwrap();
+    assert!(
+        args.windows(2)
+            .any(|a| a == ["--permission-mode", "dontAsk"])
+    );
+    assert!(
+        !args
+            .iter()
+            .any(|a| a == "--plugin-dir" || a == "--settings" || a == "--setting-sources")
+    );
+    recheck_remote_child_permissions(
+        &policy,
+        &definition,
+        &cwd,
+        &env,
+        &protected,
+        Some(&mapping),
+        Some(&parent),
+    )
+    .unwrap();
     catalogue["market"]["lastUpdated"] = json!("2026-10-17T04:05:35.002Z");
     fs::write(&marketplaces, serde_json::to_vec(&catalogue).unwrap()).unwrap();
     recheck_context(&policy["launch_context"], &definition, &cwd, &env).unwrap();
-    recheck_remote_child_permissions(&policy, &definition, &cwd, &env, &protected, Some(&mapping), Some(&parent)).unwrap();
+    recheck_remote_child_permissions(
+        &policy,
+        &definition,
+        &cwd,
+        &env,
+        &protected,
+        Some(&mapping),
+        Some(&parent),
+    )
+    .unwrap();
     catalogue["market"]["source"]["repo"] = json!("foreign/plugins");
     fs::write(&marketplaces, serde_json::to_vec(&catalogue).unwrap()).unwrap();
-    assert_eq!(recheck_context(&policy["launch_context"], &definition, &cwd, &env).unwrap_err(), "settings_revision_changed");
+    assert_eq!(
+        recheck_context(&policy["launch_context"], &definition, &cwd, &env).unwrap_err(),
+        "settings_revision_changed"
+    );
     catalogue["market"]["source"]["repo"] = json!("example/plugins");
     catalogue["market"]["installLocation"] = json!("/foreign/market");
     fs::write(&marketplaces, serde_json::to_vec(&catalogue).unwrap()).unwrap();
-    assert_eq!(recheck_context(&policy["launch_context"], &definition, &cwd, &env).unwrap_err(), "settings_revision_changed");
+    assert_eq!(
+        recheck_context(&policy["launch_context"], &definition, &cwd, &env).unwrap_err(),
+        "settings_revision_changed"
+    );
     catalogue["market"]["installLocation"] = json!("/another-computer/market");
     fs::write(&marketplaces, serde_json::to_vec(&catalogue).unwrap()).unwrap();
     fs::write(root.join("settings.json"), "{}").unwrap();
-    assert_eq!(recheck_remote_child_permissions(&policy, &definition, &cwd, &env, &protected,
-        Some(&mapping), Some(&parent)).unwrap_err(), "settings_revision_changed");
-    fs::write(root.join("settings.json"), serde_json::to_vec(&settings).unwrap()).unwrap();
-    let (readonly, posture) = project_remote_permissions(&parent, &definition, &mapping, &cwd, &env,
-        Some(SpawnPosture::Discovery), &protected).unwrap();
+    assert_eq!(
+        recheck_remote_child_permissions(
+            &policy,
+            &definition,
+            &cwd,
+            &env,
+            &protected,
+            Some(&mapping),
+            Some(&parent)
+        )
+        .unwrap_err(),
+        "settings_revision_changed"
+    );
+    fs::write(
+        root.join("settings.json"),
+        serde_json::to_vec(&settings).unwrap(),
+    )
+    .unwrap();
+    let (readonly, posture) = project_remote_permissions(
+        &parent,
+        &definition,
+        &mapping,
+        &cwd,
+        &env,
+        Some(SpawnPosture::Discovery),
+        &protected,
+    )
+    .unwrap();
     assert_eq!(posture, SpawnPosture::Discovery);
     assert_eq!(readonly["permission_mode"], "plan");
     assert_eq!(readonly["tools"], json!(["Read", "Glob", "Grep"]));
-    assert!(readonly["disallowed_tools"].as_array().unwrap().contains(&json!("Bash")));
-    fs::write(root.join("settings.json"), serde_json::to_vec(&json!({
-        "permissions":{"additionalDirectories":[protected[0]]}})).unwrap()).unwrap();
-    assert_eq!(project_remote_permissions(&parent, &definition, &mapping, &cwd, &env,
-        None, &protected).unwrap_err(), "machine_path_protected");
-    fs::write(root.join("settings.json"), serde_json::to_vec(&settings).unwrap()).unwrap();
+    assert!(
+        readonly["disallowed_tools"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("Bash"))
+    );
+    fs::write(
+        root.join("settings.json"),
+        serde_json::to_vec(&json!({
+        "permissions":{"additionalDirectories":[protected[0]]}}))
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        project_remote_permissions(&parent, &definition, &mapping, &cwd, &env, None, &protected)
+            .unwrap_err(),
+        "machine_path_protected"
+    );
+    fs::write(
+        root.join("settings.json"),
+        serde_json::to_vec(&settings).unwrap(),
+    )
+    .unwrap();
     let launcher = root.join("bin/my-provider-launcher");
     fs::write(&launcher, "#!/bin/sh\nexec /bin/echo \"$@\"\n").unwrap();
     fs::set_permissions(&launcher, fs::Permissions::from_mode(0o755)).unwrap();
-    let mut custom = definition.clone(); custom.command = launcher.to_string_lossy().into_owned();
-    let (custom_policy, _) = project_remote_permissions(&parent, &custom, &mapping, &cwd, &env,
-        Some(SpawnPosture::Development), &protected).unwrap();
+    let mut custom = definition.clone();
+    custom.command = launcher.to_string_lossy().into_owned();
+    let (custom_policy, _) = project_remote_permissions(
+        &parent,
+        &custom,
+        &mapping,
+        &cwd,
+        &env,
+        Some(SpawnPosture::Development),
+        &protected,
+    )
+    .unwrap();
     assert_eq!(custom_policy["launch_context"]["cli_path"], json!(launcher));
     fs::set_permissions(&launcher, fs::Permissions::from_mode(0o777)).unwrap();
-    assert!(project_remote_permissions(&parent, &custom, &mapping, &cwd, &env,
-        Some(SpawnPosture::Development), &protected).is_err());
+    assert!(
+        project_remote_permissions(
+            &parent,
+            &custom,
+            &mapping,
+            &cwd,
+            &env,
+            Some(SpawnPosture::Development),
+            &protected
+        )
+        .is_err()
+    );
     fs::remove_dir_all(root).unwrap();
 }
 
 #[test]
 fn incident171_native_t3_tools_without_transplant_profile_preserve_rules_and_recheck() {
     let (root, env, mapping, protected) = remote162_fixture("native-t3-tools");
-    let mut parent = claude_fact(&root, &mapping.remote_root, &env,
-        "bypassPermissions", "t3_runtime", "allow", true);
+    let mut parent = claude_fact(
+        &root,
+        &mapping.remote_root,
+        &env,
+        "bypassPermissions",
+        "t3_runtime",
+        "allow",
+        true,
+    );
     parent.cwd = "/origin162/project/src".into();
     parent.provider_policy["allowed_tools"] = json!(["mcp__t3-code__*"]);
     parent.provider_policy["disallowed_tools"] = json!(["WebFetch"]);
-    assert!(parent.provider_policy["launch_context"].get("source_equivalence").is_none());
-    assert!(parent.provider_policy["launch_context"].get("settings_overrides").is_none());
+    assert!(
+        parent.provider_policy["launch_context"]
+            .get("source_equivalence")
+            .is_none()
+    );
+    assert!(
+        parent.provider_policy["launch_context"]
+            .get("settings_overrides")
+            .is_none()
+    );
     let original = parent.clone();
     let mut definition = claude_definition(&root, &[]);
     definition.mcp.interactive = "claude".into();
     let cwd = mapping.remote_root.join("src");
-    let project = |p: &ProviderPermissions, d: &AgentDefinition| project_remote_permissions(
-        p, d, &mapping, &cwd, &env, Some(SpawnPosture::Development), &protected);
+    let project = |p: &ProviderPermissions, d: &AgentDefinition| {
+        project_remote_permissions(
+            p,
+            d,
+            &mapping,
+            &cwd,
+            &env,
+            Some(SpawnPosture::Development),
+            &protected,
+        )
+    };
     let (policy, posture) = project(&parent, &definition).unwrap();
     assert_eq!(posture, SpawnPosture::Development);
     // Destination grants are native; the local T3 auto-approval is not transplanted.
     assert!(policy.get("allowed_tools").is_none());
-    assert_eq!(policy["disallowed_tools"], parent.provider_policy["disallowed_tools"]);
+    assert_eq!(
+        policy["disallowed_tools"],
+        parent.provider_policy["disallowed_tools"]
+    );
     assert_eq!(parent, original);
-    recheck_remote_child_permissions(&policy, &definition, &cwd, &env,
-        &protected, Some(&mapping), Some(&parent)).unwrap();
+    recheck_remote_child_permissions(
+        &policy,
+        &definition,
+        &cwd,
+        &env,
+        &protected,
+        Some(&mapping),
+        Some(&parent),
+    )
+    .unwrap();
     let mut bad = parent.clone();
     bad.provider_policy["allowed_tools"] = json!(["mcp__other__*"]);
-    assert_eq!(project(&bad, &definition).unwrap_err(), "permission_mapping_unavailable");
-    bad = parent.clone(); bad.provider_policy["permission_callback"]["kind"] = json!("native_wrapper");
-    assert_eq!(project(&bad, &definition).unwrap_err(), "permission_attestation_unavailable");
-    bad = parent.clone(); bad.provider_policy["launch_context"]["settings_overrides"] = json!({"permissions":{"allow":["Bash(*)"]}});
-    assert_eq!(project(&bad, &definition).unwrap_err(), "permission_mapping_unavailable");
-    let mut unsafe_definition = definition.clone(); unsafe_definition.mcp.interactive = "none".into();
-    assert_eq!(project(&parent, &unsafe_definition).unwrap_err(), "permission_mapping_unavailable");
-    unsafe_definition = definition.clone(); unsafe_definition.args.push("--mcp-config=foreign.json".into());
-    assert_eq!(project(&parent, &unsafe_definition).unwrap_err(), "permission_mapping_unavailable");
+    assert_eq!(
+        project(&bad, &definition).unwrap_err(),
+        "permission_mapping_unavailable"
+    );
+    bad = parent.clone();
+    bad.provider_policy["permission_callback"]["kind"] = json!("native_wrapper");
+    assert_eq!(
+        project(&bad, &definition).unwrap_err(),
+        "permission_attestation_unavailable"
+    );
+    bad = parent.clone();
+    bad.provider_policy["launch_context"]["settings_overrides"] =
+        json!({"permissions":{"allow":["Bash(*)"]}});
+    assert_eq!(
+        project(&bad, &definition).unwrap_err(),
+        "permission_mapping_unavailable"
+    );
+    let mut unsafe_definition = definition.clone();
+    unsafe_definition.mcp.interactive = "none".into();
+    assert_eq!(
+        project(&parent, &unsafe_definition).unwrap_err(),
+        "permission_mapping_unavailable"
+    );
+    unsafe_definition = definition.clone();
+    unsafe_definition
+        .args
+        .push("--mcp-config=foreign.json".into());
+    assert_eq!(
+        project(&parent, &unsafe_definition).unwrap_err(),
+        "permission_mapping_unavailable"
+    );
     fs::write(root.join("settings.json"), "{}").unwrap();
-    assert!(recheck_remote_child_permissions(&policy, &definition, &cwd, &env,
-        &protected, Some(&mapping), Some(&parent)).is_err());
+    assert!(
+        recheck_remote_child_permissions(
+            &policy,
+            &definition,
+            &cwd,
+            &env,
+            &protected,
+            Some(&mapping),
+            Some(&parent)
+        )
+        .is_err()
+    );
 }
 
 #[test]
@@ -1840,33 +2210,93 @@ fn incident171_native_sdk_parent_fact_without_launch_context_preserves_auth_and_
     let (root, env, mut mapping, protected) = remote162_fixture("native-parent-fact");
     let cwd = mapping.remote_root.join("src");
     mapping.source_root = mapping.remote_root.clone();
-    let mut parent = claude_fact(&root, &cwd, &env, "bypassPermissions", "t3_runtime", "allow", true);
+    let mut parent = claude_fact(
+        &root,
+        &cwd,
+        &env,
+        "bypassPermissions",
+        "t3_runtime",
+        "allow",
+        true,
+    );
     parent.runtime_mode = "full-access".into();
     parent.provider_policy["allowed_tools"] = json!(["mcp__t3-code__*"]);
     parent.provider_policy["additional_directories"] = json!([mapping.source_root]);
     parent.provider_policy["allow_dangerously_skip_permissions"] = json!(true);
-    parent.provider_policy.as_object_mut().unwrap().remove("launch_context");
+    parent
+        .provider_policy
+        .as_object_mut()
+        .unwrap()
+        .remove("launch_context");
     let original = parent.clone();
     let proof = prove_parent_permissions(&parent, parent.revision).unwrap();
-    assert_eq!(proof, prove_parent_permissions(&parent, parent.revision).unwrap());
+    assert_eq!(
+        proof,
+        prove_parent_permissions(&parent, parent.revision).unwrap()
+    );
     assert_eq!(parent, original);
-    assert_eq!(prove_parent_permissions(&parent, parent.revision + 1).unwrap_err(), "permission_revision_changed");
-    let mut forged = parent.clone(); forged.provider_policy["permission_callback"]["kind"] = json!("native_wrapper");
-    assert_eq!(prove_parent_permissions(&forged, forged.revision).unwrap_err(), "permission_attestation_unavailable");
+    assert_eq!(
+        prove_parent_permissions(&parent, parent.revision + 1).unwrap_err(),
+        "permission_revision_changed"
+    );
+    let mut forged = parent.clone();
+    forged.provider_policy["permission_callback"]["kind"] = json!("native_wrapper");
+    assert_eq!(
+        prove_parent_permissions(&forged, forged.revision).unwrap_err(),
+        "permission_attestation_unavailable"
+    );
     forged.source = "native_wrapper".into();
-    assert_eq!(prove_parent_permissions(&forged, forged.revision).unwrap_err(), "permission_source_unavailable");
-    let mut definition = claude_definition(&root, &[]); definition.mcp.interactive = "claude".into();
-    let (policy, _) = project_remote_permissions(&parent, &definition, &mapping, &cwd, &env,
-        Some(SpawnPosture::Development), &protected).unwrap();
-    recheck_remote_child_permissions(&policy, &definition, &cwd, &env, &protected,
-        Some(&mapping), Some(&parent)).unwrap();
+    assert_eq!(
+        prove_parent_permissions(&forged, forged.revision).unwrap_err(),
+        "permission_source_unavailable"
+    );
+    let mut definition = claude_definition(&root, &[]);
+    definition.mcp.interactive = "claude".into();
+    let (policy, _) = project_remote_permissions(
+        &parent,
+        &definition,
+        &mapping,
+        &cwd,
+        &env,
+        Some(SpawnPosture::Development),
+        &protected,
+    )
+    .unwrap();
+    recheck_remote_child_permissions(
+        &policy,
+        &definition,
+        &cwd,
+        &env,
+        &protected,
+        Some(&mapping),
+        Some(&parent),
+    )
+    .unwrap();
     assert!(policy["launch_context"]["permission_sources"].is_array());
-    let observed = claude_fact(&root, &cwd, &env, "bypassPermissions", "t3_runtime", "allow", true);
+    let observed = claude_fact(
+        &root,
+        &cwd,
+        &env,
+        "bypassPermissions",
+        "t3_runtime",
+        "allow",
+        true,
+    );
     prove_parent_permissions(&observed, observed.revision).unwrap();
     fs::write(root.join("settings.json"), "{}").unwrap();
     assert!(prove_parent_permissions(&observed, observed.revision).is_err());
-    assert!(recheck_remote_child_permissions(&policy, &definition, &cwd, &env, &protected,
-        Some(&mapping), Some(&parent)).is_err());
+    assert!(
+        recheck_remote_child_permissions(
+            &policy,
+            &definition,
+            &cwd,
+            &env,
+            &protected,
+            Some(&mapping),
+            Some(&parent)
+        )
+        .is_err()
+    );
     fs::remove_dir_all(root).unwrap();
 }
 
@@ -1874,52 +2304,106 @@ fn incident171_native_sdk_parent_fact_without_launch_context_preserves_auth_and_
 fn spec214_native_t3_codex_projection_preserves_ceiling_and_refuses_other_rules() {
     let (root, env, mapping, protected) = remote162_fixture("native-t3-codex214");
     let cwd = mapping.remote_root.join("src");
-    let mut parent = claude_fact(&root, &cwd, &env, "bypassPermissions", "t3_runtime", "allow", true);
+    let mut parent = claude_fact(
+        &root,
+        &cwd,
+        &env,
+        "bypassPermissions",
+        "t3_runtime",
+        "allow",
+        true,
+    );
     parent.cwd = "/origin162/project/src".into();
     parent.runtime_mode = "full-access".into();
     parent.provider_policy["tools"] = json!({"type":"preset","preset":"claude_code"});
     parent.provider_policy["allowed_tools"] = json!(["mcp__t3-code__*"]);
     parent.provider_policy["settings_sources"] = json!("provider_default");
-    parent.provider_policy.as_object_mut().unwrap().remove("launch_context");
+    parent
+        .provider_policy
+        .as_object_mut()
+        .unwrap()
+        .remove("launch_context");
     let original = parent.clone();
     let mut definition = codex_definition();
     definition.mcp.interactive = "codex".into();
-    let project = |p: &ProviderPermissions, d: &AgentDefinition, posture|
-        project_remote_permissions(p, d, &mapping, &cwd, &env, Some(posture), &protected);
+    let project = |p: &ProviderPermissions, d: &AgentDefinition, posture| {
+        project_remote_permissions(p, d, &mapping, &cwd, &env, Some(posture), &protected)
+    };
     let (policy, posture) = project(&parent, &definition, SpawnPosture::Development).unwrap();
     assert_eq!(posture, SpawnPosture::Development);
-    assert_eq!(policy, json!({"kind":"codex","approval_policy":"never","approvals_reviewer":"user","sandbox_policy":{"type":"dangerFullAccess"}}));
+    assert_eq!(
+        policy,
+        json!({"kind":"codex","approval_policy":"never","approvals_reviewer":"user","sandbox_policy":{"type":"dangerFullAccess"}})
+    );
     assert_eq!(parent, original);
-    recheck_remote_child_permissions(&policy, &definition, &cwd, &env, &protected, Some(&mapping), Some(&parent)).unwrap();
+    recheck_remote_child_permissions(
+        &policy,
+        &definition,
+        &cwd,
+        &env,
+        &protected,
+        Some(&mapping),
+        Some(&parent),
+    )
+    .unwrap();
     let (policy, posture) = project(&parent, &definition, SpawnPosture::Discovery).unwrap();
     assert_eq!(posture, SpawnPosture::Discovery);
-    assert_eq!(policy["sandbox_policy"],json!({"type":"readOnly","networkAccess":false}));
+    assert_eq!(
+        policy["sandbox_policy"],
+        json!({"type":"readOnly","networkAccess":false})
+    );
     // Aucune règle autre que l’approbation T3 exacte n’est effacée.
-    for value in [json!(["Bash"]),json!(["mcp__other__*"]),json!(["mcp__t3-code__*","Bash"])] {
-        let mut bad=parent.clone();bad.provider_policy["allowed_tools"]=value;
-        assert!(project(&bad,&definition,SpawnPosture::Development).is_err());
-    }
-    for (key,value) in [
-        ("disallowed_tools",json!(["WebFetch"])),
-        ("tools",json!(["Read","Glob","Grep"])),
-        ("permission_mode",json!("plan")),
-        ("settings_sources",json!("user")),
-        ("launch_context",json!({"hooks":{"PreToolUse":[]}})),
-        ("permission_callback",json!({"kind":"native_wrapper","tool_approval":"allow","plan_exit":"deny"})),
+    for value in [
+        json!(["Bash"]),
+        json!(["mcp__other__*"]),
+        json!(["mcp__t3-code__*", "Bash"]),
     ] {
-        let mut bad=parent.clone();bad.provider_policy[key]=value;
-        assert!(project(&bad,&definition,SpawnPosture::Development).is_err(),"{key}");
+        let mut bad = parent.clone();
+        bad.provider_policy["allowed_tools"] = value;
+        assert!(project(&bad, &definition, SpawnPosture::Development).is_err());
     }
-    let mut bad=parent.clone();bad.source="native_wrapper".into();
-    assert!(project(&bad,&definition,SpawnPosture::Development).is_err());
-    bad=parent.clone();bad.runtime_mode="approval-required".into();
-    assert!(project(&bad,&definition,SpawnPosture::Development).is_err());
-    let mut unmapped=parent.clone();unmapped.cwd="/outside214".into();
-    assert!(project(&unmapped,&definition,SpawnPosture::Development).is_err());
-    let mut unmounted=definition.clone();unmounted.mcp.interactive="none".into();
-    assert!(project(&parent,&unmounted,SpawnPosture::Development).is_err());
+    for (key, value) in [
+        ("disallowed_tools", json!(["WebFetch"])),
+        ("tools", json!(["Read", "Glob", "Grep"])),
+        ("permission_mode", json!("plan")),
+        ("settings_sources", json!("user")),
+        ("launch_context", json!({"hooks":{"PreToolUse":[]}})),
+        (
+            "permission_callback",
+            json!({"kind":"native_wrapper","tool_approval":"allow","plan_exit":"deny"}),
+        ),
+    ] {
+        let mut bad = parent.clone();
+        bad.provider_policy[key] = value;
+        assert!(
+            project(&bad, &definition, SpawnPosture::Development).is_err(),
+            "{key}"
+        );
+    }
+    let mut bad = parent.clone();
+    bad.source = "native_wrapper".into();
+    assert!(project(&bad, &definition, SpawnPosture::Development).is_err());
+    bad = parent.clone();
+    bad.runtime_mode = "approval-required".into();
+    assert!(project(&bad, &definition, SpawnPosture::Development).is_err());
+    let mut unmapped = parent.clone();
+    unmapped.cwd = "/outside214".into();
+    assert!(project(&unmapped, &definition, SpawnPosture::Development).is_err());
+    let mut unmounted = definition.clone();
+    unmounted.mcp.interactive = "none".into();
+    assert!(project(&parent, &unmounted, SpawnPosture::Development).is_err());
     // Sans origine attestée, l’exception ne s’applique jamais.
-    assert_eq!(child_policy(&parent,&definition,&cwd,&env,Some(SpawnPosture::Development)).unwrap_err(),"permission_attestation_unavailable");
+    assert_eq!(
+        child_policy(
+            &parent,
+            &definition,
+            &cwd,
+            &env,
+            Some(SpawnPosture::Development)
+        )
+        .unwrap_err(),
+        "permission_attestation_unavailable"
+    );
     fs::remove_dir_all(root).unwrap();
 }
 
@@ -1927,17 +2411,26 @@ fn spec214_native_t3_codex_projection_preserves_ceiling_and_refuses_other_rules(
 fn spec241_command_execution_follows_effective_profile_without_widening_rights() {
     let read = json!({"kind":"claude","permission_mode":"plan",
         "tools":["Read","Glob","Grep"],"disallowed_tools":["Bash","Edit","Write"]});
-    let before=read.clone();
-    assert!(!permits_command_execution(&read,false));
-    assert_eq!(read,before);
+    let before = read.clone();
+    assert!(!permits_command_execution(&read, false));
+    assert_eq!(read, before);
     let mut shell = read.clone();
-    shell["tools"]=json!({"type":"preset","preset":"claude_code"});
-    assert!(!permits_command_execution(&shell,false));
-    shell["disallowed_tools"]=json!([]);
-    assert!(permits_command_execution(&shell,false));
-    shell["disallowed_tools"]=json!(["Bash(*)"]);
-    assert!(!permits_command_execution(&shell,false));
-    assert!(permits_command_execution(&json!({"kind":"codex","sandbox_policy":{"type":"readOnly"}}),false));
-    assert!(!permits_command_execution(&json!({"kind":"codex","sandbox_policy":{"type":"readOnly"}}),true));
-    assert!(!permits_command_execution(&json!({"kind":"unknown"}),false));
+    shell["tools"] = json!({"type":"preset","preset":"claude_code"});
+    assert!(!permits_command_execution(&shell, false));
+    shell["disallowed_tools"] = json!([]);
+    assert!(permits_command_execution(&shell, false));
+    shell["disallowed_tools"] = json!(["Bash(*)"]);
+    assert!(!permits_command_execution(&shell, false));
+    assert!(permits_command_execution(
+        &json!({"kind":"codex","sandbox_policy":{"type":"readOnly"}}),
+        false
+    ));
+    assert!(!permits_command_execution(
+        &json!({"kind":"codex","sandbox_policy":{"type":"readOnly"}}),
+        true
+    ));
+    assert!(!permits_command_execution(
+        &json!({"kind":"unknown"}),
+        false
+    ));
 }

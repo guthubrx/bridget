@@ -1,7 +1,7 @@
 //! Dernier contrôle de portée sur l'identité courante, avant les effets natifs.
-use bridget_transport::poison::RecoverPoison;
 use super::*;
 use crate::mobile::store::{Operation, Store};
+use bridget_transport::poison::RecoverPoison;
 use bridget_transport::protocol::{MobileOperation, MobileOperationRequest};
 use std::path::Path;
 
@@ -88,23 +88,29 @@ fn agent_journal(
         if task.is_none() && identity.is_none() {
             return refusal("not_found");
         }
-        let foreign=identity.as_ref().and_then(|(_,instance)|st.presences.get(instance))
-            .is_some_and(|presence|presence.host!=st.host);
+        let foreign = identity
+            .as_ref()
+            .and_then(|(_, instance)| st.presences.get(instance))
+            .is_some_and(|presence| presence.host != st.host);
         (task, identity, foreign, st.socket_path.clone())
     };
     let after_seq = if tail {
-        match crate::attach::journal_tail_start(&socket,agent_id,limit) {
-            Ok(start)=>start, Err(_)=>return refusal("journal_unavailable")
+        match crate::attach::journal_tail_start(&socket, agent_id, limit) {
+            Ok(start) => start,
+            Err(_) => return refusal("journal_unavailable"),
         }
-    } else { after_seq };
+    } else {
+        after_seq
+    };
     let page = if let Some(task) = &task {
         match native_lineage::read_task_journal(state, task, after_seq, limit) {
             Ok((page, _)) => page,
             Err(_) => return refusal("journal_unavailable"),
         }
     } else if foreign {
-        match crate::attach::lineage_journal_remote_page(&socket,agent_id,after_seq,limit) {
-            Ok(page)=>page,Err(_)=>return refusal("journal_unavailable")
+        match crate::attach::lineage_journal_remote_page(&socket, agent_id, after_seq, limit) {
+            Ok(page) => page,
+            Err(_) => return refusal("journal_unavailable"),
         }
     } else {
         match crate::attach::lineage_journal_page(
@@ -145,9 +151,15 @@ fn agent_journal(
     {
         return refusal(error.code());
     }
-    let agent_state={let st=state.lock().recover_poison();
-        st.router.get_agent(agent_id).and_then(|route|st.conn_instances.get(&route.connection_id))
-            .and_then(|instance|st.presences.get(instance)).map(|p|p.state.clone()).unwrap_or_else(||"unknown".into())};
+    let agent_state = {
+        let st = state.lock().recover_poison();
+        st.router
+            .get_agent(agent_id)
+            .and_then(|route| st.conn_instances.get(&route.connection_id))
+            .and_then(|instance| st.presences.get(instance))
+            .map(|p| p.state.clone())
+            .unwrap_or_else(|| "unknown".into())
+    };
     DaemonToWrapper::MobileOperationResult {
         result: serde_json::json!({
             "status":"ok","agent_id":agent_id,"agent_state":agent_state,"items":page.get("events"),
@@ -164,7 +176,10 @@ pub(super) fn handle(
 ) -> DaemonToWrapper {
     let required_capabilities: &[ClientCapability] =
         if matches!(&request.operation, MobileOperation::Specialists { .. }) {
-            &[ClientCapability::MobileOperationsV1, ClientCapability::SpecialistsV1]
+            &[
+                ClientCapability::MobileOperationsV1,
+                ClientCapability::SpecialistsV1,
+            ]
         } else {
             &[ClientCapability::MobileOperationsV1]
         };
@@ -173,7 +188,8 @@ pub(super) fn handle(
         if st.connection_roles.get(conn_id) != Some(&ConnectionRole::Client)
             || st.auxiliary_connections.contains(conn_id)
             || st.conn_names.contains_key(conn_id)
-            || st.peer_uids.get(conn_id).copied() != Some(bridget_transport::fsutil::effective_uid())
+            || st.peer_uids.get(conn_id).copied()
+                != Some(bridget_transport::fsutil::effective_uid())
             || !st.client_negotiations.get(conn_id).is_some_and(|n| {
                 n.version == CLIENT_CONTRACT_VERSION
                     && n.capabilities.as_slice() == required_capabilities
@@ -193,11 +209,11 @@ pub(super) fn handle(
         Ok(device) => device,
         Err(error) => return refusal(error.code()),
     };
-    if let MobileOperation::Specialists {request:command}=&request.operation {
-        return super::specialists222::handle_mobile(conn_id,command,&device,state);
+    if let MobileOperation::Specialists { request: command } = &request.operation {
+        return super::specialists222::handle_mobile(conn_id, command, &device, state);
     }
-    if let MobileOperation::AgentTracking {request:command}=&request.operation {
-        return super::agent_tracking230::mobile(command,&device,state);
+    if let MobileOperation::AgentTracking { request: command } = &request.operation {
+        return super::agent_tracking230::mobile(command, &device, state);
     }
     if matches!(
         request.operation,
@@ -224,7 +240,9 @@ pub(super) fn handle(
             _ => bridget_transport::protocol::UpdateRequest::Status,
         };
         return match crate::updates::policy(&root, &q) {
-            Ok(result) => DaemonToWrapper::MobileOperationResult { result: super::mobile_admin::project_update_status(result, state) },
+            Ok(result) => DaemonToWrapper::MobileOperationResult {
+                result: super::mobile_admin::project_update_status(result, state),
+            },
             Err(code) => refusal(code),
         };
     }
@@ -280,7 +298,10 @@ pub(super) fn handle(
         return refusal("authorization_required");
     };
     negotiated.issuer_scope = format!("mobile177_{}", device.device_id.replace('-', ""));
-    if matches!(request.operation, MobileOperation::MessageQueue { .. } | MobileOperation::MessageQueueChange { .. }) {
+    if matches!(
+        request.operation,
+        MobileOperation::MessageQueue { .. } | MobileOperation::MessageQueueChange { .. }
+    ) {
         return super::mobile_queue::handle(conn_id, &request.operation, &device, &mut st);
     }
     match request.operation {
@@ -294,10 +315,10 @@ pub(super) fn handle(
         | MobileOperation::UpdatesConfigure { .. }
         | MobileOperation::Questions { .. }
         | MobileOperation::UserInputs { .. }
-            | MobileOperation::UserInputShow { .. }
-            | MobileOperation::UserInputRespond { .. }
-            | MobileOperation::UserInputReceipt { .. }
-            | MobileOperation::QuestionShow { .. }
+        | MobileOperation::UserInputShow { .. }
+        | MobileOperation::UserInputRespond { .. }
+        | MobileOperation::UserInputReceipt { .. }
+        | MobileOperation::QuestionShow { .. }
         | MobileOperation::QuestionRespond { .. }
         | MobileOperation::QuestionReceipt { .. }
         | MobileOperation::TaskList { .. }

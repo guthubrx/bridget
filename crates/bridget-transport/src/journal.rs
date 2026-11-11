@@ -1,8 +1,8 @@
 //! Journal JSONL versionné des sessions ACP.
 
-use crate::poison::RecoverPoison;
 use crate::acp::{AcpEvent, AcpEventQueue};
 use crate::fsutil::create_private_dir;
+use crate::poison::RecoverPoison;
 use crate::protocol::AttachWindow;
 use serde::Serialize;
 use serde_json::Value;
@@ -190,10 +190,7 @@ impl JournalLiveFeed {
     /// Flux indépendant d'attach : seuls les petits faits structurés y passent.
     /// O(n), n<=256 ; la source n'attend jamais un consommateur.
     pub fn take_observations(&self) -> (Vec<crate::protocol::WrapperToDaemon>, u64) {
-        let receiver = self
-            .observation_receiver
-            .lock()
-            .recover_poison();
+        let receiver = self.observation_receiver.lock().recover_poison();
         (
             receiver.try_iter().take(WRITER_QUEUE_CAPACITY).collect(),
             self.observation_dropped.swap(0, Ordering::Relaxed),
@@ -201,10 +198,7 @@ impl JournalLiveFeed {
     }
 
     pub fn after(&self, cursor: Option<u64>) -> JournalLiveBatch {
-        let receiver = self
-            .receiver
-            .lock()
-            .recover_poison();
+        let receiver = self.receiver.lock().recover_poison();
         let expected = cursor.map_or(1, |seq| seq.saturating_add(1));
         let dropped = self.dropped_through.load(Ordering::SeqCst);
         let gap = (dropped >= expected).then_some((expected, dropped));
@@ -260,56 +254,38 @@ impl AppendLatencyProbe {
     fn install_with_scope(root: impl AsRef<Path>, all_events: bool) -> Self {
         let root = root.as_ref().to_path_buf();
         let samples = Arc::new(Mutex::new(Vec::new()));
-        append_probes()
-            .lock()
-            .recover_poison()
-            .insert(
-                root.clone(),
-                AppendProbeRegistration {
-                    samples: Arc::downgrade(&samples),
-                    all_events,
-                },
-            );
+        append_probes().lock().recover_poison().insert(
+            root.clone(),
+            AppendProbeRegistration {
+                samples: Arc::downgrade(&samples),
+                all_events,
+            },
+        );
         Self { root, samples }
     }
 
     pub fn sample_count(&self) -> usize {
-        self.samples
-            .lock()
-            .recover_poison()
-            .len()
+        self.samples.lock().recover_poison().len()
     }
 
     pub fn take(&self) -> Vec<Duration> {
-        std::mem::take(
-            &mut *self
-                .samples
-                .lock()
-                .recover_poison(),
-        )
-        .into_iter()
-        .map(|sample| sample.elapsed)
-        .collect()
+        std::mem::take(&mut *self.samples.lock().recover_poison())
+            .into_iter()
+            .map(|sample| sample.elapsed)
+            .collect()
     }
 
     /// Prélève les observations complètes, dont la borne temporelle après le
     /// flush, pour corréler append et rendu dans les bancs attach.
     pub fn take_samples(&self) -> Vec<AppendLatencySample> {
-        std::mem::take(
-            &mut *self
-                .samples
-                .lock()
-                .recover_poison(),
-        )
+        std::mem::take(&mut *self.samples.lock().recover_poison())
     }
 }
 
 #[cfg(feature = "test-support")]
 impl Drop for AppendLatencyProbe {
     fn drop(&mut self) {
-        let mut probes = append_probes()
-            .lock()
-            .recover_poison();
+        let mut probes = append_probes().lock().recover_poison();
         if probes
             .get(&self.root)
             .and_then(|registration| registration.samples.upgrade())
@@ -370,16 +346,17 @@ impl JournalWriter {
         #[cfg(test)]
         let thread_append_latencies = append_latencies.clone();
         #[cfg(feature = "test-support")]
-        let thread_probe = append_probes()
-            .lock()
-            .recover_poison()
-            .get(root)
-            .and_then(|registration| {
-                registration
-                    .samples
-                    .upgrade()
-                    .map(|samples| (samples, registration.all_events))
-            });
+        let thread_probe =
+            append_probes()
+                .lock()
+                .recover_poison()
+                .get(root)
+                .and_then(|registration| {
+                    registration
+                        .samples
+                        .upgrade()
+                        .map(|samples| (samples, registration.all_events))
+                });
         let handle = thread::spawn(move || {
             while let Ok(command) = receiver.recv() {
                 match command {
@@ -394,10 +371,7 @@ impl JournalWriter {
                             Ok(event) => event,
                             Err(error) => {
                                 let detail = format!("écriture du journal ACP impossible: {error}");
-                                *thread_failure
-                                    .lock()
-                                    .recover_poison() =
-                                    Some(detail.clone());
+                                *thread_failure.lock().recover_poison() = Some(detail.clone());
                                 on_failure(detail);
                                 break;
                             }
@@ -432,14 +406,11 @@ impl JournalWriter {
                         if let Some((samples, all_events)) = &thread_probe
                             && (is_turn_boundary || *all_events)
                         {
-                            samples
-                                .lock()
-                                .recover_poison()
-                                .push(AppendLatencySample {
-                                    seq: sequence,
-                                    completed_at,
-                                    elapsed: append_elapsed,
-                                });
+                            samples.lock().recover_poison().push(AppendLatencySample {
+                                seq: sequence,
+                                completed_at,
+                                elapsed: append_elapsed,
+                            });
                         }
                     }
                     WriterCommand::Stop(done) => {
@@ -467,12 +438,7 @@ impl JournalWriter {
         // Contrat d'écriture : un kind d'update hors vocabulaire est refusé ici,
         // point unique traversé par ACP, Claude et Codex — jamais silencieux.
         crate::act_kind::validate_journal_write(event, &payload)?;
-        if let Some(error) = self
-            .failure
-            .lock()
-            .recover_poison()
-            .clone()
-        {
+        if let Some(error) = self.failure.lock().recover_poison().clone() {
             return Err(error);
         }
         let (_, timestamp) = now_date_and_timestamp();
@@ -491,12 +457,7 @@ impl JournalWriter {
     }
 
     pub fn stop(&self) {
-        let Some(handle) = self
-            .handle
-            .lock()
-            .recover_poison()
-            .take()
-        else {
+        let Some(handle) = self.handle.lock().recover_poison().take() else {
             return;
         };
         let (done_sender, done_receiver) = mpsc::channel();
@@ -522,12 +483,7 @@ impl JournalWriter {
 
     #[cfg(test)]
     pub(crate) fn take_append_latencies(&self) -> Vec<Duration> {
-        std::mem::take(
-            &mut *self
-                .append_latencies
-                .lock()
-                .recover_poison(),
-        )
+        std::mem::take(&mut *self.append_latencies.lock().recover_poison())
     }
 }
 

@@ -6,8 +6,8 @@
 //! `named-roster.json` n'est pas un snapshot d'équipe à ressusciter : il ne
 //! sert qu'à nommer les absents non persistants, invisibles de `fleet.json`.
 
-use bridget_transport::poison::RecoverPoison;
 use bridget_transport::fsutil::write_private_file_atomic;
+use bridget_transport::poison::RecoverPoison;
 use log::warn;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -124,20 +124,14 @@ impl NamedRosterStore {
     }
 
     pub fn remember(&self, name: String, entry: NamedRosterEntry) {
-        let _guard = self
-            .lock
-            .lock()
-            .recover_poison();
+        let _guard = self.lock.lock().recover_poison();
         let mut file = self.load_unlocked();
         file.named.insert(name, entry);
         self.persist_unlocked(&file);
     }
 
     pub fn forget(&self, name: &str) {
-        let _guard = self
-            .lock
-            .lock()
-            .recover_poison();
+        let _guard = self.lock.lock().recover_poison();
         let mut file = self.load_unlocked();
         if file.named.remove(name).is_none() {
             return;
@@ -146,10 +140,7 @@ impl NamedRosterStore {
     }
 
     pub fn drain_non_persistent(&self) -> Vec<(String, NamedRosterEntry)> {
-        let _guard = self
-            .lock
-            .lock()
-            .recover_poison();
+        let _guard = self.lock.lock().recover_poison();
         let mut file = self.load_unlocked();
         let mut drained = Vec::new();
         file.named.retain(|name, entry| {
@@ -167,10 +158,7 @@ impl NamedRosterStore {
     }
 
     pub fn persistent_entries(&self) -> Vec<(String, NamedRosterEntry)> {
-        let _guard = self
-            .lock
-            .lock()
-            .recover_poison();
+        let _guard = self.lock.lock().recover_poison();
         self.load_unlocked()
             .named
             .into_iter()
@@ -189,10 +177,7 @@ impl NamedRosterStore {
     ///
     /// Complexité : O(n log n) pour n noms au roster, une seule E/S.
     pub fn persistence_by_name(&self) -> BTreeMap<String, bool> {
-        let _guard = self
-            .lock
-            .lock()
-            .recover_poison();
+        let _guard = self.lock.lock().recover_poison();
         self.load_unlocked()
             .named
             .into_iter()

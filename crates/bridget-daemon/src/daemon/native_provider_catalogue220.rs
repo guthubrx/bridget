@@ -33,9 +33,13 @@ pub(super) fn ingest(
     if !update.valid() {
         return rejected(WorkerRefusal::InvalidEnvelope);
     }
-    if update.catalogue.models.iter().any(|model|
-        model.service_tiers_unavailable || !model.service_tiers.is_empty() || model.default_service_tier.is_some())
-        && !worker.capabilities.contains(&WorkerCapability::ModelOptionsV1)
+    if update.catalogue.models.iter().any(|model| {
+        model.service_tiers_unavailable
+            || !model.service_tiers.is_empty()
+            || model.default_service_tier.is_some()
+    }) && !worker
+        .capabilities
+        .contains(&WorkerCapability::ModelOptionsV1)
     {
         return rejected(WorkerRefusal::CapabilityRequired);
     }
@@ -56,10 +60,11 @@ pub(super) fn ingest(
         return None;
     };
     worker.catalogues.retain(|id, cached| {
-        cached.value.cause == Some(CatalogueCause::StopUnconfirmed) || policy
-            .connections
-            .iter()
-            .any(|c| c.machine_id == worker.identity.machine_id && c.connection_id == *id)
+        cached.value.cause == Some(CatalogueCause::StopUnconfirmed)
+            || policy
+                .connections
+                .iter()
+                .any(|c| c.machine_id == worker.identity.machine_id && c.connection_id == *id)
     });
     let connection = policy.connections.iter().find(|c| {
         c.machine_id == worker.identity.machine_id
@@ -106,35 +111,68 @@ pub(super) fn ingest(
 /// n'appelle jamais le fournisseur et n'accorde aucun accès payant.
 /// O(C*M), C connexions et M modèles bornés par le protocole.
 pub(super) fn model_option_account(
-    st:&DaemonState, registry:&AgentRegistry, candidate:&crate::registry::RoutingCandidate,
-    service_tier:Option<&str>,
-)->Result<Option<String>,String> {
-    let Some(tier)=service_tier else{return Ok(None);};
-    if !registry.routing_candidates().ok_or("model_options_not_permitted")?.iter().any(|current|
-        current.enabled && current.machine_id==candidate.machine_id
-            && current.connection_id==candidate.connection_id && current.agent_type==candidate.agent_type
-            && current.model==candidate.model && current.engine==candidate.engine
-            && current.service_tiers.iter().any(|value|value==tier)) {
+    st: &DaemonState,
+    registry: &AgentRegistry,
+    candidate: &crate::registry::RoutingCandidate,
+    service_tier: Option<&str>,
+) -> Result<Option<String>, String> {
+    let Some(tier) = service_tier else {
+        return Ok(None);
+    };
+    if !registry
+        .routing_candidates()
+        .ok_or("model_options_not_permitted")?
+        .iter()
+        .any(|current| {
+            current.enabled
+                && current.machine_id == candidate.machine_id
+                && current.connection_id == candidate.connection_id
+                && current.agent_type == candidate.agent_type
+                && current.model == candidate.model
+                && current.engine == candidate.engine
+                && current.service_tiers.iter().any(|value| value == tier)
+        })
+    {
         return Err("model_options_not_permitted".into());
     }
-    let observation=project_connection_at(st,registry,unix_timestamp(),Instant::now(),
-        Some(&candidate.connection_id)).into_iter().find(|value|
-        value["machine_id"].as_str()==Some(candidate.machine_id.as_str())
-            && value["connection_id"].as_str()==Some(candidate.connection_id.as_str()))
-        .ok_or("model_options_observation_unavailable")?;
-    if observation["status"]!="reported_models" || observation["model_options_status"]!="reported" {
+    let observation = project_connection_at(
+        st,
+        registry,
+        unix_timestamp(),
+        Instant::now(),
+        Some(&candidate.connection_id),
+    )
+    .into_iter()
+    .find(|value| {
+        value["machine_id"].as_str() == Some(candidate.machine_id.as_str())
+            && value["connection_id"].as_str() == Some(candidate.connection_id.as_str())
+    })
+    .ok_or("model_options_observation_unavailable")?;
+    if observation["status"] != "reported_models"
+        || observation["model_options_status"] != "reported"
+    {
         return Err("model_options_observation_unavailable".into());
     }
-    if observation["models"].as_array().is_some_and(|models|models.iter().any(|model|
-        model["model"].as_str()==Some(candidate.model.as_str()) && model["model_options_status"]=="not_observed")) {
+    if observation["models"].as_array().is_some_and(|models| {
+        models.iter().any(|model| {
+            model["model"].as_str() == Some(candidate.model.as_str())
+                && model["model_options_status"] == "not_observed"
+        })
+    }) {
         return Err("model_options_observation_unavailable".into());
     }
-    let account=observation["account_scope"].as_str()
-        .ok_or("model_options_account_unidentified")?.to_owned();
-    if !observation["models"].as_array().is_some_and(|models|models.iter().any(|model|
-        model["model"].as_str()==Some(candidate.model.as_str())
-            && model["service_tiers"].as_array().is_some_and(|tiers|
-                tiers.iter().any(|value|value.as_str()==Some(tier))))) {
+    let account = observation["account_scope"]
+        .as_str()
+        .ok_or("model_options_account_unidentified")?
+        .to_owned();
+    if !observation["models"].as_array().is_some_and(|models| {
+        models.iter().any(|model| {
+            model["model"].as_str() == Some(candidate.model.as_str())
+                && model["service_tiers"]
+                    .as_array()
+                    .is_some_and(|tiers| tiers.iter().any(|value| value.as_str() == Some(tier)))
+        })
+    }) {
         return Err("model_options_not_announced".into());
     }
     Ok(Some(account))
@@ -152,14 +190,18 @@ pub(super) fn project_at(
     now: i64,
     instant: Instant,
 ) -> Vec<Value> {
-    project_connection_at(st,registry,now,instant,None)
+    project_connection_at(st, registry, now, instant, None)
 }
 
 /// Même projection pour une seule connexion à l'admission : ne pas allouer
 /// les catalogues des autres serveurs pour chacun des candidats.
 fn project_connection_at(
-    st:&DaemonState,registry:&AgentRegistry,now:i64,instant:Instant,only:Option<&str>,
-)->Vec<Value> {
+    st: &DaemonState,
+    registry: &AgentRegistry,
+    now: i64,
+    instant: Instant,
+    only: Option<&str>,
+) -> Vec<Value> {
     use bridget_transport::protocol::{WorkerCapability, WorkerContactState};
     let Some(policy) = registry.routing_policy().filter(|p| p.enabled) else {
         return Vec::new();
@@ -172,7 +214,9 @@ fn project_connection_at(
     }
     let mut result = Vec::new();
     for connection in &policy.connections {
-        if only.is_some_and(|id|id!=connection.connection_id){continue;}
+        if only.is_some_and(|id| id != connection.connection_id) {
+            continue;
+        }
         let worker = st.remote_workers.get(&connection.machine_id);
         let cached = worker.and_then(|w| w.catalogues.get(&connection.connection_id));
         let valid_definition = registry.resolved_definition(&connection.agent_type).ok();
@@ -276,12 +320,17 @@ fn project_connection_at(
             .flatten()
             .map(|model| (model.model.as_str(), model))
             .collect::<std::collections::BTreeMap<_, _>>();
-        let options_negotiated = worker.is_some_and(|w|
-            w.capabilities.contains(&WorkerCapability::ModelOptionsV1));
-        let options_status = if connection.engine != "codex" { "unsupported_provider" }
-            else if worker.is_some() && !options_negotiated { "unverified_peer" }
-            else if status == "reported_models" { "reported" }
-            else { "not_observed" };
+        let options_negotiated =
+            worker.is_some_and(|w| w.capabilities.contains(&WorkerCapability::ModelOptionsV1));
+        let options_status = if connection.engine != "codex" {
+            "unsupported_provider"
+        } else if worker.is_some() && !options_negotiated {
+            "unverified_peer"
+        } else if status == "reported_models" {
+            "reported"
+        } else {
+            "not_observed"
+        };
         let models=observation.filter(|o|o.state==CatalogueState::Observed).map(|o|o.models.iter().map(|m| {
             let policy_model=declared.get(m.model.as_str());
             let supported=m.supported_efforts.iter().collect::<std::collections::BTreeSet<_>>();
@@ -316,21 +365,38 @@ fn project_connection_at(
         }).collect::<Vec<_>>()).unwrap_or_default();
         // Lecture par modèle C07 : ne jamais transformer une omission de liste
         // ou un contrôle manquant en refus d'abonnement ou en autorité d'admission.
-        let announced = observation.filter(|o| o.state == CatalogueState::Observed)
-            .map(|o| o.models.iter().map(|m| m.model.as_str()).collect::<std::collections::BTreeSet<_>>());
-        let model_checks = declared.keys().map(|model| {
-            let state = match status {
-                "disabled" => "connection_disabled",
-                "machine_disabled" => "machine_disabled",
-                "sign_in_required" => "sign_in_required",
-                "reported_models" if announced.as_ref().is_some_and(|models| models.contains(model)) => "announced_access_unverified",
-                "reported_models" => "not_announced",
-                _ if cause == Some(CatalogueCause::ProgramUnavailable) => "program_unavailable",
-                _ if cause == Some(CatalogueCause::ProtocolUnavailable) => "observation_protocol_unavailable",
-                _ => "unverified",
-            };
-            json!({"model":model,"status":state,"entitlement":"unknown"})
-        }).collect::<Vec<_>>();
+        let announced = observation
+            .filter(|o| o.state == CatalogueState::Observed)
+            .map(|o| {
+                o.models
+                    .iter()
+                    .map(|m| m.model.as_str())
+                    .collect::<std::collections::BTreeSet<_>>()
+            });
+        let model_checks = declared
+            .keys()
+            .map(|model| {
+                let state = match status {
+                    "disabled" => "connection_disabled",
+                    "machine_disabled" => "machine_disabled",
+                    "sign_in_required" => "sign_in_required",
+                    "reported_models"
+                        if announced
+                            .as_ref()
+                            .is_some_and(|models| models.contains(model)) =>
+                    {
+                        "announced_access_unverified"
+                    }
+                    "reported_models" => "not_announced",
+                    _ if cause == Some(CatalogueCause::ProgramUnavailable) => "program_unavailable",
+                    _ if cause == Some(CatalogueCause::ProtocolUnavailable) => {
+                        "observation_protocol_unavailable"
+                    }
+                    _ => "unverified",
+                };
+                json!({"model":model,"status":state,"entitlement":"unknown"})
+            })
+            .collect::<Vec<_>>();
         let source_age = cached.map(|v| now.saturating_sub(v.value.observed_at).max(0) as u64);
         let received_age = cached.map(|v| instant.saturating_duration_since(v.received).as_secs());
         let remaining = age.map(|age| CATALOGUE_TTL_SECS.saturating_sub(age));

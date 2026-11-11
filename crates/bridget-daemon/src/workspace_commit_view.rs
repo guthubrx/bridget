@@ -34,9 +34,20 @@ pub(super) struct Manifest {
 fn refusal(cause: &str) -> String {
     format!("workspace_commit_view_unavailable:cause={cause}")
 }
-fn limit_refusal(kind: bridget_transport::protocol::CommitViewLimitKind, observed: u64, maximum: u64) -> String {
-    let failure = bridget_transport::protocol::CommitViewFailure::MeasuredLimit { kind, observed, maximum };
-    format!("workspace_commit_view_limit:{}", serde_json::to_string(&failure).unwrap())
+fn limit_refusal(
+    kind: bridget_transport::protocol::CommitViewLimitKind,
+    observed: u64,
+    maximum: u64,
+) -> String {
+    let failure = bridget_transport::protocol::CommitViewFailure::MeasuredLimit {
+        kind,
+        observed,
+        maximum,
+    };
+    format!(
+        "workspace_commit_view_limit:{}",
+        serde_json::to_string(&failure).unwrap()
+    )
 }
 fn path_valid(path: &str) -> bool {
     !path.is_empty()
@@ -272,7 +283,11 @@ pub(super) fn plan(source: &Path, base: &str) -> Result<Manifest, String> {
         true,
     )?;
     if output.truncated {
-        return Err(limit_refusal(bridget_transport::protocol::CommitViewLimitKind::TreeBytes, MAX_TREE_OUTPUT as u64 + 1, MAX_TREE_OUTPUT as u64));
+        return Err(limit_refusal(
+            bridget_transport::protocol::CommitViewLimitKind::TreeBytes,
+            MAX_TREE_OUTPUT as u64 + 1,
+            MAX_TREE_OUTPUT as u64,
+        ));
     }
     if !output.success() {
         return Err(refusal("tree_unavailable"));
@@ -282,7 +297,11 @@ pub(super) fn plan(source: &Path, base: &str) -> Result<Manifest, String> {
     let mut total = 0u64;
     for row in output.stdout.split('\0').filter(|r| !r.is_empty()) {
         if entries.len() >= MAX_ENTRIES {
-            return Err(limit_refusal(bridget_transport::protocol::CommitViewLimitKind::Entries, entries.len() as u64 + 1, MAX_ENTRIES as u64));
+            return Err(limit_refusal(
+                bridget_transport::protocol::CommitViewLimitKind::Entries,
+                entries.len() as u64 + 1,
+                MAX_ENTRIES as u64,
+            ));
         }
         let (meta, path) = row
             .split_once('\t')
@@ -425,12 +444,20 @@ fn manifest_paths(manifest: &Manifest) -> Result<(BTreeSet<String>, BTreeSet<Str
                 initial.insert(text.into());
             }
             if all.len() > MAX_ENTRIES + 1 {
-                return Err(limit_refusal(bridget_transport::protocol::CommitViewLimitKind::Entries, all.len() as u64, (MAX_ENTRIES + 1) as u64));
+                return Err(limit_refusal(
+                    bridget_transport::protocol::CommitViewLimitKind::Entries,
+                    all.len() as u64,
+                    (MAX_ENTRIES + 1) as u64,
+                ));
             }
             parent = path.parent();
         }
         if all.len() > MAX_ENTRIES + 1 {
-            return Err(limit_refusal(bridget_transport::protocol::CommitViewLimitKind::Entries, all.len() as u64, (MAX_ENTRIES + 1) as u64));
+            return Err(limit_refusal(
+                bridget_transport::protocol::CommitViewLimitKind::Entries,
+                all.len() as u64,
+                (MAX_ENTRIES + 1) as u64,
+            ));
         }
     }
     Ok((all, initial))
@@ -481,7 +508,11 @@ fn notice(manifest: &Manifest, links: &BTreeMap<String, String>) -> Result<Vec<u
         "next_action":"Cette carte décrit la sélection initiale ; un fichier omis peut avoir été matérialisé depuis. Lire les fichiers présents. Pour un chemin omis, appeler bridget_read_commit_file avec path égal au chemin exact de cette carte, puis lire le chemin renvoyé. L'enfant utilise sa connexion courante sans task_id ; le parent indique sa propre task_id. Si l'outil manque, faire charger le client compatible ; ne pas remplacer la mission ou sa base. Aucun git show/log dans cette vue ; aucun fichier absent n'est une preuve d'absence du commit."
     })).map_err(|_|refusal("manifest_invalid"))?;
     if bytes.len() > MAX_NOTICE {
-        return Err(limit_refusal(bridget_transport::protocol::CommitViewLimitKind::NoticeBytes, bytes.len() as u64, MAX_NOTICE as u64));
+        return Err(limit_refusal(
+            bridget_transport::protocol::CommitViewLimitKind::NoticeBytes,
+            bytes.len() as u64,
+            MAX_NOTICE as u64,
+        ));
     }
     Ok(bytes)
 }
@@ -554,7 +585,11 @@ impl Directory {
             }
             Self::name(name)?;
             if names.len() > MAX_ENTRIES {
-                return Err(limit_refusal(bridget_transport::protocol::CommitViewLimitKind::Entries, (names.len() + 1) as u64, (MAX_ENTRIES + 1) as u64));
+                return Err(limit_refusal(
+                    bridget_transport::protocol::CommitViewLimitKind::Entries,
+                    (names.len() + 1) as u64,
+                    (MAX_ENTRIES + 1) as u64,
+                ));
             }
             names.push(name.to_owned());
         }
@@ -1009,7 +1044,11 @@ fn validate_manifest(manifest: &Manifest) -> Result<(), String> {
                 .checked_add(entry.bytes)
                 .ok_or_else(|| refusal("link_metadata_limit"))?;
             if link_bytes > MAX_TREE_OUTPUT as u64 {
-                return Err(limit_refusal(bridget_transport::protocol::CommitViewLimitKind::LinkBytes, link_bytes, MAX_TREE_OUTPUT as u64));
+                return Err(limit_refusal(
+                    bridget_transport::protocol::CommitViewLimitKind::LinkBytes,
+                    link_bytes,
+                    MAX_TREE_OUTPUT as u64,
+                ));
             }
         }
         if entry.selected {
@@ -1099,19 +1138,25 @@ fn audit_inventory(manifest: &Manifest, root: &Path) -> Result<Audit, String> {
         if Instant::now() >= deadline {
             return Err(refusal("view_audit_timeout"));
         }
-        let mut names=directory.names()?;
+        let mut names = directory.names()?;
         if prefix.is_empty() {
             // La carte lie les tailles/objets au manifeste privé. La vérifier
             // AVANT tout contenu évite de hacher un fichier volontairement
             // gigantesque pour un manifeste déjà divergent.
-            let index=names.iter().position(|name|name==NOTICE)
-                .ok_or_else(||refusal("view_integrity_failed"))?;
-            names.swap(0,index);
+            let index = names
+                .iter()
+                .position(|name| name == NOTICE)
+                .ok_or_else(|| refusal("view_integrity_failed"))?;
+            names.swap(0, index);
         }
         for name in names {
             count += 1;
             if count > MAX_ENTRIES + 1 {
-                return Err(limit_refusal(bridget_transport::protocol::CommitViewLimitKind::Entries, count as u64, (MAX_ENTRIES + 1) as u64));
+                return Err(limit_refusal(
+                    bridget_transport::protocol::CommitViewLimitKind::Entries,
+                    count as u64,
+                    (MAX_ENTRIES + 1) as u64,
+                ));
             }
             let relative = if prefix.is_empty() {
                 name.clone()
@@ -1197,7 +1242,10 @@ pub(super) fn materialize(
     if entry.selected || entry.mode == "120000" {
         return Err(refusal("view_integrity_failed"));
     }
-    let _selected_bytes = inventory.bytes.checked_add(entry.bytes).ok_or_else(||refusal("byte_count_overflow"))?;
+    let _selected_bytes = inventory
+        .bytes
+        .checked_add(entry.bytes)
+        .ok_or_else(|| refusal("byte_count_overflow"))?;
     let root = Directory::open(root)?;
     let mut objects = Objects::open(source)?;
     // Objet absent : aucun dossier ou fichier créé. Sa disparition ultérieure
@@ -1236,72 +1284,144 @@ pub(crate) struct ViewIntent {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct ViewPlan {
-    version:u8,
-    pub(crate) binding:ViewBinding,
-    pub(crate) source:PathBuf,
-    pub(crate) data_root:PathBuf,
-    pub(crate) base:String,
-    pub(crate) source_root:PathBuf,
-    pub(crate) git_identity:String,
-    #[serde(default,skip_serializing_if="std::ops::Not::not")]
-    pub(crate) native_placement_v1:bool,
-    created_at:u64,
-    expires_at:u64,
+    version: u8,
+    pub(crate) binding: ViewBinding,
+    pub(crate) source: PathBuf,
+    pub(crate) data_root: PathBuf,
+    pub(crate) base: String,
+    pub(crate) source_root: PathBuf,
+    pub(crate) git_identity: String,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) native_placement_v1: bool,
+    created_at: u64,
+    expires_at: u64,
 }
-const MAX_PLAN:usize=16*1024;
+const MAX_PLAN: usize = 16 * 1024;
 impl ViewPlan {
-    pub(crate) fn new(binding:ViewBinding,source:&Path,data_root:&Path,base:&str,source_root:&Path,git_identity:&str)->Result<Self,String> {
-        let now=Self::now()?;
-        let seed=Self {version:1,binding,source:source.into(),data_root:data_root.into(),
-            base:base.into(),source_root:source_root.into(),git_identity:git_identity.into(),native_placement_v1:false,created_at:now,expires_at:now.checked_add(120).ok_or_else(||refusal("proof_invalid"))?};
-        seed.encoded()?;Ok(seed)
+    pub(crate) fn new(
+        binding: ViewBinding,
+        source: &Path,
+        data_root: &Path,
+        base: &str,
+        source_root: &Path,
+        git_identity: &str,
+    ) -> Result<Self, String> {
+        let now = Self::now()?;
+        let seed = Self {
+            version: 1,
+            binding,
+            source: source.into(),
+            data_root: data_root.into(),
+            base: base.into(),
+            source_root: source_root.into(),
+            git_identity: git_identity.into(),
+            native_placement_v1: false,
+            created_at: now,
+            expires_at: now
+                .checked_add(120)
+                .ok_or_else(|| refusal("proof_invalid"))?,
+        };
+        seed.encoded()?;
+        Ok(seed)
     }
-    pub(crate) fn new_native(binding:ViewBinding,source:&Path,base:&str,source_root:&Path,git_identity:&str)
-        ->Result<Self,String> {
-        let mut seed=Self::new(binding,source,&Self::native_data_root(source_root)?,base,source_root,git_identity)?;
-        seed.native_placement_v1=true;seed.encoded()?;Ok(seed)
+    pub(crate) fn new_native(
+        binding: ViewBinding,
+        source: &Path,
+        base: &str,
+        source_root: &Path,
+        git_identity: &str,
+    ) -> Result<Self, String> {
+        let mut seed = Self::new(
+            binding,
+            source,
+            &Self::native_data_root(source_root)?,
+            base,
+            source_root,
+            git_identity,
+        )?;
+        seed.native_placement_v1 = true;
+        seed.encoded()?;
+        Ok(seed)
     }
-    fn now()->Result<u64,String> {
-        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
-            .map(|duration|duration.as_secs()).map_err(|_|refusal("preparation_expired"))
+    fn now() -> Result<u64, String> {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|duration| duration.as_secs())
+            .map_err(|_| refusal("preparation_expired"))
     }
-    fn encoded(&self)->Result<Vec<u8>,String> {
-        ViewIntent::validate_roots(&self.binding,&self.source,&self.data_root)?;
-        ViewIntent::validate_roots(&self.binding,&self.source_root,&self.data_root)?;
-        if !self.source.starts_with(&self.source_root) || self.git_identity.is_empty() || self.git_identity.len()>4096
-            || self.git_identity.chars().any(|c|c.is_control()) {
+    fn encoded(&self) -> Result<Vec<u8>, String> {
+        ViewIntent::validate_roots(&self.binding, &self.source, &self.data_root)?;
+        ViewIntent::validate_roots(&self.binding, &self.source_root, &self.data_root)?;
+        if !self.source.starts_with(&self.source_root)
+            || self.git_identity.is_empty()
+            || self.git_identity.len() > 4096
+            || self.git_identity.chars().any(|c| c.is_control())
+        {
             return Err(refusal("proof_binding_invalid"));
         }
-        if self.version!=1 || self.base.len()!=40 || !self.base.bytes().all(|b|b.is_ascii_hexdigit())
-            || self.created_at==0 || self.expires_at.checked_sub(self.created_at)!=Some(120) {
+        if self.version != 1
+            || self.base.len() != 40
+            || !self.base.bytes().all(|b| b.is_ascii_hexdigit())
+            || self.created_at == 0
+            || self.expires_at.checked_sub(self.created_at) != Some(120)
+        {
             return Err(refusal("proof_binding_invalid"));
         }
-        let bytes=serde_json::to_vec(self).map_err(|_|refusal("proof_invalid"))?;
-        if bytes.len()>MAX_PLAN {return Err(limit_refusal(bridget_transport::protocol::CommitViewLimitKind::PlanBytes, bytes.len() as u64, MAX_PLAN as u64));}
+        let bytes = serde_json::to_vec(self).map_err(|_| refusal("proof_invalid"))?;
+        if bytes.len() > MAX_PLAN {
+            return Err(limit_refusal(
+                bridget_transport::protocol::CommitViewLimitKind::PlanBytes,
+                bytes.len() as u64,
+                MAX_PLAN as u64,
+            ));
+        }
         Ok(bytes)
     }
-    pub(crate) fn live(&self)->Result<(),String> {
+    pub(crate) fn live(&self) -> Result<(), String> {
         self.encoded()?;
-        let now=Self::now()?;
-        if now<self.created_at || now>=self.expires_at {return Err(refusal("preparation_expired"));}
+        let now = Self::now()?;
+        if now < self.created_at || now >= self.expires_at {
+            return Err(refusal("preparation_expired"));
+        }
         Ok(())
     }
-    pub(crate) fn native_data_root(source_root:&Path)->Result<PathBuf,String> {
-        let parent=source_root.parent().ok_or_else(||refusal("destination_invalid"))?;
-        if parent==source_root {return Err(refusal("destination_invalid"));}
+    pub(crate) fn native_data_root(source_root: &Path) -> Result<PathBuf, String> {
+        let parent = source_root
+            .parent()
+            .ok_or_else(|| refusal("destination_invalid"))?;
+        if parent == source_root {
+            return Err(refusal("destination_invalid"));
+        }
         Ok(parent.join(".bridget-commit-views"))
     }
-    fn planned_data_root(&self,top:&Path)->Result<PathBuf,String> {
-        if !self.native_placement_v1 {return Ok(self.data_root.clone());}
-        let device=Directory::open(&self.source_root)?.0.metadata().map_err(compact::io_failure)?.dev();
+    fn planned_data_root(&self, top: &Path) -> Result<PathBuf, String> {
+        if !self.native_placement_v1 {
+            return Ok(self.data_root.clone());
+        }
+        let device = Directory::open(&self.source_root)?
+            .0
+            .metadata()
+            .map_err(compact::io_failure)?
+            .dev();
         // Politique engagée dans la graine : premier ancêtre privé sur ce
         // volume et hors Git. Pas un repli de mapping ni une racine libre.
         for parent in self.source_root.ancestors().skip(1).take(256) {
-            if parent.canonicalize().map_err(compact::io_failure)?!=parent {return Err(refusal("destination_invalid"));}
-            let metadata=Directory::open(parent)?.0.metadata().map_err(compact::io_failure)?;
-            if metadata.dev()!=device {return Err(refusal("destination_volume_mismatch"));}
-            if parent.starts_with(top) {continue;}
-            if metadata.uid()==bridget_transport::fsutil::effective_uid() && metadata.mode()&0o022==0 {
+            if parent.canonicalize().map_err(compact::io_failure)? != parent {
+                return Err(refusal("destination_invalid"));
+            }
+            let metadata = Directory::open(parent)?
+                .0
+                .metadata()
+                .map_err(compact::io_failure)?;
+            if metadata.dev() != device {
+                return Err(refusal("destination_volume_mismatch"));
+            }
+            if parent.starts_with(top) {
+                continue;
+            }
+            if metadata.uid() == bridget_transport::fsutil::effective_uid()
+                && metadata.mode() & 0o022 == 0
+            {
                 return Ok(parent.join(".bridget-commit-views"));
             }
         }
@@ -1309,94 +1429,176 @@ impl ViewPlan {
     }
     /// Exécuté seulement dans le helper après RELEASE : aucun Git ni mkdir
     /// depuis la boucle de commande. La sélection A précède le premier effet.
-    fn planned_intent(&self)->Result<ViewIntent,String> {
+    fn planned_intent(&self) -> Result<ViewIntent, String> {
         self.check_source()?;
-        let source=self.source.canonicalize().map_err(|_|refusal("source_unavailable"))?;
-        if source!=self.source {return Err(refusal("source_identity_changed"));}
-        let manifest=plan(&source,&self.base)?;
+        let source = self
+            .source
+            .canonicalize()
+            .map_err(|_| refusal("source_unavailable"))?;
+        if source != self.source {
+            return Err(refusal("source_identity_changed"));
+        }
+        let manifest = plan(&source, &self.base)?;
         self.live()?;
-        let mut top=source.clone();
-        if manifest.cwd!="." {
+        let mut top = source.clone();
+        if manifest.cwd != "." {
             for part in Path::new(&manifest.cwd).components().rev() {
-                if top.file_name()!=Some(part.as_os_str()) || !top.pop() {return Err(refusal("source_unavailable"));}
+                if top.file_name() != Some(part.as_os_str()) || !top.pop() {
+                    return Err(refusal("source_unavailable"));
+                }
             }
         }
-        let data_root=self.planned_data_root(&top)?;
-        let parent_path=data_root.parent().ok_or_else(||refusal("destination_invalid"))?;
-        if parent_path.canonicalize().map_err(|_|refusal("destination_invalid"))?!=parent_path
-            || data_root.starts_with(&top) || (!self.native_placement_v1
-                && parent_path!=self.source_root.parent().ok_or_else(||refusal("destination_invalid"))?) {
+        let data_root = self.planned_data_root(&top)?;
+        let parent_path = data_root
+            .parent()
+            .ok_or_else(|| refusal("destination_invalid"))?;
+        if parent_path
+            .canonicalize()
+            .map_err(|_| refusal("destination_invalid"))?
+            != parent_path
+            || data_root.starts_with(&top)
+            || (!self.native_placement_v1
+                && parent_path
+                    != self
+                        .source_root
+                        .parent()
+                        .ok_or_else(|| refusal("destination_invalid"))?)
+        {
             return Err(refusal("destination_inside_source"));
         }
-        let parent=Directory::open(parent_path)?;
-        let parent_meta=parent.0.metadata().map_err(compact::io_failure)?;
-        let source_meta=Directory::open(&self.source_root)?.0.metadata().map_err(compact::io_failure)?;
-        if parent_meta.uid()!=bridget_transport::fsutil::effective_uid() || parent_meta.mode()&0o022!=0
-            || parent_meta.dev()!=source_meta.dev() {return Err(refusal("destination_invalid"));}
-        let name=data_root.file_name().and_then(|name|name.to_str()).ok_or_else(||refusal("destination_invalid"))?;
-        let data=match parent.optional_kind(name)? {
-            Some(libc::S_IFDIR)=>parent.child(name)?,
-            None if self.native_placement_v1 || data_root==Self::native_data_root(&self.source_root)?=>{
-                let child=parent.create(name)?;parent.0.sync_all().map_err(compact::io_failure)?;child
+        let parent = Directory::open(parent_path)?;
+        let parent_meta = parent.0.metadata().map_err(compact::io_failure)?;
+        let source_meta = Directory::open(&self.source_root)?
+            .0
+            .metadata()
+            .map_err(compact::io_failure)?;
+        if parent_meta.uid() != bridget_transport::fsutil::effective_uid()
+            || parent_meta.mode() & 0o022 != 0
+            || parent_meta.dev() != source_meta.dev()
+        {
+            return Err(refusal("destination_invalid"));
+        }
+        let name = data_root
+            .file_name()
+            .and_then(|name| name.to_str())
+            .ok_or_else(|| refusal("destination_invalid"))?;
+        let data = match parent.optional_kind(name)? {
+            Some(libc::S_IFDIR) => parent.child(name)?,
+            None if self.native_placement_v1
+                || data_root == Self::native_data_root(&self.source_root)? =>
+            {
+                let child = parent.create(name)?;
+                parent.0.sync_all().map_err(compact::io_failure)?;
+                child
             }
-            _=>return Err(refusal("destination_invalid")),
+            _ => return Err(refusal("destination_invalid")),
         };
-        let metadata=data.0.metadata().map_err(compact::io_failure)?;
-        if metadata.uid()!=bridget_transport::fsutil::effective_uid() || metadata.mode()&0o077!=0
-            || metadata.dev()!=source_meta.dev() {return Err(refusal("destination_invalid"));}
-        let (available,block)=super::available_space(&data.0)
-            .map_err(|_|refusal("storage_space_unavailable"))?;
-        let needed=manifest.entries.iter().filter(|entry|entry.selected).map(|entry|entry.bytes as u128).sum::<u128>()
-            +manifest.entries.len() as u128*block+MAX_INTENT as u128+MAX_NOTICE as u128+MAX_PLAN as u128;
-        if available<needed {
+        let metadata = data.0.metadata().map_err(compact::io_failure)?;
+        if metadata.uid() != bridget_transport::fsutil::effective_uid()
+            || metadata.mode() & 0o077 != 0
+            || metadata.dev() != source_meta.dev()
+        {
+            return Err(refusal("destination_invalid"));
+        }
+        let (available, block) =
+            super::available_space(&data.0).map_err(|_| refusal("storage_space_unavailable"))?;
+        let needed = manifest
+            .entries
+            .iter()
+            .filter(|entry| entry.selected)
+            .map(|entry| entry.bytes as u128)
+            .sum::<u128>()
+            + manifest.entries.len() as u128 * block
+            + MAX_INTENT as u128
+            + MAX_NOTICE as u128
+            + MAX_PLAN as u128;
+        if available < needed {
             return Err("workspace_disk_full: espace insuffisant pour cette vue".into());
         }
         self.live()?;
-        let intent=ViewIntent{version:1,binding:self.binding.clone(),source,data_root,manifest};
-        intent.encoded()?;Ok(intent)
+        let intent = ViewIntent {
+            version: 1,
+            binding: self.binding.clone(),
+            source,
+            data_root,
+            manifest,
+        };
+        intent.encoded()?;
+        Ok(intent)
     }
-    pub(crate) fn remaining(&self)->Result<Duration,String> {
+    pub(crate) fn remaining(&self) -> Result<Duration, String> {
         self.live()?;
-        let remaining=self.expires_at.checked_sub(Self::now()?).filter(|seconds|*seconds>0)
-            .ok_or_else(||refusal("preparation_expired"))?;
+        let remaining = self
+            .expires_at
+            .checked_sub(Self::now()?)
+            .filter(|seconds| *seconds > 0)
+            .ok_or_else(|| refusal("preparation_expired"))?;
         Ok(Duration::from_secs(remaining))
     }
-    fn check_source(&self)->Result<(),String> {
+    fn check_source(&self) -> Result<(), String> {
         self.live()?;
-        let origin=run_git(&self.source_root,
-            &["config","--local","--no-includes","--get","remote.origin.url"],READ_TIMEOUT)?;
-        if !origin.success() || origin.truncated
-            || origin.stdout.trim_end_matches(['\r','\n'])!=self.git_identity {
+        let origin = run_git(
+            &self.source_root,
+            &[
+                "config",
+                "--local",
+                "--no-includes",
+                "--get",
+                "remote.origin.url",
+            ],
+            READ_TIMEOUT,
+        )?;
+        if !origin.success()
+            || origin.truncated
+            || origin.stdout.trim_end_matches(['\r', '\n']) != self.git_identity
+        {
             return Err(refusal("source_identity_changed"));
         }
         self.live()
     }
-    pub(crate) fn proof_digest(&self)->Result<String,String>{Ok(view_digest(&self.encoded()?))}
-    pub(crate) fn reserved_bytes(&self)->u64 {MAX_VIEW_RESERVATION_BYTES}
-    pub(crate) fn adopted_reserved_bytes(&self,intent:&ViewIntent)->Result<u64,String> {
+    pub(crate) fn proof_digest(&self) -> Result<String, String> {
+        Ok(view_digest(&self.encoded()?))
+    }
+    pub(crate) fn reserved_bytes(&self) -> u64 {
+        MAX_VIEW_RESERVATION_BYTES
+    }
+    pub(crate) fn adopted_reserved_bytes(&self, intent: &ViewIntent) -> Result<u64, String> {
         self.matches(intent)?;
-        intent.reserved_bytes()?.checked_add(self.encoded()?.len() as u64)
-            .ok_or_else(||refusal("proof_byte_limit"))
+        intent
+            .reserved_bytes()?
+            .checked_add(self.encoded()?.len() as u64)
+            .ok_or_else(|| refusal("proof_byte_limit"))
     }
 
-    pub(crate) fn matches(&self,intent:&ViewIntent)->Result<(),String> {
+    pub(crate) fn matches(&self, intent: &ViewIntent) -> Result<(), String> {
         self.encoded()?;
         intent.validate()?;
-        let placement_matches=if self.native_placement_v1 {
-            let mut top=intent.source.clone();
+        let placement_matches = if self.native_placement_v1 {
+            let mut top = intent.source.clone();
             for part in Path::new(&intent.manifest.cwd).components().rev() {
-                if matches!(part,std::path::Component::CurDir){continue;}
-                if !matches!(part,std::path::Component::Normal(_))
-                    || top.file_name()!=Some(part.as_os_str()) || !top.pop() {
+                if matches!(part, std::path::Component::CurDir) {
+                    continue;
+                }
+                if !matches!(part, std::path::Component::Normal(_))
+                    || top.file_name() != Some(part.as_os_str())
+                    || !top.pop()
+                {
                     return Err(refusal("proof_binding_mismatch"));
                 }
             }
             // Une graine de sous-mapping n'accorde jamais un ancêtre dans Git.
             // Réutiliser la même politique que le helper, pas une seconde liste.
-            !intent.data_root.starts_with(&top) && self.planned_data_root(&top)?==intent.data_root
-        } else {intent.data_root==self.data_root};
-        if intent.binding!=self.binding || intent.source!=self.source || !placement_matches
-            || intent.base_commit()!=self.base {return Err(refusal("proof_binding_mismatch"));}
+            !intent.data_root.starts_with(&top) && self.planned_data_root(&top)? == intent.data_root
+        } else {
+            intent.data_root == self.data_root
+        };
+        if intent.binding != self.binding
+            || intent.source != self.source
+            || !placement_matches
+            || intent.base_commit() != self.base
+        {
+            return Err(refusal("proof_binding_mismatch"));
+        }
         Ok(())
     }
 }
@@ -1444,16 +1646,20 @@ const MAX_INTENT: usize = 64 * MAX_OUTPUT;
 const MAX_NOTICE: usize = 4 * MAX_INTENT;
 
 #[derive(Deserialize)]
-struct NoticeManifest { manifest: Manifest }
+struct NoticeManifest {
+    manifest: Manifest,
+}
 
 // O(octets) ; les champs publics autres que le manifeste ne sont pas alloués.
 fn notice_manifest(reader: impl Read) -> Result<Manifest, String> {
     let reader = std::io::BufReader::with_capacity(64 * 1024, reader.take(MAX_NOTICE as u64 + 1));
     serde_json::from_reader::<_, NoticeManifest>(reader)
-        .map(|notice| notice.manifest).map_err(|_| refusal("proof_invalid"))
+        .map(|notice| notice.manifest)
+        .map_err(|_| refusal("proof_invalid"))
 }
 const MAX_PUBLICATION: usize = 1024;
-pub(crate) const MAX_VIEW_RESERVATION_BYTES: u64 = (MAX_INTENT+MAX_PLAN+MAX_PUBLICATION+2*2048) as u64;
+pub(crate) const MAX_VIEW_RESERVATION_BYTES: u64 =
+    (MAX_INTENT + MAX_PLAN + MAX_PUBLICATION + 2 * 2048) as u64;
 fn view_digest(bytes: &[u8]) -> String {
     hexadecimal(ring::digest::digest(&ring::digest::SHA256, bytes).as_ref())
 }
@@ -1540,7 +1746,11 @@ impl ViewIntent {
         self.validate()?;
         let bytes = serde_json::to_vec(self).map_err(|_| refusal("proof_invalid"))?;
         if bytes.len() > MAX_INTENT {
-            return Err(limit_refusal(bridget_transport::protocol::CommitViewLimitKind::ManifestBytes, bytes.len() as u64, MAX_INTENT as u64));
+            return Err(limit_refusal(
+                bridget_transport::protocol::CommitViewLimitKind::ManifestBytes,
+                bytes.len() as u64,
+                MAX_INTENT as u64,
+            ));
         }
         Ok(bytes)
     }
@@ -1625,7 +1835,9 @@ impl ViewProofs {
         }
         let directory = Directory::open(path)?;
         let metadata = directory.0.metadata().map_err(compact::io_failure)?;
-        if metadata.uid() != bridget_transport::fsutil::effective_uid() || metadata.mode() & 0o077 != 0 {
+        if metadata.uid() != bridget_transport::fsutil::effective_uid()
+            || metadata.mode() & 0o077 != 0
+        {
             return Err(refusal("proof_path_unsafe"));
         }
         Ok(Self {
@@ -1664,28 +1876,43 @@ impl ViewProofs {
         file.sync_all().map_err(compact::io_failure)?;
         self.directory.0.sync_all().map_err(compact::io_failure)
     }
-    pub(crate) fn write_plan(&self,seed:&ViewPlan)->Result<(),String> {
-        let bytes=seed.encoded()?;let key=seed.binding.key()?;
+    pub(crate) fn write_plan(&self, seed: &ViewPlan) -> Result<(), String> {
+        let bytes = seed.encoded()?;
+        let key = seed.binding.key()?;
         if self.path.starts_with(&seed.source) || self.path.starts_with(&seed.data_root) {
             return Err(refusal("proof_path_unsafe"));
         }
-        if let Some(existing)=self.read(&format!("{key}.plan.json"),MAX_PLAN)? {
-            return if existing==bytes {Ok(())} else {Err(refusal("proof_binding_mismatch"))};
+        if let Some(existing) = self.read(&format!("{key}.plan.json"), MAX_PLAN)? {
+            return if existing == bytes {
+                Ok(())
+            } else {
+                Err(refusal("proof_binding_mismatch"))
+            };
         }
         seed.live()?;
-        if self.read(&format!("{key}.intent.json"),MAX_INTENT)?.is_some()
-            || fs::symlink_metadata(seed.data_root.join(&key)).is_ok() {
+        if self
+            .read(&format!("{key}.intent.json"), MAX_INTENT)?
+            .is_some()
+            || fs::symlink_metadata(seed.data_root.join(&key)).is_ok()
+        {
             return Err(refusal("preparation_incomplete"));
         }
-        self.write_new(&format!("{key}.plan.json"),&bytes)
+        self.write_new(&format!("{key}.plan.json"), &bytes)
     }
-    pub(crate) fn load_plan(&self,key:&str)->Result<ViewPlan,String> {
-        if !digest_valid(key) {return Err(refusal("proof_binding_invalid"));}
-        let bytes=self.read(&format!("{key}.plan.json"),MAX_PLAN)?
-            .ok_or_else(||refusal("proof_unavailable"))?;
-        let seed:ViewPlan=serde_json::from_slice(&bytes).map_err(|_|refusal("proof_invalid"))?;
-        if seed.encoded()?!=bytes || seed.binding.key()?!=key
-            || self.path.starts_with(&seed.source) || self.path.starts_with(&seed.data_root) {
+    pub(crate) fn load_plan(&self, key: &str) -> Result<ViewPlan, String> {
+        if !digest_valid(key) {
+            return Err(refusal("proof_binding_invalid"));
+        }
+        let bytes = self
+            .read(&format!("{key}.plan.json"), MAX_PLAN)?
+            .ok_or_else(|| refusal("proof_unavailable"))?;
+        let seed: ViewPlan =
+            serde_json::from_slice(&bytes).map_err(|_| refusal("proof_invalid"))?;
+        if seed.encoded()? != bytes
+            || seed.binding.key()? != key
+            || self.path.starts_with(&seed.source)
+            || self.path.starts_with(&seed.data_root)
+        {
             return Err(refusal("proof_binding_mismatch"));
         }
         Ok(seed)
@@ -2077,16 +2304,24 @@ impl ViewProofs {
         state: WorkspaceState,
     ) -> Result<WorkspaceRecord, String> {
         self.recover(&intent.binding, &intent.source, &intent.data_root)?;
-        self.workspace_metadata(intent,state)
+        self.workspace_metadata(intent, state)
     }
     /// Métadonnées d'un instantané audité par le lecteur possédé. Ne remplace
     /// jamais recover() pour un rapport utilisateur ou une relecture Release.
-    pub(crate) fn workspace_metadata(&self,intent:&ViewIntent,state:WorkspaceState)
-        ->Result<WorkspaceRecord,String> {
-        if matches!(&state,WorkspaceState::Active) {self.require_live_intent(intent)?;}
-        let publication=self.publication(intent)?;
-        let metadata=Directory::open(&intent.destination()?)?.0.metadata().map_err(compact::io_failure)?;
-        if publication.device!=metadata.dev() || publication.inode!=metadata.ino() {
+    pub(crate) fn workspace_metadata(
+        &self,
+        intent: &ViewIntent,
+        state: WorkspaceState,
+    ) -> Result<WorkspaceRecord, String> {
+        if matches!(&state, WorkspaceState::Active) {
+            self.require_live_intent(intent)?;
+        }
+        let publication = self.publication(intent)?;
+        let metadata = Directory::open(&intent.destination()?)?
+            .0
+            .metadata()
+            .map_err(compact::io_failure)?;
+        if publication.device != metadata.dev() || publication.inode != metadata.ino() {
             return Err(refusal("view_identity_changed"));
         }
         if !job::source_group_stopped(self, intent)? {
@@ -2134,8 +2369,8 @@ pub(super) fn report_view(workspace: &WorkspaceRecord) -> Result<WorkspaceRecord
 #[path = "workspace_commit_view_job.rs"]
 mod job;
 pub(crate) use job::{
-    ExportFailure, JobPoll, ViewJob, ViewJobRequest, run_commit_view_plan, run_commit_view_export,
-    run_commit_view_materialize,
+    ExportFailure, JobPoll, ViewJob, ViewJobRequest, run_commit_view_export,
+    run_commit_view_materialize, run_commit_view_plan,
 };
 
 #[cfg(test)]

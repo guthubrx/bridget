@@ -30,9 +30,7 @@ static PILOT_KIND_SUITE_LOCK: Mutex<()> = Mutex::new(());
 /// Verrou partagé : tout tour qui journalise un acte via `pilot_kind_str`.
 #[cfg(test)]
 pub fn pilot_kind_suite_lock() -> std::sync::MutexGuard<'static, ()> {
-    PILOT_KIND_SUITE_LOCK
-        .lock()
-        .recover_poison()
+    PILOT_KIND_SUITE_LOCK.lock().recover_poison()
 }
 
 /// Exécute `f` en forçant le kind que les pilotes écrivent via
@@ -42,16 +40,12 @@ pub fn pilot_kind_suite_lock() -> std::sync::MutexGuard<'static, ()> {
 pub fn with_forced_pilot_update_kind<R>(kind: &'static str, f: impl FnOnce() -> R) -> R {
     let _suite = pilot_kind_suite_lock();
     {
-        let mut slot = FORCED_PILOT_UPDATE_KIND
-            .lock()
-            .recover_poison();
+        let mut slot = FORCED_PILOT_UPDATE_KIND.lock().recover_poison();
         *slot = Some(kind);
     }
     let result = f();
     {
-        let mut slot = FORCED_PILOT_UPDATE_KIND
-            .lock()
-            .recover_poison();
+        let mut slot = FORCED_PILOT_UPDATE_KIND.lock().recover_poison();
         *slot = None;
     }
     result

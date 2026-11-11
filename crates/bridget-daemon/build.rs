@@ -15,14 +15,27 @@ fn main() {
         println!("cargo:rerun-if-changed={}", path.display());
     }
     // Invalidation automatique : vérificateur ET constructeurs des requêtes.
-    use sha2::{Digest,Sha256};
-    let mut contract=Sha256::new();
-    for relative in ["crates/bridget-daemon/src/provider_program_compat.rs", "crates/bridget-daemon/src/provider_catalogue220.rs", "crates/bridget-transport/src/codex_app_server.rs"] {
-        let path=root.join(relative);println!("cargo:rerun-if-changed={}",path.display());
-        contract.update(relative.as_bytes());contract.update(std::fs::read(path).expect("source du contrat"));
+    use sha2::{Digest, Sha256};
+    let mut contract = Sha256::new();
+    for relative in [
+        "crates/bridget-daemon/src/provider_program_compat.rs",
+        "crates/bridget-daemon/src/provider_catalogue220.rs",
+        "crates/bridget-transport/src/codex_app_server.rs",
+    ] {
+        let path = root.join(relative);
+        println!("cargo:rerun-if-changed={}", path.display());
+        contract.update(relative.as_bytes());
+        contract.update(std::fs::read(path).expect("source du contrat"));
     }
-    contract.update(std::env::var("CARGO_PKG_VERSION").expect("version Cargo").as_bytes());
-    println!("cargo:rustc-env=BRIDGET_PROGRAM_CONTRACT_DIGEST={:x}",contract.finalize());
+    contract.update(
+        std::env::var("CARGO_PKG_VERSION")
+            .expect("version Cargo")
+            .as_bytes(),
+    );
+    println!(
+        "cargo:rustc-env=BRIDGET_PROGRAM_CONTRACT_DIGEST={:x}",
+        contract.finalize()
+    );
     let build_id = std::env::var("BRIDGET_BUILD_ID")
         .ok()
         .filter(|value| !value.is_empty())

@@ -1,5 +1,5 @@
-use bridget_transport::poison::RecoverPoison;
 use bridget_core::BridgetMessage;
+use bridget_transport::poison::RecoverPoison;
 #[path = "support/idempotent.rs"]
 pub mod fixture;
 use bridget_daemon::registry::AgentRegistry;
@@ -186,10 +186,7 @@ fn connect_attach(socket: &Path, agent: &str, deadline: Instant) -> AttachViewCo
                     }) if received == subscription_id => {
                         if final_fragment {
                             observed.fetch_add(1, Ordering::SeqCst);
-                            observed_sequences
-                                .lock()
-                                .recover_poison()
-                                .push(seq);
+                            observed_sequences.lock().recover_poison().push(seq);
                             observed_rendered_at
                                 .lock()
                                 .recover_poison()

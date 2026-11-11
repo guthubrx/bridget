@@ -1,6 +1,6 @@
 //! CLI — point d'entrée unifié pour toutes les sous-commandes bridget.
 
-use crate::cli_table::{table_println as println, table_print as print};
+use crate::cli_table::{table_print as print, table_println as println};
 use crate::communication::client::DaemonConnection;
 use crate::daemon::{self, DaemonConfig};
 use bridget_core::{
@@ -118,7 +118,14 @@ fn validate_communication_entry(command: &str, args: &[String]) -> Result<(), St
 fn command_initializes_namespace(command: &str) -> bool {
     !matches!(
         command,
-        "federate" | "managed-bootstrap" | "version" | "--version" | "-v" | "help" | "--help" | "-h"
+        "federate"
+            | "managed-bootstrap"
+            | "version"
+            | "--version"
+            | "-v"
+            | "help"
+            | "--help"
+            | "-h"
     )
 }
 
@@ -167,7 +174,9 @@ fn diagnostic_cli_guard(
     explicit_identity: bool,
 ) -> Result<(), crate::mcp_identity::IdentityError> {
     use crate::mcp_identity::IdentityError as E;
-    if delegated_marker {return Err(E::DelegatedMcpOnly);}
+    if delegated_marker {
+        return Err(E::DelegatedMcpOnly);
+    }
     match resolved {
         Ok(identity) if identity.delegated_origin.is_some() => Err(E::DelegatedMcpOnly),
         Ok(_) => Ok(()),
@@ -175,18 +184,36 @@ fn diagnostic_cli_guard(
         Err(error) => Err(error),
     }
 }
-fn current_diagnostic_cli_guard(config:&crate::remote_worker::WorkerRuntimeConfig) -> Result<crate::remote_worker::LiveWorkerBinding,String> {
+fn current_diagnostic_cli_guard(
+    config: &crate::remote_worker::WorkerRuntimeConfig,
+) -> Result<crate::remote_worker::LiveWorkerBinding, String> {
     use crate::mcp_identity::{IdentityError, SystemProcessTree};
-    let namespace=crate::environment::Namespace::from_environment().map_err(|_|IdentityError::NamespaceConfiguration.code().to_owned())?;
-    let delegated=crate::mcp_identity::has_delegated_marker(&namespace.root.join("delegated-pids"),std::process::id(),&SystemProcessTree);
-    if delegated {return Err(IdentityError::DelegatedMcpOnly.code().into());}
-    let binding=crate::remote_worker::live_worker_binding(config).map_err(str::to_owned)?;
+    let namespace = crate::environment::Namespace::from_environment()
+        .map_err(|_| IdentityError::NamespaceConfiguration.code().to_owned())?;
+    let delegated = crate::mcp_identity::has_delegated_marker(
+        &namespace.root.join("delegated-pids"),
+        std::process::id(),
+        &SystemProcessTree,
+    );
+    if delegated {
+        return Err(IdentityError::DelegatedMcpOnly.code().into());
+    }
+    let binding = crate::remote_worker::live_worker_binding(config).map_err(str::to_owned)?;
     // Ce namespace est lié au détenteur noyau du verrou worker, pas choisi
     // depuis l'environnement du lecteur. Les options doivent égaler son argv.
-    let target_delegated=crate::mcp_identity::has_delegated_marker(&binding.namespace_root.join("delegated-pids"),std::process::id(),&SystemProcessTree);
-    let explicit=std::env::var_os("BRIDGET_AGENT_ID_FILE").is_some() || std::env::var_os("BRIDGET_AGENT_INSTANCE_ID").is_some();
-    diagnostic_cli_guard(crate::mcp_identity::resolve_current_identity(),target_delegated,explicit)
-        .map_err(|error|error.code().to_owned())?;
+    let target_delegated = crate::mcp_identity::has_delegated_marker(
+        &binding.namespace_root.join("delegated-pids"),
+        std::process::id(),
+        &SystemProcessTree,
+    );
+    let explicit = std::env::var_os("BRIDGET_AGENT_ID_FILE").is_some()
+        || std::env::var_os("BRIDGET_AGENT_INSTANCE_ID").is_some();
+    diagnostic_cli_guard(
+        crate::mcp_identity::resolve_current_identity(),
+        target_delegated,
+        explicit,
+    )
+    .map_err(|error| error.code().to_owned())?;
     Ok(binding)
 }
 
@@ -196,8 +223,8 @@ pub fn run() {
 
 // Le test CLI doit appeler la vraie entrée malgré argv du testlib et exit().
 fn run_with_args(args: Vec<String>) {
-    let (args, _table_output) = crate::cli_table::prepare(args)
-        .unwrap_or_else(|error| exit_argument_error(&error));
+    let (args, _table_output) =
+        crate::cli_table::prepare(args).unwrap_or_else(|error| exit_argument_error(&error));
     if args.len() < 2 {
         print_usage();
         crate::cli_table::exit(2);
@@ -217,14 +244,17 @@ fn run_with_args(args: Vec<String>) {
     // Le worker n'ouvre pas le namespace métier et ne démarre aucun daemon.
     if cmd == "worker" {
         if args.get(2).is_some_and(|s| s == "recover-view-capacity") {
-            let config = parse_worker_args(&args[3..])
-                .unwrap_or_else(|error| exit_argument_error(&error));
+            let config =
+                parse_worker_args(&args[3..]).unwrap_or_else(|error| exit_argument_error(&error));
             match crate::remote_worker::recover_view_capacity(&config) {
                 Ok(value) => println!("{value}"),
                 Err(code) => {
-                    eprintln!("{}", serde_json::json!({"status":"refused","code":code,
+                    eprintln!(
+                        "{}",
+                        serde_json::json!({"status":"refused","code":code,
                         "scope":"this_store","message":"Conserver le magasin et ses reçus. La reprise ciblée de capacité n’a pas réuni toutes ses preuves : worker arrêté, identité, inventaire et arrêt des producteurs. Faire lire ce refus par le responsable ; aucun marqueur à effacer, aucune mission à rejouer.",
-                        "other_work":"Les autres machines et travaux autorisés suivent leur propre état."}));
+                        "other_work":"Les autres machines et travaux autorisés suivent leur propre état."})
+                    );
                     crate::cli_table::exit(1);
                 }
             }
@@ -233,18 +263,28 @@ fn run_with_args(args: Vec<String>) {
         if args.get(2).is_some_and(|s| s == "diagnose") {
             let (config, command) = parse_worker_diagnostic_args(&args[3..])
                 .unwrap_or_else(|error| exit_argument_error(&error));
-            let binding=match current_diagnostic_cli_guard(&config) {
-                Ok(binding)=>binding,
-                Err(code)=>{
-                    eprintln!("{}",crate::remote_worker::diagnostic_failure(&code,&command));
+            let binding = match current_diagnostic_cli_guard(&config) {
+                Ok(binding) => binding,
+                Err(code) => {
+                    eprintln!(
+                        "{}",
+                        crate::remote_worker::diagnostic_failure(&code, &command)
+                    );
                     crate::cli_table::exit(1);
                 }
             };
-            let outcome=crate::remote_worker::diagnose_live_local(&config,&command,&binding);
+            let outcome = crate::remote_worker::diagnose_live_local(&config, &command, &binding);
             match outcome {
-                Ok(mut value)=>{value["live_worker_pid"]=serde_json::json!(binding.pid);value["live_worker_birth"]=serde_json::json!(binding.birth);println!("{value}");},
+                Ok(mut value) => {
+                    value["live_worker_pid"] = serde_json::json!(binding.pid);
+                    value["live_worker_birth"] = serde_json::json!(binding.birth);
+                    println!("{value}");
+                }
                 Err(code) => {
-                    eprintln!("{}", crate::remote_worker::diagnostic_failure(&code, &command));
+                    eprintln!(
+                        "{}",
+                        crate::remote_worker::diagnostic_failure(&code, &command)
+                    );
                     crate::cli_table::exit(1);
                 }
             }
@@ -342,15 +382,27 @@ fn run_with_args(args: Vec<String>) {
         "managed-bootstrap" => cmd_managed_bootstrap(&args[2..]),
         "managed-wrapper" => cmd_managed_wrapper(&args[2..]),
         "workspace-view-plan" => {
-            let code=if crate::workspace_git::run_commit_view_plan(&args[2..]).is_ok(){0}else{1};
+            let code = if crate::workspace_git::run_commit_view_plan(&args[2..]).is_ok() {
+                0
+            } else {
+                1
+            };
             crate::cli_table::exit(code);
         }
         "workspace-view-export" => {
-            let code = if crate::workspace_git::run_commit_view_export(&args[2..]).is_ok() { 0 } else { 1 };
+            let code = if crate::workspace_git::run_commit_view_export(&args[2..]).is_ok() {
+                0
+            } else {
+                1
+            };
             crate::cli_table::exit(code);
         }
         "workspace-view-materialize" => {
-            let code=if crate::workspace_git::run_commit_view_materialize(&args[2..]).is_ok(){0}else{1};
+            let code = if crate::workspace_git::run_commit_view_materialize(&args[2..]).is_ok() {
+                0
+            } else {
+                1
+            };
             crate::cli_table::exit(code);
         }
         "mcp" => cmd_mcp(),
@@ -390,23 +442,38 @@ fn run_with_args(args: Vec<String>) {
         "agents" => cmd_agents(&args[2..]),
         "discover" => cmd_discover(),
         "status" => cmd_status(),
-        "sentinel" => {
-            match args.get(2).map(String::as_str) {
-                Some("status") if args.len()==3 => {
-                    match crate::sentinel244::read_remote(&socket_path()) {
-                        Ok(report)=>println!("{report}"),
-                        other=>{eprintln!("sentinel status indisponible : {other:?}");crate::cli_table::exit(1);}
+        "sentinel" => match args.get(2).map(String::as_str) {
+            Some("status") if args.len() == 3 => {
+                match crate::sentinel244::read_remote(&socket_path()) {
+                    Ok(report) => println!("{report}"),
+                    other => {
+                        eprintln!("sentinel status indisponible : {other:?}");
+                        crate::cli_table::exit(1);
                     }
                 }
-                Some(action @ ("run"|"tick"|"activation")) if args.len()==3 => {
-                    let config=DaemonConfig::default();
-                    let result=std::env::current_exe().map_err(|e|e.to_string()).and_then(|binary|
-                        crate::sentinel244::run(&binary,config.db_path.parent().unwrap(),if action=="run"{"manual"}else{action}));
-                    match result {Ok(code)=>crate::cli_table::exit(code),Err(e)=>{eprintln!("sentinel : {e}");crate::cli_table::exit(1);}}
-                }
-                _=>exit_argument_error("sentinel : run | status | tick | activation"),
             }
-        }
+            Some(action @ ("run" | "tick" | "activation")) if args.len() == 3 => {
+                let config = DaemonConfig::default();
+                let result =
+                    std::env::current_exe()
+                        .map_err(|e| e.to_string())
+                        .and_then(|binary| {
+                            crate::sentinel244::run(
+                                &binary,
+                                config.db_path.parent().unwrap(),
+                                if action == "run" { "manual" } else { action },
+                            )
+                        });
+                match result {
+                    Ok(code) => crate::cli_table::exit(code),
+                    Err(e) => {
+                        eprintln!("sentinel : {e}");
+                        crate::cli_table::exit(1);
+                    }
+                }
+            }
+            _ => exit_argument_error("sentinel : run | status | tick | activation"),
+        },
         "ledger" => cmd_ledger(&args[2..]),
         "reprise" => cmd_reprise(&args[2..]),
         "reaper" => cmd_reaper(&args[2..]),
@@ -746,25 +813,49 @@ fn cmd_identity(args: &[String]) {
     );
 }
 
-fn parse_worker_diagnostic_args(args: &[String]) -> Result<(crate::remote_worker::WorkerRuntimeConfig, bridget_transport::protocol::WorkerCommandIdentity), String> {
+fn parse_worker_diagnostic_args(
+    args: &[String],
+) -> Result<
+    (
+        crate::remote_worker::WorkerRuntimeConfig,
+        bridget_transport::protocol::WorkerCommandIdentity,
+    ),
+    String,
+> {
     let identity_flags = ["--command-id", "--task-id", "--instance-id", "--generation"];
-    if !args.len().is_multiple_of(2) { return Err("diagnostic: options par paires requises".into()); }
+    if !args.len().is_multiple_of(2) {
+        return Err("diagnostic: options par paires requises".into());
+    }
     let mut identity = std::collections::BTreeMap::new();
     let mut worker = Vec::new();
     for pair in args.chunks_exact(2) {
         if identity_flags.contains(&pair[0].as_str()) {
-            if pair[1].is_empty() || identity.insert(pair[0].as_str(), pair[1].as_str()).is_some() {
+            if pair[1].is_empty()
+                || identity
+                    .insert(pair[0].as_str(), pair[1].as_str())
+                    .is_some()
+            {
                 return Err("diagnostic: identité vide ou répétée".into());
             }
-        } else { worker.extend_from_slice(pair); }
+        } else {
+            worker.extend_from_slice(pair);
+        }
     }
-    if identity.len()!=identity_flags.len() {return Err("diagnostic: tuple complet requis".into());}
-    let command=bridget_transport::protocol::WorkerCommandIdentity {
-        command_id:identity["--command-id"].into(),task_id:identity["--task-id"].into(),
-        instance_id:identity["--instance-id"].into(),generation:identity["--generation"].parse().map_err(|_|"diagnostic: génération invalide")?,
+    if identity.len() != identity_flags.len() {
+        return Err("diagnostic: tuple complet requis".into());
+    }
+    let command = bridget_transport::protocol::WorkerCommandIdentity {
+        command_id: identity["--command-id"].into(),
+        task_id: identity["--task-id"].into(),
+        instance_id: identity["--instance-id"].into(),
+        generation: identity["--generation"]
+            .parse()
+            .map_err(|_| "diagnostic: génération invalide")?,
     };
-    command.validate().map_err(|_|"diagnostic: identité invalide")?;
-    Ok((parse_worker_args(&worker)?,command))
+    command
+        .validate()
+        .map_err(|_| "diagnostic: identité invalide")?;
+    Ok((parse_worker_args(&worker)?, command))
 }
 
 fn parse_worker_args(args: &[String]) -> Result<crate::remote_worker::WorkerRuntimeConfig, String> {
@@ -883,7 +974,9 @@ fn which(cmd: &str) -> bool {
 }
 
 fn print_usage() {
-    println!("Affichage : bridget --table COMMANDE ou bridget COMMANDE --table.\\n--table et --json sont exclusifs ; flux et moteurs gardent leur format natif.");
+    println!(
+        "Affichage : bridget --table COMMANDE ou bridget COMMANDE --table.\\n--table et --json sont exclusifs ; flux et moteurs gardent leur format natif."
+    );
     eprintln!(
         "bridget {} — protocole de communication inter-agents\n\n\
          Usage: bridget <COMMANDE> [OPTIONS]\n\n\
@@ -2576,7 +2669,7 @@ fn parse_auto_delegate_args(args: &[String]) -> Result<serde_json::Value, String
             "--quota-fallback-authorized" => {
                 let value=option_value(args,&mut index,option)?.parse::<bool>()
                     .map_err(|_|"--quota-fallback-authorized attend true ou false ; true seulement après accord humain explicite pour cette mission".to_string())?;
-                ("quota_fallback_authorized",serde_json::Value::Bool(value))
+                ("quota_fallback_authorized", serde_json::Value::Bool(value))
             }
             "--urgent" => {
                 let value = option_value(args, &mut index, option)?
@@ -2910,25 +3003,37 @@ fn parse_task_args(
                 displayed_request_id: None,
             }
         }
-        Some("repair-workspace") if values.len()==7 => {
-            if values[3]!="--expected-head" || values[5]!="--request-id" {
+        Some("repair-workspace") if values.len() == 7 => {
+            if values[3] != "--expected-head" || values[5] != "--request-id" {
                 return Err("task repair-workspace : attendre TASK_ID DOSSIER --expected-head SHA --request-id CLE".into());
             }
             ParsedNativeCli {
-                tool:"bridget_task_repair_workspace",
-                payload:serde_json::json!({"task_id":values[1],"target_cwd":values[2],
+                tool: "bridget_task_repair_workspace",
+                payload: serde_json::json!({"task_id":values[1],"target_cwd":values[2],
                     "expected_head":values[4],"request_id":values[6]}),
-                json,displayed_request_id:Some(values[6].clone()),
+                json,
+                displayed_request_id: Some(values[6].clone()),
             }
         }
-        Some("read-file") if values.len()==2 || values.len()==3=>{
-            let (task_id,path)=if values.len()==3 {(Some(&values[1]),&values[2])}else{(None,&values[1])};
+        Some("read-file") if values.len() == 2 || values.len() == 3 => {
+            let (task_id, path) = if values.len() == 3 {
+                (Some(&values[1]), &values[2])
+            } else {
+                (None, &values[1])
+            };
             if !bridget_transport::protocol::commit_view_file_path(path) {
                 return Err("task read-file : chemin relatif exact de la carte requis, sans ../ ni préfixe absolu".into());
             }
-            let mut arguments=serde_json::json!({"path":path});
-            if let Some(task_id)=task_id {arguments["task_id"]=serde_json::json!(task_id);}
-            ParsedNativeCli{tool:"bridget_read_commit_file",payload:arguments,json,displayed_request_id:None}
+            let mut arguments = serde_json::json!({"path":path});
+            if let Some(task_id) = task_id {
+                arguments["task_id"] = serde_json::json!(task_id);
+            }
+            ParsedNativeCli {
+                tool: "bridget_read_commit_file",
+                payload: arguments,
+                json,
+                displayed_request_id: None,
+            }
         }
         Some("continue") if values.len() >= 3 => {
             let mut request_id = None;
@@ -3183,14 +3288,18 @@ fn cmd_delegate(args: &[String]) {
 
 fn cmd_delegate_catalogue(args: &[String]) {
     let mut machine = None;
-    let mut observed=false;let mut refresh=false;
+    let mut observed = false;
+    let mut refresh = false;
     let mut json_output = false;
     let mut index = 0;
     while index < args.len() {
         match args[index].as_str() {
             "--json" if !json_output => json_output = true,
-            "--observed" if !observed=>observed=true,
-            "--refresh-models" if !refresh=>{refresh=true;observed=true;},
+            "--observed" if !observed => observed = true,
+            "--refresh-models" if !refresh => {
+                refresh = true;
+                observed = true;
+            }
             "--machine" if machine.is_none() => {
                 machine = Some(option_value(args, &mut index, "--machine").unwrap_or_else(
                     |error| {
@@ -3216,19 +3325,30 @@ fn cmd_delegate_catalogue(args: &[String]) {
         }
         index += 1;
     }
-    let result =
-        if observed {crate::communication::client::routing_catalogue_observed(&DaemonConfig::default().socket_path,true,refresh,machine.clone())} else {crate::communication::client::routing_catalogue(&DaemonConfig::default().socket_path)}
-            .unwrap_or_else(|error| {
-                exit_coordination_error(
-                    "delegate",
-                    json_output,
-                    "capability_unavailable",
-                    &error.to_string(),
-                    None,
-                    1,
-                )
-            });
-    if observed {println!("{result}");return;}
+    let result = if observed {
+        crate::communication::client::routing_catalogue_observed(
+            &DaemonConfig::default().socket_path,
+            true,
+            refresh,
+            machine.clone(),
+        )
+    } else {
+        crate::communication::client::routing_catalogue(&DaemonConfig::default().socket_path)
+    }
+    .unwrap_or_else(|error| {
+        exit_coordination_error(
+            "delegate",
+            json_output,
+            "capability_unavailable",
+            &error.to_string(),
+            None,
+            1,
+        )
+    });
+    if observed {
+        println!("{result}");
+        return;
+    }
     let options = result
         .get("options")
         .and_then(serde_json::Value::as_array)
@@ -4280,7 +4400,9 @@ fn cmd_send(args: &[String]) {
                     "information" => Some(bridget_core::MessageIntent::StoreOnly),
                     "steer" => Some(bridget_core::MessageIntent::SteerCurrent),
                     "interrupt" => Some(bridget_core::MessageIntent::InterruptAndStart),
-                    _ => send_usage_error("invalid_intent : attendu queue, steer, interrupt ou information"),
+                    _ => send_usage_error(
+                        "invalid_intent : attendu queue, steer, interrupt ou information",
+                    ),
                 };
                 intent_seen = true;
             }
@@ -4329,8 +4451,11 @@ fn cmd_send(args: &[String]) {
         send_usage_error("invalid_intent : steer est incompatible avec --reply");
     }
     if intent == Some(bridget_core::MessageIntent::StoreOnly)
-        && (reply || timeout_secs.is_some() || in_reply_to.is_some()) {
-        send_usage_error("information_requires_uncorrelated_message : information conserve un avis sans réveil, sans --reply, --timeout ni --in-reply-to ; une demande ou un résultat garde son envoi normal");
+        && (reply || timeout_secs.is_some() || in_reply_to.is_some())
+    {
+        send_usage_error(
+            "information_requires_uncorrelated_message : information conserve un avis sans réveil, sans --reply, --timeout ni --in-reply-to ; une demande ou un résultat garde son envoi normal",
+        );
     }
     let to = match to {
         Some(t) => t,
@@ -4407,13 +4532,13 @@ fn cmd_send(args: &[String]) {
     };
 
     let idempotent = idempotent.or_else(|| {
-        (msg.cross_project_reason.is_some() || project_root.is_some()
-            || msg.intent == Some(bridget_core::MessageIntent::StoreOnly)).then(|| {
-            IdempotentSendOptions {
-                id: msg.id.clone(),
-                issued_at: unix_timestamp(),
-                issuer_scope: crate::communication::issuer_scope(&msg.id),
-            }
+        (msg.cross_project_reason.is_some()
+            || project_root.is_some()
+            || msg.intent == Some(bridget_core::MessageIntent::StoreOnly))
+        .then(|| IdempotentSendOptions {
+            id: msg.id.clone(),
+            issued_at: unix_timestamp(),
+            issuer_scope: crate::communication::issuer_scope(&msg.id),
         })
     });
     if send_idempotent_if_requested(
@@ -5041,8 +5166,12 @@ fn send_idempotent_if_requested(
         }) => {
             emit_project_warnings(&project_warnings);
             if message.intent == Some(bridget_core::MessageIntent::StoreOnly)
-                && matches!(issue, IdempotencyIssue::Accepted { .. }) {
-                println!("STOCKÉ SANS RÉVEIL: id={}, issued_at={}, issuer_scope={} ; consultable dans le ledger, aucune lecture ni remise au modèle attestée", options.id, options.issued_at, options.issuer_scope);
+                && matches!(issue, IdempotencyIssue::Accepted { .. })
+            {
+                println!(
+                    "STOCKÉ SANS RÉVEIL: id={}, issued_at={}, issuer_scope={} ; consultable dans le ledger, aucune lecture ni remise au modèle attestée",
+                    options.id, options.issued_at, options.issuer_scope
+                );
             } else {
                 print_idempotency_issue(&issue, &options);
             }
@@ -5147,8 +5276,12 @@ pub(crate) fn send_idempotent_to_daemon_at_with_project(
     }
 
     let mut requested_capabilities = vec![ClientCapability::SendIdempotent];
-    if message.cross_project_reason.is_some() || project_root.is_some() { requested_capabilities.push(ClientCapability::CommunicationProjectsV1); }
-    if message.intent == Some(bridget_core::MessageIntent::StoreOnly) { requested_capabilities.push(ClientCapability::SendInformationV1); }
+    if message.cross_project_reason.is_some() || project_root.is_some() {
+        requested_capabilities.push(ClientCapability::CommunicationProjectsV1);
+    }
+    if message.intent == Some(bridget_core::MessageIntent::StoreOnly) {
+        requested_capabilities.push(ClientCapability::SendInformationV1);
+    }
     match connection
         .exchange(&WrapperToDaemon::ClientHello {
             contract_version: CLIENT_CONTRACT_VERSION,
@@ -5157,9 +5290,14 @@ pub(crate) fn send_idempotent_to_daemon_at_with_project(
         })
         .map_err(|error| error.to_string())?
     {
-        DaemonToWrapper::ClientWelcome { capabilities, build_id, .. }
-            if capabilities.contains(&ClientCapability::SendIdempotent) => {
-            if message.intent == Some(bridget_core::MessageIntent::StoreOnly) && !capabilities.contains(&ClientCapability::SendInformationV1) {
+        DaemonToWrapper::ClientWelcome {
+            capabilities,
+            build_id,
+            ..
+        } if capabilities.contains(&ClientCapability::SendIdempotent) => {
+            if message.intent == Some(bridget_core::MessageIntent::StoreOnly)
+                && !capabilities.contains(&ClientCapability::SendInformationV1)
+            {
                 return Err("information_unsupported : aucun envoi effectué, aucun remplacement par un message normal ; chargez un daemon compatible pour cet avis".into());
             }
 
@@ -6622,13 +6760,21 @@ fn daemon_status_or_exit(command: &str, config: &DaemonConfig) -> daemon::Daemon
 }
 
 fn cmd_agents(args: &[String]) {
-    if matches!(args.first().map(String::as_str),Some("sleep"|"wake")) {
-        cmd_agent_tracking(args); return;
+    if matches!(args.first().map(String::as_str), Some("sleep" | "wake")) {
+        cmd_agent_tracking(args);
+        return;
     }
-    let history=args.iter().any(|a|a=="--dormant");
-    let all=args.iter().any(|a|a=="--all");
-    if history&&all {eprintln!("Choisissez --dormant ou --all."); crate::cli_table::exit(2);}
-    let args:Vec<String>=args.iter().filter(|a|!matches!(a.as_str(),"--dormant"|"--all")).cloned().collect();
+    let history = args.iter().any(|a| a == "--dormant");
+    let all = args.iter().any(|a| a == "--all");
+    if history && all {
+        eprintln!("Choisissez --dormant ou --all.");
+        crate::cli_table::exit(2);
+    }
+    let args: Vec<String> = args
+        .iter()
+        .filter(|a| !matches!(a.as_str(), "--dormant" | "--all"))
+        .cloned()
+        .collect();
     let parsed = parse_directory_args("agents", &args, true).unwrap_or_else(|error| {
         eprintln!("bridget {error}");
         eprintln!(
@@ -6642,8 +6788,10 @@ fn cmd_agents(args: &[String]) {
     // Une sonde distincte à2s déclarait à tort le maître absent lorsque le
     // premier octet du relais SSH arrivait ensuite dans le budget client10s.
 
-    let agents:Vec<_> = scoped_directory_or_exit("agents", &parsed, &config.socket_path).into_iter()
-        .filter(|a|all || a.tracking.as_ref().is_some_and(|t|t.dormant)==history).collect();
+    let agents: Vec<_> = scoped_directory_or_exit("agents", &parsed, &config.socket_path)
+        .into_iter()
+        .filter(|a| all || a.tracking.as_ref().is_some_and(|t| t.dormant) == history)
+        .collect();
 
     if parsed.json {
         println!(
@@ -6679,33 +6827,90 @@ fn cmd_agents(args: &[String]) {
                     .unwrap_or("inconnu"),
                 scoped.project_relation
             );
-            if let Some(tracking)=&scoped.tracking {
-                println!("    suivi : {} ; synchronisation : {}{}",if tracking.dormant{"dormant"}else{"actif"},if tracking.synchronize{"dans les deux sens"}else{"Bridget uniquement"},if tracking.synchronization_pending{" (en attente)"}else{""});
+            if let Some(tracking) = &scoped.tracking {
+                println!(
+                    "    suivi : {} ; synchronisation : {}{}",
+                    if tracking.dormant { "dormant" } else { "actif" },
+                    if tracking.synchronize {
+                        "dans les deux sens"
+                    } else {
+                        "Bridget uniquement"
+                    },
+                    if tracking.synchronization_pending {
+                        " (en attente)"
+                    } else {
+                        ""
+                    }
+                );
             }
         }
     }
 }
 
-fn cmd_agent_tracking(args:&[String]) {
+fn cmd_agent_tracking(args: &[String]) {
     use bridget_transport::agent_tracking::AgentTrackingRequest;
-    let failed=||{eprintln!("usage: bridget agents sleep|wake <UUID> [--local-only|--synchronize] [--request-id <UUID>] [--revision <n>] [--json]"); crate::cli_table::exit(2);};
-    let Some(agent)=args.get(1).filter(|id|uuid::Uuid::parse_str(id).is_ok()) else{failed();return};
-    let mut request_id=uuid::Uuid::new_v4().to_string(); let mut synchronize=None; let mut revision=None;
-    let mut i=2;
-    while i<args.len() {
+    let failed = || {
+        eprintln!(
+            "usage: bridget agents sleep|wake <UUID> [--local-only|--synchronize] [--request-id <UUID>] [--revision <n>] [--json]"
+        );
+        crate::cli_table::exit(2);
+    };
+    let Some(agent) = args.get(1).filter(|id| uuid::Uuid::parse_str(id).is_ok()) else {
+        failed();
+        return;
+    };
+    let mut request_id = uuid::Uuid::new_v4().to_string();
+    let mut synchronize = None;
+    let mut revision = None;
+    let mut i = 2;
+    while i < args.len() {
         match args[i].as_str() {
-            "--json"=>{},
-            "--local-only" if synchronize.is_none()=>synchronize=Some(false),
-            "--synchronize" if synchronize.is_none()=>synchronize=Some(true),
-            "--request-id"=>{i+=1;let Some(id)=args.get(i) else{failed();return};request_id=id.clone();},
-            "--revision"=>{i+=1;let Some(n)=args.get(i).and_then(|s|s.parse::<u64>().ok()) else{failed();return};revision=Some(n);},
-            _=>{failed();return},
-        } i+=1;
+            "--json" => {}
+            "--local-only" if synchronize.is_none() => synchronize = Some(false),
+            "--synchronize" if synchronize.is_none() => synchronize = Some(true),
+            "--request-id" => {
+                i += 1;
+                let Some(id) = args.get(i) else {
+                    failed();
+                    return;
+                };
+                request_id = id.clone();
+            }
+            "--revision" => {
+                i += 1;
+                let Some(n) = args.get(i).and_then(|s| s.parse::<u64>().ok()) else {
+                    failed();
+                    return;
+                };
+                revision = Some(n);
+            }
+            _ => {
+                failed();
+                return;
+            }
+        }
+        i += 1;
     }
-    match crate::communication::client::human_agent_tracking(&socket_path(),AgentTrackingRequest::Set{
-        request_id:request_id.clone(),agent_id:agent.clone(),dormant:args[0]=="sleep",synchronize,expected_revision:revision}) {
-        Ok(result)=>{println!("{result}");if result["status"]!="ok" {crate::cli_table::exit(1);}},
-        Err(error)=>{eprintln!("Action non confirmée, identifiant {request_id} à conserver : {error}");crate::cli_table::exit(1);},
+    match crate::communication::client::human_agent_tracking(
+        &socket_path(),
+        AgentTrackingRequest::Set {
+            request_id: request_id.clone(),
+            agent_id: agent.clone(),
+            dormant: args[0] == "sleep",
+            synchronize,
+            expected_revision: revision,
+        },
+    ) {
+        Ok(result) => {
+            println!("{result}");
+            if result["status"] != "ok" {
+                crate::cli_table::exit(1);
+            }
+        }
+        Err(error) => {
+            eprintln!("Action non confirmée, identifiant {request_id} à conserver : {error}");
+            crate::cli_table::exit(1);
+        }
     }
 }
 
@@ -6862,7 +7067,10 @@ fn print_control_status(
     inbox_open_count: u32,
 ) {
     if crate::cli_table::active() {
-        println!("{}",serde_json::json!({"control":state,"inbox_open_count":inbox_open_count}));
+        println!(
+            "{}",
+            serde_json::json!({"control":state,"inbox_open_count":inbox_open_count})
+        );
         return;
     }
     println!(
@@ -7276,7 +7484,10 @@ fn cmd_inbox(args: &[String]) {
             }) {
                 Ok(DaemonToWrapper::HumanInbox { items, open_count }) => {
                     if crate::cli_table::active() {
-                        println!("{}",serde_json::json!({"items":items,"open_count":open_count}));
+                        println!(
+                            "{}",
+                            serde_json::json!({"items":items,"open_count":open_count})
+                        );
                         return;
                     }
                     println!("{open_count} décision(s) en attente");
@@ -7373,8 +7584,13 @@ fn cmd_who(args: &[String]) {
     let agents: Vec<_> = scoped.iter().map(|agent| agent.agent.clone()).collect();
 
     if crate::cli_table::active() {
-        println!("{}",serde_json::to_value(&scoped).expect("annuaire sérialisable"));
-    } else {print!("{}", render_who(&agents, parsed.domain.as_deref()));}
+        println!(
+            "{}",
+            serde_json::to_value(&scoped).expect("annuaire sérialisable")
+        );
+    } else {
+        print!("{}", render_who(&agents, parsed.domain.as_deref()));
+    }
     if parsed.global && !crate::cli_table::active() {
         for agent in &scoped {
             println!(
@@ -8377,10 +8593,15 @@ fn cmd_ledger(args: &[String]) {
     match messages {
         Ok(messages) => {
             if crate::cli_table::active() {
-                let more=messages.len()>limite;
-                println!("{}",serde_json::json!({"messages":messages.iter().take(limite).collect::<Vec<_>>(),"more":more}));
-            } else {print!("{}", render_ledger_borne(&messages, limite));}
-        },
+                let more = messages.len() > limite;
+                println!(
+                    "{}",
+                    serde_json::json!({"messages":messages.iter().take(limite).collect::<Vec<_>>(),"more":more})
+                );
+            } else {
+                print!("{}", render_ledger_borne(&messages, limite));
+            }
+        }
         Err(error) => {
             eprintln!("{error}");
             crate::cli_table::exit(1);
@@ -8583,9 +8804,12 @@ mod depot_tests {
 mod guidance156_tests;
 
 /// Client humain181 : aucune identité d’agent empruntée, réponse explicite en terminal.
-fn cmd_questions(args:&[String]) {
-    if args.is_empty() || args==["--help"] {
-        println!("bridget questions list [AGENT_UUID] | show REQUEST_UUID | answer REQUEST_UUID --revision SHA256 --command-id UUID --answers-file /chemin/absolu.json");return;
+fn cmd_questions(args: &[String]) {
+    if args.is_empty() || args == ["--help"] {
+        println!(
+            "bridget questions list [AGENT_UUID] | show REQUEST_UUID | answer REQUEST_UUID --revision SHA256 --command-id UUID --answers-file /chemin/absolu.json"
+        );
+        return;
     }
     let parsed=(||->Result<serde_json::Value,String>{
         match args {
@@ -8601,105 +8825,248 @@ fn cmd_questions(args:&[String]) {
             _=>Err("Usage : bridget questions list [AGENT_UUID] | show REQUEST_UUID | answer REQUEST_UUID --revision SHA256 --command-id UUID --answers-file /chemin/absolu.json".into())
         }
     })().and_then(|request|crate::communication::client::user_input_request(&socket_path(),None,request).map_err(|e|e.to_string()));
-    match parsed {Ok(value)=>{println!("{}",serde_json::to_string_pretty(&value).unwrap_or_default());if value["status"]!="ok"{crate::cli_table::exit(1);}},Err(e)=>{eprintln!("bridget questions : {e}");crate::cli_table::exit(1);}}
+    match parsed {
+        Ok(value) => {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&value).unwrap_or_default()
+            );
+            if value["status"] != "ok" {
+                crate::cli_table::exit(1);
+            }
+        }
+        Err(e) => {
+            eprintln!("bridget questions : {e}");
+            crate::cli_table::exit(1);
+        }
+    }
 }
-
 
 #[cfg(test)]
 mod worker188_tests {
     use super::*;
     #[test]
     fn spec188_worker_diagnostic_parser_requires_exact_tuple_and_known_paths() {
-        let mut args=vec!["--machine-id","cartae","--worker-id","worker-cartae","--provisioning-revision","1",
-            "--credential-file","/private/credential","--state-root","/private/state","--registry-file","/private/registry",
-            "--master-socket","/private/socket","--command-id","command","--task-id","task","--instance-id","instance","--generation","1"]
-            .into_iter().map(String::from).collect::<Vec<_>>();
-        let (config,command)=parse_worker_diagnostic_args(&args).unwrap();
-        assert_eq!(config.machine_id,"cartae");assert_eq!(command.generation,1);
-        args.extend(["--generation".into(),"2".into()]);assert!(parse_worker_diagnostic_args(&args).is_err());
-        args.truncate(args.len()-2);args.pop();assert!(parse_worker_diagnostic_args(&args).is_err());
-        args.push("0".into());assert!(parse_worker_diagnostic_args(&args).is_err());
+        let mut args = vec![
+            "--machine-id",
+            "cartae",
+            "--worker-id",
+            "worker-cartae",
+            "--provisioning-revision",
+            "1",
+            "--credential-file",
+            "/private/credential",
+            "--state-root",
+            "/private/state",
+            "--registry-file",
+            "/private/registry",
+            "--master-socket",
+            "/private/socket",
+            "--command-id",
+            "command",
+            "--task-id",
+            "task",
+            "--instance-id",
+            "instance",
+            "--generation",
+            "1",
+        ]
+        .into_iter()
+        .map(String::from)
+        .collect::<Vec<_>>();
+        let (config, command) = parse_worker_diagnostic_args(&args).unwrap();
+        assert_eq!(config.machine_id, "cartae");
+        assert_eq!(command.generation, 1);
+        args.extend(["--generation".into(), "2".into()]);
+        assert!(parse_worker_diagnostic_args(&args).is_err());
+        args.truncate(args.len() - 2);
+        args.pop();
+        assert!(parse_worker_diagnostic_args(&args).is_err());
+        args.push("0".into());
+        assert!(parse_worker_diagnostic_args(&args).is_err());
     }
     #[test]
     fn spec188_worker_diagnostic_preserves_delegated_cli_guard() {
         use crate::mcp_identity::IdentityError as E;
-        assert!(diagnostic_cli_guard(Err(E::DelegatedMcpOnly),false,false).is_err());
-        assert!(diagnostic_cli_guard(Err(E::NamespaceConfiguration),false,false).is_err());
-        assert!(diagnostic_cli_guard(Err(E::IdentityNotFound),true,false).is_err(),"marqueur enfant même invalide");
-        assert!(diagnostic_cli_guard(Err(E::IdentityNotFound),false,true).is_err(),"identité explicite non résolue");
-        assert!(diagnostic_cli_guard(Err(E::LegacyMarker),false,false).is_err());
-        assert!(diagnostic_cli_guard(Err(E::T3SessionUnavailable),false,false).is_err());
-        assert!(diagnostic_cli_guard(Err(E::IdentityNotFound),false,false).is_ok(),"lecture locale sans principal, sous UID propriétaire");
+        assert!(diagnostic_cli_guard(Err(E::DelegatedMcpOnly), false, false).is_err());
+        assert!(diagnostic_cli_guard(Err(E::NamespaceConfiguration), false, false).is_err());
+        assert!(
+            diagnostic_cli_guard(Err(E::IdentityNotFound), true, false).is_err(),
+            "marqueur enfant même invalide"
+        );
+        assert!(
+            diagnostic_cli_guard(Err(E::IdentityNotFound), false, true).is_err(),
+            "identité explicite non résolue"
+        );
+        assert!(diagnostic_cli_guard(Err(E::LegacyMarker), false, false).is_err());
+        assert!(diagnostic_cli_guard(Err(E::T3SessionUnavailable), false, false).is_err());
+        assert!(
+            diagnostic_cli_guard(Err(E::IdentityNotFound), false, false).is_ok(),
+            "lecture locale sans principal, sous UID propriétaire"
+        );
     }
 }
 
-fn cmd_specialists(args:&[String]) {
+fn cmd_specialists(args: &[String]) {
     use bridget_transport::specialists::SpecialistRequest;
-    if args.is_empty()||matches!(args[0].as_str(),"help"|"--help"|"-h") {
-        println!("bridget specialists list [--json]\nbridget specialists request --file CHEMIN_ABSOLU [--json]\nLe fichier porte une commande specialists version1. Mutations : terminal humain requis. Aucun client ne doit envoyer actor/is_human.");
+    if args.is_empty() || matches!(args[0].as_str(), "help" | "--help" | "-h") {
+        println!(
+            "bridget specialists list [--json]\nbridget specialists request --file CHEMIN_ABSOLU [--json]\nLe fichier porte une commande specialists version1. Mutations : terminal humain requis. Aucun client ne doit envoyer actor/is_human."
+        );
         return;
     }
-    let json=args.iter().any(|a|a=="--json");
-    let parse=(||->Result<SpecialistRequest,String>{
+    let json = args.iter().any(|a| a == "--json");
+    let parse = (|| -> Result<SpecialistRequest, String> {
         match args[0].as_str() {
-            "list" if args[1..].iter().all(|a|a=="--json")=>Ok(SpecialistRequest::List{version:1,cursor:None,limit:Some(30)}),
-            "request"=>{
-                let mut file=None;let mut i=1;
-                while i<args.len() {match args[i].as_str() {
-                    "--json"=>{},
-                    "--file"=>{i+=1;let value=args.get(i).ok_or("--file exige un chemin")?;if file.replace(value).is_some(){return Err("--file répété".into());}},
-                    _=>return Err(unknown_argument("specialists",&args[i])),
-                }i+=1;}
-                let path=std::path::Path::new(file.ok_or("--file requis")?);
-                if !path.is_absolute(){return Err("Le fichier doit avoir un chemin absolu.".into());}
+            "list" if args[1..].iter().all(|a| a == "--json") => Ok(SpecialistRequest::List {
+                version: 1,
+                cursor: None,
+                limit: Some(30),
+            }),
+            "request" => {
+                let mut file = None;
+                let mut i = 1;
+                while i < args.len() {
+                    match args[i].as_str() {
+                        "--json" => {}
+                        "--file" => {
+                            i += 1;
+                            let value = args.get(i).ok_or("--file exige un chemin")?;
+                            if file.replace(value).is_some() {
+                                return Err("--file répété".into());
+                            }
+                        }
+                        _ => return Err(unknown_argument("specialists", &args[i])),
+                    }
+                    i += 1;
+                }
+                let path = std::path::Path::new(file.ok_or("--file requis")?);
+                if !path.is_absolute() {
+                    return Err("Le fichier doit avoir un chemin absolu.".into());
+                }
                 use std::io::Read;
-                let mut body=Vec::new();
-                std::fs::File::open(path).map_err(|_|"Fichier de commande illisible")?.take(65_537).read_to_end(&mut body).map_err(|_|"Lecture de commande impossible")?;
-                if body.len()>65_536{return Err("Commande supérieure à64Kio.".into());}
-                serde_json::from_slice(&body).map_err(|_|"Commande version1 ou champs invalides.".into())
+                let mut body = Vec::new();
+                std::fs::File::open(path)
+                    .map_err(|_| "Fichier de commande illisible")?
+                    .take(65_537)
+                    .read_to_end(&mut body)
+                    .map_err(|_| "Lecture de commande impossible")?;
+                if body.len() > 65_536 {
+                    return Err("Commande supérieure à64Kio.".into());
+                }
+                serde_json::from_slice(&body)
+                    .map_err(|_| "Commande version1 ou champs invalides.".into())
             }
-            _=>Err("Utiliser specialists list ou specialists request --file CHEMIN_ABSOLU.".into()),
+            _ => {
+                Err("Utiliser specialists list ou specialists request --file CHEMIN_ABSOLU.".into())
+            }
         }
     })();
-    let request=match parse {Ok(q)=>q,Err(e)=>exit_coordination_error("specialists",json,"invalid_request",&e,None,2)};
-    if let Err(code)=request.validate(){exit_coordination_error("specialists",json,code,"Commande non transmise.",None,2);}
-    if !request.is_read()&&!require_interactive_terminal("specialists") {crate::cli_table::exit(1);}
-    if !request.is_read(){
-        eprintln!("Administration locale des spécialistes. Cette commande modifie exactement la demande fournie et son périmètre. Confirmer cette décision humaine ? [oui/N]");
-        let mut answer=String::new();
-        if std::io::stdin().read_line(&mut answer).is_err()||answer.trim()!="oui"{
-            eprintln!("Commande non envoyée ; aucune approbation enregistrée.");crate::cli_table::exit(1);
+    let request = match parse {
+        Ok(q) => q,
+        Err(e) => exit_coordination_error("specialists", json, "invalid_request", &e, None, 2),
+    };
+    if let Err(code) = request.validate() {
+        exit_coordination_error(
+            "specialists",
+            json,
+            code,
+            "Commande non transmise.",
+            None,
+            2,
+        );
+    }
+    if !request.is_read() && !require_interactive_terminal("specialists") {
+        crate::cli_table::exit(1);
+    }
+    if !request.is_read() {
+        eprintln!(
+            "Administration locale des spécialistes. Cette commande modifie exactement la demande fournie et son périmètre. Confirmer cette décision humaine ? [oui/N]"
+        );
+        let mut answer = String::new();
+        if std::io::stdin().read_line(&mut answer).is_err() || answer.trim() != "oui" {
+            eprintln!("Commande non envoyée ; aucune approbation enregistrée.");
+            crate::cli_table::exit(1);
         }
     }
 
-    match crate::communication::client::human_specialists(&socket_path(),request) {
-        Ok(value)=>{
-            if json {println!("{}",value);}else{println!("{}",serde_json::to_string_pretty(&value).expect("JSON value"));}
-            if value["status"]=="refused"{crate::cli_table::exit(1);}
+    match crate::communication::client::human_specialists(&socket_path(), request) {
+        Ok(value) => {
+            if json {
+                println!("{}", value);
+            } else {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&value).expect("JSON value")
+                );
+            }
+            if value["status"] == "refused" {
+                crate::cli_table::exit(1);
+            }
         }
-        Err(error)=>exit_coordination_error("specialists",json,"specialists_unavailable",&format!("{error:?}"),None,1),
+        Err(error) => exit_coordination_error(
+            "specialists",
+            json,
+            "specialists_unavailable",
+            &format!("{error:?}"),
+            None,
+            1,
+        ),
     }
 }
 
 #[cfg(test)]
 mod table225_parser_tests {
     use super::*;
-    fn table_args(values: &[&str])->Vec<String> {
-        let input=std::iter::once("bridget").chain(values.iter().copied()).map(str::to_owned).collect();
+    fn table_args(values: &[&str]) -> Vec<String> {
+        let input = std::iter::once("bridget")
+            .chain(values.iter().copied())
+            .map(str::to_owned)
+            .collect();
         crate::cli_table::normalize(input).unwrap().args[2..].to_vec()
     }
     #[test]
     fn table225_uses_the_actual_native_parsers() {
-        assert!(parse_directory_args("agents",&table_args(&["agents","--global","--table"]),true).is_ok());
-        assert!(parse_requests_args(&table_args(&["requests","--all","--table"])).is_ok());
-        assert!(parse_task_args(&table_args(&["task","status","stable-id","--table"]),||"request".into()).is_ok());
-        assert!(parse_task_args(&table_args(&["task","list","--table"]),||"request".into()).is_ok());
-        assert!(parse_handoff_args(&table_args(&["handoff","preview","--json-stdin","--table"])).is_ok());
-        assert!(parse_spawn_args(&table_args(&["spawn","codex","--persistent","--table"])).is_ok());
-        assert!(parse_delegation_control(&table_args(&["control","delegations","list","--table"])).is_ok());
-        assert!(parse_ledger_args(&table_args(&["ledger","--limit","8","--table"])).is_ok());
-        assert!(parse_events_args(&table_args(&["events","missed","--table"])).is_ok());
-        assert!(validate_zero_arity_command("status",&table_args(&["status","--table"])).is_ok());
+        assert!(
+            parse_directory_args(
+                "agents",
+                &table_args(&["agents", "--global", "--table"]),
+                true
+            )
+            .is_ok()
+        );
+        assert!(parse_requests_args(&table_args(&["requests", "--all", "--table"])).is_ok());
+        assert!(
+            parse_task_args(
+                &table_args(&["task", "status", "stable-id", "--table"]),
+                || "request".into()
+            )
+            .is_ok()
+        );
+        assert!(
+            parse_task_args(&table_args(&["task", "list", "--table"]), || "request"
+                .into())
+            .is_ok()
+        );
+        assert!(
+            parse_handoff_args(&table_args(&[
+                "handoff",
+                "preview",
+                "--json-stdin",
+                "--table"
+            ]))
+            .is_ok()
+        );
+        assert!(
+            parse_spawn_args(&table_args(&["spawn", "codex", "--persistent", "--table"])).is_ok()
+        );
+        assert!(
+            parse_delegation_control(&table_args(&["control", "delegations", "list", "--table"]))
+                .is_ok()
+        );
+        assert!(parse_ledger_args(&table_args(&["ledger", "--limit", "8", "--table"])).is_ok());
+        assert!(parse_events_args(&table_args(&["events", "missed", "--table"])).is_ok());
+        assert!(validate_zero_arity_command("status", &table_args(&["status", "--table"])).is_ok());
     }
 }
 
@@ -8709,6 +9076,10 @@ mod message244_tests {
     fn spec244_message_de_coordination_depasse_dix_mille_sans_refus_artificiel() {
         assert!(super::validate_message_body(&"é".repeat(10_000)).is_ok());
         assert!(super::validate_message_body("texte\0interdit").is_err());
-        assert!(super::validate_message_body(&"x".repeat(65_537)).unwrap_err().contains("octets"));
+        assert!(
+            super::validate_message_body(&"x".repeat(65_537))
+                .unwrap_err()
+                .contains("octets")
+        );
     }
 }

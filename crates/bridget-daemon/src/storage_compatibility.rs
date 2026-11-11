@@ -8,8 +8,8 @@ use std::collections::BTreeSet;
 use std::io::Read;
 
 const WORKTREE: &str = "workspace.worktree.v1";
-const COMMIT_VIEW:&str="workspace.commit_view.v1";
-const COMMIT_VIEW_ORIGIN_ROOT:&str="workspace.commit_view.origin_root.v2";
+const COMMIT_VIEW: &str = "workspace.commit_view.v1";
+const COMMIT_VIEW_ORIGIN_ROOT: &str = "workspace.commit_view.origin_root.v2";
 // Le lecteur comprend préparation partielle, fichier en cours, alias198 et
 // conservation compacte, même lorsque la création publique reste fermée.
 // Les contre-épreuves opérationnelles sont dans remote_worker::tests et
@@ -19,13 +19,32 @@ const COMMIT_VIEW_ORIGIN_ROOT:&str="workspace.commit_view.origin_root.v2";
 // Le lecteur A accepte le JSON V1 mais ne sait pas effectuer cette relecture.
 // Le choix figure dans AutoV2, Task et Prepare et doit survivre aux reprises.
 /// Accepter le JSON sans appliquer ce choix n'est pas un lecteur compatible.
-const MODEL_OPTIONS:&str="delegation.model_options.v1";
+const MODEL_OPTIONS: &str = "delegation.model_options.v1";
 const PROVIDER_ACCOUNTS: &str = "launch.provider_account.v1";
 const WORKER_CAPACITY: &str = "worker.store.capacity.v2";
 const SPECIALIST_REQUESTS: &str = "specialists.requests.v1";
 // Les prepared222 ne peuvent être remis que par leur autorité épinglée.
 // Un ancien drain qui ignore cette garde ne constitue pas un lecteur compatible.
-const FORMATS: &[&str] = &["delegation.quota_fallback.v1","wrapper.delivery_spool.v1","wrapper.reply_outbox.v1","delegation.admission_authority.v1","workspace.commit_view.resource_bound.v3","worker.workload_tools.v1","workspace.commit_view.notice.v2","worker.view.reservation.v2","workspace.commit_view.large.v2","worker.store.capacity.v3","agents.dormancy.v1",SPECIALIST_REQUESTS,WORKER_CAPACITY,WORKTREE,COMMIT_VIEW,COMMIT_VIEW_ORIGIN_ROOT,MODEL_OPTIONS,PROVIDER_ACCOUNTS];
+const FORMATS: &[&str] = &[
+    "delegation.quota_fallback.v1",
+    "wrapper.delivery_spool.v1",
+    "wrapper.reply_outbox.v1",
+    "delegation.admission_authority.v1",
+    "workspace.commit_view.resource_bound.v3",
+    "worker.workload_tools.v1",
+    "workspace.commit_view.notice.v2",
+    "worker.view.reservation.v2",
+    "workspace.commit_view.large.v2",
+    "worker.store.capacity.v3",
+    "agents.dormancy.v1",
+    SPECIALIST_REQUESTS,
+    WORKER_CAPACITY,
+    WORKTREE,
+    COMMIT_VIEW,
+    COMMIT_VIEW_ORIGIN_ROOT,
+    MODEL_OPTIONS,
+    PROVIDER_ACCOUNTS,
+];
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -153,60 +172,134 @@ mod tests {
     }
     #[test]
     fn spec244_retour_exige_les_deux_files_durables() {
-        for format in ["wrapper.delivery_spool.v1","wrapper.reply_outbox.v1"] {
-            let mut old=fixture();old["reads"].as_array_mut().unwrap().retain(|v|v!=format);old["writes"]=old["reads"].clone();
-            assert!(!validate(&serde_json::to_vec(&old).unwrap(),&"a".repeat(32),&"b".repeat(64)));
+        for format in ["wrapper.delivery_spool.v1", "wrapper.reply_outbox.v1"] {
+            let mut old = fixture();
+            old["reads"].as_array_mut().unwrap().retain(|v| v != format);
+            old["writes"] = old["reads"].clone();
+            assert!(!validate(
+                &serde_json::to_vec(&old).unwrap(),
+                &"a".repeat(32),
+                &"b".repeat(64)
+            ));
         }
     }
 
     #[test]
     fn spec241_return_requires_authority_resource_and_tool_contracts() {
-        for format in ["delegation.admission_authority.v1","workspace.commit_view.resource_bound.v3","worker.workload_tools.v1"] {
-            let mut old=fixture();
-            old["reads"].as_array_mut().unwrap().retain(|value|value!=format);
-            old["writes"]=old["reads"].clone();
-            assert!(!validate(&serde_json::to_vec(&old).unwrap(),&"a".repeat(32),&"b".repeat(64)),"{format}");
+        for format in [
+            "delegation.admission_authority.v1",
+            "workspace.commit_view.resource_bound.v3",
+            "worker.workload_tools.v1",
+        ] {
+            let mut old = fixture();
+            old["reads"]
+                .as_array_mut()
+                .unwrap()
+                .retain(|value| value != format);
+            old["writes"] = old["reads"].clone();
+            assert!(
+                !validate(
+                    &serde_json::to_vec(&old).unwrap(),
+                    &"a".repeat(32),
+                    &"b".repeat(64)
+                ),
+                "{format}"
+            );
         }
-        assert!(validate(&serde_json::to_vec(&fixture()).unwrap(),&"a".repeat(32),&"b".repeat(64)));
-        let mut future=fixture();
-        for n in 0..20 {future["reads"].as_array_mut().unwrap().push(serde_json::json!(format!("future.format{n}")));}
-        assert!(validate(&serde_json::to_vec(&future).unwrap(),&"a".repeat(32),&"b".repeat(64)),"le budget de trame suffit ; pas de quota caché de 16 contrats");
+        assert!(validate(
+            &serde_json::to_vec(&fixture()).unwrap(),
+            &"a".repeat(32),
+            &"b".repeat(64)
+        ));
+        let mut future = fixture();
+        for n in 0..20 {
+            future["reads"]
+                .as_array_mut()
+                .unwrap()
+                .push(serde_json::json!(format!("future.format{n}")));
+        }
+        assert!(
+            validate(
+                &serde_json::to_vec(&future).unwrap(),
+                &"a".repeat(32),
+                &"b".repeat(64)
+            ),
+            "le budget de trame suffit ; pas de quota caché de 16 contrats"
+        );
     }
 
     #[test]
     fn spec221_c19_origin_root_floor_refuses_reader_a_despite_unchanged_json_schema() {
-        let mut old=fixture();
-        old["reads"]=serde_json::json!([WORKTREE,COMMIT_VIEW]);
-        old["writes"]=old["reads"].clone();
-        assert!(!validate(&serde_json::to_vec(&old).unwrap(),&"a".repeat(32),&"b".repeat(64)));
-        assert!(validate(&serde_json::to_vec(&fixture()).unwrap(),&"a".repeat(32),&"b".repeat(64)));
+        let mut old = fixture();
+        old["reads"] = serde_json::json!([WORKTREE, COMMIT_VIEW]);
+        old["writes"] = old["reads"].clone();
+        assert!(!validate(
+            &serde_json::to_vec(&old).unwrap(),
+            &"a".repeat(32),
+            &"b".repeat(64)
+        ));
+        assert!(validate(
+            &serde_json::to_vec(&fixture()).unwrap(),
+            &"a".repeat(32),
+            &"b".repeat(64)
+        ));
     }
 
     #[test]
     fn spec222_storage_floor_refuses_reader_without_specialist_prepared_authority() {
         let mut old = fixture();
-        old["reads"].as_array_mut().unwrap().retain(|v|v != SPECIALIST_REQUESTS);
+        old["reads"]
+            .as_array_mut()
+            .unwrap()
+            .retain(|v| v != SPECIALIST_REQUESTS);
         old["writes"] = old["reads"].clone();
-        assert!(!validate(&serde_json::to_vec(&old).unwrap(), &"a".repeat(32), &"b".repeat(64)));
-        assert!(validate(&serde_json::to_vec(&fixture()).unwrap(), &"a".repeat(32), &"b".repeat(64)));
+        assert!(!validate(
+            &serde_json::to_vec(&old).unwrap(),
+            &"a".repeat(32),
+            &"b".repeat(64)
+        ));
+        assert!(validate(
+            &serde_json::to_vec(&fixture()).unwrap(),
+            &"a".repeat(32),
+            &"b".repeat(64)
+        ));
     }
 
     #[test]
     fn spec221_result_capacity_floor_refuses_legacy_16mib_reader() {
-        let mut old=fixture();
-        old["reads"].as_array_mut().unwrap().retain(|v|v!=WORKER_CAPACITY);
-        old["writes"]=old["reads"].clone();
-        assert!(!validate(&serde_json::to_vec(&old).unwrap(),&"a".repeat(32),&"b".repeat(64)));
-        assert!(validate(&serde_json::to_vec(&fixture()).unwrap(),&"a".repeat(32),&"b".repeat(64)));
+        let mut old = fixture();
+        old["reads"]
+            .as_array_mut()
+            .unwrap()
+            .retain(|v| v != WORKER_CAPACITY);
+        old["writes"] = old["reads"].clone();
+        assert!(!validate(
+            &serde_json::to_vec(&old).unwrap(),
+            &"a".repeat(32),
+            &"b".repeat(64)
+        ));
+        assert!(validate(
+            &serde_json::to_vec(&fixture()).unwrap(),
+            &"a".repeat(32),
+            &"b".repeat(64)
+        ));
     }
 
     #[test]
     fn spec221_c05_storage_floor_refuses_a_reader_that_would_ignore_the_choice() {
-        let mut old=fixture();
-        old["reads"]=serde_json::json!([WORKTREE,COMMIT_VIEW,COMMIT_VIEW_ORIGIN_ROOT]);
-        old["writes"]=old["reads"].clone();
-        assert!(!validate(&serde_json::to_vec(&old).unwrap(),&"a".repeat(32),&"b".repeat(64)));
-        assert!(validate(&serde_json::to_vec(&fixture()).unwrap(),&"a".repeat(32),&"b".repeat(64)));
+        let mut old = fixture();
+        old["reads"] = serde_json::json!([WORKTREE, COMMIT_VIEW, COMMIT_VIEW_ORIGIN_ROOT]);
+        old["writes"] = old["reads"].clone();
+        assert!(!validate(
+            &serde_json::to_vec(&old).unwrap(),
+            &"a".repeat(32),
+            &"b".repeat(64)
+        ));
+        assert!(validate(
+            &serde_json::to_vec(&fixture()).unwrap(),
+            &"a".repeat(32),
+            &"b".repeat(64)
+        ));
     }
 
     #[test]
@@ -240,7 +333,10 @@ mod tests {
         // Une déclaration additive ne doit pas casser un ancien validateur
         // si elle conserve les formats qu'il exige.
         let mut future = original.clone();
-        future["reads"].as_array_mut().unwrap().push(serde_json::json!("future.format"));
+        future["reads"]
+            .as_array_mut()
+            .unwrap()
+            .push(serde_json::json!("future.format"));
         assert!(validate(
             &serde_json::to_vec(&future).unwrap(),
             &nonce,
@@ -257,9 +353,13 @@ mod tests {
         assert!(FORMATS.contains(&COMMIT_VIEW));
         // Le plancher ne dépend pas du créateur : le jalon lecteur seul a
         // exercé ce même contrat avant l'ouverture du candidat de création.
-        let old=serde_json::json!({"version":1,"nonce":"a".repeat(32),"image_sha256":"b".repeat(64),
+        let old = serde_json::json!({"version":1,"nonce":"a".repeat(32),"image_sha256":"b".repeat(64),
             "reads":[WORKTREE],"writes":[WORKTREE]});
-        assert!(!validate(&serde_json::to_vec(&old).unwrap(),&"a".repeat(32),&"b".repeat(64)));
+        assert!(!validate(
+            &serde_json::to_vec(&old).unwrap(),
+            &"a".repeat(32),
+            &"b".repeat(64)
+        ));
         assert!(
             serde_json::from_value::<WorkspaceRequest>(
                 serde_json::json!({"strategy":"commit_view"})
@@ -268,8 +368,19 @@ mod tests {
         );
         let value = execute(&["policy".into(), "--json".into()]).unwrap();
         assert_eq!(value["inventory_scanned"], false);
-        for retained in [WORKTREE,COMMIT_VIEW,COMMIT_VIEW_ORIGIN_ROOT,MODEL_OPTIONS,PROVIDER_ACCOUNTS] {
-            assert!(value["required_reads"].as_array().unwrap().contains(&serde_json::json!(retained)));
+        for retained in [
+            WORKTREE,
+            COMMIT_VIEW,
+            COMMIT_VIEW_ORIGIN_ROOT,
+            MODEL_OPTIONS,
+            PROVIDER_ACCOUNTS,
+        ] {
+            assert!(
+                value["required_reads"]
+                    .as_array()
+                    .unwrap()
+                    .contains(&serde_json::json!(retained))
+            );
         }
     }
 }
