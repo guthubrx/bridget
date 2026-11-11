@@ -1,3 +1,4 @@
 # Tests en échec dans un seul des deux passages de la ligne de base (instables, 10 novembre 2026)
 codex_app_server::tests::spec185_workspace_repair_uncertain_stop_is_bounded_and_never_claims_success
 reprise_daemon_redelivre_les_octets_immuables_a_la_meme_instance   (test d'intégration sensible à la charge : échoue 1 fois sur 3 seul, voir releves.md section 15)
+daemon::native_delegation::native_delegation_permissions149_tests::native149_o4_lot_mixte_garde_la_grace_native_et_l_escalade_ordinaire   (échec une fois sur la suite complète au lot 5, trois succès en rejeu seul)

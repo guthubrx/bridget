@@ -11,6 +11,7 @@ Statut du programme : In Progress. Règles : `contracts/regles-implementeur.md`.
 | 2 | intégré | T025 à T030 faits |
 | 3 | intégré | T031 à T035 faits |
 | 4 | intégré | T036 à T053 faits (desired_state.rs arrêté) |
+| 5 | intégré | T054 à T068 faits |
 | 6 | intégré | T069 à T080 faits (158 blocs en repli) |
 | 12 | intégré | T125 à T127 faits |
 | 13 | intégré | T128 à T136 faits ; T137 partiel (job CI différé) |
@@ -238,3 +239,17 @@ Attributs de lint seulement. « Activation en attente » : sans effet fonctionne
 
 ### Bilan lot 6
 Seul `effective_uid()` modifie du code exécutable (équivalent). Les commentaires ne changent pas le comportement. « Activation en attente ».
+
+### Lot 5 - Aiguillage découpé (T054 à T068)
+- Statut : fait
+- Commits : préparation du module `daemon/wrapper_dispatch.rs`, 37 commits `refactor(daemon): Extraire la branche <Nom> de l'aiguillage`, extraction des contrôles `service_refusal` et `client_refusal`, nettoyage des imports et `mut` devenus inutiles.
+- Fichiers : `crates/bridget-daemon/src/daemon.rs`, `crates/bridget-daemon/src/daemon/wrapper_dispatch.rs`, `outils/extraire_branches.py` (nouvel outil : lit la branche, lit les types dans l'énumération du protocole, écrit `on_<nom>` avec le corps inchangé), `validation/lot05-depart.txt`, `validation/lot05-fin.txt`.
+- Vérifications : fonction `handle_wrapper_message_with_peer` : 5 010 lignes au départ -> 1 296 lignes (SC06 : moins de 1 500). 37 branches de 30 lignes ou plus extraites, plus aucune branche de 30 lignes ou plus dans le `match`. `clippy --all-targets -D warnings` : code 0. Porte sur cliché isolé de `HEAD` : `C-NOMS` identique à la base ; `C-ECHECS` = base + 1 test (`native149_o4_lot_mixte...`) qui passe trois fois en rejeu seul (noté instable).
+- Écarts :
+  - Les commits de branche sont automatiques (outil + compilation du démon avant chaque commit). Quinze branches ont d'abord échoué faute d'imports de types : l'outil qualifie maintenant les types par leur chemin complet et le module importe `bridget_transport::protocol::*`.
+  - Le corps des branches est copié tel quel (y compris l'indentation d'origine, que le lot 10 normalisera).
+  - Les deux blocs de refus ont été extraits en un seul commit.
+- Non vérifié : rien de plus.
+
+### Bilan lot 5
+Code exécutable modifié (aiguillage du démon) : **activation en attente**.

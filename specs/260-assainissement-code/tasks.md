@@ -1,6 +1,6 @@
 # Tâches 260 - Assainissement du code et du dépôt
 
-Statut : In Progress. 85 tâches cochées sur 157 (voir `implementation.md` pour le détail et les lots bloqués). La mise en oeuvre est en cours : lots 0, 1 (sauf T024), 2, 3, 4, 6, 12, 14, 13 (T137 partiel), 15, 17 traités.
+Statut : In Progress. 100 tâches cochées sur 157 (voir `implementation.md` pour le détail et les lots bloqués). La mise en oeuvre est en cours : lots 0, 1 (sauf T024), 2, 3, 4, 5, 6, 12, 14, 13 (T137 partiel), 15, 17 traités.
 Spécification : `spec.md`. Plan : `plan.md`. Règles : `contracts/regles-implementeur.md`. Portes : `decisions.md`. Démarrage et clôture : `quickstart.md`.
 
 ## Comment lire ce fichier
@@ -82,21 +82,21 @@ Spécification : `spec.md`. Plan : `plan.md`. Règles : `contracts/regles-implem
 
 ## Lot 5 - Aiguillage découpé (guide : `guides/lot-05-aiguillage.md`)
 
-- [ ] T054 [L5] Mesure de départ ; créer `daemon/wrapper_dispatch.rs` et `mod wrapper_dispatch;`.
-- [ ] T055 [L5] Extraire le bloc `service_refusal` (environ 265 lignes).
-- [ ] T056 [L5] Extraire le bloc `client_refusal` (environ 321 lignes).
-- [ ] T057 [L5] Branches Send, ServiceRequest, RelaunchOrder, CancelRequest (un commit par branche).
-- [ ] T058 [L5] Branches SpawnOrder, ServiceHello, ControlExecutionReported, DecommissionOrder.
-- [ ] T059 [L5] Branches ArtifactPublish, Register, GuichetReply, CoordinationSubscribe.
-- [ ] T060 [L5] Branches ClientHello, QueueEditRequest, ObservationRequest, Subscribe.
-- [ ] T061 [L5] Branches DisplayNameSet, DeliveryRejected, ThreadRequest.
-- [ ] T062 [L5] Branches DelegatedRuntimeEvent, NativePermissionFact, WaitAgentLinks.
-- [ ] T063 [L5] Branches T3ThreadBindingFact, DaemonIdentityRequest, Subscribed.
-- [ ] T064 [L5] Branches ObservedActivity, TurnState, Unsubscribe.
-- [ ] T065 [L5] Branches DeliveryIndeterminate, ListRequests, AdoptStoppedOrder, DisplayNameResolve, DirectoryScoped.
-- [ ] T066 [L5] Branches AttachRejected, JournalReady, LiveJournalFragment, Gap.
-- [ ] T067 [L5] Contrôle : 37 appels `wrapper_dispatch::on_`, fonction sous 1500 lignes ; `validation/lot05-fin.txt`.
-- [ ] T068 [L5] Porte : `C-TESTS`, `C-ECHECS`, `C-NOMS` ; bilan ; fin de lot.
+- [x] T054 [L5] Mesure de départ ; créer `daemon/wrapper_dispatch.rs` et `mod wrapper_dispatch;`.
+- [x] T055 [L5] Extraire le bloc `service_refusal` (environ 265 lignes).
+- [x] T056 [L5] Extraire le bloc `client_refusal` (environ 321 lignes).
+- [x] T057 [L5] Branches Send, ServiceRequest, RelaunchOrder, CancelRequest (un commit par branche).
+- [x] T058 [L5] Branches SpawnOrder, ServiceHello, ControlExecutionReported, DecommissionOrder.
+- [x] T059 [L5] Branches ArtifactPublish, Register, GuichetReply, CoordinationSubscribe.
+- [x] T060 [L5] Branches ClientHello, QueueEditRequest, ObservationRequest, Subscribe.
+- [x] T061 [L5] Branches DisplayNameSet, DeliveryRejected, ThreadRequest.
+- [x] T062 [L5] Branches DelegatedRuntimeEvent, NativePermissionFact, WaitAgentLinks.
+- [x] T063 [L5] Branches T3ThreadBindingFact, DaemonIdentityRequest, Subscribed.
+- [x] T064 [L5] Branches ObservedActivity, TurnState, Unsubscribe.
+- [x] T065 [L5] Branches DeliveryIndeterminate, ListRequests, AdoptStoppedOrder, DisplayNameResolve, DirectoryScoped.
+- [x] T066 [L5] Branches AttachRejected, JournalReady, LiveJournalFragment, Gap.
+- [x] T067 [L5] Contrôle : 37 appels `wrapper_dispatch::on_`, fonction sous 1500 lignes ; `validation/lot05-fin.txt`.
+- [x] T068 [L5] Porte : `C-TESTS`, `C-ECHECS`, `C-NOMS` ; bilan ; fin de lot.
 
 ## Lot 6 - `unsafe` justifiés (guide : `guides/lot-06-unsafe.md`)
 
