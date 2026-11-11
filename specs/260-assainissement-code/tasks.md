@@ -1,6 +1,6 @@
 # Tâches 260 - Assainissement du code et du dépôt
 
-Statut : In Progress. 128 tâches cochées sur 157 (voir `implementation.md` pour le détail et les lots bloqués). La mise en oeuvre est en cours : lots 0, 1 (sauf T024), 2, 3, 4, 5, 6, 7, 8 (partiel), 9 (partiel), 10, 12, 14, 13 (T137 partiel), 15, 17 traités.
+Statut : In Progress. 135 tâches cochées sur 157 (voir `implementation.md` pour le détail et les lots bloqués). La mise en oeuvre est en cours : lots 0, 1 (sauf T024), 2, 3, 4, 5, 6, 7, 8 (partiel), 9 (partiel), 10, 12, 14, 13 (T137 partiel), 15, 17 traités.
 Spécification : `spec.md`. Plan : `plan.md`. Règles : `contracts/regles-implementeur.md`. Portes : `decisions.md`. Démarrage et clôture : `quickstart.md`.
 
 ## Comment lire ce fichier
@@ -165,12 +165,12 @@ Spécification : `spec.md`. Plan : `plan.md`. Règles : `contracts/regles-implem
 
 ## Lot 11 - Modules nommés par rôle (guide : `guides/lot-11-modules.md`)
 
-- [ ] T119 [L11] [D10] Porte D10, dépôt calme, lot 10 intégré ; `validation/lot11-renommages.txt`.
-- [ ] T120 [L11] Renommer les modules 1 à 6 de la table.
-- [ ] T121 [L11] Renommer les modules 7 à 12.
-- [ ] T122 [L11] Renommer les modules 13 à 18.
-- [ ] T123 [L11] Contrôle des restes (anciens noms) ; `validation/lot11-restes.txt`.
-- [ ] T124 [L11] Porte : `C-ECHECS` et `C-NOMS` avec lignes de base transformées ; bases actualisées ; bilan ; fin de lot.
+- [x] T119 [L11] [D10] Porte D10, dépôt calme, lot 10 intégré ; `validation/lot11-renommages.txt`.
+- [x] T120 [L11] Renommer les modules 1 à 6 de la table.
+- [x] T121 [L11] Renommer les modules 7 à 12.
+- [x] T122 [L11] Renommer les modules 13 à 18.
+- [x] T123 [L11] Contrôle des restes (anciens noms) ; `validation/lot11-restes.txt`.
+- [x] T124 [L11] Porte : `C-ECHECS` et `C-NOMS` avec lignes de base transformées ; bases actualisées ; bilan ; fin de lot.
 
 ## Lot 12 - Stockage documenté (guide : `guides/lot-12-stockage.md`)
 
@@ -189,7 +189,7 @@ Spécification : `spec.md`. Plan : `plan.md`. Règles : `contracts/regles-implem
 - [x] T134 [L13] `scripts/update.py` S310 et restes ; `py_compile` sans exécution.
 - [x] T135 [L13] `set -eu` dans les 2 scripts de test shell sans référence.
 - [x] T136 [L13] Documenter l'absence de `set -e` des 4 scripts vivants.
-- [ ] T137 [L13] Cible `lint-scripts`, job CI `scripts`, porte du lot ; bilan ; fin de lot.
+- [x] T137 [L13] Cible `lint-scripts`, job CI `scripts`, porte du lot ; bilan ; fin de lot.
 
 ## Lot 14 - Tests ignorés expliqués (guide : `guides/lot-14-tests-ignores.md`)
 

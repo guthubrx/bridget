@@ -17,8 +17,9 @@ Statut du programme : In Progress. Règles : `contracts/regles-implementeur.md`.
 | 8 | partiel | T092 à T095, T097, T098 faits ; T096 non faite |
 | 9 | partiel | T099, T100, T102, T103, T112, T113 faits ; T101, T104 arrêtées ; T105 à T111 non faites |
 | 10 | intégré | T114 à T118 faits |
+| 11 | intégré | T119 à T124 faits |
 | 12 | intégré | T125 à T127 faits |
-| 13 | intégré | T128 à T136 faits ; T137 partiel (job CI différé) |
+| 13 | intégré | T128 à T137 faits (job CI en observation) |
 | 14 | intégré | T138 à T140 faits |
 | 15 | intégré | T141, T142 faits |
 | 17 | intégré | T151 à T154 faits |
@@ -307,3 +308,18 @@ Code exécutable modifié (constantes, signatures internes) : **activation en at
 
 ### Bilan lot 10
 Forme seulement. « Activation en attente » : binaire équivalent.
+
+### Lot 11 - Modules nommés par rôle (T119 à T124)
+- Statut : fait
+- Commits : `refactor(daemon): Renommer les 18 modules numerotes par leur role` (renommage par `git mv`, jetons `perl`-like protégés par `(?!-)`, formatage, commentaires `SAFETY` replacés) ; `ci(scripts): Controler les scripts en integration continue` (T137).
+- Fichiers : 18 fichiers renommés (`validation/lot11-renommages.txt` : 24 correspondances fichier ou identifiant), 46 fichiers touchés.
+- Vérifications : D10 tranchée par François (« renommer maintenant »). Compilation, `cargo fmt --check` et `clippy -D warnings` : code 0. Aucune chaîne durable modifiée : les seules lignes avec guillemets sont les attributs `#[path = ...]`, des chemins de fichiers dans deux tests qui lisent le source (`provider_catalogue.rs`), et `include_bytes!`. Porte sur cliché isolé de `HEAD` : `C-ECHECS` identique à la base **transformée** (les identifiants de modules figurent dans les noms de tests) ; `C-NOMS` identique à la base transformée (3 848 noms, 0 différence). Les lignes de base sont remplacées par leurs versions transformées.
+- Écarts :
+  - 16 identifiants de modules à chiffres changent aussi (ex. `specialists222` -> `specialist_requests`, `capacity234` -> `capacity`, `quota_questions246` -> `quota_questions`), car la même chaîne apparaissait dans les chemins de modules et les noms de tests.
+  - Le formatage de masse a déplacé six commentaires `// SAFETY:` (une instruction `match` formatée sur plusieurs lignes) : ils ont été replacés au-dessus de leur bloc `unsafe`, `clippy -D warnings` revenu à 0.
+  - `scripts/sentinel.py` : le commentaire cite désormais `sentinel.rs` (fichier embarqué dans le démon par `include_str!`).
+  - `scripts/tests/test_sentinel.py` contient encore le libellé `"sentinel244"` (nom arbitraire d'un module Python importé par le test, hors périmètre).
+- Non vérifié : les anciennes références dans la documentation (`docs/`, `specs/`), non modifiées volontairement.
+
+### Bilan lot 11
+Noms seulement. **Activation en attente** (binaire différent par les chemins de modules).
