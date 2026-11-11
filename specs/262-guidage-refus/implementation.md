@@ -32,18 +32,19 @@ Les retours aux deux demandeurs sont conservés avec leurs reçus. Le retour Men
 
 ## Ménage et conservations
 
-Ménage exécuté dans les gardes : 58 anciennes copies exécutables retirées sur Mac, SYS et KS. Les versions actives et de retour sont conservées. Sur SYS, l’entretien natif après installation a retiré 6,40 Gio d’intermédiaires. Les exports et copies de compilation propres au passage ont aussi été retirés sur Mac et SYS, soit environ 770 Mo logiques.
+Ménage exécuté dans les gardes : 83 anciennes copies exécutables retirées sur Mac, Cartae, SYS et KS. Les versions actives et de retour sont conservées. Sur SYS, l’entretien natif après installation a retiré 6,40 Gio d’intermédiaires. Les exports et copies de compilation propres au passage ont aussi été retirés sur les quatre hôtes, soit environ 1,15 Go logiques.
 
 Conservations précises :
 
 - Mac : 15,77 Gio de caches, car trois processus Python rendent leur cwd illisible (ENOENT observé, PID33346, 52798 et 70824 lors du diagnostic). Aucun processus d’autrui n’est arrêté pour nettoyer.
-- Cartae : 25 anciennes copies exécutables et les exports propres au passage, car l’observation complète après exclusion d’un montage FUSE est intermittente. Une observation positive isolée ne remplace pas le contrôle gardé du retrait ; les derniers passages refusés n’ont rien supprimé.
 - SYS : une ancienne copie 246-reader-r1, car son dossier n’est pas privé et aucune observation globale privilégiée n’est disponible pour ce retrait.
-- KS : une copie de transfert du binaire, car son dernier contrôle d’usage complet a été refusé.
 - La vue de la revue indépendante reste soumise à sa conservation native. Les manifests et reçus anciens sont conservés, sans être assimilés à des exécutables inutiles.
 
 Ces éléments sont à réexaminer lors de la prochaine livraison. Aucune garde n’a été retirée et aucun droit n’a été élargi pour faire passer le ménage.
 
-Le refus trop vague du script d’entretien est aussi corrigé : il indique maintenant une cause fermée, le PID, le descripteur et son type, sans nom de fichier. Le cas réel de cwd illisible a été reproduit. La garde conserve la même décision de refus. Validation : 69 tests Python, dont 66 réussis et 3 cas d’observation réelle ignorés par leur garde, plus Ruff sans erreur. Ce script se charge à chaque invocation depuis le checkout aligné ; cette correction ne modifie pas l’image Rust.
+Le refus trop vague du script d’entretien est aussi corrigé : il indique maintenant une cause fermée, le PID, le descripteur et son type, sans nom de fichier. Le cas réel de cwd illisible a été reproduit. La garde conserve la même décision de refus. Validation : 69 tests Python réussis sur Linux ; sur Mac, 66 réussis et 3 cas d’observation réelle ignorés par leur garde ; Ruff sans erreur. Ce script se charge à chaque invocation depuis le checkout aligné ; cette correction ne modifie pas l’image Rust.
 
 Les reçus privés restent hors Git, dans le cache dédié à la livraison. La distribution locale conservée fait 34 525 944 octets. Les changements concernent des contrats et diagnostics techniques ; aucune interface graphique n’est modifiée.
+
+
+Contrôle final du ménage distant : l’observation qualifiée d’un périmètre commun a permis le retrait des 25 anciennes copies Cartae. Les copies de transfert et les exports de compilation du passage ont été retirés sur les quatre hôtes après contrôle de leurs usages. Les premières observations refusées n’ont produit aucun retrait. Les diagnostics et reçus sont conservés hors Git. Le cache de compilation Mac et l’ancienne copie SYS cités ci-dessus restent les conservations à réexaminer.
