@@ -1255,21 +1255,21 @@ fn observe_routing_candidates_for_project(
                 }
                 let pinned=registry.clone().pin_delegation_service_tier(
                     &candidate.agent_type,&candidate.model,request.service_tier.as_deref())?;
-                let Ok((_, snapshot, _)) = resolve_target(
-                    &pinned,
-                    &st.source_env,
-                    &unknown_limits,
-                    &owner,
-                    &instance,
-                    Some(&parent),
-                    &candidate.agent_type,
-                    &candidate.model,
-                    candidate.default_effort.as_deref(),
-                    source,
-                    request.posture,
-                    request.workspace.as_ref(),
-                    request.child_requests.as_deref(),
-                ) else {
+                let Ok((_, snapshot, _)) = resolve_target(ResolveTargetArgs {
+registry: &pinned,
+source: &st.source_env,
+limits: &unknown_limits,
+owner: &owner,
+instance: &instance,
+fact: Some(&parent),
+agent_type: &candidate.agent_type,
+model: &candidate.model,
+effort: candidate.default_effort.as_deref(),
+cwd: source,
+posture: request.posture,
+workspace: request.workspace.as_ref(),
+child_requests: request.child_requests.as_deref(),
+}) else {
                     continue;
                 };
                 let Some(snapshot) = snapshot else {
@@ -3410,21 +3410,21 @@ fn filter_auto_candidates(
             let candidate_id = format!("c{:02}", index + 1);
             if candidate.machine_id == "local" {
                 if request.project_id.is_some()
-                    || resolve_target(
-                        &st.registry,
-                        &st.source_env,
-                        &st.provider_limits,
-                        &owner,
-                        &instance,
-                        Some(&parent),
-                        &candidate.agent_type,
-                        &candidate.model,
-                        candidate.effort.as_deref(),
-                        source,
-                        request.posture,
-                        request.workspace.as_ref(),
-                        request.child_requests.as_deref(),
-                    )
+                    || resolve_target(ResolveTargetArgs {
+registry: &st.registry,
+source: &st.source_env,
+limits: &st.provider_limits,
+owner: &owner,
+instance: &instance,
+fact: Some(&parent),
+agent_type: &candidate.agent_type,
+model: &candidate.model,
+effort: candidate.effort.as_deref(),
+cwd: source,
+posture: request.posture,
+workspace: request.workspace.as_ref(),
+child_requests: request.child_requests.as_deref(),
+})
                     .is_err()
                 {
                     continue;
@@ -8229,21 +8229,23 @@ fn task_id_for_pass<'a>(pass: WorkspacePass<'a>) -> &'a str {
 /// O(log t + log p + m + C+B+P+E log e) : t types, p quotas fournisseurs,
 /// m efforts, C capacités/arguments, B définitions et sources de droits lues,
 /// P PATH, E variables déclarées, e source ; huit fenêtres de quota au plus.
-fn resolve_target(
-    registry: &AgentRegistry,
-    source: &crate::lifecycle::SourceEnvironment,
-    limits: &crate::provider_limits::ProviderLimits,
-    owner: &str,
-    instance: &str,
-    fact: Option<&bridget_transport::protocol::ProviderPermissions>,
-    agent_type: &str,
-    model: &str,
-    effort: Option<&str>,
-    cwd: &Path,
-    posture: Option<SpawnPosture>,
-    workspace: Option<&WorkspaceRequest>,
-    child_requests: Option<&str>,
-) -> Result<
+struct ResolveTargetArgs<'a> {
+    pub registry: &'a AgentRegistry,
+    pub source: &'a crate::lifecycle::SourceEnvironment,
+    pub limits: &'a crate::provider_limits::ProviderLimits,
+    pub owner: &'a str,
+    pub instance: &'a str,
+    pub fact: Option<&'a bridget_transport::protocol::ProviderPermissions>,
+    pub agent_type: &'a str,
+    pub model: &'a str,
+    pub effort: Option<&'a str>,
+    pub cwd: &'a Path,
+    pub posture: Option<SpawnPosture>,
+    pub workspace: Option<&'a WorkspaceRequest>,
+    pub child_requests: Option<&'a str>,
+}
+
+fn resolve_target(args: ResolveTargetArgs<'_>) -> Result<
     (
         AgentRegistry,
         Option<bridget_transport::protocol::NativePermissionSnapshot>,
@@ -8251,6 +8253,7 @@ fn resolve_target(
     ),
     String,
 > {
+    let ResolveTargetArgs { registry, source, limits, owner, instance, fact, agent_type, model, effort, cwd, posture, workspace, child_requests } = args;
     target_resolver(
         registry,
         source,
@@ -8952,21 +8955,21 @@ fn admit_delegate(
                     return Err("invalid_request".into());
                 }
                 let pinned = AgentRegistry::from_resolved(agent_type, definition)?;
-                let (scoped, snapshot, effective) = resolve_target(
-                    &pinned,
-                    &st.source_env,
-                    limits,
-                    &owner,
-                    &instance,
-                    fact.as_ref(),
-                    agent_type,
-                    model,
-                    effort.as_deref(),
-                    &frozen_cwd,
-                    *posture,
-                    workspace.as_ref(),
-                    child_requests.as_deref(),
-                )?;
+                let (scoped, snapshot, effective) = resolve_target(ResolveTargetArgs {
+registry: &pinned,
+source: &st.source_env,
+limits,
+owner: &owner,
+instance: &instance,
+fact: fact.as_ref(),
+agent_type,
+model,
+effort: effort.as_deref(),
+cwd: &frozen_cwd,
+posture: *posture,
+workspace: workspace.as_ref(),
+child_requests: child_requests.as_deref(),
+})?;
                 (
                     selected.clone(),
                     definition.clone(),
@@ -8988,21 +8991,21 @@ fn admit_delegate(
                     .chain(fallback.iter())
                     .enumerate()
                 {
-                    match resolve_target(
-                        &registry,
-                        &st.source_env,
-                        limits,
-                        &owner,
-                        &instance,
-                        fact.as_ref(),
-                        &candidate.agent_type,
-                        &candidate.model,
-                        candidate.effort.as_deref(),
-                        &frozen_cwd,
-                        *posture,
-                        workspace.as_ref(),
-                        child_requests.as_deref(),
-                    ) {
+                    match resolve_target(ResolveTargetArgs {
+registry: &registry,
+source: &st.source_env,
+limits,
+owner: &owner,
+instance: &instance,
+fact: fact.as_ref(),
+agent_type: &candidate.agent_type,
+model: &candidate.model,
+effort: candidate.effort.as_deref(),
+cwd: &frozen_cwd,
+posture: *posture,
+workspace: workspace.as_ref(),
+child_requests: child_requests.as_deref(),
+}) {
                         Ok((scoped, snapshot, effective)) => {
                             let definition =
                                 registry.resolved_definition(&candidate.agent_type)?;
@@ -9126,21 +9129,21 @@ fn admit_delegate(
                 }
                 let fact = fact.ok_or("permission_attestation_unavailable")?;
                 let pinned = AgentRegistry::from_resolved(agent_type, &raw_definition)?;
-                let (scoped, snapshot, effective) = resolve_target(
-                    &pinned,
-                    &st.source_env,
-                    limits,
-                    &owner,
-                    &instance,
-                    Some(&fact),
-                    agent_type,
-                    model,
-                    effort.as_deref(),
-                    &child,
-                    *posture,
-                    workspace.as_ref(),
-                    child_requests.as_deref(),
-                )?;
+                let (scoped, snapshot, effective) = resolve_target(ResolveTargetArgs {
+registry: &pinned,
+source: &st.source_env,
+limits,
+owner: &owner,
+instance: &instance,
+fact: Some(&fact),
+agent_type,
+model,
+effort: effort.as_deref(),
+cwd: &child,
+posture: *posture,
+workspace: workspace.as_ref(),
+child_requests: child_requests.as_deref(),
+})?;
                 if Some(effective) != effective_posture {
                     return Err("permission_not_inherited".into());
                 }
