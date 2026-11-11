@@ -1,3 +1,4 @@
+use bridget_transport::poison::RecoverPoison;
     use super::*;
 
     #[test]
@@ -1455,7 +1456,7 @@
         let emitter: Arc<dyn Fn(WrapperToDaemon) + Send + Sync> = Arc::new(move |message| {
             captured
                 .lock()
-                .unwrap_or_else(|poison| poison.into_inner())
+                .recover_poison()
                 .push(message);
         });
         (events, emitter)
@@ -1479,7 +1480,7 @@
             captured
                 .messages
                 .lock()
-                .unwrap_or_else(|poison| poison.into_inner())
+                .recover_poison()
                 .push(message);
             captured.emitted.notify_all();
         });
@@ -1493,12 +1494,12 @@
         let mut messages = events
             .messages
             .lock()
-            .unwrap_or_else(|poison| poison.into_inner());
+            .recover_poison();
         while !condition(&messages) {
             messages = events
                 .emitted
                 .wait(messages)
-                .unwrap_or_else(|poison| poison.into_inner());
+                .recover_poison();
         }
     }
 
@@ -2836,7 +2837,7 @@
         let state = worker
             .control_state
             .lock()
-            .unwrap_or_else(|poison| poison.into_inner());
+            .recover_poison();
         assert_eq!(state.pending.len(), 1);
         assert!(state.active.is_empty());
         assert_eq!(state.cancelled.len(), 1);
@@ -2848,7 +2849,7 @@
         let state = worker
             .control_state
             .lock()
-            .unwrap_or_else(|poison| poison.into_inner());
+            .recover_poison();
         assert!(state.pending.is_empty());
         assert!(state.active.is_empty());
         assert!(state.cancelled.is_empty());
@@ -3261,7 +3262,7 @@
         let messages = events
             .messages
             .lock()
-            .unwrap_or_else(|poison| poison.into_inner());
+            .recover_poison();
         let b = messages.iter().position(|message| matches!(message, WrapperToDaemon::JournalFragment { subscription_id, seq: 2, .. } if subscription_id == "b-live")).expect("fragment B");
         let a_final = messages.iter().position(|message| matches!(message, WrapperToDaemon::JournalFragment { subscription_id, seq: 1, final_fragment: true, .. } if subscription_id == "a-gros")).expect("final A");
         assert!(b < a_final, "B doit passer avant le dernier fragment de A");

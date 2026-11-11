@@ -1,4 +1,5 @@
 //! Boîte humaine native : une réponse reste un choix offert, son application est acquittée séparément.
+use bridget_transport::poison::RecoverPoison;
 use super::*;
 use crate::mobile::store::{Operation, Store};
 use bridget_transport::protocol::{
@@ -57,7 +58,7 @@ pub(super) fn handle(
     root: &Path,
     state: &Arc<Mutex<DaemonState>>,
 ) -> DaemonToWrapper {
-    let st = state.lock().unwrap_or_else(|e| e.into_inner());
+    let st = state.lock().recover_poison();
     let device = match Store::open(&root.join("mobile-devices.db"))
         .and_then(|s| s.authenticate(request.credential.expose_for_attestation(), unix_now_secs()))
     {

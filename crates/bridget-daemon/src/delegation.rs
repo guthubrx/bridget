@@ -1,4 +1,5 @@
 //! Saga native durable. Les identités et effets appartiennent au daemon.
+use bridget_transport::poison::RecoverPoison;
 use bridget_transport::protocol::{
     FallbackTarget, NativeDelegationRequest, ResolvedAgentDefinition, SpawnPosture,
 };
@@ -29,22 +30,22 @@ pub(crate) struct WaitEpoch(Arc<(Mutex<u64>, Condvar)>);
 
 impl WaitEpoch {
     pub fn get(&self) -> u64 {
-        *self.0.0.lock().unwrap_or_else(|e| e.into_inner())
+        *self.0.0.lock().recover_poison()
     }
 
     pub fn bump(&self) {
-        let mut epoch = self.0.0.lock().unwrap_or_else(|e| e.into_inner());
+        let mut epoch = self.0.0.lock().recover_poison();
         *epoch = epoch.wrapping_add(1);
         self.0.1.notify_all();
     }
 
     pub fn wait_changed(&self, seen: u64, slice: Duration) {
-        let epoch = self.0.0.lock().unwrap_or_else(|e| e.into_inner());
+        let epoch = self.0.0.lock().recover_poison();
         drop(
             self.0
                 .1
                 .wait_timeout_while(epoch, slice, |epoch| *epoch == seen)
-                .unwrap_or_else(|e| e.into_inner()),
+                .recover_poison(),
         );
     }
 }

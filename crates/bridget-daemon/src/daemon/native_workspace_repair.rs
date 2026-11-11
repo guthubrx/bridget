@@ -1,4 +1,5 @@
 //! Coordination185 : même tâche et mêmes canons de naissance.
+use bridget_transport::poison::RecoverPoison;
 use super::*;
 use bridget_transport::protocol::{
     WorkspaceRepairActionV1, WorkspaceRepairRequestV1, WorkspaceRepairStatusV1,
@@ -126,7 +127,7 @@ pub(super) fn failure_context(
     state: &Arc<Mutex<DaemonState>>,
 ) -> Value {
     let mut result = failure(code);
-    let st = state.lock().unwrap_or_else(|e| e.into_inner());
+    let st = state.lock().recover_poison();
     if recheck_attested_thread(&st, conn, thread).is_err() {
         return result;
     }
@@ -186,7 +187,7 @@ fn reconcile_publication(
     state: &Arc<Mutex<DaemonState>>,
 ) -> Result<Option<Value>, String> {
     let (saved, worker, command, owner, instance) = {
-        let st = state.lock().unwrap_or_else(|e| e.into_inner());
+        let st = state.lock().recover_poison();
         recheck_attested_thread(&st, conn, thread)?;
         let (owner, instance) =
             live_connection_identity(&st, conn).ok_or("permission_attestation_unavailable")?;
@@ -236,7 +237,7 @@ fn reconcile_publication(
     if status.phase != "published" {
         return Ok(None);
     }
-    let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+    let mut st = state.lock().recover_poison();
     let current = st
         .delegation_store
         .get(task_id)?
@@ -269,7 +270,7 @@ pub(super) fn repair(
         return Ok(view);
     }
     let (saved, command, worker, owner, instance) = {
-        let st = state.lock().unwrap_or_else(|e| e.into_inner());
+        let st = state.lock().recover_poison();
         recheck_attested_thread(&st, conn, thread)?;
         let (owner, instance) =
             live_connection_identity(&st, conn).ok_or("permission_attestation_unavailable")?;
@@ -396,7 +397,7 @@ pub(super) fn repair(
         return Err("workspace_repair_envelope_mismatch".into());
     }
     {
-        let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+        let mut st = state.lock().recover_poison();
         let current = st
             .delegation_store
             .get(task_id)?
@@ -420,7 +421,7 @@ pub(super) fn repair(
         let key = format!("{task_id}:{}", request.request_id);
         let (sender, receiver) = std::sync::mpsc::sync_channel(1);
         let writer = {
-            let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+            let mut st = state.lock().recover_poison();
             let current = st
                 .delegation_store
                 .get(task_id)?
@@ -488,7 +489,7 @@ pub(super) fn repair(
         ) {
             state
                 .lock()
-                .unwrap_or_else(|e| e.into_inner())
+                .recover_poison()
                 .pending_workspace_repairs
                 .remove(&key);
             return Err(format!("workspace_repair_control_unconfirmed:{error}"));
@@ -496,7 +497,7 @@ pub(super) fn repair(
         let result = receiver.recv_timeout(Duration::from_secs(30));
         state
             .lock()
-            .unwrap_or_else(|e| e.into_inner())
+            .recover_poison()
             .pending_workspace_repairs
             .remove(&key);
         let result = result.map_err(|_| "workspace_repair_pending")?;
@@ -510,7 +511,7 @@ pub(super) fn repair(
                 .unwrap_or_else(|| "workspace_repair_resume_unconfirmed".into());
             // Après arrêt, un échec reste fermé et conservé.
             save_status(
-                &mut state.lock().unwrap_or_else(|e| e.into_inner()),
+                &mut state.lock().recover_poison(),
                 task_id,
                 result,
             )?;
@@ -519,7 +520,7 @@ pub(super) fn repair(
     }
     remote_parent_proof(state, &saved.owner, &snapshot.parent, saved.admitted_parent()?.map(|_| &saved))?;
     {
-        let st = state.lock().unwrap_or_else(|e| e.into_inner());
+        let st = state.lock().recover_poison();
         let current = st
             .delegation_store
             .get(task_id)?
@@ -550,7 +551,7 @@ pub(super) fn repair(
         return Err("workspace_repair_pending".into());
     }
     {
-        let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+        let mut st = state.lock().recover_poison();
         let current = st
             .delegation_store
             .get(task_id)?
@@ -582,7 +583,7 @@ pub(super) fn repair(
     if status.request != *request || status.phase != "published" {
         return Err("workspace_repair_pending".into());
     }
-    let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+    let mut st = state.lock().recover_poison();
     let current = st
         .delegation_store
         .get(task_id)?

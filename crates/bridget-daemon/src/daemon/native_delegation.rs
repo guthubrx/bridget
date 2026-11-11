@@ -11,6 +11,7 @@ mod permission_change;
 mod workspace_preparation210;
 #[path = "native_admission_guidance211.rs"]
 mod admission_guidance211;
+use bridget_transport::poison::RecoverPoison;
 use super::*;
 use crate::decision_service::{
     CallerDeadline, DecisionBrief, DecisionCandidate, DecisionChoice, HealthStatus,
@@ -479,7 +480,7 @@ fn validate_routing_parent_source(
 ) -> Result<(), String> {
     use bridget_transport::protocol::*;
     let remote = {
-        let st = state.lock().unwrap_or_else(|e| e.into_inner());
+        let st = state.lock().recover_poison();
         let (owner, instance) = live_connection_identity(&st, conn).ok_or("identity_unavailable")?;
         let parent = parent_fact(&st, &owner, &instance, Some(&request.request_id), attested)?
             .ok_or("permission_attestation_unavailable")?;
@@ -496,7 +497,7 @@ fn validate_routing_parent_source(
     };
     let Some((worker, command, parent)) = remote else {
         let (owner,parent)={
-            let st=state.lock().unwrap_or_else(|e|e.into_inner());
+            let st=state.lock().recover_poison();
             let (owner,instance)=live_connection_identity(&st,conn).ok_or("identity_unavailable")?;
             let parent=parent_fact(&st,&owner,&instance,Some(&request.request_id),attested)?.ok_or("permission_attestation_unavailable")?;
             (owner,parent)
@@ -910,7 +911,7 @@ fn prepare_routing_projects(
     state: &Arc<Mutex<DaemonState>>,
 ) -> Result<(), String> {
     let (registry, host, origin_host, owner, parent) = {
-        let st = state.lock().unwrap_or_else(|e| e.into_inner());
+        let st = state.lock().recover_poison();
         recheck_attested_thread(&st, conn, thread)?;
         let (owner, instance) = live_connection_identity(&st, conn).ok_or("identity_unavailable")?;
         let parent = parent_fact(&st, &owner, &instance, Some(&request.request_id), attested)?
@@ -987,7 +988,7 @@ fn prepare_routing_projects(
     if plan.candidates.is_empty() {
         return Err(admission_guidance211::mapping_context_error("project_preparation",&refused));
     }
-    let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+    let mut st = state.lock().recover_poison();
     recheck_attested_thread(&st, conn, thread)?;
     let (owner, instance) = live_connection_identity(&st, conn).ok_or("identity_unavailable")?;
     if super::origin_proof::host_for_owner(&st,&owner)? != origin_host {
@@ -1128,7 +1129,7 @@ fn observe_routing_candidates_for_project(
     let now = unix_timestamp();
     let (required_tools,requires_workspace_write)=identified_workload_requirements(&request.task);
     let (source_env,has_local,source_root)={
-        let st=state.lock().unwrap_or_else(|e|e.into_inner());
+        let st=state.lock().recover_poison();
         let (owner,instance)=live_connection_identity(&st,conn).ok_or("identity_unavailable")?;
         let parent=parent_fact(&st,&owner,&instance,Some(&request.request_id),attested)?
             .ok_or("permission_attestation_unavailable")?;
@@ -1143,7 +1144,7 @@ fn observe_routing_candidates_for_project(
     let mut option_accounts=HashMap::new();
     let mut option_refusals=Vec::new();
     let (parent, mut observations, batches, host) = {
-        let mut st = state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut st = state.lock().recover_poison();
         let (owner, instance) =
             live_connection_identity(&st, conn).ok_or("identity_unavailable")?;
         let parent = parent_fact(&st, &owner, &instance, Some(&request.request_id), attested)?
@@ -1468,7 +1469,7 @@ fn observe_routing_candidates_for_project(
                     let connection = &candidate_connections[&candidate_id];
                     let blocked = *quota_seen.entry((connection.clone(), definition_digest.clone()))
                         .or_insert_with(|| {
-                            let st = state.lock().unwrap_or_else(|error| error.into_inner());
+                            let st = state.lock().recover_poison();
                             let live = st.conn_instances.values().cloned().collect();
                             let scope = st
                                 .registry
@@ -2105,7 +2106,7 @@ fn routing_lightweight_options(
         .model
         .as_deref()
         .ok_or("lightweight_decision_unavailable")?;
-    let st = state.lock().unwrap_or_else(|error| error.into_inner());
+    let st = state.lock().recover_poison();
     if !routing_is_local(&connection.machine_id, &st.host) {
         return Err("lightweight_decision_unavailable".into());
     }
@@ -2213,7 +2214,7 @@ impl Drop for RoutingAdmissionClaim {
     fn drop(&mut self) {
         self.active
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .recover_poison()
             .remove(&self.key);
     }
 }
@@ -2230,7 +2231,7 @@ fn route_selected_admission(
     state: &Arc<Mutex<DaemonState>>,
 ) -> Result<Value, String> {
     let _claim = {
-        let mut st = state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut st = state.lock().recover_poison();
         let current = st
             .delegation_store
             .auto_admission_receipt(&receipt.owner, &receipt.request_id)?
@@ -2248,7 +2249,7 @@ fn route_selected_admission(
         let key = (receipt.owner.clone(), receipt.request_id.clone());
         if !active
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .recover_poison()
             .insert(key.clone())
         {
             return Err("admission_pending".into());
@@ -2263,7 +2264,7 @@ fn route_selected_admission(
         let candidate = &plan.candidates[index];
         validate_routing_parent_source(conn, request, attested, state)?;
         let (host, recovering) = {
-            let st = state.lock().unwrap_or_else(|e| e.into_inner());
+            let st = state.lock().recover_poison();
             (
                 st.host.clone(),
                 st.coordinator_epoch != receipt.coordinator_epoch,
@@ -2327,7 +2328,7 @@ fn route_selected_admission(
                 state,
             ),
             _ => {
-                let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+                let mut st = state.lock().recover_poison();
                 recheck_attested_thread(&st, conn, thread)?;
                 match admit_delegate(
                     conn,
@@ -2354,7 +2355,7 @@ fn route_selected_admission(
     }
     // La clôture CAS fait partie du même parcours exclusif que Prepare.
     outcome.or_else(|code| {
-        let st = state.lock().unwrap_or_else(|error| error.into_inner());
+        let st = state.lock().recover_poison();
         Err(close_auto_admission_error(&st, receipt, code)?)
     })
 }
@@ -2375,7 +2376,7 @@ fn choose_routing_admission(
 ) -> Result<Value, String> {
     use bridget_transport::protocol::{LineageDecisionSourceV4, LineageDecisionV4};
     {
-        let st = state.lock().unwrap_or_else(|e| e.into_inner());
+        let st = state.lock().recover_poison();
         recheck_attested_thread(&st, conn, thread)?;
         let current = st
             .delegation_store
@@ -2430,7 +2431,7 @@ fn choose_routing_admission(
             _ => AutoAdmissionMode::Automatic,
         };
         let chosen = {
-            let st = state.lock().unwrap_or_else(|e| e.into_inner());
+            let st = state.lock().recover_poison();
             recheck_attested_thread(&st, conn, thread)?;
             if !recovering && st.coordinator_epoch != receipt.coordinator_epoch {
                 return Err("admission_pending".into());
@@ -2468,7 +2469,7 @@ fn choose_routing_admission(
         ) {
             Ok(view) => Ok(view),
             Err(code) => {
-                let st = state.lock().unwrap_or_else(|e| e.into_inner());
+                let st = state.lock().recover_poison();
                 Err(close_auto_admission_error(&st, &chosen, code)?)
             }
         }
@@ -2476,7 +2477,7 @@ fn choose_routing_admission(
     match outcome {
         Ok(view) => Ok(view),
         Err(code) => {
-            let st = state.lock().unwrap_or_else(|e| e.into_inner());
+            let st = state.lock().recover_poison();
             let current = st
                 .delegation_store
                 .auto_admission_receipt(&receipt.owner, &receipt.request_id)?;
@@ -2515,7 +2516,7 @@ fn admit_auto_routing(
         return Err("auto_admission_invalid".into());
     }
     let (registry, coordinator) = {
-        let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+        let mut st = state.lock().recover_poison();
         recheck_attested_thread(&st, conn, thread)?;
         let (owner, _) = live_connection_identity(&st, conn).ok_or("identity_unavailable")?;
         if let Some(receipt) = st
@@ -2584,7 +2585,7 @@ fn admit_auto_routing(
         return if code == "routing_candidate_unavailable" {
             let mut view=routing_probe_failure(&plan);
             let observed_quota=plan.connections.iter().any(|fact|serde_json::from_str::<Value>(&fact.summary).ok().is_some_and(|q|q["launch_blocked"]==true));
-            let st=state.lock().unwrap_or_else(|e|e.into_inner());
+            let st=state.lock().recover_poison();
             if let Err(code)=quota_questions246::pre_admission(&st,conn,&NativeDelegationRequest::AutoDelegateV2(request.clone()),observed_quota,&mut view) {
                 view["quota_question_error"]=json!(code);
             }
@@ -2594,7 +2595,7 @@ fn admit_auto_routing(
         };
     }
     let receipt = {
-        let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+        let mut st = state.lock().recover_poison();
         recheck_attested_thread(&st, conn, thread)?;
         let (owner, _) = live_connection_identity(&st, conn).ok_or("identity_unavailable")?;
         if let Some(existing) = st
@@ -2668,7 +2669,7 @@ fn admit_auto_routing(
         );
     }
     let (client, permit) = {
-        let st = state.lock().unwrap_or_else(|e| e.into_inner());
+        let st = state.lock().recover_poison();
         let client = st.decision_service.clone();
         let permit = if payload_available {
             match client.acquire_routing_permit() {
@@ -2718,7 +2719,7 @@ fn admit_auto_routing(
                 plan.decision_level = AutoAdmissionDecisionLevel::LightweightModel;
                 let metadata = serde_json::to_vec(&routing_snapshot(&plan, None))
                     .map_err(|e| e.to_string())?;
-                let st = state.lock().unwrap_or_else(|e| e.into_inner());
+                let st = state.lock().recover_poison();
                 if st.coordinator_epoch != receipt.coordinator_epoch {
                     return Err("admission_pending".into());
                 }
@@ -3200,7 +3201,7 @@ fn reserve_auto_receipt(
     thread: Option<&str>,
     state: &Arc<Mutex<DaemonState>>,
 ) -> Result<AutoReceiptReservation, String> {
-    let mut st = state.lock().unwrap_or_else(|error| error.into_inner());
+    let mut st = state.lock().recover_poison();
     recheck_attested_thread(&st, conn, thread)?;
     let (owner, _) = live_connection_identity(&st, conn).ok_or("identity_unavailable")?;
     let canonical = serde_json::to_vec(&NativeDelegationRequest::AutoDelegate(request.clone()))
@@ -3258,7 +3259,7 @@ fn existing_auto_receipt_view(
     thread: Option<&str>,
     state: &Arc<Mutex<DaemonState>>,
 ) -> Result<Option<Value>, String> {
-    let mut st = state.lock().unwrap_or_else(|error| error.into_inner());
+    let mut st = state.lock().recover_poison();
     recheck_attested_thread(&st, conn, thread)?;
     let (owner, _) = live_connection_identity(&st, conn).ok_or("identity_unavailable")?;
     let canonical = serde_json::to_vec(&NativeDelegationRequest::AutoDelegate(request.clone()))
@@ -3383,7 +3384,7 @@ fn filter_auto_candidates(
         .map_err(|error| error.to_string())?;
     let admission_id = auto_admission_id(&canonical);
     let (parent, mut eligible, remote_batches) = {
-        let st = state.lock().unwrap_or_else(|error| error.into_inner());
+        let st = state.lock().recover_poison();
         let (owner, instance) =
             live_connection_identity(&st, conn).ok_or("identity_unavailable")?;
         let parent = parent_fact(&st, &owner, &instance, Some(&request.request_id), attested)
@@ -3623,7 +3624,7 @@ fn finalise_auto_choice(
             }
         ) {
             let chosen = {
-                let st = state.lock().unwrap_or_else(|error| error.into_inner());
+                let st = state.lock().recover_poison();
                 recheck_attested_thread(&st, conn, thread)?;
                 st.delegation_store.choose_auto_admission(
                     &receipt.owner,
@@ -3647,13 +3648,13 @@ fn finalise_auto_choice(
             ) {
                 Ok(view) => Ok(view),
                 Err(code) => {
-                    let st = state.lock().unwrap_or_else(|error| error.into_inner());
+                    let st = state.lock().recover_poison();
                     recheck_attested_thread(&st, conn, thread)?;
                     Err(close_auto_admission_error(&st, &chosen, code)?)
                 }
             };
         }
-        let mut st = state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut st = state.lock().recover_poison();
         recheck_attested_thread(&st, conn, thread)?;
         return finalise_auto_local_choice(
             conn,
@@ -3670,7 +3671,7 @@ fn finalise_auto_choice(
 
     let delegate_canonical = serde_json::to_vec(&delegate).map_err(|error| error.to_string())?;
     let chosen = {
-        let st = state.lock().unwrap_or_else(|error| error.into_inner());
+        let st = state.lock().recover_poison();
         recheck_attested_thread(&st, conn, thread)?;
         st.delegation_store.choose_auto_admission(
             &receipt.owner,
@@ -3695,7 +3696,7 @@ fn finalise_auto_choice(
     ) {
         Ok(view) => Ok(view),
         Err(code) => {
-            let st = state.lock().unwrap_or_else(|error| error.into_inner());
+            let st = state.lock().recover_poison();
             recheck_attested_thread(&st, conn, thread)?;
             // Si la Task a déjà été liée, le CAS refuse et son état admis reste
             // la seule vérité. Le conflit CAS ne masque donc pas l'erreur
@@ -3726,7 +3727,7 @@ fn admit_auto_configured(
         return Ok(view);
     }
     let registry = {
-        let st = state.lock().unwrap_or_else(|error| error.into_inner());
+        let st = state.lock().recover_poison();
         recheck_attested_thread(&st, conn, thread)?;
         st.registry.clone()
     };
@@ -3761,7 +3762,7 @@ fn admit_auto_configured(
                 })
         };
         let Some((index, mode)) = selection else {
-            let st = state.lock().unwrap_or_else(|error| error.into_inner());
+            let st = state.lock().recover_poison();
             recheck_attested_thread(&st, conn, thread)?;
             st.delegation_store.refuse_auto_admission(
                 &receipt,
@@ -3789,7 +3790,7 @@ fn admit_auto_configured(
     }
 
     let (receipt, client, service) = {
-        let st = state.lock().unwrap_or_else(|error| error.into_inner());
+        let st = state.lock().recover_poison();
         recheck_attested_thread(&st, conn, thread)?;
         let started = st
             .delegation_store
@@ -3805,7 +3806,7 @@ fn admit_auto_configured(
     let payload = match laya_auto_request(request, &receipt, &plan) {
         Ok(payload) => payload,
         Err(code) => {
-            let st = state.lock().unwrap_or_else(|error| error.into_inner());
+            let st = state.lock().recover_poison();
             recheck_attested_thread(&st, conn, thread)?;
             st.delegation_store
                 .refuse_auto_admission(&receipt, &code, unix_timestamp())?;
@@ -3849,7 +3850,7 @@ fn admit_auto_configured(
                     .position(|candidate| candidate.id == fallback)
                 else {
                     let fallback_code = "fallback_profile_unavailable";
-                    let st = state.lock().unwrap_or_else(|error| error.into_inner());
+                    let st = state.lock().recover_poison();
                     recheck_attested_thread(&st, conn, thread)?;
                     st.delegation_store.refuse_auto_admission(
                         &receipt,
@@ -3875,7 +3876,7 @@ fn admit_auto_configured(
                     state,
                 );
             }
-            let st = state.lock().unwrap_or_else(|error| error.into_inner());
+            let st = state.lock().recover_poison();
             recheck_attested_thread(&st, conn, thread)?;
             st.delegation_store
                 .refuse_auto_admission(&receipt, &code, unix_timestamp())?;
@@ -3910,7 +3911,7 @@ struct WorkspaceClaim {
 
 impl Drop for WorkspaceClaim {
     fn drop(&mut self) {
-        let mut work = self.work.lock().unwrap_or_else(|e| e.into_inner());
+        let mut work = self.work.lock().recover_poison();
         match &self.key {
             WorkspaceClaimKey::Creation(key) => {
                 work.creations.remove(key);
@@ -4008,7 +4009,7 @@ fn routing_failure_admission(
     if result["status"] != "refused" {
         return result;
     }
-    let st = state.lock().unwrap_or_else(|error| error.into_inner());
+    let st = state.lock().recover_poison();
     let observed = (|| -> Result<(&str, Option<String>), String> {
         recheck_attested_thread(&st, conn, thread)?;
         let (owner, _) = live_connection_identity(&st, conn).ok_or("identity_unavailable")?;
@@ -5768,7 +5769,7 @@ pub(super) fn handle_attested(
         }
     };
     let valid = {
-        let st = state.lock().unwrap_or_else(|e| e.into_inner());
+        let st = state.lock().recover_poison();
         let expected = (
             crate::t3code::stable_uuid(&proof.thread_id),
             crate::t3code::stable_uuid(&format!("instance:{}", proof.thread_id)),
@@ -5900,7 +5901,7 @@ fn read_commit_file(conn:&str,task_id:Option<&str>,path:&str,thread:Option<&str>
     use bridget_transport::protocol::*;
     if !commit_view_file_path(path){return commit_file_refusal("commit_file_path_invalid",None);}
     let (task,execution)={
-        let st=state.lock().unwrap_or_else(|error|error.into_inner());
+        let st=state.lock().recover_poison();
         match commit_file_context(&st,conn,task_id,thread){Ok(context)=>context,Err(code)=>return commit_file_refusal(code,None)}
     };
     let worker=remote_worker_identity(task.remote_placement.as_ref().unwrap());
@@ -5912,7 +5913,7 @@ fn read_commit_file(conn:&str,task_id:Option<&str>,path:&str,thread:Option<&str>
         Err(reason)=>return commit_file_worker_refusal(reason,&task),
     };
     let current={
-        let st=state.lock().unwrap_or_else(|error|error.into_inner());
+        let st=state.lock().recover_poison();
         match commit_file_context(&st,conn,task_id,thread){Ok(context)=>context,Err(code)=>return commit_file_refusal(code,Some(&task))}
     };
     let same_workspace=serde_json::to_value(&current.0.workspace).ok()
@@ -5955,14 +5956,14 @@ fn catalogue_blocked177(st:&DaemonState,instance:&str)->Result<Vec<String>,Strin
 }
 fn foreign_catalogue177(conn:&str,attested:Option<&bridget_transport::protocol::ProviderPermissions>,
     thread:Option<&str>,state:&Arc<Mutex<DaemonState>>)->Result<Option<Value>,String>{
-    let (owner,instance,parent,blocked)={let st=state.lock().unwrap_or_else(|e|e.into_inner());
+    let (owner,instance,parent,blocked)={let st=state.lock().recover_poison();
         recheck_attested_thread(&st,conn,thread)?;
         let (owner,instance)=live_connection_identity(&st,conn).ok_or("identity_unavailable")?;
         if super::origin_proof::foreign_host(&st,&owner)?.is_none(){return Ok(None);}
         let parent=parent_fact(&st,&owner,&instance,None,attested)?.ok_or("permission_attestation_unavailable")?;
         let blocked=catalogue_blocked177(&st,&instance)?;(owner,instance,parent,blocked)};
     let mut entries=super::origin_proof::catalogue(state,&owner,&parent,blocked.clone())?;
-    let st=state.lock().unwrap_or_else(|e|e.into_inner());
+    let st=state.lock().recover_poison();
     recheck_attested_thread(&st,conn,thread)?;
     if live_connection_identity(&st,conn)!=Some((owner.clone(),instance.clone()))
         || parent_fact(&st,&owner,&instance,None,attested)?.as_ref()!=Some(&parent)
@@ -5996,7 +5997,7 @@ fn status_with_worker_observation(
     use bridget_transport::protocol::*;
     let NativeDelegationRequest::Status {task_id}=request else {return Err("invalid_request".into());};
     let (task,worker,command,epoch)={
-        let mut st=state.lock().unwrap_or_else(|e|e.into_inner());
+        let mut st=state.lock().recover_poison();
         recheck_attested_thread(&st,conn,thread)?;
         let mut initial=handle_locked_with_project(conn,request.clone(),project,fact,&mut st)?;
         let task=st.delegation_store.get(task_id)?.ok_or("task_unavailable")?;
@@ -6021,7 +6022,7 @@ fn status_with_worker_observation(
     let result=remote_worker_roundtrip_with_send_deadline(state,&worker,&command,
         WorkerRequestOperation::ExecutionStatus {},
         Instant::now()+Duration::from_secs(2),Instant::now()+Duration::from_millis(250));
-    let mut st=state.lock().unwrap_or_else(|e|e.into_inner());
+    let mut st=state.lock().recover_poison();
     recheck_attested_thread(&st,conn,thread)?;
     let mut view=handle_locked_with_project(conn,request.clone(),project,fact,&mut st)?;
     let current=st.delegation_store.get(task_id)?.ok_or("task_unavailable")?;
@@ -6063,7 +6064,7 @@ fn handle_with_fact(
         let known=result["code"]=="provider_quota_exhausted" || (result["code"]=="fallback_exhausted"
             && result["detail"]["tried"].as_array().is_some_and(|rows|!rows.is_empty() && rows.iter().all(|r|r["code"]=="provider_quota_exhausted")));
         if known && result["task_id"].is_null() {
-            let st=state.lock().unwrap_or_else(|e|e.into_inner());
+            let st=state.lock().recover_poison();
             if let Err(code)=quota_questions246::pre_admission(&st,conn,&request,true,result) {result["quota_question_error"]=json!(code);}
         }
     }
@@ -6082,7 +6083,7 @@ fn handle_with_fact_inner(
     if let NativeDelegationRequest::Specialists { request: operation } = &request {
         if matches!(operation,bridget_transport::specialists::SpecialistRequest::RequestTemporary{..}) {
             let prepared=(||->Result<_,String>{
-                let st=state.lock().unwrap_or_else(|e|e.into_inner());
+                let st=state.lock().recover_poison();
                 recheck_attested_thread(&st,conn,thread)?;
                 let (owner,instance)=live_connection_identity(&st,conn).ok_or("identity_unavailable")?;
                 parent_fact(&st,&owner,&instance,None,fact.as_ref())?.ok_or("permission_attestation_unavailable")?;
@@ -6092,7 +6093,7 @@ fn handle_with_fact_inner(
             let (owner,native)=match prepared{Ok(v)=>v,Err(code)=>return DaemonToWrapper::NativeDelegationResult{result:super::specialists222::failure(&code)}};
             let mut response=handle_with_fact(conn,NativeDelegationRequest::AutoDelegateV2(native),fact,thread,permission_proof,state,peer);
             if let DaemonToWrapper::NativeDelegationResult{result}=&mut response{
-                let st=state.lock().unwrap_or_else(|e|e.into_inner());
+                let st=state.lock().recover_poison();
                 if let Err(code)=super::specialists222::attach_temporary_result(&st,&owner,operation,result){
                     result["specialist_attachment"]=super::specialists222::failure(&code);
                     result["next_action"]=json!("Conserver la tâche native déjà admise. Faire vérifier son rattachement au profil ; aucune nouvelle mission ni nouvelle clé.");
@@ -6102,7 +6103,7 @@ fn handle_with_fact_inner(
         }
         if matches!(operation,bridget_transport::specialists::SpecialistRequest::CaptureHistory{..}) {
             let principal=(||->Result<_,String>{
-                let st=state.lock().unwrap_or_else(|e|e.into_inner());
+                let st=state.lock().recover_poison();
                 recheck_attested_thread(&st,conn,thread)?;
                 if !st.client_negotiations.get(conn).is_some_and(|n|n.capabilities.contains(&ClientCapability::SpecialistsV1)){return Err("specialists_capability_required".into());}
                 let (owner,instance)=live_connection_identity(&st,conn).ok_or("identity_unavailable")?;
@@ -6114,7 +6115,7 @@ fn handle_with_fact_inner(
         }
         let mut controls=Vec::new();
         let result = (|| -> Result<Value, String> {
-            let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+            let mut st = state.lock().recover_poison();
             recheck_attested_thread(&st, conn, thread)?;
             let (owner, instance) = live_connection_identity(&st, conn).ok_or("identity_unavailable")?;
             parent_fact(&st, &owner, &instance, None, fact.as_ref())?
@@ -6162,7 +6163,7 @@ fn handle_with_fact_inner(
     if let NativeDelegationRequest::ProviderCatalogueV1 {refresh,machine_id}=&request {
         let mut controls=Vec::new();
         let mut result=(|| {
-            let mut st=state.lock().unwrap_or_else(|e|e.into_inner());
+            let mut st=state.lock().recover_poison();
             let human=st.connection_roles.get(conn)==Some(&ConnectionRole::Client)
                 && !st.conn_names.contains_key(conn) && !st.auxiliary_connections.contains(conn)
                 && st.peer_uids.get(conn).copied()==Some(bridget_transport::fsutil::effective_uid())
@@ -6194,7 +6195,7 @@ fn handle_with_fact_inner(
     }
     if matches!(&request, NativeDelegationRequest::RoutingCatalogueV1 {}) {
         let result = {
-            let st = state.lock().unwrap_or_else(|error| error.into_inner());
+            let st = state.lock().recover_poison();
             routing_catalogue_view(&st, conn)
         }
         .unwrap_or_else(|code| failure(&code));
@@ -6222,7 +6223,7 @@ fn handle_with_fact_inner(
     }
     // Résoudre Git hors du verrou, puis comparer avec le fait vivant au puits.
     let (host, project_cwd) = {
-        let st = state.lock().unwrap_or_else(|error| error.into_inner());
+        let st = state.lock().recover_poison();
         let cwd = match &request {
             NativeDelegationRequest::Delegate { cwd, .. } => Some(cwd.clone()),
             NativeDelegationRequest::AutoDelegate(request) => Some(request.cwd.clone()),
@@ -6350,7 +6351,7 @@ fn handle_with_fact_inner(
             return Ok(None);
         };
         let task = {
-            let st = state.lock().unwrap_or_else(|e| e.into_inner());
+            let st = state.lock().recover_poison();
             let Some(task) = st.delegation_store.get(task_id)? else {
                 return Ok(None);
             };
@@ -6385,7 +6386,7 @@ fn handle_with_fact_inner(
         Ok(proof) => proof,
         Err(code) => {
             let mut result = {
-                let st = state.lock().unwrap_or_else(|e| e.into_inner());
+                let st = state.lock().recover_poison();
                 continuation_failure(&st, conn, remote_task_context.as_ref(), continuation_key.as_deref(), &code)
             };
             // Ce contexte vient uniquement de la tâche après contrôle du parent,
@@ -6411,7 +6412,7 @@ fn handle_with_fact_inner(
         NativeDelegationRequest::Delegate { .. } | NativeDelegationRequest::Cancel { .. }
     );
     let (result, drives) = {
-        let mut st = state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut st = state.lock().recover_poison();
         if let Some(thread) = thread {
             let owner = crate::t3code::stable_uuid(thread);
             let expected = (
@@ -6560,7 +6561,7 @@ fn remote_parent_proof(
 ) -> Result<String, String> {
     use bridget_transport::protocol::*;
     let source = {
-        let st = state.lock().unwrap_or_else(|e| e.into_inner());
+        let st = state.lock().recover_poison();
         st.delegation_store
             .for_child(owner)?
             .filter(|task| task.remote_placement.is_some())
@@ -6726,7 +6727,7 @@ fn delegate_remote_with_routing(
     let inspect_only =
         routing.is_some() && matches!(workspace, Some(WorkspaceRequest::Worktree { .. } | WorkspaceRequest::CommitView {}));
     let (owner, parent, worker, mut prepare, task_id) = {
-        let st = state.lock().unwrap_or_else(|e| e.into_inner());
+        let st = state.lock().recover_poison();
         recheck_attested_thread(&st, conn, thread)?;
         let (owner, instance) =
             live_connection_identity(&st, conn).ok_or("identity_unavailable")?;
@@ -6859,7 +6860,7 @@ fn delegate_remote_with_routing(
         return Err(permission_change::code("after_inspection", &["permission_sources"]));
     }
     {
-        let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+        let mut st = state.lock().recover_poison();
         recheck_attested_thread(&st, conn, thread)?;
         match admit_delegate(
             conn,
@@ -6889,7 +6890,7 @@ fn delegate_remote_with_routing(
             prepare.workspace=workspace.clone();
             let binding=crate::remote_worker::commit_view_preparation_binding(&worker,&provisional,&prepare)
                 .map_err(|reason|format!("remote_prepare:{reason:?}"))?;
-            let st=state.lock().unwrap_or_else(|error|error.into_inner());
+            let st=state.lock().recover_poison();
             let mut task=st.delegation_store.get(&task_id)?.ok_or("task_unavailable")?;
             if task.state!="queued" || task.child_instance.is_some()
                 || task.commit_view_prepare.as_ref().is_some_and(|known|known!=&binding) {
@@ -6906,7 +6907,7 @@ fn delegate_remote_with_routing(
                 &provisional,
                 {
                     let operation = routing_prepare_operation(prepare, routing.as_ref(), false);
-                    let negotiated = state.lock().unwrap_or_else(|e| e.into_inner())
+                    let negotiated = state.lock().recover_poison()
                         .remote_workers.get(&worker.machine_id)
                         .is_some_and(|session| session.capabilities.contains(
                             &bridget_transport::protocol::WorkerCapability::WorkspaceFailureV1));
@@ -6936,7 +6937,7 @@ fn delegate_remote_with_routing(
             return Err(permission_change::code("after_workspace", &["permission_sources"]));
         }
         {
-            let st = state.lock().unwrap_or_else(|e| e.into_inner());
+            let st = state.lock().recover_poison();
             recheck_attested_thread(&st, conn, thread)?;
             let mut task = st
                 .delegation_store
@@ -7036,7 +7037,7 @@ fn remote_admission_outcome(
     task_id: &str,
     outcome: Result<(), String>,
 ) -> Result<Value, String> {
-    let st = state.lock().unwrap_or_else(|e| e.into_inner());
+    let st = state.lock().recover_poison();
     let Some(mut task) = st.delegation_store.get(task_id)? else {
         return Err(outcome.err().unwrap_or_else(|| "task_unavailable".into()));
     };
@@ -7098,7 +7099,7 @@ pub(super) fn remote_dispatch_proof(
         remote_parent_proof(state, &task.owner, &snapshot.parent, task.admitted_parent()?.map(|_| task)),
     )?;
     let command_result = {
-        let st = state.lock().unwrap_or_else(|e| e.into_inner());
+        let st = state.lock().recover_poison();
         remote_command_identity(&st, task).map_err(|e| format!("{e:?}"))
     };
     let command = observe(state, task, Stage::CommandIdentity, command_result)?;
@@ -7272,7 +7273,7 @@ fn reserve_remote_result_slot(
     use bridget_transport::protocol::*;
     let mut diagnostic = None;
     let setup = (|| {
-        let st = state.lock().unwrap_or_else(|e| e.into_inner());
+        let st = state.lock().recover_poison();
         let task = st
             .delegation_store
             .get(task_id)?
@@ -7394,7 +7395,7 @@ fn reserve_remote_result_slot(
         );
     }
     let admitted = (|| {
-        let st = state.lock().unwrap_or_else(|e| e.into_inner());
+        let st = state.lock().recover_poison();
         let mut task = st
             .delegation_store
             .get(task_id)?
@@ -7424,7 +7425,7 @@ fn reserve_remote_result_slot(
         // Aucune remise n'a pu observer ce slot absent de Task ; fermeture corrélée seulement.
         let absent = state
             .lock()
-            .unwrap_or_else(|e| e.into_inner())
+            .recover_poison()
             .delegation_store
             .get(task_id)
             .is_ok_and(|task| task.is_some_and(|task| !task.remote_result_slots.contains(&slot)));
@@ -7452,7 +7453,7 @@ fn dispatch_remote_pause_resume(
     task_id: &str,
     proof: Option<&Task>,
 ) -> Result<(), String> {
-    let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+    let mut st = state.lock().recover_poison();
     let task = st
         .delegation_store
         .get(task_id)?
@@ -7594,7 +7595,7 @@ fn start_remote_task_with(
     // La mission admise utilise son autorité figée, même si l'appelant fournit
     // le fait d'un tour ultérieur. La tâche et les révocations sont relues ensuite.
     let admitted_parent = {
-        let st = state.lock().unwrap_or_else(|e| e.into_inner());
+        let st = state.lock().recover_poison();
         st.delegation_store.get(task_id)?.ok_or("task_unavailable")?.admitted_parent()?.cloned()
     };
     let parent = admitted_parent.as_ref().unwrap_or(parent);
@@ -7603,7 +7604,7 @@ fn start_remote_task_with(
         return Err("remote_prepare_invalid".into());
     }
     let (worker, command, start, owner) = {
-        let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+        let mut st = state.lock().recover_poison();
         let mut task = st
             .delegation_store
             .get(task_id)?
@@ -7772,7 +7773,7 @@ fn start_remote_task_with(
         .map_err(|e| e.to_string())?;
     let confirmation_timeout = Duration::from_secs(30);
     let detailed = {
-        let st = state.lock().unwrap_or_else(|e| e.into_inner());
+        let st = state.lock().recover_poison();
         st.remote_workers.get(&worker.machine_id).is_some_and(|peer| {
             peer.capabilities.contains(&WorkerCapability::StartRecoveryV1)
         })
@@ -7816,7 +7817,7 @@ fn start_remote_task_with(
         return Err(reason);
     }
     let authority_task = {
-        let st = state.lock().unwrap_or_else(|e| e.into_inner());
+        let st = state.lock().recover_poison();
         st.delegation_store.get(task_id)?.ok_or("task_unavailable")?
     };
     let admitted = authority_task.admitted_parent()?.is_some();
@@ -7838,7 +7839,7 @@ fn start_remote_task_with(
     }};
     remote_parent_proof(state, &owner, parent, admitted.then_some(&authority_task))?;
     let permit = {
-        let st = state.lock().unwrap_or_else(|e| e.into_inner());
+        let st = state.lock().recover_poison();
         let task = st
             .delegation_store
             .get(task_id)?
@@ -7930,7 +7931,7 @@ fn delegate_worktree(
     state: &Arc<Mutex<DaemonState>>,
 ) -> Result<Value, String> {
     let (cwd, selected_request, selected_definition, substitution) = {
-        let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+        let mut st = state.lock().recover_poison();
         recheck_attested_thread(&st, conn, thread)?;
         match admit_delegate(
             conn,
@@ -7969,7 +7970,7 @@ fn delegate_worktree(
             .map_err(|error| error.into_admission(auto_receipt.is_some()))?;
     let task_id = Uuid::new_v4().to_string();
     let (reserved, _claim) = {
-        let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+        let mut st = state.lock().recover_poison();
         recheck_attested_thread(&st, conn, thread)?;
         match admit_delegate(
             conn,
@@ -8013,7 +8014,7 @@ fn delegate_worktree(
         }
     })?;
     let result = {
-        let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+        let mut st = state.lock().recover_poison();
         recheck_attested_thread(&st, conn, thread).and_then(|()| {
             admit_delegate(
                 conn,
@@ -8083,7 +8084,7 @@ fn wait_tasks(
     let start = Instant::now();
     let deadline = start + Duration::from_secs(timeout);
     let (identity, epoch, active) = {
-        let st = state.lock().unwrap_or_else(|e| e.into_inner());
+        let st = state.lock().recover_poison();
         (
             live_connection_identity(&st, conn).ok_or("identity_unavailable")?,
             st.delegation_store.wait_epoch(),
@@ -8098,7 +8099,7 @@ fn wait_tasks(
             return Err("daemon_unreachable".into());
         }
         let (ready, pending, pending_requests) = {
-            let st = state.lock().unwrap_or_else(|e| e.into_inner());
+            let st = state.lock().recover_poison();
             if live_connection_identity(&st, conn).as_ref() != Some(&identity) {
                 return Err("task_unavailable".into());
             }
@@ -8812,7 +8813,7 @@ fn admit_delegate(
             && st
                 .workspace_work
                 .lock()
-                .unwrap_or_else(|e| e.into_inner())
+                .recover_poison()
                 .creations
                 .contains_key(&(owner.clone(), request_id.clone()))
         {
@@ -9159,7 +9160,7 @@ fn admit_delegate(
         } else {
             st.delegation_store.admission_counts(&instance)?
         };
-        let work = st.workspace_work.lock().unwrap_or_else(|e| e.into_inner());
+        let work = st.workspace_work.lock().recover_poison();
         let own = matches!(pass, WorkspacePass::Commit { .. });
         let reservations = work
             .creations
@@ -9343,7 +9344,7 @@ fn admit_delegate(
             };
             st.workspace_work
                 .lock()
-                .unwrap_or_else(|e| e.into_inner())
+                .recover_poison()
                 .creations
                 .insert(key.clone(), reservation);
             let claim = WorkspaceClaim {
@@ -9378,7 +9379,7 @@ fn admit_delegate(
             // La place réservée devient la tâche durable sous le même verrou.
             st.workspace_work
                 .lock()
-                .unwrap_or_else(|e| e.into_inner())
+                .recover_poison()
                 .creations
                 .remove(&(record.owner.clone(), request_id.clone()));
         }
@@ -11970,7 +11971,7 @@ fn claim_workspace_report(
     }
     let workspace = task.workspace.as_ref()?;
     let key = (task.task_id.clone(), task.mission.clone(), task.round_no());
-    let mut work = st.workspace_work.lock().unwrap_or_else(|e| e.into_inner());
+    let mut work = st.workspace_work.lock().recover_poison();
     if !work.reports.insert(key.clone()) {
         return None;
     }
@@ -12103,7 +12104,7 @@ fn complete_workspace_report(state: &Arc<Mutex<DaemonState>>, job: WorkspaceRepo
             job.task_id, job.mission, job.round, error
         );
     }
-    let st = state.lock().unwrap_or_else(|e| e.into_inner());
+    let st = state.lock().recover_poison();
     let Ok(Some(mut task)) = st.delegation_store.get(&job.task_id) else {
         return;
     };
@@ -12197,7 +12198,7 @@ fn auto_recovery_context(
         recovered_auto_request(receipt)?.cwd
     };
     let (conn, fact, host, cwd) = {
-        let st = state.lock().unwrap_or_else(|error| error.into_inner());
+        let st = state.lock().recover_poison();
         if st.delegation_store.revoked_agent(&receipt.owner)? {
             return Err("permission_not_inherited".into());
         }
@@ -12338,7 +12339,7 @@ fn resume_chosen_auto_admission(
                 )?;
             }
             NativeDelegationRequest::Delegate { .. } => {
-                let mut st = state.lock().unwrap_or_else(|error| error.into_inner());
+                let mut st = state.lock().recover_poison();
                 match admit_delegate(
                     conn,
                     &expected,
@@ -12359,7 +12360,7 @@ fn resume_chosen_auto_admission(
     match result {
         Ok(()) => Ok(()),
         Err(code) => {
-            let st = state.lock().unwrap_or_else(|error| error.into_inner());
+            let st = state.lock().recover_poison();
             Err(close_auto_admission_error(&st, receipt, code)?)
         }
     }
@@ -12377,7 +12378,7 @@ fn recover_routing_admission(
         Ok(context) => context,
         Err(code) if code == "admission_parent_republication_pending" => return Ok(()),
         Err(code) if code == "permission_not_inherited" => {
-            let st = state.lock().unwrap_or_else(|e| e.into_inner());
+            let st = state.lock().recover_poison();
             st.delegation_store
                 .refuse_auto_admission(receipt, &code, unix_timestamp())?;
             return Ok(());
@@ -12387,7 +12388,7 @@ fn recover_routing_admission(
     let outcome = match receipt.state {
         AutoAdmissionState::Pending | AutoAdmissionState::DecisionStarted => {
             let started = if receipt.state == AutoAdmissionState::Pending {
-                let st = state.lock().unwrap_or_else(|e| e.into_inner());
+                let st = state.lock().recover_poison();
                 st.delegation_store.start_auto_decision_level(
                     receipt,
                     receipt.coordinator_epoch,
@@ -12436,7 +12437,7 @@ fn recover_routing_admission(
     match outcome {
         Ok(()) => Ok(()),
         Err(code) => {
-            let st = state.lock().unwrap_or_else(|e| e.into_inner());
+            let st = state.lock().recover_poison();
             Err(close_auto_admission_error(&st, receipt, code)?)
         }
     }
@@ -12447,7 +12448,7 @@ fn recover_routing_admission(
 /// faites hors mutex, tandis que chaque transition conserve son CAS durable.
 fn recover_auto_admissions(state: &Arc<Mutex<DaemonState>>) {
     let receipts = {
-        let st = state.lock().unwrap_or_else(|error| error.into_inner());
+        let st = state.lock().recover_poison();
         st.delegation_store
             .auto_admission_receipts_before_epoch(st.coordinator_epoch, 128)
     };
@@ -12469,7 +12470,7 @@ fn recover_auto_admissions(state: &Arc<Mutex<DaemonState>>) {
                 Ok(context) => context,
                 Err(code) if code == "admission_parent_republication_pending" => return Ok(()),
                 Err(code) if code == "permission_not_inherited" => {
-                    let st = state.lock().unwrap_or_else(|error| error.into_inner());
+                    let st = state.lock().recover_poison();
                     st.delegation_store.refuse_auto_admission(
                         &receipt,
                         "permission_not_inherited",
@@ -12521,7 +12522,7 @@ fn recover_auto_admissions(state: &Arc<Mutex<DaemonState>>) {
                             state,
                         )?;
                     } else {
-                        let st = state.lock().unwrap_or_else(|error| error.into_inner());
+                        let st = state.lock().recover_poison();
                         st.delegation_store.refuse_auto_admission(
                             &receipt,
                             "decision_interrupted",
@@ -12552,7 +12553,7 @@ fn recover_auto_admissions(state: &Arc<Mutex<DaemonState>>) {
                             state,
                         )?;
                     } else {
-                        let st = state.lock().unwrap_or_else(|error| error.into_inner());
+                        let st = state.lock().recover_poison();
                         st.delegation_store.refuse_auto_admission(
                             &receipt,
                             "decision_interrupted",
@@ -12594,7 +12595,7 @@ const START_MONITOR_BUDGET: Duration = crate::workspace_git::WORKTREE_ADD_TIMEOU
 
 pub(super) fn tick(state: &Arc<Mutex<DaemonState>>) {
     {
-        let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+        let mut st = state.lock().recover_poison();
         let now = unix_timestamp();
         if st.host_resources.fresh_snapshot(now, 10).is_none() {
             let coordinator = routing_coordinator(&st.registry, &st.host);
@@ -12616,7 +12617,7 @@ pub(super) fn tick(state: &Arc<Mutex<DaemonState>>) {
     // un envoi par cadence, même si le candidat choisi est invalide ou injoignable.
     let start_probe = {
         use bridget_transport::protocol::*;
-        let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+        let mut st = state.lock().recover_poison();
         {
             let DaemonState { remote_workers, remote_start_reconciles, .. } = &mut *st;
             remote_start_reconciles.retain(|machine, (epoch, receiver)| {
@@ -12714,7 +12715,7 @@ pub(super) fn tick(state: &Arc<Mutex<DaemonState>>) {
     // Le canal ne contient qu'un résultat ; aucun thread n'attend dans cette boucle.
     let mut remote_proofs = HashMap::new();
     let remote_pending = {
-        let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+        let mut st = state.lock().recover_poison();
         if let Some(receiver) = st.remote_result_reservation.take() {
             match receiver.try_recv() {
                 Ok(Ok(Some(proof))) => { remote_proofs.insert(proof.task_id.clone(), proof); }
@@ -12795,7 +12796,7 @@ pub(super) fn tick(state: &Arc<Mutex<DaemonState>>) {
     let mut reports = Vec::new();
     let mut dispatch_events = Vec::new();
     {
-        let mut st = state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut st = state.lock().recover_poison();
         let control = match crate::referent_control::read(st.store.connection()) {
             Ok(control) => control,
             Err(error) => {
@@ -13712,7 +13713,7 @@ fn fence_cancel_unstarted(
 ) -> Result<(), &'static str> {
     use bridget_transport::protocol::*;
     let (worker, placement, deadline_at) = {
-        let st = state.lock().unwrap_or_else(|e| e.into_inner());
+        let st = state.lock().recover_poison();
         let task = st.delegation_store.get(task_id).map_err(|_| "store_unavailable")?
             .ok_or("identity_unavailable")?;
         if task.state != "cancelling" || task.mission_issued_at.is_some()
@@ -13753,7 +13754,7 @@ fn fence_cancel_unstarted(
         return Err("invalid_reply");
     }
     // L’état métier est relu après l’E/S ; aucun ACK ancien ne clôt une autre tentative.
-    let st = state.lock().unwrap_or_else(|e| e.into_inner());
+    let st = state.lock().recover_poison();
     let task = st.delegation_store.get(task_id).map_err(|_| "store_unavailable")?
         .ok_or("identity_unavailable")?;
     if task.state != "cancelling" || task.mission_issued_at.is_some()
@@ -13779,7 +13780,7 @@ pub(super) fn cancel_remote_task(
         state: "worker arrêt non attesté".into(),
     };
     let (worker, command) = {
-        let st = state.lock().unwrap_or_else(|e| e.into_inner());
+        let st = state.lock().recover_poison();
         let Ok(Some(current)) = st.delegation_store.get(&task.task_id) else {
             return failed();
         };
@@ -13832,7 +13833,7 @@ pub(super) fn cancel_remote_task(
     ) {
         return failed();
     }
-    let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+    let mut st = state.lock().recover_poison();
     if remote_command_identity(&st, task).ok().as_ref() != Some(&command) {
         return failed();
     }
@@ -13887,7 +13888,7 @@ fn complete_commit_view_conservation(state: &Arc<Mutex<DaemonState>>, snapshot: 
     let digest=&binding.prepare_digest;
     let key=(snapshot.task_id.clone(),snapshot.mission.clone(),snapshot.round_no());
     let _claim={
-        let st=state.lock().unwrap_or_else(|e|e.into_inner());
+        let st=state.lock().recover_poison();
         let Ok(Some(current))=st.delegation_store.get(&snapshot.task_id) else {return false;};
         if current.mission!=snapshot.mission || current.round_no()!=snapshot.round_no()
             || current.workspace.as_ref().and_then(|w|w.commit_view.as_ref())!=reference
@@ -13897,7 +13898,7 @@ fn complete_commit_view_conservation(state: &Arc<Mutex<DaemonState>>, snapshot: 
             return false;
         }
         if current.cleanup_done {return true;}
-        let mut work=st.workspace_work.lock().unwrap_or_else(|e|e.into_inner());
+        let mut work=st.workspace_work.lock().recover_poison();
         if !work.reports.insert(key.clone()) {return false;}
         WorkspaceClaim {work:Arc::clone(&st.workspace_work),key:WorkspaceClaimKey::Report(key)}
     };
@@ -13910,7 +13911,7 @@ fn complete_commit_view_conservation(state: &Arc<Mutex<DaemonState>>, snapshot: 
             response.err().unwrap_or(bridget_transport::protocol::WorkerRefusal::CommandMismatch));
         return false;
     }
-    let st=state.lock().unwrap_or_else(|e|e.into_inner());
+    let st=state.lock().recover_poison();
     let Ok(Some(mut current))=st.delegation_store.get(&snapshot.task_id) else {return false;};
     if current.mission!=snapshot.mission || current.round_no()!=snapshot.round_no()
         || current.workspace.as_ref().and_then(|w|w.commit_view.as_ref())!=reference
@@ -13926,7 +13927,7 @@ fn complete_commit_view_conservation(state: &Arc<Mutex<DaemonState>>, snapshot: 
 
 fn cancel_tree(state: &Arc<Mutex<DaemonState>>, task: &Task) {
     let (root_id, members, task_ids) = {
-        let st = state.lock().unwrap_or_else(|error| error.into_inner());
+        let st = state.lock().recover_poison();
         let Ok(Some(mut root)) = st.delegation_store.get(&task.task_id) else {
             return;
         };
@@ -14074,12 +14075,12 @@ fn cancel_tree(state: &Arc<Mutex<DaemonState>>, task: &Task) {
             cancel_remote_task(state, &remote)
         } else {
             let target = {
-                let mut st = state.lock().unwrap_or_else(|error| error.into_inner());
+                let mut st = state.lock().recover_poison();
                 prepare_classified_stop(&mut st, &name, kind)
             };
             await_managed_stop(target, &name)
         };
-        let st = state.lock().unwrap_or_else(|error| error.into_inner());
+        let st = state.lock().recover_poison();
         let Ok(Some(mut root)) = st.delegation_store.get(&root_id) else {
             return;
         };
@@ -14114,7 +14115,7 @@ fn cancel_tree(state: &Arc<Mutex<DaemonState>>, task: &Task) {
         let mut reports = Vec::new();
         let mut closed = Vec::new();
         {
-            let mut st = state.lock().unwrap_or_else(|error| error.into_inner());
+            let mut st = state.lock().recover_poison();
             // Les demandes ne retardent jamais les arrêts ci-dessus. Elles
             // protègent seulement la finalisation et le nettoyage après arrêt.
             for id in &task_ids {
@@ -14184,7 +14185,7 @@ fn cancel_tree(state: &Arc<Mutex<DaemonState>>, task: &Task) {
         }
         let mut views=Vec::new();
         {
-            let st = state.lock().unwrap_or_else(|error| error.into_inner());
+            let st = state.lock().recover_poison();
             for id in closed {
                 if let Ok(Some(mut entry)) = st.delegation_store.get(&id)
                     && entry.terminal()

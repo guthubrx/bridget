@@ -1,4 +1,5 @@
 //! Autorité181 : un producteur pose sa question, seul un client humain répond.
+use bridget_transport::poison::RecoverPoison;
 use super::*;
 use crate::user_input as store;
 use serde_json::{Value, json};
@@ -240,7 +241,7 @@ pub(super) fn handle(
     }
     let deadline = Instant::now() + Duration::from_secs(wait);
     let (epoch, active) = {
-        let st = state.lock().unwrap_or_else(|e| e.into_inner());
+        let st = state.lock().recover_poison();
         (st.delegation_store.wait_epoch(), st.active_waits.clone())
     };
     let _permit = if waiting {
@@ -263,7 +264,7 @@ pub(super) fn handle(
             };
         }
         let result = {
-            let st = state.lock().unwrap_or_else(|e| e.into_inner());
+            let st = state.lock().recover_poison();
             execute(conn, request, &st)
         };
         match result {
@@ -279,7 +280,7 @@ pub(super) fn handle(
                     epoch.bump();
                     if let Some(n) = &state
                         .lock()
-                        .unwrap_or_else(|e| e.into_inner())
+                        .recover_poison()
                         .mobile_notifier
                     {
                         n.changed();
@@ -432,7 +433,7 @@ pub(super) fn receive_native(
     state: &Arc<Mutex<DaemonState>>,
 ) -> DaemonToWrapper {
     use bridget_transport::protocol::{ChildRequestAnswer, ChildRequestDecision};
-    let st = state.lock().unwrap_or_else(|e| e.into_inner());
+    let st = state.lock().recover_poison();
     let identity = live_connection_identity(&st, conn);
     let revision_key = if request.details["method"] == "t3.runtime-request.respond" {
         request.details["questions"].clone()
@@ -509,7 +510,7 @@ pub(super) fn tick_request(state: &Arc<Mutex<DaemonState>>, request_id: Option<&
         ChildProviderRequest, ChildRequestAnswer, ChildRequestDecision,
     };
     let outgoing = {
-        let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+        let mut st = state.lock().recover_poison();
         let after = st
             .user_input_dispatch_after
             .clone()

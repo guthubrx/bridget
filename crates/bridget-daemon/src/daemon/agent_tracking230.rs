@@ -1,4 +1,5 @@
 //! Façades d'organisation ; mêmes principaux natifs que les autres contrôles humains.
+use bridget_transport::poison::RecoverPoison;
 use super::*;
 use bridget_transport::agent_tracking::AgentTrackingRequest;
 use bridget_transport::protocol::{ProjectRelation, ScopedAgentInfo};
@@ -148,7 +149,7 @@ pub(super) fn human(
     request: &AgentTrackingRequest,
     state: &Arc<Mutex<DaemonState>>,
 ) -> DaemonToWrapper {
-    let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+    let mut st = state.lock().recover_poison();
     let allowed = st.connection_roles.get(conn) == Some(&ConnectionRole::Client)
         && !st.auxiliary_connections.contains(conn)
         && !st.conn_names.contains_key(conn)
@@ -172,7 +173,7 @@ pub(super) fn mobile(
     device: &crate::mobile::store::Device,
     state: &Arc<Mutex<DaemonState>>,
 ) -> DaemonToWrapper {
-    let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+    let mut st = state.lock().recover_poison();
     let result = apply(
         &mut st,
         &format!("mobile:{}", device.device_id),

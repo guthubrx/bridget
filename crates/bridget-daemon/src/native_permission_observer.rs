@@ -1,4 +1,5 @@
 //! Observer temporaire du CLI Claude détenu. Il ne décide aucun droit.
+use bridget_transport::poison::RecoverPoison;
 use crate::native_permissions;
 use crate::registry::AgentDefinition;
 use bridget_transport::protocol::{ProviderPermissions,WrapperToDaemon};
@@ -62,7 +63,7 @@ impl Observer{
                 let mut line=String::new();
                 if BufReader::new((&stream).take(16385)).read_line(&mut line).is_err()||line.len()>16384{continue}
                 let input:Value=match serde_json::from_str(&line){Ok(v)=>v,Err(_)=>continue};
-                let owner=*owned_provider.lock().unwrap_or_else(|e|e.into_inner());
+                let owner=*owned_provider.lock().recover_poison();
                 if input["nonce"]!=nonce||input["version"]!=1||!owner.is_some_and(|owner|peer_is_provider_descendant(&stream,owner)){continue}
                 let valid_atom=|field:&str|input[field].as_str().filter(|s|!s.is_empty()&&s.len()<=256&&!s.chars().any(char::is_control));
                 let mode=valid_atom("permission_mode");let session=valid_atom("session_id");let prompt=valid_atom("prompt_id");
@@ -86,12 +87,12 @@ impl Observer{
                 if bridget_transport::protocol::claude_launch_policy_options(&launch.args,&mut policy).is_err(){let _=writeln!(stream,"{}",json!({"accepted":false,"code":"permission_source_unavailable"}));continue}
                 let fact=ProviderPermissions{version:1,source:"native_wrapper".into(),run_id:prompt.unwrap().into(),provider_session_id:session.unwrap().into(),provider_instance_id:instance.clone(),revision,driver:"claude_stream_json".into(),cwd:cwd.to_string_lossy().into_owned(),runtime_mode:match mode{"default"|"plan"=>"approval-required","acceptEdits"=>"auto-accept-edits","bypassPermissions"=>"full-access",_=>"auto"}.into(),interaction_mode:if mode=="plan"{"plan"}else{"default"}.into(),provider_policy:policy};
                 let observation_id=uuid::Uuid::new_v4().to_string();
-                *acks.0.lock().unwrap_or_else(|e|e.into_inner())=None;
+                *acks.0.lock().recover_poison()=None;
                 emit(WrapperToDaemon::NativePermissionFact{fact:Some(fact),request_id,observation_id:Some(observation_id.clone()),unavailable_code:None});
                 let deadline=Instant::now()+Duration::from_secs(2);
-                let mut ack=acks.0.lock().unwrap_or_else(|e|e.into_inner());
+                let mut ack=acks.0.lock().recover_poison();
                 while ack.as_ref().is_none_or(|a|a.0!=observation_id)&&Instant::now()<deadline{
-                    let waited=acks.1.wait_timeout(ack,deadline.saturating_duration_since(Instant::now())).unwrap_or_else(|e|e.into_inner());ack=waited.0;
+                    let waited=acks.1.wait_timeout(ack,deadline.saturating_duration_since(Instant::now())).recover_poison();ack=waited.0;
                 }
                 let accepted=ack.as_ref().is_some_and(|a|a.0==observation_id&&a.1);
                 let _=writeln!(stream,"{}",json!({"accepted":accepted,"code":if accepted{"ok"}else{"permission_attestation_unavailable"}}));
@@ -102,11 +103,11 @@ impl Observer{
     }
     pub(crate) fn bind_provider(&self,pid:u32)->Result<(),String>{
         let birth=crate::managed_process::process_birth(pid).map_err(|_|"permission_source_unavailable")?;
-        *self.provider.lock().unwrap_or_else(|e|e.into_inner())=Some((pid,birth));Ok(())
+        *self.provider.lock().recover_poison()=Some((pid,birth));Ok(())
     }
     pub(crate) fn overlay(&self)->&Path{&self.overlay}
     pub(crate) fn acknowledgement_sink(&self)->Acknowledgements{self.acknowledgements.clone()}
-    pub(crate) fn acknowledge(sink:&Acknowledgements,id:String,accepted:bool){*sink.0.lock().unwrap_or_else(|e|e.into_inner())=Some((id,accepted));sink.1.notify_one();}
+    pub(crate) fn acknowledge(sink:&Acknowledgements,id:String,accepted:bool){*sink.0.lock().recover_poison()=Some((id,accepted));sink.1.notify_one();}
 }
 impl Drop for Observer{
     fn drop(&mut self){self.stop.store(true,Ordering::Release);let _=UnixStream::connect(&self.socket);if let Some(thread)=self.thread.take(){let _=thread.join();}let _=std::fs::remove_file(&self.socket);let _=std::fs::remove_file(&self.overlay);}

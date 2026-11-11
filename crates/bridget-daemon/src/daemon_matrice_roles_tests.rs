@@ -1,3 +1,4 @@
+use bridget_transport::poison::RecoverPoison;
     use super::*;
     use std::io::{BufRead, BufReader, BufWriter, Write};
     use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
@@ -449,7 +450,7 @@
                     ..
                 }) => {
                     // Les VALEURS, pas la presence : ce sont celles de l'etat.
-                    let attendu = shared.lock().unwrap_or_else(|p| p.into_inner());
+                    let attendu = shared.lock().recover_poison();
                     assert_eq!(host, attendu.host, "role {role:?}");
                     assert_eq!(
                         db_path,

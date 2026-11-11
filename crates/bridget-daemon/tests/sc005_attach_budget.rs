@@ -1,3 +1,4 @@
+use bridget_transport::poison::RecoverPoison;
 use bridget_core::BridgetMessage;
 #[path = "support/idempotent.rs"]
 pub mod fixture;
@@ -41,7 +42,7 @@ fn lock_latency_bench() -> std::sync::MutexGuard<'static, ()> {
     LATENCY_BENCH_LOCK
         .get_or_init(|| Mutex::new(()))
         .lock()
-        .unwrap_or_else(|poison| poison.into_inner())
+        .recover_poison()
 }
 
 fn wait_until(deadline: Instant, detail: &str, predicate: impl Fn() -> bool) {
@@ -187,11 +188,11 @@ fn connect_attach(socket: &Path, agent: &str, deadline: Instant) -> AttachViewCo
                             observed.fetch_add(1, Ordering::SeqCst);
                             observed_sequences
                                 .lock()
-                                .unwrap_or_else(|poison| poison.into_inner())
+                                .recover_poison()
                                 .push(seq);
                             observed_rendered_at
                                 .lock()
-                                .unwrap_or_else(|poison| poison.into_inner())
+                                .recover_poison()
                                 .entry(seq)
                                 .or_insert_with(Instant::now);
                         }

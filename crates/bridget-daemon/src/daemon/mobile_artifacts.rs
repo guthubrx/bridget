@@ -1,4 +1,5 @@
 //! Adaptation humaine des artefacts natifs : aucun chemin reçu ni identité d'agent empruntée.
+use bridget_transport::poison::RecoverPoison;
 use super::*;
 use crate::{
     artifact_store::{ArtifactStore, ArtifactStoreError},
@@ -164,7 +165,7 @@ pub(super) fn handle(
             }
             let db = state
                 .lock()
-                .unwrap_or_else(|e| e.into_inner())
+                .recover_poison()
                 .db_path
                 .clone();
             let value = ArtifactStore::open(&db)
@@ -192,7 +193,7 @@ pub(super) fn handle(
         return fail("history_scope_unavailable");
     }
     let (snapshot, db, blobs) = {
-        let st = state.lock().unwrap_or_else(|e| e.into_inner());
+        let st = state.lock().recover_poison();
         let binding = if upload {
             match binding(&st, device, agent, op) {
                 Ok(b) => b,
@@ -341,7 +342,7 @@ pub(super) fn handle(
                     return fail("storage_unavailable");
                 }
                 // Les gros octets sont déjà privés ; dernière garde avant l'unique publication native.
-                let st = state.lock().unwrap_or_else(|e| e.into_inner());
+                let st = state.lock().recover_poison();
                 let current = match current_device(root, request) {
                     Ok(d) => d,
                     Err(c) => return fail(c),
@@ -396,7 +397,7 @@ pub(super) fn handle(
         Ok(d) => d,
         Err(c) => return fail(c),
     };
-    let st = state.lock().unwrap_or_else(|e| e.into_inner());
+    let st = state.lock().recover_poison();
     if upload {
         if binding(&st, &current, agent, op).ok().as_ref() != Some(&snapshot) {
             return fail("not_found");

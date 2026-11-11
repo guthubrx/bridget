@@ -1,6 +1,7 @@
 //! Client Unix partagé : inscription auxiliaire commune et budget borné par opération.
 //! Aucune logique de présentation ni accès client au stockage du daemon.
 
+use bridget_transport::poison::RecoverPoison;
 use bridget_transport::protocol::{
     CLIENT_CONTRACT_VERSION, CONTROL_STATE_CONTRACT_VERSION, ClientCapability, ConnectionRole,
     ControlEventFrame, ControlStateFrame, RuntimeSource, decode, encode,
@@ -641,7 +642,7 @@ static DOMAIN_TEST_OBSERVER_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(
 pub(crate) fn lock_domain_test_observers() -> std::sync::MutexGuard<'static, ()> {
     DOMAIN_TEST_OBSERVER_MUTEX
         .lock()
-        .unwrap_or_else(|error| error.into_inner())
+        .recover_poison()
 }
 
 #[cfg(test)]
@@ -650,7 +651,7 @@ pub(crate) fn replace_domain_lock_contention_observer(
 ) {
     *DOMAIN_LOCK_CONTENTION_OBSERVER
         .lock()
-        .unwrap_or_else(|error| error.into_inner()) = observer;
+        .recover_poison() = observer;
 }
 
 fn acquire_domain_lock_until(
@@ -763,7 +764,7 @@ static DOMAIN_AFTER_ACK_OBSERVER: std::sync::Mutex<Option<DomainAfterAckObserver
 pub(crate) fn replace_domain_after_ack_observer(observer: Option<DomainAfterAckObserver>) {
     *DOMAIN_AFTER_ACK_OBSERVER
         .lock()
-        .unwrap_or_else(|error| error.into_inner()) = observer;
+        .recover_poison() = observer;
 }
 
 #[cfg(test)]

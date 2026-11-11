@@ -6,6 +6,7 @@
 //! `named-roster.json` n'est pas un snapshot d'équipe à ressusciter : il ne
 //! sert qu'à nommer les absents non persistants, invisibles de `fleet.json`.
 
+use bridget_transport::poison::RecoverPoison;
 use bridget_transport::fsutil::write_private_file_atomic;
 use log::warn;
 use serde::{Deserialize, Serialize};
@@ -126,7 +127,7 @@ impl NamedRosterStore {
         let _guard = self
             .lock
             .lock()
-            .unwrap_or_else(|poison| poison.into_inner());
+            .recover_poison();
         let mut file = self.load_unlocked();
         file.named.insert(name, entry);
         self.persist_unlocked(&file);
@@ -136,7 +137,7 @@ impl NamedRosterStore {
         let _guard = self
             .lock
             .lock()
-            .unwrap_or_else(|poison| poison.into_inner());
+            .recover_poison();
         let mut file = self.load_unlocked();
         if file.named.remove(name).is_none() {
             return;
@@ -148,7 +149,7 @@ impl NamedRosterStore {
         let _guard = self
             .lock
             .lock()
-            .unwrap_or_else(|poison| poison.into_inner());
+            .recover_poison();
         let mut file = self.load_unlocked();
         let mut drained = Vec::new();
         file.named.retain(|name, entry| {
@@ -169,7 +170,7 @@ impl NamedRosterStore {
         let _guard = self
             .lock
             .lock()
-            .unwrap_or_else(|poison| poison.into_inner());
+            .recover_poison();
         self.load_unlocked()
             .named
             .into_iter()
@@ -191,7 +192,7 @@ impl NamedRosterStore {
         let _guard = self
             .lock
             .lock()
-            .unwrap_or_else(|poison| poison.into_inner());
+            .recover_poison();
         self.load_unlocked()
             .named
             .into_iter()

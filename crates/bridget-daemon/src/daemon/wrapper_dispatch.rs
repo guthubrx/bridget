@@ -1,11 +1,12 @@
 //! Fonctions des branches volumineuses de `handle_wrapper_message_with_peer` (programme 260, lot 5).
 //! Chaque fonction reprend le corps de sa branche sans changement.
+use bridget_transport::poison::RecoverPoison;
 use super::*;
 use bridget_transport::protocol::*;
 
 pub(super) fn on_gap(subscription_id: String, from_seq: u64, to_seq: u64, reason: Option<String>, conn_id: &str, state: &Arc<Mutex<DaemonState>>) -> Option<DaemonToWrapper> {
             let view = {
-                let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+                let mut st = state.lock().recover_poison();
                 let accepted = st
                     .attach_subscriptions
                     .get_mut(&subscription_id)
@@ -33,7 +34,7 @@ pub(super) fn on_gap(subscription_id: String, from_seq: u64, to_seq: u64, reason
 
 pub(super) fn on_relaunch_order(name: String, command_id: String, conn_id: &str, state: &Arc<Mutex<DaemonState>>) -> Option<DaemonToWrapper> {
             info!("cycle_vie action=relaunch phase=request name={name} command_id={command_id}");
-            let mut st = state.lock().unwrap_or_else(|error| error.into_inner());
+            let mut st = state.lock().recover_poison();
             if st.decommissioning_names.contains(&name) {
                 return Some(DaemonToWrapper::RelaunchResult {
                     command_id,
@@ -233,7 +234,7 @@ pub(super) fn on_relaunch_order(name: String, command_id: String, conn_id: &str,
         }
 
 pub(super) fn on_cancel_request(id: String, sender: String, reason: Option<String>, conn_id: &str, state: &Arc<Mutex<DaemonState>>) -> Option<DaemonToWrapper> {
-            let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+            let mut st = state.lock().recover_poison();
             // Le champ sender désigne la demande, pas une autorité. La route
             // appartient au wrapper lui-même, ou à son client auxiliaire déjà
             // attesté par le même helper que rename et les contenus privés.
@@ -491,7 +492,7 @@ pub(super) fn on_service_hello(version: u16, service: String, issuer_scope: Stri
                     reason: ServiceRefusal::InvalidEnvelope,
                 });
             }
-            let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+            let mut st = state.lock().recover_poison();
             st.service_negotiations.insert(
                 conn_id.to_string(),
                 NegotiatedService {
@@ -557,7 +558,7 @@ pub(super) fn on_service_hello(version: u16, service: String, issuer_scope: Stri
 
 pub(super) fn on_control_execution_reported(issuer_scope: String, command_id: String, execution_id: String, accepted: bool, refusal_reason: Option<String>, conn_id: &str, state: &Arc<Mutex<DaemonState>>) -> Option<DaemonToWrapper> {
             let (controls, response) = {
-                let st = state.lock().unwrap_or_else(|e| e.into_inner());
+                let st = state.lock().recover_poison();
                 let Some(target) = (match st.execution_store.execution_control_target(&execution_id)
                 {
                     Ok(target) => target,
@@ -667,7 +668,7 @@ pub(super) fn on_decommission_order(name: String, command_id: String, state: &Ar
                 "cycle_vie action=decommission phase=request name={name} command_id={command_id}"
             );
             let (entry, launch_in_flight) = {
-                let mut st = state.lock().unwrap_or_else(|error| error.into_inner());
+                let mut st = state.lock().recover_poison();
                 let Some(entry) = st.fleet.desired_entry(&name).ok().flatten() else {
                     return Some(DaemonToWrapper::DecommissionResult {
                         command_id,
@@ -706,7 +707,7 @@ pub(super) fn on_decommission_order(name: String, command_id: String, state: &Ar
                 };
             let outcome = match stop_outcome {
                 StopOutcome::Stopped => {
-                    let mut st = state.lock().unwrap_or_else(|error| error.into_inner());
+                    let mut st = state.lock().recover_poison();
                     let outcome = match st.fleet.decommission(&name) {
                         Ok(true) => {
                             prune_agent_presence(&mut st, &name);
@@ -721,7 +722,7 @@ pub(super) fn on_decommission_order(name: String, command_id: String, state: &Ar
                     outcome
                 }
                 StopOutcome::StoppedForced { survivors_killed } => {
-                    let mut st = state.lock().unwrap_or_else(|error| error.into_inner());
+                    let mut st = state.lock().recover_poison();
                     let outcome = match st.fleet.decommission(&name) {
                         Ok(true) => {
                             prune_agent_presence(&mut st, &name);
@@ -738,7 +739,7 @@ pub(super) fn on_decommission_order(name: String, command_id: String, state: &Ar
                 StopOutcome::NotManaged => {
                     state
                         .lock()
-                        .unwrap_or_else(|error| error.into_inner())
+                        .recover_poison()
                         .decommissioning_names
                         .remove(&name);
                     DecommissionOutcome::NotManaged
@@ -746,7 +747,7 @@ pub(super) fn on_decommission_order(name: String, command_id: String, state: &Ar
                 StopOutcome::NotFound => {
                     state
                         .lock()
-                        .unwrap_or_else(|error| error.into_inner())
+                        .recover_poison()
                         .decommissioning_names
                         .remove(&name);
                     DecommissionOutcome::NotFound
@@ -754,7 +755,7 @@ pub(super) fn on_decommission_order(name: String, command_id: String, state: &Ar
                 StopOutcome::Timeout { state: stop_state } => {
                     state
                         .lock()
-                        .unwrap_or_else(|error| error.into_inner())
+                        .recover_poison()
                         .decommissioning_names
                         .remove(&name);
                     DecommissionOutcome::Timeout { state: stop_state }
@@ -770,7 +771,7 @@ pub(super) fn on_decommission_order(name: String, command_id: String, state: &Ar
         }
 
 pub(super) fn on_register(identity_version: u8, agent_type: String, agent_id: String, host: Option<String>, transport: Option<String>, channel: ChannelReport, mode: Option<PresenceMode>, location: Option<String>, os: Option<String>, instance_id: Option<String>, domain: Option<String>, turn_in_progress: bool, journal_available: Option<bool>, turn_attest: bool, queue_fallback: bool, conn_id: &str, state: &Arc<Mutex<DaemonState>>) -> Option<DaemonToWrapper> {
-            let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+            let mut st = state.lock().recover_poison();
             if instance_id
                 .as_ref()
                 .is_some_and(|id| st.managed_terminal_instances.contains(id))
@@ -850,7 +851,7 @@ pub(super) fn on_coordination_subscribe(version: u16, after_cursor: Option<u64>,
                     },
                 });
             }
-            let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+            let mut st = state.lock().recover_poison();
             let replay = match st.store.guichet_coordination_events_after(after_cursor) {
                 Ok(replay) => replay,
                 Err(error) => {
@@ -941,7 +942,7 @@ pub(super) fn on_client_hello(contract_version: u16, issuer_scope: String, capab
                     reason: ClientRefusal::InvalidIssuerScope,
                 });
             }
-            let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+            let mut st = state.lock().recover_poison();
             let active_scopes = st
                 .client_negotiations
                 .values()
@@ -1014,7 +1015,7 @@ pub(super) fn on_client_hello(contract_version: u16, issuer_scope: String, capab
         }
 
 pub(super) fn on_delivery_rejected(id: String, reason: String, execution_id: Option<String>, generation: Option<u64>, conn_id: &str, state: &Arc<Mutex<DaemonState>>) -> Option<DaemonToWrapper> {
-            let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+            let mut st = state.lock().recover_poison();
             match native_delegation::rejected(
                 &mut st,
                 conn_id,
@@ -1089,7 +1090,7 @@ pub(super) fn on_wait_agent_links(after_cursor: Option<u64>, timeout_ms: u64, co
                 });
             }
             let (parent_instance_id, fleet) = {
-                let st = state.lock().unwrap_or_else(|e| e.into_inner());
+                let st = state.lock().recover_poison();
                 let Some(parent_instance_id) = st.conn_instances.get(conn_id).cloned() else {
                     return Some(DaemonToWrapper::Nack {
                         id: "agent-link-events".to_string(),
@@ -1131,7 +1132,7 @@ pub(super) fn on_wait_agent_links(after_cursor: Option<u64>, timeout_ms: u64, co
         }
 
 pub(super) fn on_t3_thread_binding_fact(version: u16, t3_thread_id: String, conn_id: &str, state: &Arc<Mutex<DaemonState>>) -> Option<DaemonToWrapper> {
-            let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+            let mut st = state.lock().recover_poison();
             let agent = crate::t3code::stable_uuid(&t3_thread_id);
             let instance = crate::t3code::stable_uuid(&format!("instance:{t3_thread_id}"));
             // T3 atteste aussi des identifiants opaques (mcp:…, thread:mcp:…).
@@ -1179,7 +1180,7 @@ pub(super) fn on_t3_thread_binding_fact(version: u16, t3_thread_id: String, conn
         }
 
 pub(super) fn on_daemon_identity_request(state: &Arc<Mutex<DaemonState>>) -> Option<DaemonToWrapper> {
-            let st = state.lock().unwrap_or_else(|e| e.into_inner());
+            let st = state.lock().recover_poison();
             Some(DaemonToWrapper::DaemonIdentityReport {
                 host: st.host.clone(),
                 db_path: st.db_path.display().to_string(),
@@ -1229,7 +1230,7 @@ pub(super) fn on_daemon_identity_request(state: &Arc<Mutex<DaemonState>>) -> Opt
 
 pub(super) fn on_subscribed(subscription_id: String, conn_id: &str, state: &Arc<Mutex<DaemonState>>) -> Option<DaemonToWrapper> {
             let control = {
-                let st = state.lock().unwrap_or_else(|e| e.into_inner());
+                let st = state.lock().recover_poison();
                 let subscription = st.attach_subscriptions.get(&subscription_id).cloned()?;
                 if subscription.wrapper_conn != conn_id {
                     return None;
@@ -1252,7 +1253,7 @@ pub(super) fn on_subscribed(subscription_id: String, conn_id: &str, state: &Arc<
                 control.is_some_and(|control| execute_controls(vec![control]).is_empty());
             if !delivered {
                 let (control, view) = {
-                    let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+                    let mut st = state.lock().recover_poison();
                     let subscription = st.attach_subscriptions.remove(&subscription_id);
                     let control = subscription.and_then(|subscription| {
                         st.connections
@@ -1277,7 +1278,7 @@ pub(super) fn on_subscribed(subscription_id: String, conn_id: &str, state: &Arc<
         }
 
 pub(super) fn on_turn_state(in_progress: bool, conn_id: &str, state: &Arc<Mutex<DaemonState>>) -> Option<DaemonToWrapper> {
-            let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+            let mut st = state.lock().recover_poison();
             let finished=!in_progress && st.conn_instances.get(conn_id).and_then(|id| st.presences.get(id)).is_some_and(|p| p.state=="busy");
             match st.set_turn_state(conn_id, in_progress) {
                 Ok(()) => {
@@ -1301,7 +1302,7 @@ pub(super) fn on_turn_state(in_progress: bool, conn_id: &str, state: &Arc<Mutex<
                         if !retry.is_empty() {
                             state
                                 .lock()
-                                .unwrap_or_else(|e| e.into_inner())
+                                .recover_poison()
                                 .pending_post_response_controls
                                 .entry(target_conn)
                                 .or_default()
@@ -1319,7 +1320,7 @@ pub(super) fn on_turn_state(in_progress: bool, conn_id: &str, state: &Arc<Mutex<
 
 pub(super) fn on_unsubscribe(subscription_id: String, conn_id: &str, state: &Arc<Mutex<DaemonState>>) -> Option<DaemonToWrapper> {
             let (control, view) = {
-                let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+                let mut st = state.lock().recover_poison();
                 let Some(subscription) = st.attach_subscriptions.get(&subscription_id).cloned()
                 else {
                     // Une fin d'ancienne génération n'a pas le droit de toucher
@@ -1362,7 +1363,7 @@ pub(super) fn on_unsubscribe(subscription_id: String, conn_id: &str, state: &Arc
 pub(super) fn on_delivery_indeterminate(delivery_id: String, delivery_generation: u64, conn_id: &str, state: &Arc<Mutex<DaemonState>>) -> Option<DaemonToWrapper> {
             let Some(instance_id) = state
                 .lock()
-                .unwrap_or_else(|e| e.into_inner())
+                .recover_poison()
                 .conn_instances
                 .get(conn_id)
                 .cloned()
@@ -1372,7 +1373,7 @@ pub(super) fn on_delivery_indeterminate(delivery_id: String, delivery_generation
                     reason: "accusé indéterminé émis par une instance inconnue".to_string(),
                 });
             };
-            let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+            let mut st = state.lock().recover_poison();
             match st.idempotency.mark_delivery_indeterminate(
                 &delivery_id,
                 &instance_id,
@@ -1396,7 +1397,7 @@ pub(super) fn on_delivery_indeterminate(delivery_id: String, delivery_generation
         }
 
 pub(super) fn on_list_requests(sender: String, limit: u16, state: &Arc<Mutex<DaemonState>>) -> Option<DaemonToWrapper> {
-            let st = state.lock().unwrap_or_else(|e| e.into_inner());
+            let st = state.lock().recover_poison();
             match st
                 .store
                 .requests_for_participant(&sender, usize::from(limit))
@@ -1436,7 +1437,7 @@ pub(super) fn on_adopt_stopped_order(name: String, command_id: String, state: &A
             info!(
                 "cycle_vie action=adopt_stopped phase=request name={name} command_id={command_id}"
             );
-            let mut st = state.lock().unwrap_or_else(|error| error.into_inner());
+            let mut st = state.lock().recover_poison();
             let visible = st
                 .agent_infos()
                 .into_iter()
@@ -1468,7 +1469,7 @@ pub(super) fn on_adopt_stopped_order(name: String, command_id: String, state: &A
 
 pub(super) fn on_attach_rejected(subscription_id: Option<String>, reason: AttachRefusal, conn_id: &str, state: &Arc<Mutex<DaemonState>>) -> Option<DaemonToWrapper> {
             let (control, view) = {
-                let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+                let mut st = state.lock().recover_poison();
                 let subscription_id = subscription_id?;
                 let subscription = st.attach_subscriptions.get(&subscription_id).cloned()?;
                 if subscription.wrapper_conn != conn_id {
@@ -1499,7 +1500,7 @@ pub(super) fn on_attach_rejected(subscription_id: Option<String>, reason: Attach
         }
 
 pub(super) fn on_journal_ready(receipt_probe: bool, conn_id: &str, state: &Arc<Mutex<DaemonState>>) -> Option<DaemonToWrapper> {
-            let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+            let mut st = state.lock().recover_poison();
             let Some(instance_id) = st.conn_instances.get(conn_id).cloned() else {
                 return Some(DaemonToWrapper::Nack {
                     id: "journal-ready".to_string(),
@@ -1534,7 +1535,7 @@ pub(super) fn on_journal_ready(receipt_probe: bool, conn_id: &str, state: &Arc<M
 
 pub(super) fn on_live_journal_fragment(seq: u64, offset: u64, final_fragment: bool, bytes: Vec<u8>, conn_id: &str, state: &Arc<Mutex<DaemonState>>) -> Option<DaemonToWrapper> {
             let views = {
-                let st = state.lock().unwrap_or_else(|e| e.into_inner());
+                let st = state.lock().recover_poison();
                 st.attach_subscriptions
                     .iter()
                     .filter(|(_, subscription)| {
@@ -1574,7 +1575,7 @@ pub(super) fn on_send(mut bridge_msg: bridget_core::BridgetMessage, conn_id: &st
                 bridge_msg.to,
                 bridge_msg.body.chars().take(40).collect::<String>()
             );
-            let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+            let mut st = state.lock().recover_poison();
             let is_attach = st.connection_roles.get(conn_id) == Some(&ConnectionRole::Attach);
             purge_expired_attach_sends(&mut st);
             if is_attach && st.pending_attach_sends.len() >= MAX_PENDING_ATTACH_SENDS {
@@ -1937,7 +1938,7 @@ pub(super) fn on_send(mut bridge_msg: bridget_core::BridgetMessage, conn_id: &st
             let delivery_succeeded = delivery.is_ok();
             // Aucun writer n'est détenu à la reprise du verrou global. Le
             // suivi peut déjà être terminal ; ne jamais le recréer ici.
-            let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+            let mut st = state.lock().recover_poison();
             if !delivery_succeeded
                 && let Some((execution_id, generation, revision)) = execution_attempt
             {
@@ -2016,7 +2017,7 @@ pub(super) fn on_service_request(version: u16, issuer_scope: String, request_id:
                 });
             }
             let (declared_name, declared_instance_id, declared_sender_matches) = {
-                let st = state.lock().unwrap_or_else(|e| e.into_inner());
+                let st = state.lock().recover_poison();
                 let name = st.conn_names.get(conn_id).cloned();
                 let instance_id = st.conn_instances.get(conn_id).cloned();
                 let matches = name.as_ref().is_some_and(|registered| {
@@ -2040,7 +2041,7 @@ pub(super) fn on_service_request(version: u16, issuer_scope: String, request_id:
             // l'identité humaine) peut porter une origine humaine ou un focus,
             // et c'est le daemon qui fabrique l'origine, jamais le client.
             let human_principal = {
-                let st = state.lock().unwrap_or_else(|e| e.into_inner());
+                let st = state.lock().recover_poison();
                 declared_name.as_deref() == Some(UI_HUMAN_AGENT_ID)
                     && declared_instance_id.as_deref().is_some_and(|instance| {
                         st.presences
@@ -2117,7 +2118,7 @@ pub(super) fn on_service_request(version: u16, issuer_scope: String, request_id:
                     signature: bridget_transport::protocol::human_message_content_seal(&observed),
                 };
                 {
-                    let st = state.lock().unwrap_or_else(|e| e.into_inner());
+                    let st = state.lock().recover_poison();
                     let mut human_message =
                         bridget_core::BridgetMessage::new(UI_HUMAN_SENDER, "guichet", goal);
                     human_message.id = message_id.clone();
@@ -2198,7 +2199,7 @@ pub(super) fn on_service_request(version: u16, issuer_scope: String, request_id:
                             deposit.authorization_attestation = Some(attestation.clone());
                             state
                                 .lock()
-                                .unwrap_or_else(|error| error.into_inner())
+                                .recover_poison()
                                 .store
                                 .deposit_guichet(
                                     &deposit,
@@ -2222,7 +2223,7 @@ pub(super) fn on_service_request(version: u16, issuer_scope: String, request_id:
                 }
                 None => state
                     .lock()
-                    .unwrap_or_else(|error| error.into_inner())
+                    .recover_poison()
                     .store
                     .deposit_guichet(
                         &deposit,
@@ -2246,7 +2247,7 @@ pub(super) fn on_service_request(version: u16, issuer_scope: String, request_id:
         }
 
 pub(super) fn on_spawn_order(posture: Option<bridget_transport::protocol::SpawnPosture>, agent_type: String, project: Option<bridget_transport::protocol::ProjectReference>, agent_id: Option<String>, cwd: String, persistent: bool, command_id: String, issued_at: i64, deadline_at: i64, ownership: Option<bridget_transport::protocol::SpawnOwnership>, conn_id: &str, state: &Arc<Mutex<DaemonState>>) -> Option<DaemonToWrapper> {
-            let mut st = state.lock().unwrap_or_else(|error| error.into_inner());
+            let mut st = state.lock().recover_poison();
             let order = FleetSpawnOrder {
                 remote_placement: None,
                 posture,
@@ -2450,7 +2451,7 @@ pub(super) fn on_artifact_publish(contract_version: u8, canonical_publication: V
                     }
                 };
             let (context, database_path, artifact_root) = {
-                let st = state.lock().unwrap_or_else(|error| error.into_inner());
+                let st = state.lock().recover_poison();
                 let (agent_name, instance_id, project_id) = match artifact_access_scope(
                     &st, conn_id,
                 ) {
@@ -2544,7 +2545,7 @@ pub(super) fn on_guichet_reply(version: u16, issuer_scope: String, request_id: S
                     });
                 }
             };
-            let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+            let mut st = state.lock().recover_poison();
             match st.store.reply_guichet(
                 conn_id,
                 GuichetReplyInput {
@@ -2596,7 +2597,7 @@ pub(super) fn on_guichet_reply(version: u16, issuer_scope: String, request_id: S
 pub(super) fn on_queue_edit_request(request_id: String, target: String, action: bridget_transport::protocol::QueueEditAction, message_id: String, before_message_id: Option<String>, conn_id: &str, state: &Arc<Mutex<DaemonState>>) -> Option<DaemonToWrapper> {
             let mut controls = Vec::new();
             let (response, notice) = {
-                let mut st = state.lock().unwrap_or_else(|error| error.into_inner());
+                let mut st = state.lock().recover_poison();
                 handle_queue_edit(
                     &mut st,
                     conn_id,
@@ -2611,7 +2612,7 @@ pub(super) fn on_queue_edit_request(request_id: String, target: String, action: 
             // Le COMMIT et le relâchement de State précèdent toute poussée. Rejeu : zéro contrôle.
             let failed_controls = execute_controls(controls);
             if !failed_controls.is_empty() {
-                let mut st = state.lock().unwrap_or_else(|error| error.into_inner());
+                let mut st = state.lock().recover_poison();
                 for control in failed_controls {
                     if let DaemonToWrapper::DeliverIdempotent {
                         delivery_id,
@@ -2632,7 +2633,7 @@ pub(super) fn on_queue_edit_request(request_id: String, target: String, action: 
             if let Some(notice) = notice {
                 use rusqlite::OptionalExtension;
                 let pending = {
-                    let st = state.lock().unwrap_or_else(|error| error.into_inner());
+                    let st = state.lock().recover_poison();
                     let body = st.store.connection().query_row(
                         "SELECT body FROM orphan_emitter_notices WHERE delivery_id=?1 AND notified_at IS NULL",
                         [&notice.delivery_id], |row| row.get::<_, String>(0),
@@ -2656,7 +2657,7 @@ pub(super) fn on_queue_edit_request(request_id: String, target: String, action: 
                         warn!("notice d'édition différée: {error}");
                     } else if let Err(error) = state
                         .lock()
-                        .unwrap_or_else(|e| e.into_inner())
+                        .recover_poison()
                         .idempotency
                         .mark_orphan_emitter_notified(&notice.delivery_id, unix_now_secs())
                     {
@@ -2668,7 +2669,7 @@ pub(super) fn on_queue_edit_request(request_id: String, target: String, action: 
         }
 
 pub(super) fn on_observation_request(request: bridget_transport::protocol::ObservationRequest, conn_id: &str, state: &Arc<Mutex<DaemonState>>) -> Option<DaemonToWrapper> {
-            let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+            let mut st = state.lock().recover_poison();
             let Some((owner, _)) = live_connection_identity(&st, conn_id) else {
                 return Some(DaemonToWrapper::Nack {
                     id: "observation".into(),
@@ -2748,7 +2749,7 @@ pub(super) fn on_observation_request(request: bridget_transport::protocol::Obser
 
 pub(super) fn on_subscribe(agent: String, window: bridget_transport::protocol::AttachWindow, conn_id: &str, state: &Arc<Mutex<DaemonState>>) -> Option<DaemonToWrapper> {
             let (subscription_id, control) = {
-                let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+                let mut st = state.lock().recover_poison();
                 if st.connection_roles.get(conn_id) != Some(&ConnectionRole::Attach) {
                     return Some(DaemonToWrapper::AttachRejected {
                         subscription_id: None,
@@ -2806,7 +2807,7 @@ pub(super) fn on_subscribe(agent: String, window: bridget_transport::protocol::A
                 None
             } else {
                 let view = {
-                    let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+                    let mut st = state.lock().recover_poison();
                     st.attach_subscriptions.remove(&subscription_id);
                     st.attach_views.remove(&subscription_id)
                 };
@@ -2827,7 +2828,7 @@ pub(super) fn on_display_name_set(request: bridget_transport::protocol::DisplayN
             use bridget_transport::protocol::{
                 DisplayNameOutcome as Outcome, DisplayNameRefusal as Refusal,
             };
-            let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+            let mut st = state.lock().recover_poison();
             let mut renamed = HashSet::new();
             let result = (|| {
                 if request.version != 1
@@ -2900,7 +2901,7 @@ pub(super) fn on_thread_request(request: bridget_transport::protocol::ThreadRequ
                 request.request,
                 bridget_transport::protocol::ThreadAction::AddMembers { .. }
             ) {
-                let st = state.lock().unwrap_or_else(|e| e.into_inner());
+                let st = state.lock().recover_poison();
                 if !st
                     .client_negotiations
                     .get(conn_id)
@@ -2931,7 +2932,7 @@ pub(super) fn on_thread_request(request: bridget_transport::protocol::ThreadRequ
                     | bridget_transport::protocol::ThreadAction::Close { .. }
             );
             let (result, controls) = {
-                let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+                let mut st = state.lock().recover_poison();
                 let Some((owner, _)) = live_connection_identity(&st, conn_id) else {
                     return Some(DaemonToWrapper::ThreadResult {
                         result: bridget_transport::protocol::ThreadResult {
@@ -2966,7 +2967,7 @@ pub(super) fn on_thread_request(request: bridget_transport::protocol::ThreadRequ
 
 pub(super) fn on_delegated_runtime_event(execution_id: String, kind: bridget_transport::protocol::DelegatedRuntimeEventKind, code: String, reference: String, conn_id: &str, state: &Arc<Mutex<DaemonState>>) -> Option<DaemonToWrapper> {
             let (child_instance_id, fleet) = {
-                let st = state.lock().unwrap_or_else(|e| e.into_inner());
+                let st = state.lock().recover_poison();
                 let Some(child_instance_id) = st.conn_instances.get(conn_id).cloned() else {
                     return Some(DaemonToWrapper::Nack {
                         id: "delegated-runtime-event".to_string(),
@@ -2993,7 +2994,7 @@ pub(super) fn on_delegated_runtime_event(execution_id: String, kind: bridget_tra
                 }
             };
             let parent_writer = {
-                let st = state.lock().unwrap_or_else(|e| e.into_inner());
+                let st = state.lock().recover_poison();
                 st.conn_instances
                     .iter()
                     .find(|(candidate_conn, candidate_instance)| {
@@ -3029,7 +3030,7 @@ pub(super) fn on_delegated_runtime_event(execution_id: String, kind: bridget_tra
 
 pub(super) fn on_observed_activity(seq: u64, event: bridget_transport::protocol::ObservationKind, file: Option<String>, conn_id: &str, state: &Arc<Mutex<DaemonState>>) -> Option<DaemonToWrapper> {
             use bridget_transport::protocol::ObservationKind;
-            let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+            let mut st = state.lock().recover_poison();
             let (agent, instance) = live_connection_identity(&st, conn_id)?;
             if st.auxiliary_connections.contains(conn_id)
                 || !st.observations.accepts(conn_id, event)
@@ -3054,7 +3055,7 @@ pub(super) fn on_observed_activity(seq: u64, event: bridget_transport::protocol:
                 let agent=agent.clone();let instance=instance.clone();
                 drop(st);
                 specialists222::observe_history(state,&agent,&instance,seq);
-                st=state.lock().unwrap_or_else(|e|e.into_inner());
+                st=state.lock().recover_poison();
                 if live_connection_identity(&st,conn_id)!=Some((agent,instance)){return None;}
             }
             let host = st
@@ -3080,7 +3081,7 @@ pub(super) fn on_display_name_resolve(request: bridget_transport::protocol::Disp
             use bridget_transport::protocol::{
                 DisplayNameRefusal as Refusal, DisplayNameResolution as Outcome,
             };
-            let st = state.lock().unwrap_or_else(|e| e.into_inner());
+            let st = state.lock().recover_poison();
             let outcome = if request.version != 1
                 || request.display_name.chars().any(char::is_control)
                 || request.display_name.trim().is_empty()
@@ -3115,7 +3116,7 @@ pub(super) fn on_directory_scoped(scope: bridget_transport::protocol::Communicat
             use bridget_transport::protocol::{
                 CommunicationDirectoryScope, ProjectRelation,
             };
-            let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+            let mut st = state.lock().recover_poison();
             let project = connection_communication_project(&st, conn_id);
             let all = match agent_tracking230::directory(&mut st) {
                 Ok(all)=>all,
@@ -3147,7 +3148,7 @@ pub(super) fn on_directory_scoped(scope: bridget_transport::protocol::Communicat
         }
 
 pub(super) fn on_native_permission_fact(fact: Option<ProviderPermissions>, request_id: Option<String>, observation_id: Option<String>, unavailable_code: Option<String>, conn_id: &str, state: &Arc<Mutex<DaemonState>>) -> Option<DaemonToWrapper> {
-            let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+            let mut st = state.lock().recover_poison();
             if st.auxiliary_connections.contains(conn_id)
                 || live_connection_identity(&st, conn_id).is_none()
             {
@@ -3208,7 +3209,7 @@ pub(super) fn on_native_permission_fact(fact: Option<ProviderPermissions>, reque
         }
 
 pub(super) fn service_refusal(msg: &WrapperToDaemon, conn_id: &str, state: &Arc<Mutex<DaemonState>>) -> Option<ServiceRefusal> {
-        let st = state.lock().unwrap_or_else(|e| e.into_inner());
+        let st = state.lock().recover_poison();
         let is_service_message = matches!(
             &msg,
             WrapperToDaemon::ServiceHello { .. }
@@ -3474,7 +3475,7 @@ pub(super) fn service_refusal(msg: &WrapperToDaemon, conn_id: &str, state: &Arc<
     }
 
 pub(super) fn client_refusal(msg: &WrapperToDaemon, conn_id: &str, state: &Arc<Mutex<DaemonState>>) -> Option<ClientRefusal> {
-        let st = state.lock().unwrap_or_else(|e| e.into_inner());
+        let st = state.lock().recover_poison();
         match st.connection_roles.get(conn_id) {
             Some(ConnectionRole::Attach)
                 if matches!(&msg, WrapperToDaemon::ClientHello { .. })

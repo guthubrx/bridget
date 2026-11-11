@@ -1,4 +1,5 @@
 //! Vue humaine froide de la saga native. Aucun moteur de présentation parallèle.
+use bridget_transport::poison::RecoverPoison;
 use super::*;
 use crate::delegation::ProjectionMutation;
 use bridget_transport::protocol::{
@@ -285,7 +286,7 @@ fn validate(request: &Request) -> Result<(), E> {
 fn authorize(state: &Arc<Mutex<DaemonState>>, conn: &str, request: &Request) -> Result<Context, E> {
     validate(request)?;
     {
-        let st = state.lock().unwrap_or_else(|e| e.into_inner());
+        let st = state.lock().recover_poison();
         human_client_guard(
             &st,
             conn,
@@ -296,7 +297,7 @@ fn authorize(state: &Arc<Mutex<DaemonState>>, conn: &str, request: &Request) -> 
         .map_err(from_guard)?;
     }
     let project = human_request_project(state, &request.t3_thread_id, &request.project_root);
-    let st = state.lock().unwrap_or_else(|e| e.into_inner());
+    let st = state.lock().recover_poison();
     human_client_guard(
         &st,
         conn,
@@ -419,7 +420,7 @@ pub(super) fn handle(
     }
     let mut drive = false;
     let result = {
-        let st = state.lock().unwrap_or_else(|e| e.into_inner());
+        let st = state.lock().recover_poison();
         guard(&st, conn, &context).and_then(|()| match &request.request {
             A::List { limit, cursor } => st.delegation_store.lineage_page_versioned(
                 &context.root,
@@ -493,7 +494,7 @@ fn compose_catalogue(
     let token = uuid::Uuid::new_v4().to_string();
     let (sender, receiver) = std::sync::mpsc::channel();
     let writer = {
-        let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+        let mut st = state.lock().recover_poison();
         if compose_live_task(&st, conn, context, task).is_err() {
             return Err(Refusal::TargetUnavailable);
         }
@@ -538,7 +539,7 @@ fn compose_catalogue(
     } else {
         None
     };
-    let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+    let mut st = state.lock().recover_poison();
     st.pending_runtime_catalogues.remove(&token);
     if compose_live_task(&st, conn, context, task).is_err() {
         return Err(Refusal::TargetUnavailable);
@@ -633,7 +634,7 @@ fn compose(conn: &str, context: &Context, state: &Arc<Mutex<DaemonState>>) -> Re
         return Err(E::InvalidRequest);
     };
     let canonical = serde_json::to_string(&context.request).map_err(|_| E::InvalidRequest)?;
-    let st = state.lock().unwrap_or_else(|e| e.into_inner());
+    let st = state.lock().recover_poison();
     guard(&st, conn, context)?;
     let task = st
         .delegation_store
@@ -736,7 +737,7 @@ fn compose(conn: &str, context: &Context, state: &Arc<Mutex<DaemonState>>) -> Re
         Ok(models) => (models, None),
         Err(reason) => (Vec::new(), Some(reason)),
     };
-    let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+    let mut st = state.lock().recover_poison();
     guard(&st, conn, context)?;
     let current = st
         .delegation_store
@@ -1029,7 +1030,7 @@ fn compose_select_runtime(
     let token = uuid::Uuid::new_v4().to_string();
     let (sender, receiver) = std::sync::mpsc::channel();
     let prepared = {
-        let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+        let mut st = state.lock().recover_poison();
         compose_live_task(&st, conn, context, task)?;
         let choice = models.iter().find(|m| m.model == model);
         if task.definition.protocol != "codex_app_server" || choice.is_none() {
@@ -1103,7 +1104,7 @@ fn compose_select_runtime(
         } else {
             Outcome::OutcomeUnknown {}
         };
-        let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+        let mut st = state.lock().recover_poison();
         st.pending_runtime_selections.remove(&token);
         // Une réponse tardive ou une révocation ne permet pas d'affirmer l'état courant.
         if compose_live_task(&st, conn, context, task).is_ok() {
@@ -1141,7 +1142,7 @@ fn compose_select_runtime(
             }
         }
     }
-    let st = state.lock().unwrap_or_else(|e| e.into_inner());
+    let st = state.lock().recover_poison();
     guard(&st, conn, context)?;
     st.delegation_store.human_compose_complete(
         &context.root,
@@ -1168,7 +1169,7 @@ fn journal_page(
         return Err(E::InvalidRequest);
     };
     let task = {
-        let st = state.lock().unwrap_or_else(|e| e.into_inner());
+        let st = state.lock().recover_poison();
         guard(&st, conn, context)?;
         st.delegation_store
             .get(task_id)
@@ -1177,7 +1178,7 @@ fn journal_page(
             .ok_or(E::TaskUnavailable)?
     };
     let (page, command) = read_task_journal(state, &task, *after_seq, *limit)?;
-    let st = state.lock().unwrap_or_else(|e| e.into_inner());
+    let st = state.lock().recover_poison();
     guard_journal_snapshot(&st, conn, context, &task, command.as_ref())?;
     Ok(page)
 }
@@ -1204,7 +1205,7 @@ pub(super) fn read_task_journal(
     }
     let task_id = &task.task_id;
     let (directory, remote) = {
-        let st = state.lock().unwrap_or_else(|e| e.into_inner());
+        let st = state.lock().recover_poison();
         if let Some(placement) = &task.remote_placement {
             let worker = WorkerIdentity {
                 machine_id: placement.machine_id.clone(),
@@ -1393,7 +1394,7 @@ fn publish(st: &mut DaemonState, root: &str, mutation: &ProjectionMutation) {
 }
 
 fn watch(conn: &str, context: Context, state: &Arc<Mutex<DaemonState>>) -> Option<DaemonToWrapper> {
-    let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+    let mut st = state.lock().recover_poison();
     if let Err(e) = guard(&st, conn, &context) {
         return Some(refusal(&context.request, e));
     }
@@ -1435,7 +1436,7 @@ fn watch(conn: &str, context: Context, state: &Arc<Mutex<DaemonState>>) -> Optio
         thread::spawn(move || {
             while receiver.recv().is_ok() {
                 let Some(state) = weak.upgrade() else { break };
-                let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+                let mut st = state.lock().recover_poison();
                 for (root, mutation) in st.delegation_store.take_changes() {
                     publish(&mut st, &root, &mutation)
                 }
@@ -1448,7 +1449,7 @@ fn watch(conn: &str, context: Context, state: &Arc<Mutex<DaemonState>>) -> Optio
         loop {
             let Some(state) = weak.upgrade() else { break };
             let event = {
-                let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+                let mut st = state.lock().recover_poison();
                 let Some(w) = st.lineage_watches.get(&conn) else {
                     break;
                 };
@@ -1488,7 +1489,7 @@ fn watch(conn: &str, context: Context, state: &Arc<Mutex<DaemonState>>) -> Optio
                 if terminal || sent.is_err() {
                     state
                         .lock()
-                        .unwrap_or_else(|e| e.into_inner())
+                        .recover_poison()
                         .lineage_watches
                         .remove(&conn);
                     break;
@@ -1510,7 +1511,7 @@ fn journal_follow(
     context: Context,
     state: &Arc<Mutex<DaemonState>>,
 ) -> Option<DaemonToWrapper> {
-    let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+    let mut st = state.lock().recover_poison();
     let refusal = |e| {
         Some(DaemonToWrapper::HumanLineageResult {
             result: E::result(e),
@@ -1619,7 +1620,7 @@ fn journal_follow(
                 limit,
                 |stream| {
                     let state = weak.upgrade().ok_or(E::BindingUnavailable)?;
-                    let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+                    let mut st = state.lock().recover_poison();
                     guard_journal_snapshot(&st, &conn, &context, &task, command.as_ref())?;
                     let journal = st
                         .lineage_journals
@@ -1658,7 +1659,7 @@ fn journal_follow(
             // reprises ici sont les invalidations de garde, sans relire le corps.
             if receiver.recv().is_ok() {
                 let state = weak.upgrade().ok_or(E::BindingUnavailable)?;
-                let st = state.lock().unwrap_or_else(|e| e.into_inner());
+                let st = state.lock().recover_poison();
                 if !st.lineage_journals.contains_key(&conn) {
                     return Ok(());
                 }
@@ -1672,7 +1673,7 @@ fn journal_follow(
                 .upgrade()
                 .and_then(|s| {
                     guard(
-                        &s.lock().unwrap_or_else(|e| e.into_inner()),
+                        &s.lock().recover_poison(),
                         &conn,
                         &context,
                     )
@@ -1684,7 +1685,7 @@ fn journal_follow(
         if let Some(state) = weak.upgrade() {
             state
                 .lock()
-                .unwrap_or_else(|e| e.into_inner())
+                .recover_poison()
                 .lineage_journals
                 .remove(&conn);
         }

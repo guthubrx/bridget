@@ -1,3 +1,4 @@
+use bridget_transport::poison::RecoverPoison;
     use super::*;
     use std::os::unix::fs::PermissionsExt;
     use std::path::Path;
@@ -4929,7 +4930,7 @@ for frame in frames: print(json.dumps(frame),flush=True)
         let st = Arc::try_unwrap(state)
             .unwrap_or_else(|_| panic!("aucune autre référence de fixture"))
             .into_inner()
-            .unwrap_or_else(|error| error.into_inner());
+            .recover_poison();
         // T048 : 4 095 refus auto terminaux retiennent déjà des clés UNION.
         // Le nouveau reçu devient la 4 096e clé puis est remplacé par sa Task
         // dans la même clé, sans un refus artificiel ni double comptage.
@@ -5049,7 +5050,7 @@ for frame in frames: print(json.dumps(frame),flush=True)
         let mut st = Arc::try_unwrap(state)
             .unwrap_or_else(|_| panic!("aucune autre référence de fixture"))
             .into_inner()
-            .unwrap_or_else(|error| error.into_inner());
+            .recover_poison();
         let explicit = local_delegate_from_auto(
             &auto,
             &auto_admission_plan(&st.registry, &auto).unwrap().candidates[0],

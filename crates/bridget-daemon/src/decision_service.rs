@@ -5,6 +5,7 @@
 //! client HTTP historique du daemon et rend visibles les limites d'un appel
 //! bloqué sans introduire de runtime, file ou fournisseur supplémentaire.
 
+use bridget_transport::poison::RecoverPoison;
 use crate::registry::DecisionService;
 use bridget_transport::protocol::{is_auto_candidate_id, is_routing_candidate_id};
 use serde::{Deserialize, Serialize};
@@ -296,14 +297,14 @@ pub struct RoutingDecisionPermit {
 
 impl Drop for RoutingDecisionPermit {
     fn drop(&mut self) {
-        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.state.lock().recover_poison();
         state.routing_in_flight = false;
     }
 }
 
 impl Drop for NetworkPermit {
     fn drop(&mut self) {
-        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.state.lock().recover_poison();
         state.in_flight = false;
     }
 }
@@ -319,7 +320,7 @@ impl DecisionServiceClient {
     }
 
     pub fn acquire_routing_permit(&self) -> Result<RoutingDecisionPermit, DecisionServiceError> {
-        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.state.lock().recover_poison();
         if state.routing_in_flight {
             return Err(DecisionServiceError::CapacityOccupied);
         }
@@ -429,7 +430,7 @@ impl DecisionServiceClient {
     }
 
     fn cached_health(&self, key: &str) -> Option<HealthStatus> {
-        let state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let state = self.state.lock().recover_poison();
         state
             .health
             .get(key)
@@ -442,7 +443,7 @@ impl DecisionServiceClient {
             HealthStatus::Available => service.health_ttl_seconds,
             HealthStatus::Unavailable { .. } => service.retry_after_seconds,
         };
-        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.state.lock().recover_poison();
         if !state.health.contains_key(&key) && state.health.len() >= MAX_HEALTH_CACHE_ENTRIES {
             // Cache d'observations seulement : une éviction déterministe ne
             // touche aucune décision ni reçu durable.
@@ -473,7 +474,7 @@ impl DecisionServiceClient {
             return Err(DecisionServiceError::UnsafeRuntimeConfiguration);
         }
         let permit = {
-            let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+            let mut state = self.state.lock().recover_poison();
             if state.in_flight {
                 return Err(DecisionServiceError::CapacityOccupied);
             }

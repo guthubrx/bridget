@@ -20,6 +20,7 @@ mod mobile_artifacts;
 mod mobile_tasks;
 mod mobile_questions;
 
+use bridget_transport::poison::RecoverPoison;
 use bridget_core::{CircuitBreaker, Deduplicator, EnvelopeGuard, Router, RouterAction};
 use bridget_transport::greffe_authorization::{
     GreffeAuthorizationGate, GreffeDepositAuthorization, GreffeMutationAction,
@@ -275,7 +276,7 @@ fn wait_request(
         let start = Instant::now();
         let deadline = start + Duration::from_secs(timeout);
         let (identity, epoch, active) = {
-            let st = state.lock().unwrap_or_else(|e| e.into_inner());
+            let st = state.lock().recover_poison();
             (
                 live_connection_identity(&st, conn).ok_or("identity_unavailable")?,
                 st.delegation_store.wait_epoch(),
@@ -289,7 +290,7 @@ fn wait_request(
                 return Err("daemon_unreachable".into());
             }
             let (current, reply_deadline, summary) = {
-                let st = state.lock().unwrap_or_else(|e| e.into_inner());
+                let st = state.lock().recover_poison();
                 if live_connection_identity(&st, conn).as_ref() != Some(&identity) {
                     return Err("request_unavailable".into());
                 }
@@ -390,7 +391,7 @@ mod native151_sql_trace_tests {
                         context
                             .selects
                             .lock()
-                            .unwrap_or_else(|error| error.into_inner())
+                            .recover_poison()
                             .push(context.start.elapsed());
                     }
                 }));
@@ -538,6 +539,7 @@ fn sleep_until_flag(total: Duration, flag: &AtomicBool) -> bool {
 
 #[cfg(test)]
 mod arret_tests {
+    use bridget_transport::poison::RecoverPoison;
     use super::{SHUTDOWN_POLL, SHUTDOWN_REQUESTED, sleep_until_flag, sleep_until_shutdown};
     use std::process::Command;
     use std::sync::Arc;
@@ -662,7 +664,7 @@ mod arret_tests {
         }
         let _ordre = VERROU_DRAPEAU
             .lock()
-            .unwrap_or_else(|poison| poison.into_inner());
+            .recover_poison();
         SHUTDOWN_REQUESTED.store(false, Ordering::SeqCst);
 
         let sieste = Duration::from_secs(3);
@@ -697,7 +699,7 @@ mod arret_tests {
     fn l_adaptateur_sans_ordre_d_arret_va_au_bout_de_sa_sieste() {
         let _ordre = VERROU_DRAPEAU
             .lock()
-            .unwrap_or_else(|poison| poison.into_inner());
+            .recover_poison();
         SHUTDOWN_REQUESTED.store(false, Ordering::SeqCst);
 
         let sieste = SHUTDOWN_POLL * 3;
@@ -1352,7 +1354,7 @@ impl ManagedStopControl {
         let (sender, receiver) = mpsc::channel();
         self.waiters
             .lock()
-            .unwrap_or_else(|poison| poison.into_inner())
+            .recover_poison()
             .push(sender);
         self.requested.store(true, Ordering::SeqCst);
         receiver
@@ -1375,7 +1377,7 @@ impl ManagedStopControl {
             &mut *self
                 .waiters
                 .lock()
-                .unwrap_or_else(|poison| poison.into_inner()),
+                .recover_poison(),
         );
         for waiter in waiters {
             let _ = waiter.send(outcome.clone());
@@ -1592,9 +1594,9 @@ impl AttachView {
             loop {
                 let next = {
                     let (lock, wake) = &*worker_queue;
-                    let mut buffer = lock.lock().unwrap_or_else(|e| e.into_inner());
+                    let mut buffer = lock.lock().recover_poison();
                     while buffer.messages.is_empty() && buffer.gap.is_none() && !buffer.closed {
-                        buffer = wake.wait(buffer).unwrap_or_else(|e| e.into_inner());
+                        buffer = wake.wait(buffer).recover_poison();
                     }
                     if let Some((from_seq, to_seq, reason)) = buffer.gap.take() {
                         encode(&DaemonToWrapper::Gap {
@@ -1616,7 +1618,7 @@ impl AttachView {
                     if worker_queue
                         .0
                         .lock()
-                        .unwrap_or_else(|e| e.into_inner())
+                        .recover_poison()
                         .closed
                     {
                         break;
@@ -1633,7 +1635,7 @@ impl AttachView {
                     .unwrap_or(true);
                 if write_failed {
                     let (lock, wake) = &*worker_queue;
-                    let mut buffer = lock.lock().unwrap_or_else(|e| e.into_inner());
+                    let mut buffer = lock.lock().recover_poison();
                     buffer.closed = true;
                     let notify = !buffer.close_notified;
                     buffer.close_notified = true;
@@ -1646,13 +1648,13 @@ impl AttachView {
                 }
                 if terminal {
                     let (lock, wake) = &*worker_queue;
-                    lock.lock().unwrap_or_else(|e| e.into_inner()).closed = true;
+                    lock.lock().recover_poison().closed = true;
                     wake.notify_all();
                     break;
                 }
             }
         });
-        *view.worker.lock().unwrap_or_else(|e| e.into_inner()) = Some(handle);
+        *view.worker.lock().recover_poison() = Some(handle);
         Some(view)
     }
 
@@ -1671,7 +1673,7 @@ impl AttachView {
             return false;
         };
         let (lock, wake) = &*self.queue;
-        let mut buffer = lock.lock().unwrap_or_else(|e| e.into_inner());
+        let mut buffer = lock.lock().recover_poison();
         if buffer.closed || buffer.terminal_enqueued {
             return false;
         }
@@ -1751,13 +1753,13 @@ impl AttachView {
 
     fn close(&self) {
         let (lock, wake) = &*self.queue;
-        lock.lock().unwrap_or_else(|e| e.into_inner()).closed = true;
+        lock.lock().recover_poison().closed = true;
         wake.notify_all();
     }
 
     fn close_and_notify(&self) {
         let (lock, wake) = &*self.queue;
-        let mut buffer = lock.lock().unwrap_or_else(|e| e.into_inner());
+        let mut buffer = lock.lock().recover_poison();
         if buffer.closed {
             return;
         }
@@ -1773,7 +1775,7 @@ impl AttachView {
 
     fn close_and_join(&self) {
         self.close();
-        if let Some(worker) = self.worker.lock().unwrap_or_else(|e| e.into_inner()).take() {
+        if let Some(worker) = self.worker.lock().recover_poison().take() {
             let _ = worker.join();
         }
     }
@@ -2002,7 +2004,7 @@ fn handle_wake_request(
             return Err("invalid_request");
         }
         let (owner, native, admin) = {
-            let st = state.lock().unwrap_or_else(|e| e.into_inner());
+            let st = state.lock().recover_poison();
             let admin = matches!(
                 request.request,
                 WakeAction::AdminList {} | WakeAction::AdminCancel { .. }
@@ -2077,7 +2079,7 @@ fn handle_wake_request(
                         .ok_or("invalid_request")?;
                 }
                 schedule.owner_project = {
-                    let st = state.lock().unwrap_or_else(|e| e.into_inner());
+                    let st = state.lock().recover_poison();
                     agent_communication_project(&st, &owner)
                 };
                 let calculated = calculate_cadence(&schedule, now)?;
@@ -2085,7 +2087,7 @@ fn handle_wake_request(
                 schedule.timezone = calculated.fingerprint.clone();
                 schedule.next_calendar_date = calculated.next_calendar_date.clone();
                 let current_timezone = timezone_fingerprint(now)?;
-                let st = state.lock().unwrap_or_else(|e| e.into_inner());
+                let st = state.lock().recover_poison();
                 if live_connection_identity(&st, conn_id)
                     .is_none_or(|(current, _)| current != owner)
                 {
@@ -2105,7 +2107,7 @@ fn handle_wake_request(
                 Ok(serde_json::json!({"status":"scheduled","schedule":schedule}))
             }
             WakeAction::List {} | WakeAction::AdminList {} => {
-                let st = state.lock().unwrap_or_else(|e| e.into_inner());
+                let st = state.lock().recover_poison();
                 let schedules = st
                     .store
                     .list_wake_schedules((!admin).then_some(owner.as_str()))
@@ -2120,7 +2122,7 @@ fn handle_wake_request(
                 {
                     return Err("invalid_request");
                 }
-                let st = state.lock().unwrap_or_else(|e| e.into_inner());
+                let st = state.lock().recover_poison();
                 let changed = st
                     .store
                     .cancel_wake_schedule((!admin).then_some(owner.as_str()), &schedule_id, now)
@@ -2138,7 +2140,7 @@ fn handle_wake_request(
                 if label.len() > 2048 || id.is_empty() || id.len() > 256 {
                     return Err("invalid_request");
                 }
-                let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+                let mut st = state.lock().recover_poison();
                 let directory = st.agent_infos();
                 let agent = if crate::threads::canonical_uuid(&target).is_some() {
                     directory
@@ -2250,7 +2252,7 @@ fn deliver_frozen_wake(
     let key =
         IdempotencyKey::new(scope, OperationKind::Send, &wake.id).map_err(|_| "invalid_request")?;
     let route = {
-        let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+        let mut st = state.lock().recover_poison();
         // Un dépôt102 déjà committé n'est pas une nouvelle émission : retrouver
         // sa preuve avant les gardes mutables et sans republier ses intentions.
         if let WakeTarget::Thread { id } = &wake.target {
@@ -2630,7 +2632,7 @@ fn deliver_frozen_wake(
     drop(permit);
     if let Some(delivery) = committed {
         if result.is_err() {
-            let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+            let mut st = state.lock().recover_poison();
             let _ = st
                 .idempotency
                 .mark_delivery_indeterminate(&delivery.delivery_id, &instance, 1);
@@ -2647,7 +2649,7 @@ fn scheduled_wakes_tick(state: &Arc<Mutex<DaemonState>>, now: i64, clock: Instan
         FrozenWake, WakePhase, WakeSource, calculate_cadence, timezone_fingerprint,
     };
     let schedules = {
-        let st = state.lock().unwrap_or_else(|e| e.into_inner());
+        let st = state.lock().recover_poison();
         match st.store.list_wake_schedules(None) {
             Ok(s) => s,
             Err(e) => {
@@ -2677,7 +2679,7 @@ fn scheduled_wakes_tick(state: &Arc<Mutex<DaemonState>>, now: i64, clock: Instan
                     b"reply_to",
                     b"ack",
                 ]);
-                let st = state.lock().unwrap_or_else(|e| e.into_inner());
+                let st = state.lock().recover_poison();
                 match st
                     .store
                     .thread_operation_replay(&wake.owner, operation_id, &canonical_hash)
@@ -2698,7 +2700,7 @@ fn scheduled_wakes_tick(state: &Arc<Mutex<DaemonState>>, now: i64, clock: Instan
             false
         };
         let native_status = {
-            let st = state.lock().unwrap_or_else(|e| e.into_inner());
+            let st = state.lock().recover_poison();
             wake_native_origin(&st, &schedule.owner, schedule.owner_native.as_ref())
         };
         let owner_closed = matches!(native_status, Err("owner_unavailable"));
@@ -2709,7 +2711,7 @@ fn scheduled_wakes_tick(state: &Arc<Mutex<DaemonState>>, now: i64, clock: Instan
             Some(WakePhase::CommittedThread)
         } else if schedule.cancelled_at.is_some() || owner_closed {
             if let Some(wake) = &frozen {
-                let st = state.lock().unwrap_or_else(|e| e.into_inner());
+                let st = state.lock().recover_poison();
                 let key = match IdempotencyKey::new(
                     crate::wake_schedules::SCHEDULED_WAKE_SCOPE,
                     OperationKind::Send,
@@ -2759,7 +2761,7 @@ fn scheduled_wakes_tick(state: &Arc<Mutex<DaemonState>>, now: i64, clock: Instan
             Err(_) => continue,
         };
         {
-            let st = state.lock().unwrap_or_else(|e| e.into_inner());
+            let st = state.lock().recover_poison();
             if owner_closed {
                 let _ = st.store.cancel_wake_schedule(
                     Some(&schedule.owner),
@@ -2876,7 +2878,7 @@ fn scheduled_wakes_tick(state: &Arc<Mutex<DaemonState>>, now: i64, clock: Instan
                 } else {
                     calendar.clone()
                 };
-                let st = state.lock().unwrap_or_else(|e| e.into_inner());
+                let st = state.lock().recover_poison();
                 let _ = st.store.settle_wake_occurrence(
                     &schedule.schedule_id,
                     &wake.id,
@@ -2887,7 +2889,7 @@ fn scheduled_wakes_tick(state: &Arc<Mutex<DaemonState>>, now: i64, clock: Instan
             }
     }
     let pending = {
-        let st = state.lock().unwrap_or_else(|e| e.into_inner());
+        let st = state.lock().recover_poison();
         st.idempotency
             .pending_cli_wakes(now, st.cli_wake_cursor.clone())
     };
@@ -2895,12 +2897,12 @@ fn scheduled_wakes_tick(state: &Arc<Mutex<DaemonState>>, now: i64, clock: Instan
         if pending.is_empty() {
             state
                 .lock()
-                .unwrap_or_else(|e| e.into_inner())
+                .recover_poison()
                 .cli_wake_cursor = None;
         }
         for (wake, _, _) in pending {
             let outcome = deliver_frozen_wake(state, &wake, None, now, clock);
-            let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+            let mut st = state.lock().recover_poison();
             st.cli_wake_cursor = Some((wake.issued_at, wake.id.clone()));
             let terminal = match outcome {
                 Ok(WakePhase::MissedBeforeDeparture) => {
@@ -3141,7 +3143,7 @@ fn queue_observation_notifications_at(
 fn observer_return_tick(state: &Arc<Mutex<DaemonState>>, now: i64, clock: Instant) {
     use crate::wake_schedules::{FrozenWake, MISSED_SUMMARY_SCOPE, WakePhase, WakeSource};
     let summaries = {
-        let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+        let mut st = state.lock().recover_poison();
         // Une deadline durable dépassée prime sur un callback arrivé tardivement.
         if let Err(error) = st.store.maintain_observation_missed(now, false) {
             warn!("observation maintenance unavailable: {error}");
@@ -3253,7 +3255,7 @@ fn observer_return_tick(state: &Arc<Mutex<DaemonState>>, now: i64, clock: Instan
             Err(_) => continue,
         };
         {
-            let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+            let mut st = state.lock().recover_poison();
             match st.idempotency.send_delivery_phase(&key) {
                 Ok(Some(phase)) if phase == "acked" => {
                     if let Ok(Some(delivery)) = st.idempotency.stored_send_delivery(&key) {
@@ -3297,7 +3299,7 @@ fn observer_return_tick(state: &Arc<Mutex<DaemonState>>, now: i64, clock: Instan
             }
         }
         let project = {
-            let st = state.lock().unwrap_or_else(|e| e.into_inner());
+            let st = state.lock().recover_poison();
             agent_communication_project(&st, &summary.owner)
         };
         let mut wake = FrozenWake {
@@ -3323,7 +3325,7 @@ fn observer_return_tick(state: &Arc<Mutex<DaemonState>>, now: i64, clock: Instan
         }
         if let Ok(WakePhase::DispatchingAgent) = deliver_frozen_wake(state, &wake, None, now, clock)
         {
-            let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+            let mut st = state.lock().recover_poison();
             match st.idempotency.stored_send_delivery(&key) {
                 Ok(Some(delivery)) => {
                     let _ = st.store.bind_observation_summary_delivery(
@@ -3481,7 +3483,7 @@ fn delegated_runtime_frame(
 
 fn replay_delegated_runtime_events_for_connection(state: &Arc<Mutex<DaemonState>>, conn_id: &str) {
     let (parent_instance_id, writer, fleet) = {
-        let st = state.lock().unwrap_or_else(|e| e.into_inner());
+        let st = state.lock().recover_poison();
         // Comme la remise en direct, le rejeu appartient au parent primaire.
         // Un auxiliaire MCP attend une réponse RPC, jamais cet avis asynchrone.
         if st.auxiliary_connections.contains(conn_id) {
@@ -4393,7 +4395,7 @@ fn drain_managed_events(
         let mut views = Vec::new();
         let mut stop_completion = None;
         {
-            let mut st = state.lock().unwrap_or_else(|poison| poison.into_inner());
+            let mut st = state.lock().recover_poison();
             match event {
                 ManagedSupervisorEvent::Connected {
                     lease,
@@ -6665,7 +6667,7 @@ pub fn run(config: DaemonConfig) -> Result<(), Box<dyn std::error::Error>> {
     let (managed_event_tx, managed_event_rx) = mpsc::channel();
     let state = Arc::new(Mutex::new(DaemonState::new(&config, managed_tx.clone())?));
     let native_identities = {
-        let st = state.lock().unwrap_or_else(|poison| poison.into_inner());
+        let st = state.lock().recover_poison();
         native_delegation::restart_identities(&st)?
     };
     let marker_store = ManagedMarkerStore::at_directory(state_root.join("managed"));
@@ -6724,7 +6726,7 @@ pub fn run(config: DaemonConfig) -> Result<(), Box<dyn std::error::Error>> {
 
     let fleet = state
         .lock()
-        .unwrap_or_else(|poison| poison.into_inner())
+        .recover_poison()
         .fleet
         .clone();
     #[cfg(any(test, feature = "test-support"))]
@@ -6741,19 +6743,19 @@ pub fn run(config: DaemonConfig) -> Result<(), Box<dyn std::error::Error>> {
         executable_override,
     );
     let recoveries = {
-        let mut st = state.lock().unwrap_or_else(|poison| poison.into_inner());
+        let mut st = state.lock().recover_poison();
         reserve_managed_recoveries(&mut st, unix_timestamp())?
     };
     for (prepared, stop) in recoveries {
         let command_id = prepared.lease.command_id.clone();
         let instance_id = prepared.lease.instance_id.clone();
         let sent = {
-            let st = state.lock().unwrap_or_else(|poison| poison.into_inner());
+            let st = state.lock().recover_poison();
             st.managed_tx
                 .send(ManagedSupervisorCommand::Start { prepared, stop })
         };
         if sent.is_err() {
-            let mut st = state.lock().unwrap_or_else(|poison| poison.into_inner());
+            let mut st = state.lock().recover_poison();
             if let Some(record) = st.managed_spawns.remove(&command_id) {
                 let _ = st.fleet.fail(
                     &record.lease,
@@ -6768,7 +6770,7 @@ pub fn run(config: DaemonConfig) -> Result<(), Box<dyn std::error::Error>> {
 
     // Purge au démarrage
     {
-        let st = state.lock().unwrap_or_else(|e| e.into_inner());
+        let st = state.lock().recover_poison();
         if let Ok(n) = st.store.purge_older_than_days(config.retention_days)
             && n > 0
         {
@@ -6817,7 +6819,7 @@ pub fn run(config: DaemonConfig) -> Result<(), Box<dyn std::error::Error>> {
             let Some(shared) = views_state.upgrade() else { return; };
             let Some(_activity) = update_activity(&shared) else { continue; };
             let (controls, views) = {
-                let mut st = shared.lock().unwrap_or_else(|e| e.into_inner());
+                let mut st = shared.lock().recover_poison();
                 collect_closed_attach_views(&mut st)
             };
             drop(_activity);
@@ -6851,13 +6853,13 @@ pub fn run(config: DaemonConfig) -> Result<(), Box<dyn std::error::Error>> {
 
             // Collecter les actions à faire
             let actions: Vec<ReminderAction> = {
-                let mut st = st_reminder.lock().unwrap_or_else(|e| e.into_inner());
+                let mut st = st_reminder.lock().recover_poison();
                 collect_reminder_actions(&mut st, now)
             };
             // Session 102 : réévaluation bornée des sollicitations de fil
             // (membre revenu, DND levé, capacité annoncée, échéance passée).
             let wake_controls = {
-                let mut st = st_reminder.lock().unwrap_or_else(|e| e.into_inner());
+                let mut st = st_reminder.lock().recover_poison();
                 let mut controls = Vec::new();
                 dispatch_thread_wakes(&mut st, unix_now_secs(), now, &mut controls);
                 controls
@@ -6865,7 +6867,7 @@ pub fn run(config: DaemonConfig) -> Result<(), Box<dyn std::error::Error>> {
             let _ = execute_controls(wake_controls);
             // Session 119 : avis d'état de source, émis une fois stables.
             {
-                let mut st = st_reminder.lock().unwrap_or_else(|e| e.into_inner());
+                let mut st = st_reminder.lock().recover_poison();
                 let notices = st.observations.due_source_notices(now);
                 queue_observation_notifications(&mut st, notices);
             }
@@ -6876,7 +6878,7 @@ pub fn run(config: DaemonConfig) -> Result<(), Box<dyn std::error::Error>> {
                     ReminderAction::PushDeferred { target_conn } => {
                         let controls = st_reminder
                             .lock()
-                            .unwrap_or_else(|e| e.into_inner())
+                            .recover_poison()
                             .pending_post_response_controls
                             .remove(&target_conn)
                             .unwrap_or_default();
@@ -6884,7 +6886,7 @@ pub fn run(config: DaemonConfig) -> Result<(), Box<dyn std::error::Error>> {
                         if !retry.is_empty() {
                             st_reminder
                                 .lock()
-                                .unwrap_or_else(|e| e.into_inner())
+                                .recover_poison()
                                 .pending_post_response_controls
                                 .entry(target_conn)
                                 .or_default()
@@ -6898,7 +6900,7 @@ pub fn run(config: DaemonConfig) -> Result<(), Box<dyn std::error::Error>> {
                         target_conn,
                     } => {
                         let target_writer = {
-                            let st = st_reminder.lock().unwrap_or_else(|e| e.into_inner());
+                            let st = st_reminder.lock().recover_poison();
                             st.connections.get(&target_conn).cloned()
                         };
                         if let Some(target_writer) = target_writer {
@@ -6929,7 +6931,7 @@ pub fn run(config: DaemonConfig) -> Result<(), Box<dyn std::error::Error>> {
                         target_conn,
                     } => {
                         let target_writer = {
-                            let st = st_reminder.lock().unwrap_or_else(|e| e.into_inner());
+                            let st = st_reminder.lock().recover_poison();
                             st.connections.get(&target_conn).cloned()
                         };
                         if let Some(target_writer) = target_writer {
@@ -6964,7 +6966,7 @@ pub fn run(config: DaemonConfig) -> Result<(), Box<dyn std::error::Error>> {
                         if let Some(target_conn) = cancel_target {
                             let writer = st_reminder
                                 .lock()
-                                .unwrap_or_else(|e| e.into_inner())
+                                .recover_poison()
                                 .connections
                                 .get(&target_conn)
                                 .cloned();
@@ -6980,7 +6982,7 @@ pub fn run(config: DaemonConfig) -> Result<(), Box<dyn std::error::Error>> {
                                 );
                             }
                         }
-                        let st = st_reminder.lock().unwrap_or_else(|e| e.into_inner());
+                        let st = st_reminder.lock().recover_poison();
                         let sender_writer = st.connections.get(&from_conn).cloned();
                         // SPEC-087 T029 : une demande du référent restée sans
                         // réponse est une dette humaine ; elle arrive dans sa
@@ -7057,7 +7059,7 @@ pub fn run(config: DaemonConfig) -> Result<(), Box<dyn std::error::Error>> {
             if sleep_until_shutdown(Duration::from_secs(3600)) {
                 return;
             }
-            let st = st_purge.lock().unwrap_or_else(|e| e.into_inner());
+            let st = st_purge.lock().recover_poison();
             // SPEC-087 T031 : rappel des items de boîte ouverts depuis trop
             // longtemps, seule décision « de ronde » admise par la spec.
             match crate::human_inbox::remind_overdue(
@@ -7088,7 +7090,7 @@ pub fn run(config: DaemonConfig) -> Result<(), Box<dyn std::error::Error>> {
         // Vérifier si shutdown demandé
         if SHUTDOWN_REQUESTED.load(Ordering::SeqCst) {
             info!("shutdown demandé - notification des wrappers externes...");
-            let st = state.lock().unwrap_or_else(|e| e.into_inner());
+            let st = state.lock().recover_poison();
             for (conn_id, writer) in &st.connections {
                 if !st.notify_wrapper_on_daemon_shutdown(conn_id) {
                     continue;
@@ -7158,7 +7160,7 @@ fn handle_connection(
     let peer_uid = unix_peer_uid(&stream).ok();
     let conn_id = state
         .lock()
-        .unwrap_or_else(|e| e.into_inner())
+        .recover_poison()
         .next_conn_id();
     log::debug!("handle_connection: nouvelle connexion {}", conn_id);
     let reader_stream = stream.try_clone()?;
@@ -7167,7 +7169,7 @@ fn handle_connection(
     // Enregistrer le writer dans la map pour les push
     let push_stream = stream.try_clone()?;
     {
-        let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+        let mut st = state.lock().recover_poison();
         st.connections.insert(
             conn_id.clone(),
             Arc::new(Mutex::new(BufWriter::new(push_stream))),
@@ -7198,7 +7200,7 @@ fn handle_connection(
             if wire_len > bridget_transport::protocol::MAX_WORKER_FRAME_BYTES
                 && state
                     .lock()
-                    .unwrap_or_else(|e| e.into_inner())
+                    .recover_poison()
                     .connection_roles
                     .get(&conn_id)
                     == Some(&ConnectionRole::Worker)
@@ -7381,7 +7383,7 @@ fn handle_connection(
                     }
                 );
                 let worker_writer = {
-                    let st = state.lock().unwrap_or_else(|e| e.into_inner());
+                    let st = state.lock().recover_poison();
                     (st.connection_roles.get(&conn_id) == Some(&ConnectionRole::Worker))
                         .then(|| st.connections.get(&conn_id).cloned())
                         .flatten()
@@ -7403,7 +7405,7 @@ fn handle_connection(
             }
             let post_response_controls = state
                 .lock()
-                .unwrap_or_else(|e| e.into_inner())
+                .recover_poison()
                 .pending_post_response_controls
                 .remove(&conn_id)
                 .unwrap_or_default();
@@ -7412,7 +7414,7 @@ fn handle_connection(
             // était hors ligne à la purge (voir flush_pending_orphan_emitter_notices).
             if registered_just_now {
                 {
-                    let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+                    let mut st = state.lock().recover_poison();
                     if let Some((owner, instance)) = live_connection_identity(&st, &conn_id)
                         && !st.auxiliary_connections.contains(&conn_id)
                         && st.presences.get(&instance).is_some_and(|p| !p.is_dnd())
@@ -7423,7 +7425,7 @@ fn handle_connection(
                 }
                 state
                     .lock()
-                    .unwrap_or_else(|e| e.into_inner())
+                    .recover_poison()
                     .flush_pending_orphan_emitter_notices();
                 replay_delegated_runtime_events_for_connection(&state, &conn_id);
                 let return_clock = Instant::now();
@@ -7435,7 +7437,7 @@ fn handle_connection(
 
     // Connexion fermée : désenregistrer avec nettoyage explicite pour éviter fuites
     let (writer_opt, removed, controls, views) = {
-        let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+        let mut st = state.lock().recover_poison();
         let (controls, views) = close_attach_subscriptions(&mut st, &conn_id);
 
         // Récupérer le writer AVANT suppression pour nettoyage explicite
@@ -8101,7 +8103,7 @@ fn attest_reminder_sent(
     #[cfg(feature = "test-support")]
     crate::test_sync::checkpoint("before_coordination_persist");
     let controls = {
-        let mut st = state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut st = state.lock().recover_poison();
         let event = match st.store.record_reminder_sent(
             request_id,
             reminder_message_id,
@@ -9735,7 +9737,7 @@ fn run_maintenance(state: &Arc<Mutex<DaemonState>>, root: &std::path::Path) {
     };
     let now = unix_now_secs();
     let connected: HashSet<String> = {
-        let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+        let mut st = state.lock().recover_poison();
         maintain_stores(&mut st, now);
         // Réemploi des notices durables ; ce chemin historique prend le writer sous State.
         st.flush_pending_orphan_emitter_notices();
@@ -10823,7 +10825,7 @@ fn announce_communication_project(
 ) -> DaemonToWrapper {
     use bridget_transport::protocol::CommunicationProjectSource;
     let (owner, local, foreign, native_command, proof_host, generation) = {
-        let st = state.lock().unwrap_or_else(|e| e.into_inner());
+        let st = state.lock().recover_poison();
         let owner = live_connection_identity(&st, conn_id);
         let bare = owner.is_none()
             && !st.conn_names.contains_key(conn_id)
@@ -10871,7 +10873,7 @@ fn announce_communication_project(
         }
     } else {(None,false)};
     let verified=resolved.is_some();
-    let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+    let mut st = state.lock().recover_poison();
     let unchanged = generation == st.instance_id && live_connection_identity(&st, conn_id) == owner
         && (local || st.conn_hosts.get(conn_id).is_some_and(|current|current==host))
         && native_command.as_ref().is_none_or(|command|
@@ -10916,7 +10918,7 @@ fn ledger_read_context(
     state: &Arc<Mutex<DaemonState>>,
     conn_id: &str,
 ) -> Result<(String, PathBuf, crate::ledger::search::ReadPermit), (&'static str, &'static str)> {
-    let st = state.lock().unwrap_or_else(|e| e.into_inner());
+    let st = state.lock().recover_poison();
     let Some((actor, _)) = live_connection_identity(&st, conn_id) else {
         return Err(("identity_unavailable", "identité active requise"));
     };
@@ -10932,7 +10934,7 @@ fn ledger_read_context(
 /// Session 104 : l'identité doit être la même connexion attestée qu'au
 /// départ ; sinon le contenu est abandonné.
 fn ledger_identity_still_live(state: &Arc<Mutex<DaemonState>>, conn_id: &str, actor: &str) -> bool {
-    let st = state.lock().unwrap_or_else(|e| e.into_inner());
+    let st = state.lock().recover_poison();
     live_connection_identity(&st, conn_id).is_some_and(|(live, _)| live == actor)
 }
 
@@ -13161,7 +13163,7 @@ fn handle_execution_control_authorized(
 fn prepare_managed_stop(state: &Arc<Mutex<DaemonState>>, name: &str) -> ManagedStopTarget {
     let remote = state
         .lock()
-        .unwrap_or_else(|e| e.into_inner())
+        .recover_poison()
         .delegation_store
         .for_child(name);
     match remote {
@@ -13173,7 +13175,7 @@ fn prepare_managed_stop(state: &Arc<Mutex<DaemonState>>, name: &str) -> ManagedS
         Err(error) => return ManagedStopTarget::Immediate(StopOutcome::Timeout { state: error }),
         _ => {}
     }
-    let mut st = state.lock().unwrap_or_else(|error| error.into_inner());
+    let mut st = state.lock().recover_poison();
     let record = st
         .managed_spawns
         .values()
@@ -13401,7 +13403,7 @@ fn handle_delegation_overview(
             reason: E::UnsupportedVersion,
         };
     }
-    let st = state.lock().unwrap_or_else(|error| error.into_inner());
+    let st = state.lock().recover_poison();
     if control_client_actor(&st, conn_id).is_none() {
         return DaemonToWrapper::DelegationControlRejected {
             reason: E::HumanActorRequired,
@@ -13441,7 +13443,7 @@ fn handle_delegation_cancel(
         };
     }
     let drive = {
-        let st = state.lock().unwrap_or_else(|error| error.into_inner());
+        let st = state.lock().recover_poison();
         if control_client_actor(&st, conn_id).is_none() {
             return DaemonToWrapper::DelegationControlRejected {
                 reason: E::HumanActorRequired,
@@ -13485,7 +13487,7 @@ fn handle_delegation_cancel(
     if drive {
         native_delegation::tick(state);
     }
-    let st = state.lock().unwrap_or_else(|error| error.into_inner());
+    let st = state.lock().recover_poison();
     let task = match st.delegation_store.get(task_id) {
         Ok(Some(task)) => task,
         Ok(None) => {
@@ -13550,7 +13552,7 @@ fn handle_delegation_halt_set(
             reason: E::InvalidRequest,
         };
     }
-    let st = state.lock().unwrap_or_else(|error| error.into_inner());
+    let st = state.lock().recover_poison();
     let Some(actor) = control_client_actor(&st, conn_id) else {
         return DaemonToWrapper::DelegationControlRejected {
             reason: E::HumanActorRequired,
@@ -13730,7 +13732,7 @@ fn handle_control_state_read(state: &Arc<Mutex<DaemonState>>, version: u16) -> D
             reason: ControlStateRefusal::UnsupportedVersion,
         };
     }
-    let st = state.lock().unwrap_or_else(|e| e.into_inner());
+    let st = state.lock().recover_poison();
     let conn = st.store.connection();
     match (
         crate::referent_control::read(conn),
@@ -13762,7 +13764,7 @@ fn handle_control_focus_read(state: &Arc<Mutex<DaemonState>>, version: u16) -> D
             reason: ControlStateRefusal::UnsupportedVersion,
         };
     }
-    let st = state.lock().unwrap_or_else(|e| e.into_inner());
+    let st = state.lock().recover_poison();
     match crate::referent_control::read_focus(st.store.connection()) {
         Ok(focus) => DaemonToWrapper::ControlFocus { focus },
         Err(error) => {
@@ -13785,7 +13787,7 @@ fn handle_control_focus_publish(
             reason: ControlStateRefusal::UnsupportedVersion,
         };
     }
-    let st = state.lock().unwrap_or_else(|e| e.into_inner());
+    let st = state.lock().recover_poison();
     match crate::referent_control::publish_focus(st.store.connection(), focus.as_ref()) {
         Ok(()) => DaemonToWrapper::ControlFocus { focus },
         Err(error) => {
@@ -13808,7 +13810,7 @@ fn handle_control_history(
             reason: ControlStateRefusal::UnsupportedVersion,
         };
     }
-    let st = state.lock().unwrap_or_else(|e| e.into_inner());
+    let st = state.lock().recover_poison();
     match crate::referent_control::history(st.store.connection(), limit.clamp(1, 200)) {
         Ok(events) => DaemonToWrapper::ControlHistory {
             events: events
@@ -13850,7 +13852,7 @@ fn handle_control_state_set(
             reason: ControlStateRefusal::UnsupportedVersion,
         };
     }
-    let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+    let mut st = state.lock().recover_poison();
     let Some(actor) = control_client_actor(&st, conn_id) else {
         return DaemonToWrapper::ControlStateRejected {
             reason: ControlStateRefusal::HumanPrincipalRequired,
@@ -13913,7 +13915,7 @@ fn handle_control_state_set(
                 if !retry.is_empty() {
                     state
                         .lock()
-                        .unwrap_or_else(|e| e.into_inner())
+                        .recover_poison()
                         .pending_post_response_controls
                         .entry(target_conn)
                         .or_default()
@@ -14027,7 +14029,7 @@ fn handle_human_inbox_deposit(
         };
     }
     let channel = human_channel_config();
-    let st = state.lock().unwrap_or_else(|e| e.into_inner());
+    let st = state.lock().recover_poison();
     let request = crate::human_inbox::DepositRequest {
         dedup_key,
         kind,
@@ -14075,7 +14077,7 @@ fn handle_human_inbox_list(
             reason: HumanInboxRefusal::UnsupportedVersion,
         };
     }
-    let st = state.lock().unwrap_or_else(|e| e.into_inner());
+    let st = state.lock().recover_poison();
     if control_client_actor(&st, conn_id).is_none() {
         return DaemonToWrapper::HumanInboxRejected {
             reason: HumanInboxRefusal::HumanPrincipalRequired,
@@ -14105,7 +14107,7 @@ fn handle_human_inbox_resolve(
             reason: HumanInboxRefusal::UnsupportedVersion,
         };
     }
-    let st = state.lock().unwrap_or_else(|e| e.into_inner());
+    let st = state.lock().recover_poison();
     let Some(actor) = control_client_actor(&st, conn_id) else {
         return DaemonToWrapper::HumanInboxRejected {
             reason: HumanInboxRefusal::HumanPrincipalRequired,
@@ -14142,7 +14144,7 @@ fn handle_human_inbox_decisions(
             reason: HumanInboxRefusal::UnsupportedVersion,
         };
     }
-    let st = state.lock().unwrap_or_else(|e| e.into_inner());
+    let st = state.lock().recover_poison();
     match crate::human_inbox::pending_decisions(
         st.store.connection(),
         bridget_transport::protocol::HumanInboxProducer::Guichet,
@@ -14169,7 +14171,7 @@ fn handle_human_inbox_ack(
             reason: HumanInboxRefusal::UnsupportedVersion,
         };
     }
-    let st = state.lock().unwrap_or_else(|e| e.into_inner());
+    let st = state.lock().recover_poison();
     match crate::human_inbox::ack(st.store.connection(), decision_id, unix_now_secs()) {
         Ok(Some(acked_at)) => DaemonToWrapper::HumanInboxAcked {
             decision_id: decision_id.to_string(),
@@ -14199,7 +14201,7 @@ fn handle_human_inbox_close(
             reason: HumanInboxRefusal::UnsupportedVersion,
         };
     }
-    let st = state.lock().unwrap_or_else(|e| e.into_inner());
+    let st = state.lock().recover_poison();
     match crate::human_inbox::close_self(st.store.connection(), item_id, reason, unix_now_secs()) {
         Ok(closed) => DaemonToWrapper::HumanInboxClosed {
             item_id: item_id.to_string(),
@@ -14234,7 +14236,7 @@ fn select_runtime_from_attach(
     let token = uuid::Uuid::new_v4().to_string();
     let (sender, receiver) = std::sync::mpsc::channel();
     let writer = {
-        let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+        let mut st = state.lock().recover_poison();
         if st.connection_roles.get(conn_id) != Some(&ConnectionRole::Attach) {
             return refuse(Refusal::AttachRequired);
         }
@@ -14277,7 +14279,7 @@ fn select_runtime_from_attach(
     };
     state
         .lock()
-        .unwrap_or_else(|e| e.into_inner())
+        .recover_poison()
         .pending_runtime_selections
         .remove(&token);
     DaemonToWrapper::RuntimeSelectionResult { outcome }
@@ -14337,7 +14339,7 @@ fn human_client_guard(
 /// O(C), C connexions ; identité et projet viennent de la liaison primaire.
 fn human_request_project(state:&Arc<Mutex<DaemonState>>,thread:&str,root:&str)
     ->Option<bridget_transport::protocol::CommunicationProject>{
-    let (host,local)={let st=state.lock().unwrap_or_else(|e|e.into_inner());
+    let (host,local)={let st=state.lock().recover_poison();
         let owner=crate::t3code::stable_uuid(thread);
         let host=origin_proof::host_for_owner(&st,&owner).ok()?;
         let local=host==st.host;(host,local)};
@@ -14404,7 +14406,7 @@ fn handle_human_thread_view(
         result: R::error(code),
     };
     {
-        let st = state.lock().unwrap_or_else(|e| e.into_inner());
+        let st = state.lock().recover_poison();
         if let Err(code) = human_client_guard(
             &st,
             conn_id,
@@ -14416,7 +14418,7 @@ fn handle_human_thread_view(
         }
     }
     let project = human_request_project(state,&request.t3_thread_id,&request.project_root);
-    let st = state.lock().unwrap_or_else(|e| e.into_inner());
+    let st = state.lock().recover_poison();
     if let Err(code) = human_client_guard(
         &st,
         conn_id,
@@ -14542,7 +14544,7 @@ fn human_watch_output(
             break;
         };
         let event = {
-            let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+            let mut st = state.lock().recover_poison();
             if !st.human_thread_watches.contains_key(&conn) {
                 break;
             }
@@ -14593,7 +14595,7 @@ fn human_watch_output(
             if terminal || result.is_err() {
                 state
                     .lock()
-                    .unwrap_or_else(|e| e.into_inner())
+                    .recover_poison()
                     .human_thread_watches
                     .remove(&conn);
                 break;
@@ -14622,7 +14624,7 @@ fn handle_human_thread_watch(
         })
     };
     {
-        let st = state.lock().unwrap_or_else(|e| e.into_inner());
+        let st = state.lock().recover_poison();
         if let Err(code) = human_client_guard(
             &st,
             conn_id,
@@ -14634,7 +14636,7 @@ fn handle_human_thread_watch(
         }
     }
     let project = human_request_project(state,&request.t3_thread_id,&request.project_root);
-    let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+    let mut st = state.lock().recover_poison();
     if let Err(code) = human_client_guard(
         &st,
         conn_id,
@@ -14782,7 +14784,7 @@ fn remote_worker_disconnected(st: &mut DaemonState, conn_id: &str) {
 
 fn remote_worker_contact_tick(state: &Arc<Mutex<DaemonState>>) {
     use bridget_transport::protocol::{WORKER_STALE_SECS, WorkerContactState};
-    let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+    let mut st = state.lock().recover_poison();
     let stale: Vec<_> = st
         .remote_workers
         .values()
@@ -14829,7 +14831,7 @@ fn handle_worker_message(
         }
         Some(DaemonToWrapper::WorkerRejected { reason })
     };
-    let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+    let mut st = state.lock().recover_poison();
     let hello_capabilities = match &message {
         WrapperToDaemon::WorkerHello { hello } => Some((hello.clone(), Vec::new())),
         WrapperToDaemon::WorkerHelloWithCapabilities { hello } => {
@@ -14942,7 +14944,7 @@ fn handle_worker_message(
         if let Some(writer) = old_writer {
             let _ = writer
                 .lock()
-                .unwrap_or_else(|e| e.into_inner())
+                .recover_poison()
                 .get_ref()
                 .shutdown(std::net::Shutdown::Both);
         }
@@ -15340,7 +15342,7 @@ fn remote_worker_roundtrip_with_send_deadline(
     let correlation_id = uuid::Uuid::new_v4().to_string();
     let (tx, rx) = mpsc::sync_channel(1);
     let (writer, request, conn_id) = {
-        let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+        let mut st = state.lock().recover_poison();
         let provision = st
             .registry
             .machines()
@@ -15491,7 +15493,7 @@ fn remote_worker_roundtrip_with_send_deadline(
     } else {
         None
     };
-    let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+    let mut st = state.lock().recover_poison();
     st.pending_worker_responses.remove(&correlation_id);
     // Un contact périmé peut avoir retiré l'attente sans fermer le socket.
     // L'histoire exige toujours une requête écrite et la même connexion/époque.
@@ -15540,7 +15542,7 @@ fn remote_candidate_probe(
         .collect::<std::collections::BTreeSet<_>>();
     let (tx, rx) = mpsc::sync_channel(1);
     let (writer, conn_id, epoch) = {
-        let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+        let mut st = state.lock().recover_poison();
         let provision = st
             .registry
             .machines()
@@ -15610,7 +15612,7 @@ fn remote_candidate_probe(
     } else {
         Err(WorkerRefusal::WorkerUnavailable)
     };
-    let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+    let mut st = state.lock().recover_poison();
     st.pending_candidate_probes.remove(&correlation_id);
     if !st
         .remote_workers
@@ -15647,7 +15649,7 @@ fn remote_candidate_probe_v2(
         .collect::<std::collections::BTreeSet<_>>();
     let (tx, rx) = mpsc::sync_channel(1);
     let (writer, conn_id, epoch) = {
-        let mut st = state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut st = state.lock().recover_poison();
         let provision = st
             .registry
             .machines()
@@ -15739,7 +15741,7 @@ fn remote_candidate_probe_v2(
     } else {
         Err(WorkerRefusal::WorkerUnavailable)
     };
-    let mut st = state.lock().unwrap_or_else(|error| error.into_inner());
+    let mut st = state.lock().recover_poison();
     st.pending_candidate_probes_v2.remove(&correlation_id);
     if !st
         .remote_workers
@@ -15763,7 +15765,7 @@ fn handle_wrapper_message(
 fn update_activity(state: &Arc<Mutex<DaemonState>>) -> Option<crate::updates::Activity> {
     let gate = state
         .lock()
-        .unwrap_or_else(|e| e.into_inner())
+        .recover_poison()
         .update_gate
         .clone();
     gate.enter()
@@ -15792,7 +15794,7 @@ fn handle_wrapper_message_with_peer(
         }
     };
     {
-        let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+        let mut st = state.lock().recover_poison();
         if native_lineage::invalid_message(&mut st, conn_id) {
             return None;
         }
@@ -15831,7 +15833,7 @@ fn handle_wrapper_message_with_peer(
     }
     // Sonde seule : aucun principal n'est acquis par l'identité publique du daemon.
     if matches!(&msg, WrapperToDaemon::DaemonIdentityRequest) {
-        let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+        let mut st = state.lock().recover_poison();
         if !st.connection_roles.contains_key(conn_id) {
             st.worker_probe_connections.insert(conn_id.into());
         }
@@ -15840,7 +15842,7 @@ fn handle_wrapper_message_with_peer(
         WrapperToDaemon::WorkerHello { .. } | WrapperToDaemon::WorkerHelloWithCapabilities { .. }
     ) {
         let allowed = {
-            let st = state.lock().unwrap_or_else(|e| e.into_inner());
+            let st = state.lock().recover_poison();
             matches!(
                 st.connection_roles.get(conn_id),
                 None | Some(ConnectionRole::Worker)
@@ -15857,14 +15859,14 @@ fn handle_wrapper_message_with_peer(
     } else {
         state
             .lock()
-            .unwrap_or_else(|e| e.into_inner())
+            .recover_poison()
             .worker_probe_connections
             .remove(conn_id);
     }
 
     if !state
         .lock()
-        .unwrap_or_else(|e| e.into_inner())
+        .recover_poison()
         .connection_roles
         .contains_key(conn_id)
     {
@@ -15891,14 +15893,14 @@ fn handle_wrapper_message_with_peer(
         // La première commande non négociée choisit définitivement la
         // compatibilité wrapper. Une tentative d'upgrade ultérieure vers
         // attach ne doit jamais élargir une connexion déjà active.
-        let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+        let mut st = state.lock().recover_poison();
         st.connection_roles
             .entry(conn_id.to_string())
             .or_insert(ConnectionRole::Wrapper);
     }
 
     if let WrapperToDaemon::RoleHandshake { role } = &msg {
-        let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+        let mut st = state.lock().recover_poison();
         if st.connection_roles.contains_key(conn_id) {
             match role {
                 ConnectionRole::Worker => {
@@ -15931,7 +15933,7 @@ fn handle_wrapper_message_with_peer(
 
     if state
         .lock()
-        .unwrap_or_else(|e| e.into_inner())
+        .recover_poison()
         .connection_roles
         .get(conn_id)
         == Some(&ConnectionRole::Worker)
@@ -15940,7 +15942,7 @@ fn handle_wrapper_message_with_peer(
     }
 
     let attach_refusal = {
-        let st = state.lock().unwrap_or_else(|e| e.into_inner());
+        let st = state.lock().recover_poison();
         let queue_attach = st.connection_roles.get(conn_id) == Some(&ConnectionRole::Attach)
             && !st.conn_names.contains_key(conn_id)
             && st.connections.contains_key(conn_id)
@@ -16012,7 +16014,7 @@ fn handle_wrapper_message_with_peer(
             before_message_id,
         } => wrapper_dispatch::on_queue_edit_request(request_id, target, action, message_id, before_message_id, conn_id, state),
         WrapperToDaemon::QueueList { target } => {
-            let st = state.lock().unwrap_or_else(|error| error.into_inner());
+            let st = state.lock().recover_poison();
             Some(handle_guidance_queue(&st, conn_id, &target))
         }
         WrapperToDaemon::CommunicationProjectFact {
@@ -16031,7 +16033,7 @@ fn handle_wrapper_message_with_peer(
         WrapperToDaemon::DirectoryScoped { scope } => wrapper_dispatch::on_directory_scoped(scope, conn_id, state),
         WrapperToDaemon::ObservationGap { dropped } => {
             use bridget_transport::protocol::ObservationKind;
-            let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+            let mut st = state.lock().recover_poison();
             let (agent, _) = live_connection_identity(&st, conn_id)?;
             if st.auxiliary_connections.contains(conn_id)
                 || ![
@@ -16049,7 +16051,7 @@ fn handle_wrapper_message_with_peer(
             None
         }
         WrapperToDaemon::ObservationCapabilities { events, runtime_catalogue } => {
-            let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+            let mut st = state.lock().recover_poison();
             let Some((agent, instance)) = live_connection_identity(&st, conn_id) else {
                 return Some(DaemonToWrapper::Nack {
                     id: "observation-capabilities".into(),
@@ -16088,7 +16090,7 @@ fn handle_wrapper_message_with_peer(
             t3_thread_id,
         } => wrapper_dispatch::on_t3_thread_binding_fact(version, t3_thread_id, conn_id, state),
         WrapperToDaemon::ThreadNoticeCapability { versions } => {
-            let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+            let mut st = state.lock().recover_poison();
             // Capacité de réception d'une connexion principale enregistrée ; un
             // client auxiliaire ne reçoit jamais d'alerte. Au plus 8 valeurs lues.
             let eligible =
@@ -16261,7 +16263,7 @@ fn handle_wrapper_message_with_peer(
         WrapperToDaemon::ArtifactRead { request } => {
             let result = (|| {
                 let (scope, database_path, artifact_root) = {
-                    let st = state.lock().unwrap_or_else(|error| error.into_inner());
+                    let st = state.lock().recover_poison();
                     let (_, _, scope) = artifact_access_scope(&st, conn_id)?;
                     (scope, st.db_path.clone(), st.artifact_root.clone())
                 };
@@ -16338,7 +16340,7 @@ fn handle_wrapper_message_with_peer(
         } => wrapper_dispatch::on_delegated_runtime_event(execution_id, kind, code, reference, conn_id, state),
         WrapperToDaemon::DelegatedRuntimeEventAcknowledged { event_id } => {
             let (parent_instance_id, fleet) = {
-                let st = state.lock().unwrap_or_else(|e| e.into_inner());
+                let st = state.lock().recover_poison();
                 let Some(parent_instance_id) = st.conn_instances.get(conn_id).cloned() else {
                     return Some(DaemonToWrapper::Nack {
                         id: event_id,
@@ -16390,7 +16392,7 @@ fn handle_wrapper_message_with_peer(
                     },
                 });
             }
-            let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+            let mut st = state.lock().recover_poison();
             match st.store.claim_next_guichet(conn_id, unix_timestamp()) {
                 Ok(GuichetNext::Claimed(claim)) => Some(guichet_claim_response(claim)),
                 Ok(GuichetNext::Empty) => Some(DaemonToWrapper::GuichetEmpty {
@@ -16415,7 +16417,7 @@ fn handle_wrapper_message_with_peer(
                     reason: ServiceRefusal::InvalidEnvelope,
                 });
             }
-            let st = state.lock().unwrap_or_else(|e| e.into_inner());
+            let st = state.lock().recover_poison();
             match st.store.claim_guichet(
                 conn_id,
                 &issuer_scope,
@@ -16443,7 +16445,7 @@ fn handle_wrapper_message_with_peer(
                     reason: ServiceRefusal::InvalidEnvelope,
                 });
             }
-            let st = state.lock().unwrap_or_else(|e| e.into_inner());
+            let st = state.lock().recover_poison();
             match st
                 .store
                 .lookup_guichet(&issuer_scope, &request_id, unix_timestamp())
@@ -16478,7 +16480,7 @@ fn handle_wrapper_message_with_peer(
             instance_id,
             credential,
         } => {
-            let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+            let mut st = state.lock().recover_poison();
             Some(register_auxiliary(
                 &mut st,
                 conn_id,
@@ -16493,7 +16495,7 @@ fn handle_wrapper_message_with_peer(
             issued_at,
         } => {
             let (response, controls) = {
-                let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+                let mut st = state.lock().recover_poison();
                 let mut controls = Vec::new();
                 normalize_guidance_origin(&st, conn_id, &mut message, false);
                 let response = handle_idempotent_send(
@@ -16517,7 +16519,7 @@ fn handle_wrapper_message_with_peer(
             operation_kind,
             idempotency_key,
         } => {
-            let st = state.lock().unwrap_or_else(|e| e.into_inner());
+            let st = state.lock().recover_poison();
             Some(handle_idempotency_lookup(
                 conn_id,
                 operation_kind,
@@ -16526,7 +16528,7 @@ fn handle_wrapper_message_with_peer(
             ))
         }
         WrapperToDaemon::ControlExecution { command } => {
-            let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+            let mut st = state.lock().recover_poison();
             let Some(issuer_scope) = st
                 .client_negotiations
                 .get(conn_id)
@@ -16554,7 +16556,7 @@ fn handle_wrapper_message_with_peer(
             delivery_id,
             delivery_generation,
         } => {
-            let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+            let mut st = state.lock().recover_poison();
             handle_delivery_ack(conn_id, delivery_id, delivery_generation, &mut st)
         }
         WrapperToDaemon::DeliveryIndeterminate {
@@ -16638,7 +16640,7 @@ fn handle_wrapper_message_with_peer(
             reason,
         } => {
             let view = {
-                let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+                let mut st = state.lock().recover_poison();
                 let subscription = st.attach_subscriptions.get(&subscription_id).cloned()?;
                 if subscription.wrapper_conn != conn_id {
                     return None;
@@ -16662,7 +16664,7 @@ fn handle_wrapper_message_with_peer(
             reason,
         } => {
             let view = {
-                let st = state.lock().unwrap_or_else(|e| e.into_inner());
+                let st = state.lock().recover_poison();
                 let subscription = st.attach_subscriptions.get(&subscription_id).cloned()?;
                 if subscription.wrapper_conn != conn_id {
                     return None;
@@ -16687,7 +16689,7 @@ fn handle_wrapper_message_with_peer(
             bytes,
         } => {
             let view = {
-                let st = state.lock().unwrap_or_else(|e| e.into_inner());
+                let st = state.lock().recover_poison();
                 st.attach_subscriptions
                     .get(&subscription_id)
                     .filter(|subscription| subscription.wrapper_conn == conn_id)
@@ -16715,7 +16717,7 @@ fn handle_wrapper_message_with_peer(
             through_seq,
         } => {
             let view = {
-                let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+                let mut st = state.lock().recover_poison();
                 let accepted = st
                     .attach_subscriptions
                     .get_mut(&subscription_id)
@@ -16759,7 +16761,7 @@ fn handle_wrapper_message_with_peer(
         } => wrapper_dispatch::on_register(identity_version, agent_type, agent_id, host, transport, channel, mode, location, os, instance_id, domain, turn_in_progress, journal_available, turn_attest, queue_fallback, conn_id, state),
 
         WrapperToDaemon::DiskSpace { fact } => {
-            let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+            let mut st = state.lock().recover_poison();
             let Some(instance_id) = st.conn_instances.get(conn_id).cloned() else {
                 warn!(
                     "relevé d'espace disque ignoré avant l'enregistrement: {}",
@@ -16783,7 +16785,7 @@ fn handle_wrapper_message_with_peer(
         WrapperToDaemon::JournalReady { receipt_probe } => wrapper_dispatch::on_journal_ready(receipt_probe, conn_id, state),
 
         WrapperToDaemon::TerminalSessionReady => {
-            let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+            let mut st = state.lock().recover_poison();
             if st.auxiliary_connections.contains(conn_id)
                 || !st
                     .conn_instances
@@ -16801,7 +16803,7 @@ fn handle_wrapper_message_with_peer(
 
         WrapperToDaemon::Unregister => {
             let (controls, views) = {
-                let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+                let mut st = state.lock().recover_poison();
                 let (controls, views) = close_attach_subscriptions(&mut st, conn_id);
                 st.router.unregister_by_conn(conn_id);
                 st.mark_stopped(conn_id);
@@ -16827,7 +16829,7 @@ fn handle_wrapper_message_with_peer(
             state, conn_id, &agent, selection,
         )),
         WrapperToDaemon::RuntimeSelectionReported { token, outcome } => {
-            let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+            let mut st = state.lock().recover_poison();
             // Un wrapper voisin ou un client MCP ne peut pas forger le reçu.
             if st
                 .pending_runtime_selections
@@ -16840,7 +16842,7 @@ fn handle_wrapper_message_with_peer(
             None
         }
         WrapperToDaemon::RuntimeCatalogueReported{token,outcome}=>{
-            let mut st=state.lock().unwrap_or_else(|e|e.into_inner());
+            let mut st=state.lock().recover_poison();
             if st.pending_runtime_catalogues.get(&token).is_some_and(|(target,_)|target==conn_id)
                 && let Some((_,sender))=st.pending_runtime_catalogues.remove(&token) {
                 let _=sender.send(outcome);
@@ -16850,7 +16852,7 @@ fn handle_wrapper_message_with_peer(
         WrapperToDaemon::Send(bridge_msg) => wrapper_dispatch::on_send(bridge_msg, conn_id, state),
 
         WrapperToDaemon::Heartbeat => {
-            let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+            let mut st = state.lock().recover_poison();
             if let Some(instance_id) = st.conn_instances.get(conn_id).cloned()
                 && let Some(presence) = st.presences.get_mut(&instance_id)
             {
@@ -16863,29 +16865,29 @@ fn handle_wrapper_message_with_peer(
         WrapperToDaemon::TurnState { in_progress } => wrapper_dispatch::on_turn_state(in_progress, conn_id, state),
 
         WrapperToDaemon::ExecutionStateChanged { transition } => {
-            let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+            let mut st = state.lock().recover_poison();
             handle_execution_transition(conn_id, transition, &mut st)
         }
 
         WrapperToDaemon::WorkspaceRepairResult {task_id,status} => {
-            let mut st=state.lock().unwrap_or_else(|e|e.into_inner());
+            let mut st=state.lock().recover_poison();
             native_delegation::workspace_repair::response(&mut st,conn_id,&task_id,status);
             None
         }
         WrapperToDaemon::ExecutionProviderObserved { context } => {
-            let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+            let mut st = state.lock().recover_poison();
             handle_execution_provider_context(conn_id, context, &mut st)
         }
 
         WrapperToDaemon::DaemonIdentityRequest => wrapper_dispatch::on_daemon_identity_request(state),
 
         WrapperToDaemon::SentinelStatusRead => {
-            let path={state.lock().unwrap_or_else(|e|e.into_inner()).db_path.clone()};
+            let path={state.lock().recover_poison().db_path.clone()};
             Some(DaemonToWrapper::SentinelStatus { report:crate::sentinel244::status(path.parent().unwrap()) })
         }
 
         WrapperToDaemon::ListAgents => {
-            let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+            let mut st = state.lock().recover_poison();
             let agents = st.agent_infos();
             Some(DaemonToWrapper::AgentList { agents })
         }
@@ -16897,7 +16899,7 @@ fn handle_wrapper_message_with_peer(
             effort,
             source,
         } => {
-            let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+            let mut st = state.lock().recover_poison();
             if source == bridget_transport::protocol::RuntimeSource::Declared {
                 let instance_id = match self_mutation_instance(&st, conn_id, &agent, "runtime") {
                     Ok(instance_id) => instance_id,
@@ -16917,7 +16919,7 @@ fn handle_wrapper_message_with_peer(
         }
 
         WrapperToDaemon::ServedModel { agent, model } => {
-            let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+            let mut st = state.lock().recover_poison();
             Some(handle_served_model(&agent, model, &mut st))
         }
 
@@ -16930,7 +16932,7 @@ fn handle_wrapper_message_with_peer(
             credits,
             source,
         } => {
-            let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+            let mut st = state.lock().recover_poison();
             Some(handle_rate_limit(
                 &agent,
                 window,
@@ -16954,7 +16956,7 @@ fn handle_wrapper_message_with_peer(
             provider_kind,
             source,
         } => {
-            let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+            let mut st = state.lock().recover_poison();
             Some(handle_usage(
                 &agent,
                 bridget_transport::protocol::UsageTokens {
@@ -16976,12 +16978,12 @@ fn handle_wrapper_message_with_peer(
             from_secs,
             to_secs,
         } => {
-            let st = state.lock().unwrap_or_else(|e| e.into_inner());
+            let st = state.lock().recover_poison();
             Some(handle_usage_window(&agent, from_secs, to_secs, &st))
         }
 
         WrapperToDaemon::Domain { agent, domain } => {
-            let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+            let mut st = state.lock().recover_poison();
             let instance_id = match self_mutation_instance(&st, conn_id, &agent, "domain") {
                 Ok(instance_id) => instance_id,
                 Err(response) => return Some(*response),
@@ -16995,7 +16997,7 @@ fn handle_wrapper_message_with_peer(
         }
 
         WrapperToDaemon::Availability { agent, until_secs } => {
-            let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+            let mut st = state.lock().recover_poison();
             let instance_id = match self_mutation_instance(&st, conn_id, &agent, "availability") {
                 Ok(instance_id) => instance_id,
                 Err(response) => return Some(*response),
@@ -17025,7 +17027,7 @@ fn handle_wrapper_message_with_peer(
 
         WrapperToDaemon::UserInput { request } => Some(user_input::handle(conn_id, &request, state, None)),
         WrapperToDaemon::ChildRequest { request } => {
-            let primary={let st=state.lock().unwrap_or_else(|e|e.into_inner());user_input::primary_request(conn_id,&request,&st)};
+            let primary={let st=state.lock().recover_poison();user_input::primary_request(conn_id,&request,&st)};
             if primary {Some(user_input::receive_native(conn_id,request,state))}else{native_child_requests::receive(conn_id, request, state)}
         }
         WrapperToDaemon::ChildRequestAnswered {
@@ -17033,7 +17035,7 @@ fn handle_wrapper_message_with_peer(
             applied,
             reason,
         } => {
-            let st = state.lock().unwrap_or_else(|e| e.into_inner());
+            let st = state.lock().recover_poison();
             if user_input::native_ack(conn_id,&request_id,Some(applied),None,&st){return None;}
             native_child_requests::acknowledged(
                 conn_id,
@@ -17048,7 +17050,7 @@ fn handle_wrapper_message_with_peer(
             request_id,
             state: closed_state,
         } => {
-            let st = state.lock().unwrap_or_else(|e| e.into_inner());
+            let st = state.lock().recover_poison();
             if user_input::native_ack(conn_id,&request_id,None,Some(closed_state),&st){return None;}
             native_child_requests::closed(conn_id, &request_id, closed_state, &st);
             None
@@ -17057,7 +17059,7 @@ fn handle_wrapper_message_with_peer(
         // Le contrôle de rôle mobile est exécuté avant cette matrice.
         WrapperToDaemon::AgentTracking { .. } | WrapperToDaemon::Specialists { .. } | WrapperToDaemon::MobileAdministration { .. } | WrapperToDaemon::MobileOperation { .. } => None,
         WrapperToDaemon::LedgerProjection { scope, limit } => {
-            let st = state.lock().unwrap_or_else(|error| error.into_inner());
+            let st = state.lock().recover_poison();
             match crate::ledger::read_projection(&st.store, scope, usize::from(limit)) {
                 Ok(projection) => Some(DaemonToWrapper::LedgerProjection {
                     messages: projection.messages,

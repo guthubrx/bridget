@@ -9,6 +9,7 @@
 #[path = "support/idempotent.rs"]
 pub mod fixture;
 
+use bridget_transport::poison::RecoverPoison;
 use fixture::*;
 use std::io::{BufRead, BufReader};
 use std::os::unix::net::UnixStream;
@@ -30,7 +31,7 @@ const LOG_MARK: &str = "service RLIMIT_NOFILE: soft=";
 static SERIAL: Mutex<()> = Mutex::new(());
 
 fn serial() -> std::sync::MutexGuard<'static, ()> {
-    SERIAL.lock().unwrap_or_else(|error| error.into_inner())
+    SERIAL.lock().recover_poison()
 }
 
 fn current_limits() -> libc::rlimit {

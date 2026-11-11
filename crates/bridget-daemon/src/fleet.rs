@@ -4,6 +4,7 @@
 //! 012 reste l'unique autorité pour réserver, comparer et rejouer une clé ;
 //! `fleet.rs` ne fait aucun lookup idempotent parallèle.
 
+use bridget_transport::poison::RecoverPoison;
 use crate::desired_state::{
     ContainerAgentExecution, DesiredAgentLink, DesiredEquipier, DesiredFleet,
     DesiredLifecycleState, DesiredStateError, DesiredStateStore,
@@ -451,7 +452,7 @@ impl FleetSupervisor {
         let inner = self
             .inner
             .lock()
-            .unwrap_or_else(|poison| poison.into_inner());
+            .recover_poison();
         inner
             .active_by_command
             .get(command_id)
@@ -467,7 +468,7 @@ impl FleetSupervisor {
     pub fn supervisor_scope(&self) -> String {
         self.inner
             .lock()
-            .unwrap_or_else(|poison| poison.into_inner())
+            .recover_poison()
             .supervisor_scope
             .clone()
     }
@@ -479,7 +480,7 @@ impl FleetSupervisor {
         let inner = self
             .inner
             .lock()
-            .unwrap_or_else(|poison| poison.into_inner());
+            .recover_poison();
         let command_id = inner.active_by_name.get(agent_name)?;
         inner.active_by_command.get(command_id)?.project.clone()
     }
@@ -491,7 +492,7 @@ impl FleetSupervisor {
         let inner = self
             .inner
             .lock()
-            .unwrap_or_else(|poison| poison.into_inner());
+            .recover_poison();
         inner.active_by_command.contains_key(command_id) || inner.completed.contains_key(command_id)
     }
 
@@ -502,7 +503,7 @@ impl FleetSupervisor {
     pub fn active_count(&self) -> usize {
         self.inner
             .lock()
-            .unwrap_or_else(|poison| poison.into_inner())
+            .recover_poison()
             .active_by_command
             .len()
     }
@@ -513,7 +514,7 @@ impl FleetSupervisor {
         let inner = self
             .inner
             .lock()
-            .unwrap_or_else(|poison| poison.into_inner());
+            .recover_poison();
         let mut candidates = inner
             .active_by_command
             .values()
@@ -583,7 +584,7 @@ impl FleetSupervisor {
         let historical: Option<HistoricalManagedSpawn> = self
             .inner
             .lock()
-            .unwrap_or_else(|poison| poison.into_inner())
+            .recover_poison()
             .idempotency
             .latest_connected_spawn_by_name(name)?;
         let Some(historical) = historical else {
@@ -703,7 +704,7 @@ impl FleetSupervisor {
         let inner = self
             .inner
             .lock()
-            .unwrap_or_else(|poison| poison.into_inner());
+            .recover_poison();
         inner
             .idempotency
             .agent_link_for_child(child_instance_id)
@@ -720,7 +721,7 @@ impl FleetSupervisor {
             let mut inner = self
                 .inner
                 .lock()
-                .unwrap_or_else(|poison| poison.into_inner());
+                .recover_poison();
             inner.idempotency.record_delegated_runtime_event(input)?
         };
         self.agent_link_changed.notify_all();
@@ -735,7 +736,7 @@ impl FleetSupervisor {
         let inner = self
             .inner
             .lock()
-            .unwrap_or_else(|poison| poison.into_inner());
+            .recover_poison();
         inner
             .idempotency
             .delegated_runtime_events_for_parent(parent_instance_id)
@@ -751,7 +752,7 @@ impl FleetSupervisor {
         let mut inner = self
             .inner
             .lock()
-            .unwrap_or_else(|poison| poison.into_inner());
+            .recover_poison();
         inner
             .idempotency
             .acknowledge_delegated_runtime_event(event_id, parent_instance_id)
@@ -765,7 +766,7 @@ impl FleetSupervisor {
         let inner = self
             .inner
             .lock()
-            .unwrap_or_else(|poison| poison.into_inner());
+            .recover_poison();
         let Some(link) = inner.idempotency.agent_link_for_child(child_instance_id)? else {
             return Ok(None);
         };
@@ -786,7 +787,7 @@ impl FleetSupervisor {
         let inner = self
             .inner
             .lock()
-            .unwrap_or_else(|poison| poison.into_inner());
+            .recover_poison();
         inner
             .idempotency
             .open_agent_links_for_parent(parent_instance_id)
@@ -803,7 +804,7 @@ impl FleetSupervisor {
         let inner = self
             .inner
             .lock()
-            .unwrap_or_else(|poison| poison.into_inner());
+            .recover_poison();
         let events = inner
             .idempotency
             .agent_link_events_after(parent_instance_id, after_cursor)?;
@@ -822,7 +823,7 @@ impl FleetSupervisor {
                     .map(|events| events.is_empty())
                     .unwrap_or(false)
             })
-            .unwrap_or_else(|poison| poison.into_inner());
+            .recover_poison();
         let events = inner
             .idempotency
             .agent_link_events_after(parent_instance_id, after_cursor)?;
@@ -840,7 +841,7 @@ impl FleetSupervisor {
         let mut inner = self
             .inner
             .lock()
-            .unwrap_or_else(|poison| poison.into_inner());
+            .recover_poison();
         let changed = inner
             .idempotency
             .orphan_agent_links_for_parent(parent_instance_id, now)?;
@@ -860,7 +861,7 @@ impl FleetSupervisor {
         let mut inner = self
             .inner
             .lock()
-            .unwrap_or_else(|poison| poison.into_inner());
+            .recover_poison();
         let current = inner
             .idempotency
             .agent_link_by_id(link_id)?
@@ -949,7 +950,7 @@ impl FleetSupervisor {
         let mut inner = self
             .inner
             .lock()
-            .unwrap_or_else(|poison| poison.into_inner());
+            .recover_poison();
         let generation = inner.next_generation;
         let name = resolve_name(order, generation, &inner.active_by_name);
         let candidate_instance_id = uuid::Uuid::new_v4().to_string();
@@ -1128,7 +1129,7 @@ impl FleetSupervisor {
         let mut inner = self
             .inner
             .lock()
-            .unwrap_or_else(|poison| poison.into_inner());
+            .recover_poison();
         let active = active_for_lease(&inner, lease)?.clone();
         if active
             .remote_placement
@@ -1194,7 +1195,7 @@ impl FleetSupervisor {
         let mut inner = self
             .inner
             .lock()
-            .unwrap_or_else(|poison| poison.into_inner());
+            .recover_poison();
         let active = active_for_lease(&inner, lease)?.clone();
         if instance_id != active.instance_id {
             return Err(FleetError::StaleGeneration);
@@ -1309,7 +1310,7 @@ impl FleetSupervisor {
         let mut inner = self
             .inner
             .lock()
-            .unwrap_or_else(|poison| poison.into_inner());
+            .recover_poison();
         if let Some(active) = inner.active_by_command.get(&lease.command_id).cloned() {
             active_for_lease(&inner, lease)?;
             close_agent_link(&mut inner, &active, unix_now())?;
@@ -1451,7 +1452,7 @@ impl FleetSupervisor {
         let mut inner = self
             .inner
             .lock()
-            .unwrap_or_else(|poison| poison.into_inner());
+            .recover_poison();
         let active = active_for_lease(&inner, lease)?.clone();
         if active.remote_placement.is_some() && active.state == SpawnCommandState::Connected {
             return Err(FleetError::InvalidTransition {
@@ -1482,7 +1483,7 @@ impl FleetSupervisor {
         let mut inner = self
             .inner
             .lock()
-            .unwrap_or_else(|poison| poison.into_inner());
+            .recover_poison();
         let Some(active) = inner.active_by_command.get(command_id).cloned() else {
             return Ok(false);
         };
@@ -1507,7 +1508,7 @@ impl FleetSupervisor {
         let mut inner = self
             .inner
             .lock()
-            .unwrap_or_else(|poison| poison.into_inner());
+            .recover_poison();
         if let Some(issue) = inner.completed.get(&waiter.command_id) {
             return Ok(Some(issue.clone()));
         }
@@ -1523,7 +1524,7 @@ impl FleetSupervisor {
             .wait_timeout_while(inner, timeout, |state| {
                 !state.completed.contains_key(&waiter.command_id)
             })
-            .unwrap_or_else(|poison| poison.into_inner());
+            .recover_poison();
         inner = guard;
         Ok(inner.completed.get(&waiter.command_id).cloned())
     }

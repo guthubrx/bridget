@@ -1,5 +1,6 @@
 //! Consommateur externe par le protocole public, sans dépendance à le service compagnon.
 //! Les six scénarios 015 conservés, replay brut et droits par connexion.
+use bridget_transport::poison::RecoverPoison;
 use bridget_core::BridgetMessage;
 use bridget_transport::protocol::{
     ConnectionRole, GuichetDurationClass, GuichetOutcome, GuichetReplyPayload,
@@ -1300,7 +1301,7 @@ fn daemon_guard_nettoie_apres_une_panique_injectee() {
         let home = unique_home();
         *home_slot
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(home.clone());
+            .recover_poison() = Some(home.clone());
         // Compteur borné à CE HOME : un voisin parallèle ne peut pas le fausser.
         assert_eq!(
             daemon_count_for_home(&home),
@@ -1330,7 +1331,7 @@ fn daemon_guard_nettoie_apres_une_panique_injectee() {
     );
     let home = home_slot
         .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .recover_poison()
         .take()
         .expect("HOME du test créé avant la panique");
     // Second temps : après Drop (dépliage), plus aucun daemon sur CE HOME.

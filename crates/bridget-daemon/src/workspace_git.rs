@@ -1,4 +1,5 @@
 //! Git natif154 : un exécuteur borné, aucune suppression ni commande réseau.
+use bridget_transport::poison::RecoverPoison;
 use crate::delegation::{WorkspaceCommit, WorkspaceRecord, WorkspaceState, WorkspaceStrategy};
 use bridget_core::is_disallowed_control;
 use std::fs;
@@ -933,10 +934,10 @@ pub(crate) fn create(
         let mut locks = LOCKS
             .get_or_init(Default::default)
             .lock()
-            .unwrap_or_else(|error| error.into_inner());
+            .recover_poison();
         std::sync::Arc::clone(locks.entry(preflight.toplevel.clone()).or_default())
     };
-    let _serialized = lock.lock().unwrap_or_else(|error| error.into_inner());
+    let _serialized = lock.lock().recover_poison();
     let compact = crate::workspace_failure210::stage(
         bridget_transport::protocol::WorkspacePrepareStage::CompactPlan,
         compact::plan(preflight))?;

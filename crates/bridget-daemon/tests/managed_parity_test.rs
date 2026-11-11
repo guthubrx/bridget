@@ -4,6 +4,7 @@
     unused_mut,
     non_snake_case
 )]
+use bridget_transport::poison::RecoverPoison;
 use bridget_core::BridgetMessage;
 // 090 : le sous-harnais Codex/faux-tmux (prompt et reprise injectés dans argv)
 // est remplacé par codex_interactive_090_test : vraie TUI, même fil et MCP.
@@ -435,7 +436,7 @@ impl CutProxy {
                     if is_wrapper {
                         *current_wrapper
                             .lock()
-                            .unwrap_or_else(|poison| poison.into_inner()) = Some((
+                            .recover_poison() = Some((
                             client.try_clone().unwrap(),
                             target_stream.try_clone().unwrap(),
                         ));
@@ -471,7 +472,7 @@ impl CutProxy {
         let sockets = self
             .latest_wrapper
             .lock()
-            .unwrap_or_else(|poison| poison.into_inner())
+            .recover_poison()
             .take()
             .expect("connexion wrapper à couper");
         shutdown_for_cut(&sockets.0);
@@ -1245,7 +1246,7 @@ fn marker_pgids(root: &Path, names: &[String]) -> Vec<u32> {
 fn matrice_fr008_compare_le_meme_corpus_et_les_frames_attach() {
     let _serial = MANAGED_BENCH_LOCK
         .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+        .recover_poison();
     assert_eq!(MATRIX_VERSION, "fr-008-v1");
     assert_eq!(MATRIX_RUNS_PER_MODE, 3);
 
@@ -1325,7 +1326,7 @@ fn matrice_fr008_compare_le_meme_corpus_et_les_frames_attach() {
 fn matrice_fr008_compare_la_garde_de_facturation() {
     let _serial = MANAGED_BENCH_LOCK
         .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+        .recover_poison();
     let root = test_root("billing");
     let adapter = write_fixture(&root);
     let daemon = DaemonProcess::start(&root, true, false);
@@ -1387,7 +1388,7 @@ fn matrice_fr008_compare_la_garde_de_facturation() {
 fn sc001_vingt_spawns_survivent_a_la_fermeture_du_client_et_repondent() {
     let _serial = MANAGED_BENCH_LOCK
         .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+        .recover_poison();
     const SPAWNS: usize = 20;
     const SPAWN_P95_LIMIT: Duration = Duration::from_secs(10);
     const GLOBAL_BENCH_TIMEOUT: Duration = Duration::from_secs(120);
@@ -1471,7 +1472,7 @@ fn sc001_vingt_spawns_survivent_a_la_fermeture_du_client_et_repondent() {
 fn sc005_sc006_persistance_arrets_cooperatifs_et_reconciliation_sigkill() {
     let _serial = MANAGED_BENCH_LOCK
         .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+        .recover_poison();
     const CYCLES: usize = 3;
     const FLEET_SIZE: usize = 3;
     const GLOBAL_TIMEOUT: Duration = Duration::from_secs(120);
@@ -1576,7 +1577,7 @@ fn sc005_sc006_persistance_arrets_cooperatifs_et_reconciliation_sigkill() {
 fn daemon_process_nettoie_apres_une_panique_injectee() {
     let _serial = MANAGED_BENCH_LOCK
         .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+        .recover_poison();
     let root_slot = Mutex::new(None::<PathBuf>);
     let mid = AtomicUsize::new(usize::MAX);
     let failed = catch_unwind(AssertUnwindSafe(|| {
@@ -1584,7 +1585,7 @@ fn daemon_process_nettoie_apres_une_panique_injectee() {
         fs::create_dir_all(&root).unwrap();
         *root_slot
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(root.clone());
+            .recover_poison() = Some(root.clone());
         // Compteur borné à CE HOME : un voisin parallèle ne peut pas le fausser.
         assert_eq!(
             daemon_count_for_home(&root),
@@ -1614,7 +1615,7 @@ fn daemon_process_nettoie_apres_une_panique_injectee() {
     );
     let root = root_slot
         .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .recover_poison()
         .take()
         .expect("HOME du test créé avant la panique");
     // Second temps : après Drop (dépliage), plus aucun daemon sur CE HOME.
@@ -1677,7 +1678,7 @@ fn kill_provider_sigterm(pgid: u32) -> u32 {
 fn TEMOIN_persistant_tue_redevient_joignable_sans_redemarrer_le_daemon() {
     let _serial = MANAGED_BENCH_LOCK
         .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+        .recover_poison();
     let root = test_root("persist-relaunch");
     write_fixture(&root);
     // Borne courte pour le test, backoff minimal.
@@ -1773,7 +1774,7 @@ fn TEMOIN_persistant_tue_redevient_joignable_sans_redemarrer_le_daemon() {
 fn TEMOIN_abandon_apres_N_tentatives_est_nomme() {
     let _serial = MANAGED_BENCH_LOCK
         .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+        .recover_poison();
     let root = test_root("persist-abandon");
     let adapter = write_fixture(&root);
     let mut daemon = {

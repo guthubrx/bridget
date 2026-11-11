@@ -1,4 +1,5 @@
 //! Préférence humaine et fenêtre d'activation exclusive. Aucun téléchargement sous State.
+use bridget_transport::poison::RecoverPoison;
 use crate::cli_table::table_println as println;
 use bridget_transport::protocol::{
     MobileAdministrationRequest as A, MobileAdministrationResult as R, UpdateRequest as Q,
@@ -251,7 +252,7 @@ pub(crate) struct Gate {
 pub(crate) struct Activity(Arc<Gate>);
 impl Drop for Activity {
     fn drop(&mut self) {
-        let mut i = self.0.inner.lock().unwrap_or_else(|e| e.into_inner());
+        let mut i = self.0.inner.lock().recover_poison();
         i.active = i.active.saturating_sub(1);
     }
 }

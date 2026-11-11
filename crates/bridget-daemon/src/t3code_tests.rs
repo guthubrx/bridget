@@ -1,3 +1,4 @@
+use bridget_transport::poison::RecoverPoison;
     use super::*;
     use crate::t3code_contract::{LatestTurn, Message};
 
@@ -2314,7 +2315,7 @@
             worker
                 .drained_key
                 .lock()
-                .unwrap_or_else(|error| error.into_inner())
+                .recover_poison()
                 .is_some()
         );
         worker.handle_frame(DaemonToWrapper::Deliver {
@@ -2326,7 +2327,7 @@
             worker
                 .drained_key
                 .lock()
-                .unwrap_or_else(|error| error.into_inner())
+                .recover_poison()
                 .is_none()
         );
         worker.journal.stop();
@@ -2345,7 +2346,7 @@
             worker
                 .drained_key
                 .lock()
-                .unwrap_or_else(|error| error.into_inner())
+                .recover_poison()
                 .is_none()
         );
         worker.observe_snapshot_change(&previous);
@@ -2356,7 +2357,7 @@
             worker
                 .drained_key
                 .lock()
-                .unwrap_or_else(|error| error.into_inner())
+                .recover_poison()
                 .as_deref()
                 == Some(previous.as_str())
         );
@@ -2484,7 +2485,7 @@
         assert!(
             drained_key
                 .lock()
-                .unwrap_or_else(|error| error.into_inner())
+                .recover_poison()
                 .is_none()
         );
         assert_eq!(inbound_deliveries.load(Ordering::SeqCst), 1);

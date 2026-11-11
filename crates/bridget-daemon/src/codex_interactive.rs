@@ -1,5 +1,6 @@
 //! Cycle de vie de l'interface Codex native. La communication reste dans le
 //! wrapper existant ; aucun caractère n'est injecté dans le terminal.
+use bridget_transport::poison::RecoverPoison;
 use std::ffi::OsString;
 use std::io::{self, IsTerminal};
 use std::path::Path;
@@ -379,7 +380,7 @@ impl NativeTui {
             while !watch_stop.load(Ordering::SeqCst) && alive.load(Ordering::SeqCst) {
                 match watch_child
                     .lock()
-                    .unwrap_or_else(|e| e.into_inner())
+                    .recover_poison()
                     .try_wait()
                 {
                     Ok(None) => thread::sleep(Duration::from_millis(25)),
@@ -429,7 +430,7 @@ impl NativeTui {
         if let Some(monitor) = self.monitor.take() {
             let _ = monitor.join();
         }
-        let mut child = self.child.lock().unwrap_or_else(|e| e.into_inner());
+        let mut child = self.child.lock().recover_poison();
         let result = bridget_transport::managed_session::stop_owned_child(
             &mut child,
             false,

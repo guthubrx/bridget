@@ -1,5 +1,6 @@
 //! Façade MCP stdio. Le protocole daemon reste le seul transport métier.
 
+use bridget_transport::poison::RecoverPoison;
 use crate::artifact_types::{ARTIFACT_CONTRACT_VERSION, ArtifactPublicationV1, ArtifactReceiptV1};
 #[cfg(test)]
 use crate::communication::client::connect_nonblocking;
@@ -146,7 +147,7 @@ pub(crate) fn check_tool_call(socket: Option<&UnixStream>) -> Result<bool, ToolE
         context
             .registry
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .recover_poison()
             .checkpoint(&context.id, socket)?;
         return Ok(true);
     }
@@ -178,7 +179,7 @@ impl ToolCallGuard {
         self.context
             .registry
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .recover_poison()
             .finish(&self.context.id)
     }
 }
@@ -193,7 +194,7 @@ struct CancelCallsOnExit(Arc<Mutex<ToolCallRegistry>>);
 
 impl Drop for CancelCallsOnExit {
     fn drop(&mut self) {
-        let mut registry = self.0.lock().unwrap_or_else(|error| error.into_inner());
+        let mut registry = self.0.lock().recover_poison();
         for call in registry.calls.values_mut().filter(|call| call.waiting) {
             call.cancel(true);
         }
@@ -204,7 +205,7 @@ impl Drop for CancelCallsOnExit {
             .wait_timeout_while(registry, Duration::from_millis(4500), |registry| {
                 registry.calls.values().any(|call| !call.waiting)
             })
-            .unwrap_or_else(|error| error.into_inner());
+            .recover_poison();
         registry.cancel_all();
     }
 }
@@ -324,7 +325,7 @@ where
             if let Some(cancelled_id) = cancellation_id(&request) {
                 registry
                     .lock()
-                    .unwrap_or_else(|error| error.into_inner())
+                    .recover_poison()
                     .cancel(&cancelled_id);
                 continue;
             }
@@ -341,7 +342,7 @@ where
                     && request["params"]["arguments"]["wait_timeout"].as_u64()!=Some(0));
                 let reservation = registry
                     .lock()
-                    .unwrap_or_else(|error| error.into_inner())
+                    .recover_poison()
                     .reserve(call_id.clone(), waiting);
                 if let Err(code) = reservation {
                     write_shared_response(
@@ -392,7 +393,7 @@ where
     })?;
     output
         .lock()
-        .unwrap_or_else(|error| error.into_inner())
+        .recover_poison()
         .flush()
 }
 
@@ -411,7 +412,7 @@ fn write_shared_response(
     output: &Arc<Mutex<BufWriter<impl Write>>>,
     response: &Value,
 ) -> io::Result<()> {
-    let mut writer = output.lock().unwrap_or_else(|error| error.into_inner());
+    let mut writer = output.lock().recover_poison();
     write_response(&mut *writer, response)
 }
 

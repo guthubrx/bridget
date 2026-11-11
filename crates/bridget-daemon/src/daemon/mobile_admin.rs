@@ -1,9 +1,10 @@
 //! Administration mobile locale : rôle, capacité et UID avant tout accès privé.
+use bridget_transport::poison::RecoverPoison;
 use super::*;
 use bridget_transport::protocol::{MobileAdministrationRequest, MobileAdministrationResult};
 
 pub(super) fn project_update_status(value: serde_json::Value, state: &Arc<Mutex<DaemonState>>) -> serde_json::Value {
-    let st = state.lock().unwrap_or_else(|e| e.into_inner());
+    let st = state.lock().recover_poison();
     let mut machines = std::collections::BTreeSet::new();
     machines.insert(st.host.clone());
     machines.extend(st.registry.machines().keys().cloned());
@@ -17,7 +18,7 @@ pub(super) fn handle(
     state: &Arc<Mutex<DaemonState>>,
 ) -> DaemonToWrapper {
     let root = {
-        let st = state.lock().unwrap_or_else(|e| e.into_inner());
+        let st = state.lock().recover_poison();
         let valid = st.connection_roles.get(conn_id) == Some(&ConnectionRole::Client)
             && !st.auxiliary_connections.contains(conn_id)
             && !st.conn_names.contains_key(conn_id)
@@ -48,7 +49,7 @@ pub(super) fn handle(
             match &request {
                 Q::Prepare { token } => {
                     // L'état et le compteur sont observés sous le même verrou métier.
-                    let st = state.lock().unwrap_or_else(|e| e.into_inner());
+                    let st = state.lock().recover_poison();
                     if !st
                         .delegation_store
                         .pending()
@@ -78,7 +79,7 @@ pub(super) fn handle(
                 }
                 Q::Finish { token } => state
                     .lock()
-                    .unwrap_or_else(|e| e.into_inner())
+                    .recover_poison()
                     .update_gate
                     .finish(token),
                 _ => crate::updates::policy(&root, &request).map(|v| project_update_status(v, state)),
@@ -119,7 +120,7 @@ pub(super) fn handle(
         let notifier = crate::mobile::notifications::Notifier::start(&root);
         state
             .lock()
-            .unwrap_or_else(|e| e.into_inner())
+            .recover_poison()
             .mobile_notifier = notifier;
     }
     DaemonToWrapper::MobileAdministrationResult { result }

@@ -5,6 +5,7 @@
 //! l'ancienne lease → préparation du MÊME worktree → nouvelle lease → Start/Release.
 //! Un plan interrompu reprend à sa phase ; une commande existante est observée,
 //! jamais relancée. Aucun nouveau décideur, profil, droit ou tâche n'est créé.
+use bridget_transport::poison::RecoverPoison;
 use super::super::origin_proof;
 use super::*;
 use crate::delegation::{
@@ -42,7 +43,7 @@ impl Claim {
     fn take(task_id: &str) -> Option<Self> {
         CLAIMS
             .lock()
-            .unwrap_or_else(|e| e.into_inner())
+            .recover_poison()
             .insert(task_id.to_owned())
             .then(|| Self(task_id.to_owned()))
     }
@@ -52,7 +53,7 @@ impl Drop for Claim {
     fn drop(&mut self) {
         CLAIMS
             .lock()
-            .unwrap_or_else(|e| e.into_inner())
+            .recover_poison()
             .remove(&self.0);
     }
 }
@@ -185,7 +186,7 @@ pub(super) fn record_refusal(
     if recovery.is_none() || reason != WorkerRefusal::ResourceLimit {
         return;
     }
-    let st = state.lock().unwrap_or_else(|e| e.into_inner());
+    let st = state.lock().recover_poison();
     let Ok(Some(mut task)) = st.delegation_store.get(task_id) else {
         return;
     };
@@ -208,7 +209,7 @@ pub(super) fn record_released(
     if recovery.is_none() {
         return;
     }
-    let st = state.lock().unwrap_or_else(|e| e.into_inner());
+    let st = state.lock().recover_poison();
     let Ok(Some(mut task)) = st.delegation_store.get(task_id) else {
         return;
     };
@@ -272,7 +273,7 @@ fn fresh(
     task_id: &str,
     phases: &[StartRecoveryPhase],
 ) -> Result<(Task, StartRecovery), String> {
-    let st = state.lock().unwrap_or_else(|e| e.into_inner());
+    let st = state.lock().recover_poison();
     let task = st
         .delegation_store
         .get(task_id)?
@@ -383,7 +384,7 @@ fn gather(
     attested: Option<&ProviderPermissions>,
     thread: Option<&str>,
 ) -> Result<Result<Context, Value>, String> {
-    let st = state.lock().unwrap_or_else(|e| e.into_inner());
+    let st = state.lock().recover_poison();
     recheck_attested_thread(&st, conn, thread)?;
     let (owner, instance) = live_connection_identity(&st, conn).ok_or("identity_unavailable")?;
     let task = st
@@ -473,7 +474,7 @@ fn gather(
 
 /// Écrit l'intention AVANT toute E/S : un crash retrouve le même plan.
 fn persist_plan(state: &Arc<Mutex<DaemonState>>, task_id: &str) -> Result<(), String> {
-    let st = state.lock().unwrap_or_else(|e| e.into_inner());
+    let st = state.lock().recover_poison();
     let mut task = st
         .delegation_store
         .get(task_id)?
@@ -538,7 +539,7 @@ fn set_phase(
     from: StartRecoveryPhase,
     to: StartRecoveryPhase,
 ) -> Result<(), String> {
-    let st = state.lock().unwrap_or_else(|e| e.into_inner());
+    let st = state.lock().recover_poison();
     let mut task = st
         .delegation_store
         .get(task_id)?
@@ -583,7 +584,7 @@ fn fence(state: &Arc<Mutex<DaemonState>>, task_id: &str, ctx: &Context) -> Resul
 fn invalidate_previous(state: &Arc<Mutex<DaemonState>>, task_id: &str) -> Result<(), String> {
     let (task, plan) = fresh(state, task_id, &[StartRecoveryPhase::Fenced])?;
     {
-        let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+        let mut st = state.lock().recover_poison();
         match lease_of(&st, &plan.previous) {
             Some(lease) => {
                 st.fleet
@@ -691,7 +692,7 @@ fn prepare_same_worktree(
         ],
     )?;
     let (prepare, workspace) = {
-        let st = state.lock().unwrap_or_else(|e| e.into_inner());
+        let st = state.lock().recover_poison();
         let prepare = rebuild_prepare(&st, &task, &ctx.owner, &ctx.parent)?;
         let workspace = match (&prepare.workspace, &task.workspace) {
             (Some(WorkspaceRequest::Worktree { .. }|WorkspaceRequest::CommitView {}), Some(record)) => {
@@ -755,7 +756,7 @@ fn prepare_same_worktree(
         return Err("start_recovery_policy_changed".into());
     }
     // Revalider chaque retour d'E/S, puis écrire snapshot et phase d'un seul save.
-    let st = state.lock().unwrap_or_else(|e| e.into_inner());
+    let st = state.lock().recover_poison();
     let mut task = st
         .delegation_store
         .get(task_id)?
@@ -836,7 +837,7 @@ pub(super) fn local_reservation_refusal(
 /// Le plan peut attendre sans consommer son futur bail. L'heure du canon est
 /// fixée durablement juste avant sa première réservation, jamais prolongée ensuite.
 fn launch_plan(state: &Arc<Mutex<DaemonState>>, task_id: &str) -> Result<StartRecovery, String> {
-    let st = state.lock().unwrap_or_else(|e| e.into_inner());
+    let st = state.lock().recover_poison();
     let mut task = st
         .delegation_store
         .get(task_id)?
@@ -907,7 +908,7 @@ pub(super) fn resume(
 ) -> Result<Value, String> {
     let Some(_claim) = Claim::take(task_id) else {
         // Une reprise tourne déjà : observer, jamais lancer de second fournisseur.
-        let st = state.lock().unwrap_or_else(|e| e.into_inner());
+        let st = state.lock().recover_poison();
         let task = st
             .delegation_store
             .get(task_id)?
@@ -920,7 +921,7 @@ pub(super) fn resume(
     };
     // Preuve native fraîche hors mutex ; relue après chaque retour d'E/S.
     let attest = |ctx: &Context| -> Result<(), String> {
-        let task = state.lock().unwrap_or_else(|e| e.into_inner()).delegation_store
+        let task = state.lock().recover_poison().delegation_store
             .get(task_id)?.ok_or("task_unavailable")?;
         let admitted = task.admitted_parent()?.is_some();
         if !admitted { match (thread, permission_proof) {

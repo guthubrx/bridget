@@ -1,4 +1,5 @@
 //! Raccord222 : identité attestée, contrôle humain et canons natifs partagés.
+use bridget_transport::poison::RecoverPoison;
 use super::*;
 use crate::agent_profile::{
     AgentProfileStore,
@@ -273,7 +274,7 @@ pub(super) fn handle_human(
 ) -> DaemonToWrapper {
     let mut controls = Vec::new();
     let result = (|| -> Result<Value, String> {
-        let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+        let mut st = state.lock().recover_poison();
         let principal = human_principal(&st, conn, request)?;
         if matches!(request, SpecialistRequest::CaptureHistory { .. }) {
             drop(st);
@@ -1754,7 +1755,7 @@ pub(super) fn handle_mobile(
     use crate::mobile::store::Operation;
     if !state
         .lock()
-        .unwrap_or_else(|e| e.into_inner())
+        .recover_poison()
         .client_negotiations
         .get(conn)
         .is_some_and(|n| n.capabilities.contains(&ClientCapability::SpecialistsV1))
@@ -1783,7 +1784,7 @@ pub(super) fn handle_mobile(
     }
     let mut controls = Vec::new();
     let value = (|| -> Result<Value, String> {
-        let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+        let mut st = state.lock().recover_poison();
         let allowed = if device.scope.all_projects {
             vec!["*".into()]
         } else {
@@ -2420,13 +2421,13 @@ impl Drop for HistoryLane {
     fn drop(&mut self) {
         self.state
             .lock()
-            .unwrap_or_else(|e| e.into_inner())
+            .recover_poison()
             .specialist_capture_active
             .remove(&self.agent);
     }
 }
 fn history_lane(state: &Arc<Mutex<DaemonState>>, agent: &str) -> Result<HistoryLane, &'static str> {
-    let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+    let mut st = state.lock().recover_poison();
     if st.specialist_capture_active.len() >= 8 || !st.specialist_capture_active.insert(agent.into())
     {
         return Err("history_capture_busy");
@@ -2474,7 +2475,7 @@ fn capture_history_in_lane(
         return failure("invalid_request");
     }
     let context = (|| -> Result<_, String> {
-        let st = state.lock().unwrap_or_else(|e| e.into_inner());
+        let st = state.lock().recover_poison();
         request.validate().map_err(str::to_owned)?;
         if p.agent_id.as_deref() != Some(agent) && p.human_approval_ref.is_none() {
             return Err("role_scope_denied".into());
@@ -2551,7 +2552,7 @@ fn capture_history_in_lane(
             .map_err(|_| "history_source_unavailable")
     };
     let result=(||->Result<Value,String>{
-        let st=state.lock().unwrap_or_else(|e|e.into_inner());
+        let st=state.lock().recover_poison();
         let current=st.router.get_agent(agent).and_then(|route|live_connection_identity(&st,&route.connection_id));
         if identity!=current {return Err("history_source_changed".into());}
         if st.delegation_store.revoked_agent(agent)? {return Err("permission_attestation_unavailable".into());}
@@ -2613,7 +2614,7 @@ pub(super) fn observe_history(
         limit: Some(20),
     };
     let principal = {
-        let st = state.lock().unwrap_or_else(|e| e.into_inner());
+        let st = state.lock().recover_poison();
         if st.specialist_capture_active.contains(agent) || st.specialist_capture_active.len() >= 8 {
             return;
         }

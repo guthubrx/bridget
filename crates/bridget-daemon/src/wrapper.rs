@@ -5,6 +5,7 @@
 #[path = "wrapper_workspace_repair.rs"]
 mod workspace_repair;
 
+use bridget_transport::poison::RecoverPoison;
 use bridget_transport::journal::{
     IncrementalJournalReader, JournalLiveFeed, JournalReadItem, JournalSourceIdentity,
     JournalWindowError, JournalWriter, current_host_date, resolve_window,
@@ -610,17 +611,17 @@ impl RemoteDrainGuard {
     }
 
     fn set_journal(&self, root: &Path, agent: &str, session: &str, writer: Option<JournalWriter>) {
-        *self.journal.lock().unwrap_or_else(|e| e.into_inner()) = Some(RemoteDrainJournal {
+        *self.journal.lock().recover_poison() = Some(RemoteDrainJournal {
             root: root.to_path_buf(), agent: agent.into(), session: session.into(), writer,
         });
     }
 
     fn begin_stop(&self) {
-        let mut signaler = self.signaler.lock().unwrap_or_else(|e| e.into_inner());
+        let mut signaler = self.signaler.lock().recover_poison();
         if signaler.is_some() { return; }
         let stopped = Arc::new(AtomicBool::new(false));
         let flag = stopped.clone();
-        let journal = self.journal.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        let journal = self.journal.lock().recover_poison().clone();
         let fallback = journal.clone();
         let command = self.command.clone();
         let machine = self.machine.clone();
@@ -666,7 +667,7 @@ impl Drop for RemoteDrainGuard {
         if let Some((stopped, handle)) = self
             .signaler
             .get_mut()
-            .unwrap_or_else(|e| e.into_inner())
+            .recover_poison()
             .take()
         {
             stopped.store(true, Ordering::SeqCst);
@@ -694,7 +695,7 @@ impl Drop for RemoteDrainGuard {
             if !reported && started.elapsed() >= REMOTE_DRAIN_DIAGNOSTIC_AFTER {
                 // Les writers du transport sont joints. Réutiliser le journal
                 // natif, sans second canal de preuve ni fausse fin de tâche.
-                let journal = self.journal.get_mut().unwrap_or_else(|e| e.into_inner());
+                let journal = self.journal.get_mut().recover_poison();
                 if let Some(journal) = journal.as_ref() {
                     let _ = record_remote_drain_wait(&journal.root, &journal.agent, &journal.session, &self.command, &self.machine, cause);
                 }
@@ -3420,7 +3421,7 @@ impl AttachRelayControl {
             let mut state = self
                 .control_state
                 .lock()
-                .unwrap_or_else(|poison| poison.into_inner());
+                .recover_poison();
             if state.pending.len().saturating_add(state.active.len())
                 >= ATTACH_RELAY_CONTROL_IDS_CAPACITY
             {
@@ -3437,7 +3438,7 @@ impl AttachRelayControl {
             .map_err(|error| {
                 self.control_state
                     .lock()
-                    .unwrap_or_else(|poison| poison.into_inner())
+                    .recover_poison()
                     .pending
                     .remove(&subscription_id);
                 match error {
@@ -3454,7 +3455,7 @@ impl AttachRelayControl {
         let mut state = self
             .control_state
             .lock()
-            .unwrap_or_else(|poison| poison.into_inner());
+            .recover_poison();
         if state.pending.contains(&subscription_id) || state.active.contains(&subscription_id) {
             state.cancelled.insert(subscription_id);
             drop(state);
@@ -3571,12 +3572,12 @@ impl AttachRelayWorker {
                     had_live_subscriptions = false;
                     worker_control
                         .lock()
-                        .unwrap_or_else(|poison| poison.into_inner())
+                        .recover_poison()
                         .active
                         .clear();
                     seen_generation = current_generation;
                     let (ack, wake) = &*worker_generation_ack;
-                    *ack.lock().unwrap_or_else(|poison| poison.into_inner()) = seen_generation;
+                    *ack.lock().recover_poison() = seen_generation;
                     wake.notify_all();
                     continue;
                 }
@@ -3602,7 +3603,7 @@ impl AttachRelayWorker {
                     let cancelled = {
                         let mut state = worker_control
                             .lock()
-                            .unwrap_or_else(|poison| poison.into_inner());
+                            .recover_poison();
                         state.pending.remove(&subscription_id);
                         let cancelled = state.cancelled.remove(&subscription_id);
                         if !cancelled {
@@ -3629,7 +3630,7 @@ impl AttachRelayWorker {
                         Err(error) => {
                             worker_control
                                 .lock()
-                                .unwrap_or_else(|poison| poison.into_inner())
+                                .recover_poison()
                                 .active
                                 .remove(&subscription_id);
                             worker_emit(WrapperToDaemon::AttachRejected {
@@ -3646,13 +3647,13 @@ impl AttachRelayWorker {
                 for subscription_id in ids {
                     if worker_control
                         .lock()
-                        .unwrap_or_else(|poison| poison.into_inner())
+                        .recover_poison()
                         .cancelled
                         .remove(&subscription_id)
                     {
                         worker_control
                             .lock()
-                            .unwrap_or_else(|poison| poison.into_inner())
+                            .recover_poison()
                             .active
                             .remove(&subscription_id);
                         subscriptions.remove(&subscription_id);
@@ -3681,7 +3682,7 @@ impl AttachRelayWorker {
                     (hooks.before_read)();
                     if worker_control
                         .lock()
-                        .unwrap_or_else(|poison| poison.into_inner())
+                        .recover_poison()
                         .cancelled
                         .contains(&subscription_id)
                     {
@@ -3701,7 +3702,7 @@ impl AttachRelayWorker {
                                 // Libérer l'identifiant avant la fin visible : un
                                 // désabonnement à réception de End ne laisse rien.
                                 {
-                                    let mut control=worker_control.lock().unwrap_or_else(|poison|poison.into_inner());
+                                    let mut control=worker_control.lock().recover_poison();
                                     control.active.remove(&subscription_id);
                                     control.cancelled.remove(&subscription_id);
                                 }
@@ -3730,7 +3731,7 @@ impl AttachRelayWorker {
                             "source de journal indisponible"
                         };
                         {
-                            let mut control=worker_control.lock().unwrap_or_else(|poison|poison.into_inner());
+                            let mut control=worker_control.lock().recover_poison();
                             control.active.remove(&subscription_id);
                             control.cancelled.remove(&subscription_id);
                         }
@@ -3899,10 +3900,10 @@ impl AttachRelayWorker {
                     subscription.caught_up && !subscription.has_pending_output()
                 }) {
                     let (lock, wake) = &*worker_wake;
-                    let guard = lock.lock().unwrap_or_else(|poison| poison.into_inner());
+                    let guard = lock.lock().recover_poison();
                     let _ = wake
                         .wait_timeout(guard, ATTACH_RELAY_IDLE_WAIT)
-                        .unwrap_or_else(|poison| poison.into_inner());
+                        .recover_poison();
                 }
             }
         });
@@ -3939,7 +3940,7 @@ impl AttachRelayWorker {
         let mut state = self
             .control_state
             .lock()
-            .unwrap_or_else(|poison| poison.into_inner());
+            .recover_poison();
         let pending = state.pending.iter().cloned().collect::<Vec<_>>();
         state.cancelled.extend(pending);
         state.active.clear();
@@ -3950,11 +3951,11 @@ impl AttachRelayWorker {
             .fetch_add(1, Ordering::SeqCst)
             .saturating_add(1);
         let (ack, wake) = &*self.generation_ack;
-        let mut acknowledged = ack.lock().unwrap_or_else(|poison| poison.into_inner());
+        let mut acknowledged = ack.lock().recover_poison();
         while *acknowledged < generation {
             acknowledged = wake
                 .wait(acknowledged)
-                .unwrap_or_else(|poison| poison.into_inner());
+                .recover_poison();
         }
     }
 
@@ -5099,10 +5100,10 @@ fn launch_session_with_status(
                 {
                     break;
                 }
-                if forward_child_requests || !child_requests.lock().unwrap_or_else(|e|e.into_inner()).waiting.is_empty() {
+                if forward_child_requests || !child_requests.lock().recover_poison().waiting.is_empty() {
                     let pending: Vec<_> = child_requests
                         .lock()
-                        .unwrap_or_else(|e| e.into_inner())
+                        .recover_poison()
                         .waiting
                         .iter()
                         .filter(|entry| !entry.uncertain)
@@ -5533,10 +5534,10 @@ fn launch_session_with_status(
                 {
                     break;
                 }
-                if forward_child_requests || !child_requests.lock().unwrap_or_else(|e|e.into_inner()).waiting.is_empty() {
+                if forward_child_requests || !child_requests.lock().recover_poison().waiting.is_empty() {
                     let pending: Vec<_> = child_requests
                         .lock()
-                        .unwrap_or_else(|e| e.into_inner())
+                        .recover_poison()
                         .waiting
                         .iter()
                         .filter(|entry| !entry.uncertain)
@@ -6318,7 +6319,7 @@ pub(crate) fn send_wrapper_message(
     let Ok(json) = encode(&message) else {
         return;
     };
-    let mut writer = writer.lock().unwrap_or_else(|err| err.into_inner());
+    let mut writer = writer.lock().recover_poison();
     let write_result = writer
         .as_mut()
         .map(|writer| writeln!(writer, "{}", json).and_then(|_| writer.flush()));
@@ -6414,7 +6415,7 @@ fn reconnect_managed_session(
                 {
                     return None;
                 }
-                *writer.lock().unwrap_or_else(|error| error.into_inner()) = Some(new_writer);
+                *writer.lock().recover_poison() = Some(new_writer);
                 // Register réinitialise l'attestation au niveau du daemon : le
                 // même journal local reste actif, il doit donc être annoncé de
                 // nouveau sur la nouvelle connexion.
@@ -6524,7 +6525,7 @@ fn dispatch_managed_child_request(
             && request.turn_id == answer.turn_id
             && request.provider_request_id == answer.provider_request_id
     };
-    let mut requests = requests.lock().unwrap_or_else(|e| e.into_inner());
+    let mut requests = requests.lock().recover_poison();
     if let Some(index) = requests.settled.iter().position(|entry| {
         matches_request(&entry.request)
             && entry
@@ -7433,7 +7434,7 @@ fn forward_managed_events_with_redaction(
                     false
                 };
                 if let Some(requests) = child_requests {
-                    let mut requests = requests.lock().unwrap_or_else(|e| e.into_inner());
+                    let mut requests = requests.lock().recover_poison();
                     let mut closed = Vec::new();
                     let mut index = 0;
                     while index < requests.waiting.len() {
@@ -7771,7 +7772,7 @@ fn forward_managed_events_with_redaction(
             }
             ManagedEventKind::ProviderRequest { request } => {
                 if let Some(requests) = child_requests {
-                    let mut requests = requests.lock().unwrap_or_else(|e| e.into_inner());
+                    let mut requests = requests.lock().recover_poison();
                     let duplicate = requests.waiting.iter().any(|entry| {
                         entry.request.provider_session == request.provider_session
                             && entry.request.turn_id == request.turn_id
@@ -7839,7 +7840,7 @@ fn forward_managed_events_with_redaction(
                                 correlation["provider_request_id"].clone()
                             )
                             .ok();
-                            let mut requests = requests.lock().unwrap_or_else(|e| e.into_inner());
+                            let mut requests = requests.lock().recover_poison();
                             let index = requests.waiting.iter().position(|entry| {
                                 Some(entry.request.provider_session.as_str())
                                     == correlation["provider_session"].as_str()
@@ -7960,7 +7961,7 @@ fn observe_user_input_receipt(writer:&Arc<Mutex<Option<BufWriter<UnixStream>>>>,
     if result["status"]!="ok" || !matches!(result["item"]["origin"].as_str(),Some("codex"|"claude")){return;}
     let Some(id)=result["item"]["request_id"].as_str()else{return;};
     let Ok(request)=serde_json::from_value::<bridget_transport::protocol::ChildProviderRequest>(result["item"]["callback"].clone())else{return;};
-    let mut requests=requests.lock().unwrap_or_else(|e|e.into_inner());
+    let mut requests=requests.lock().recover_poison();
     if let Some(waiting)=requests.waiting.iter_mut().find(|w|w.request==request){waiting.request_id=Some(id.into());return;}
     if let Some(settled)=requests.settled.iter_mut().find(|w|w.request==request){
         settled.request_id=Some(id.into());let frame=WrapperToDaemon::ChildRequestClosed{request_id:id.into(),state:settled.state};drop(requests);send_wrapper_message(writer,frame);

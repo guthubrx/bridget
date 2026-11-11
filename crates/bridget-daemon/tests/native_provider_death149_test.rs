@@ -11,6 +11,7 @@
 //! - Témoin : agent persistant ordinaire, fournisseur tué, relancé (2 démarrages).
 //! - Natif : même scénario, aucune relance (1 démarrage), wrapper terminé.
 
+use bridget_transport::poison::RecoverPoison;
 use bridget_daemon::managed_process::{ManagedMarkerStore, group_exists};
 use bridget_transport::protocol::{decode, encode};
 use bridget_transport::{DaemonToWrapper, StopOutcome, WrapperToDaemon};
@@ -380,7 +381,7 @@ fn tuer_le_fournisseur(label: &str, natif: bool) -> (Vec<u32>, bool, u32) {
 /// Témoin : sans bootstrap natif, le fournisseur persistant est relancé.
 #[test]
 fn native149_temoin_fournisseur_ordinaire_tue_est_relance() {
-    let _serie = SERIE.lock().unwrap_or_else(|poison| poison.into_inner());
+    let _serie = SERIE.lock().recover_poison();
     let (demarrages, connecte, premier) = tuer_le_fournisseur("ordinaire", false);
     assert!(
         demarrages.len() >= 2,
@@ -394,7 +395,7 @@ fn native149_temoin_fournisseur_ordinaire_tue_est_relance() {
 /// relancé, ni par le wrapper ni par le daemon ; il n'y a qu'un fournisseur.
 #[test]
 fn native149_fournisseur_natif_tue_n_est_jamais_relance() {
-    let _serie = SERIE.lock().unwrap_or_else(|poison| poison.into_inner());
+    let _serie = SERIE.lock().recover_poison();
     let (demarrages, connecte, premier) = tuer_le_fournisseur("natif", true);
     assert_eq!(
         demarrages,

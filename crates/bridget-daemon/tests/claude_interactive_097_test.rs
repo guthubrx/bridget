@@ -1,5 +1,6 @@
 //! Recette du wrapper `bridget claude` sans tmux : vrai daemon, vrai wrapper,
 //! faux fournisseur sous pseudo-terminal. Aucun compte, aucun tmux.
+use bridget_transport::poison::RecoverPoison;
 use std::process::{Command, Stdio};
 use std::sync::Mutex;
 
@@ -24,7 +25,7 @@ fn claude_interactif_refuse_un_pipe_avant_presence_ou_fournisseur() {
 }
 
 fn harness(mode: &str) {
-    let _serial = HARNESS.lock().unwrap_or_else(|poison| poison.into_inner());
+    let _serial = HARNESS.lock().recover_poison();
     let script = concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/tests/fixtures/claude_interactive_097.py"

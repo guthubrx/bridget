@@ -8,6 +8,7 @@
 
 #[path="t3code_agent_tracking230.rs"]
 mod agent_tracking230;
+use bridget_transport::poison::RecoverPoison;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::io::{BufRead, BufReader, BufWriter};
 use std::os::unix::net::UnixStream;
@@ -842,7 +843,7 @@ impl Session {
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, SessionInner> {
-        self.inner.lock().unwrap_or_else(|p| p.into_inner())
+        self.inner.lock().recover_poison()
     }
 
     fn base_url(&self) -> String {
@@ -1723,7 +1724,7 @@ impl Link {
         let value = self
             .drained_key
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .recover_poison()
             .clone();
         if self.inbound_deliveries.load(Ordering::SeqCst) != 0 {
             None
@@ -1833,12 +1834,12 @@ fn spawn_reader(
                                         inbound_deliveries.fetch_add(1, Ordering::SeqCst);
                                         *drained_key
                                             .lock()
-                                            .unwrap_or_else(|error| error.into_inner()) = None;
+                                            .recover_poison() = None;
                                     }
                                     DaemonToWrapper::CancelDelivery { id, .. } => {
                                         cancelled
                                             .lock()
-                                            .unwrap_or_else(|e| e.into_inner())
+                                            .recover_poison()
                                             .insert(id.clone(), Instant::now());
                                     }
                                     DaemonToWrapper::Disconnect => {
@@ -2194,7 +2195,7 @@ impl LinkWorker {
         let mut published = self
             .drained_key
             .lock()
-            .unwrap_or_else(|error| error.into_inner());
+            .recover_poison();
         let drained = available
             && !self.last_key.is_empty()
             && self.awaiting_snapshot_change.is_none()
@@ -2291,7 +2292,7 @@ impl LinkWorker {
                 *self
                     .drained_key
                     .lock()
-                    .unwrap_or_else(|error| error.into_inner()) = None;
+                    .recover_poison() = None;
                 let _ = self.inbound_deliveries.fetch_update(
                     Ordering::SeqCst,
                     Ordering::SeqCst,
@@ -2306,7 +2307,7 @@ impl LinkWorker {
                 }
                 self.cancelled
                     .lock()
-                    .unwrap_or_else(|e| e.into_inner())
+                    .recover_poison()
                     .insert(id.clone(), Instant::now());
                 self.discard_by_id(&id, if reason=="échéance de la demande dépassée" {Discard::Expired("de demande")} else {Discard::RequestClosed("annulée")});
                 info!("demande {id} retirée avant démarrage : {reason}");
@@ -2614,7 +2615,7 @@ impl LinkWorker {
             .session
             .inner
             .lock()
-            .unwrap_or_else(|e| e.into_inner())
+            .recover_poison()
             .client
             .uses_v2();
         if !v2 || !explicit_steering_supported(provider.as_deref()) {
@@ -2682,7 +2683,7 @@ impl LinkWorker {
         let now = unix_now();
         self.cancelled
             .lock()
-            .unwrap_or_else(|e| e.into_inner())
+            .recover_poison()
             .retain(|_, received| received.elapsed() <= self.turn_wait);
         // O(n), n ≤ QUEUE_BOUND : chaque remise écartée est rapportée au daemon.
         let queue = std::mem::take(&mut self.queue);
@@ -2993,7 +2994,7 @@ impl LinkWorker {
                 || messages.iter().any(|message| {
                     self.cancelled
                         .lock()
-                        .unwrap_or_else(|e| e.into_inner())
+                        .recover_poison()
                         .contains_key(&message.id)
                         || self.is_stale(message)
                 })

@@ -1,5 +1,6 @@
 //! Découverte sans thread ni tour de modèle. Une seule sonde par worker,
 //! exécutée hors de la file des missions, avec le bootstrap géré existant.
+use bridget_transport::poison::RecoverPoison;
 use crate::managed_process::{
     ManagedIdentity, ManagedLaunch, ManagedMarkerStore, ManagedStopResult, RunningManagedChild,
 };
@@ -129,14 +130,14 @@ impl CatalogueService {
         service
     }
     pub fn activate(&self, token: &str) {
-        let mut current = self.token.lock().unwrap_or_else(|e| e.into_inner());
+        let mut current = self.token.lock().recover_poison();
         *current = token.into();
         let generation = self.generation.fetch_add(1, Ordering::AcqRel) + 1;
         // A new transport token cannot attest that an owned process stopped.
         for (g, _, value) in self
             .latest
             .lock()
-            .unwrap_or_else(|e| e.into_inner())
+            .recover_poison()
             .values_mut()
         {
             if value.cause == Some(CatalogueCause::StopUnconfirmed) {
@@ -146,7 +147,7 @@ impl CatalogueService {
         self.enabled.store(true, Ordering::Release);
     }
     pub fn deactivate(&self) {
-        let _guard = self.token.lock().unwrap_or_else(|e| e.into_inner());
+        let _guard = self.token.lock().recover_poison();
         self.enabled.store(false, Ordering::Release);
         self.generation.fetch_add(1, Ordering::AcqRel);
     }
@@ -155,11 +156,11 @@ impl CatalogueService {
         self.deactivate();
     }
     pub fn snapshots(&self) -> Vec<(String, u64, ProviderCatalogue)> {
-        let token = self.token.lock().unwrap_or_else(|e| e.into_inner());
+        let token = self.token.lock().recover_poison();
         let current = self.generation.load(Ordering::Acquire);
         self.latest
             .lock()
-            .unwrap_or_else(|e| e.into_inner())
+            .recover_poison()
             .values()
             .filter(|(g, _, _)| *g == current)
             .map(|(_, seq, value)| (token.clone(), *seq, value.clone()))
@@ -171,7 +172,7 @@ impl CatalogueService {
         {
             return;
         }
-        let mut latest = self.latest.lock().unwrap_or_else(|e| e.into_inner());
+        let mut latest = self.latest.lock().recover_poison();
         // Seule la récolte du groupe ou la récupération du marqueur constate
         // l'arrêt ; aucune nouvelle observation ne libère cette garde.
         if latest.get(&value.connection_id).is_some_and(|(_, _, old)|
@@ -188,7 +189,7 @@ impl CatalogueService {
         latest.insert(value.connection_id.clone(), (generation, *sequence, value));
     }
     fn confirm_probe_stopped(&self) {
-        self.latest.lock().unwrap_or_else(|e| e.into_inner())
+        self.latest.lock().recover_poison()
             .retain(|_, (_, _, value)| value.cause != Some(CatalogueCause::StopUnconfirmed));
     }
 
@@ -196,7 +197,7 @@ impl CatalogueService {
     // Le plafond historique reste applicable : la maintenance doit résoudre les
     // contraintes retenues avant de récupérer leurs créneaux.
     fn retain_connections(&self, keep: &BTreeSet<&str>) {
-        self.latest.lock().unwrap_or_else(|e| e.into_inner())
+        self.latest.lock().recover_poison()
             .retain(|id, (_, _, value)| keep.contains(id.as_str())
                 || value.cause == Some(CatalogueCause::StopUnconfirmed));
     }
@@ -239,7 +240,7 @@ impl CatalogueService {
                     let previous = self
                         .latest
                         .lock()
-                        .unwrap_or_else(|e| e.into_inner())
+                        .recover_poison()
                         .values()
                         .map(|(_, _, v)| v.clone())
                         .collect::<Vec<_>>();

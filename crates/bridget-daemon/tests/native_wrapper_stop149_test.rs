@@ -14,6 +14,7 @@
 //! Aucun modèle. Chaque PID arrêté par le test est un PID de fixture, vérifié
 //! par sa ligne de commande, arrêté un à un par SIGTERM.
 
+use bridget_transport::poison::RecoverPoison;
 use bridget_core::BridgetMessage;
 use bridget_daemon::managed_process::{
     ManagedIdentity, ManagedLaunch, ManagedMarkerStore, RunningManagedChild,
@@ -410,7 +411,7 @@ fn connexions_recues(scenario: &Scenario) -> usize {
 /// O4 : SIGTERM sur le seul wrapper natif. Le fournisseur (autre groupe) ne reste pas orphelin.
 #[test]
 fn native149_sigterm_du_wrapper_natif_arrete_le_fournisseur_sans_reconnexion() {
-    let _serie = SERIE.lock().unwrap_or_else(|poison| poison.into_inner());
+    let _serie = SERIE.lock().recover_poison();
     let mut scenario = lancer("sigterm-natif", true, true, FinDaemon::Silence);
     assert_eq!(
         connexions_recues(&scenario),
@@ -456,7 +457,7 @@ fn native149_sigterm_du_wrapper_natif_arrete_le_fournisseur_sans_reconnexion() {
 /// Même garantie sur coupure du daemon : le natif ne se reconnecte jamais et rend son fournisseur.
 #[test]
 fn native149_eof_du_daemon_arrete_le_wrapper_natif_et_son_fournisseur() {
-    let _serie = SERIE.lock().unwrap_or_else(|poison| poison.into_inner());
+    let _serie = SERIE.lock().recover_poison();
     let mut scenario = lancer("eof-natif", true, true, FinDaemon::Ferme);
     let _ = connexions_recues(&scenario);
 
@@ -478,7 +479,7 @@ fn native149_eof_du_daemon_arrete_le_wrapper_natif_et_son_fournisseur() {
 /// Témoin : le même EOF, sans bootstrap natif, fait reconnecter le wrapper ordinaire.
 #[test]
 fn native149_temoin_ordinaire_eof_se_reconnecte_et_garde_son_fournisseur() {
-    let _serie = SERIE.lock().unwrap_or_else(|poison| poison.into_inner());
+    let _serie = SERIE.lock().recover_poison();
     let mut scenario = lancer("eof-ordinaire", false, true, FinDaemon::Ferme);
     let mut total = connexions_recues(&scenario);
     let fin = Instant::now() + Duration::from_secs(20);
@@ -505,7 +506,7 @@ fn native149_temoin_ordinaire_eof_se_reconnecte_et_garde_son_fournisseur() {
 /// wrapper ordinaire garde la disposition par défaut de SIGTERM.
 #[test]
 fn native149_temoin_ordinaire_sigterm_garde_la_disposition_par_defaut() {
-    let _serie = SERIE.lock().unwrap_or_else(|poison| poison.into_inner());
+    let _serie = SERIE.lock().recover_poison();
     let mut scenario = lancer("sigterm-ordinaire", false, true, FinDaemon::Silence);
     let wrapper = scenario.wrapper.child_mut().id() as i32;
     // SAFETY: kill ne déréférence aucun pointeur ; ses arguments sont des entiers.

@@ -1,4 +1,5 @@
 //! Dernier refus observé par le maître. Cache volatil, jamais autorité de remise.
+use bridget_transport::poison::RecoverPoison;
 use super::DaemonState;
 use crate::delegation::Task;
 use bridget_transport::protocol::{WorkerCommandPhase, WorkerRefusal};
@@ -260,7 +261,7 @@ pub(super) fn record(
     worker: Option<WorkerFact>,
 ) {
     let event = {
-        let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+        let mut st = state.lock().recover_poison();
         if let Ok(Some(current)) = st.delegation_store.get(&expected.task_id)
             && Identity::of(&current) == Identity::of(expected)
         {

@@ -1,3 +1,4 @@
+use bridget_transport::poison::RecoverPoison;
     use super::*;
 
     // T017 : vrais sockets, preuve primaire réemployée et une seule négociation.
@@ -457,7 +458,7 @@
         let registry_home = fixture_root.0.clone();
         drop(old); // Fermeture de toutes les connexions SQL: frontière durable après COMMIT.
         let mut st = {
-            let guard = HOME_REGISTRY_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+            let guard = HOME_REGISTRY_LOCK.lock().recover_poison();
             let previous = std::env::var_os("HOME");
             // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
             unsafe { std::env::set_var("HOME", &registry_home) };
@@ -1527,7 +1528,7 @@
         let registry_home = fixture_root.0.clone();
         drop(old); // Fermeture réelle de toutes les connexions SQL avant reconstruction.
         let reopened = {
-            let guard = HOME_REGISTRY_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+            let guard = HOME_REGISTRY_LOCK.lock().recover_poison();
             let previous = std::env::var_os("HOME");
             // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
             unsafe { std::env::set_var("HOME", &registry_home) };
@@ -2655,7 +2656,7 @@
         // suivants : on relit le verrou empoisonné plutôt que de propager.
         let _home_lock = HOME_REGISTRY_LOCK
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
+            .recover_poison();
         let (managed_tx, _managed_rx) = mpsc::channel();
         let previous_home = std::env::var_os("HOME");
         // DaemonState::new charge le registre via HOME ; la fixture doit lui
@@ -16778,7 +16779,7 @@
     #[test]
     fn held159_turnstate_sortie_forcee_depuis_busy_period_start() {
         let (mut st, config) = state_with_registered_agent("held159-force");
-        let _registry_lock = HOME_REGISTRY_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let _registry_lock = HOME_REGISTRY_LOCK.lock().recover_poison();
         let home = st.fixture_root.as_ref().unwrap().0.clone();
         let source = home.join("agents.json");
         let registry_json = serde_json::json!({"agents":{"claude":{
@@ -19493,7 +19494,7 @@
             let fixture_root = state.fixture_root.take().unwrap();
             let registry_home = fixture_root.0.clone();
             drop(state);
-            let home_lock = HOME_REGISTRY_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+            let home_lock = HOME_REGISTRY_LOCK.lock().recover_poison();
             let previous_home = std::env::var_os("HOME");
             let (managed_tx, _managed_rx) = mpsc::channel();
             // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
@@ -19615,7 +19616,7 @@
             let fixture_root = state.fixture_root.take().unwrap();
             let registry_home = fixture_root.0.clone();
             drop(state);
-            let home_lock = HOME_REGISTRY_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+            let home_lock = HOME_REGISTRY_LOCK.lock().recover_poison();
             let previous_home = std::env::var_os("HOME");
             let (managed_tx, _managed_rx) = mpsc::channel();
             // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
@@ -19967,7 +19968,7 @@
             // suivants : on relit le verrou empoisonné plutôt que de propager.
             let _home_lock = HOME_REGISTRY_LOCK
                 .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
+                .recover_poison();
             let previous_home = std::env::var_os("HOME");
             // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
             unsafe { std::env::set_var("HOME", home) };
@@ -20985,7 +20986,7 @@
         // suivants : on relit le verrou empoisonné plutôt que de propager.
         let _home_lock = HOME_REGISTRY_LOCK
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
+            .recover_poison();
         let (managed_tx, _managed_rx) = mpsc::channel();
         let previous_home = std::env::var_os("HOME");
         // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
@@ -21333,7 +21334,7 @@
         // suivants : on relit le verrou empoisonné plutôt que de propager.
         let _home_lock = HOME_REGISTRY_LOCK
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
+            .recover_poison();
         let rebuilt = DaemonState::new(&config, managed_tx).unwrap();
         let control = crate::referent_control::read(rebuilt.store.connection()).unwrap();
         assert!(control.paused);

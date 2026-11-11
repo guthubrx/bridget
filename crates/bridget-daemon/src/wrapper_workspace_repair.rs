@@ -1,4 +1,5 @@
 //! Le wrapper reste propriétaire de son fournisseur pendant la réparation185.
+use bridget_transport::poison::RecoverPoison;
 use super::*;
 use bridget_transport::protocol::WorkspaceRepairStatusV1;
 
@@ -28,7 +29,7 @@ impl ManagedSession for RetainedRepairSession {
     fn process_id(&self) -> u32 {
         self.owner
             .lock()
-            .unwrap_or_else(|e| e.into_inner())
+            .recover_poison()
             .process_id()
     }
     fn activate_journal(

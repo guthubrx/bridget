@@ -1,4 +1,5 @@
 //! Demandes155 : identité attestée, décision durable et clôture fournisseur.
+use bridget_transport::poison::RecoverPoison;
 use super::*;
 use crate::delegation::{ChildRequest, Task};
 use bridget_transport::protocol::{
@@ -411,7 +412,7 @@ pub(super) fn receive(
     let mut receipt = None;
     let mut human_notification = None;
     let result = (|| -> Result<Option<DaemonToWrapper>, String> {
-        let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+        let mut st = state.lock().recover_poison();
         let task = linked_task(&st, conn)?;
         if task.terminal() || task.state == "cancelling" {
             return Err("request_unlinked".into());
@@ -651,7 +652,7 @@ pub(super) fn receive(
             ok: pushed.is_ok(),
             error: pushed.err(),
         };
-        let st = state.lock().unwrap_or_else(|error| error.into_inner());
+        let st = state.lock().recover_poison();
         if let Err(error) = crate::human_inbox::record_notify_attempt(
             st.store.connection(),
             &summary.item_id,
@@ -763,7 +764,7 @@ pub(super) fn closed(conn: &str, id: &str, result: ChildRequestClosedState, st: 
 pub(super) fn tick(state: &Arc<Mutex<DaemonState>>) {
     let mut outgoing = Vec::new();
     {
-        let st = state.lock().unwrap_or_else(|e| e.into_inner());
+        let st = state.lock().recover_poison();
         // T029 : au plus512 liens155, jamais les premières décisions globales
         // du producteur. Le puits humain087 a déjà attesté le décideur.
         let Ok(human_rows) = st.delegation_store.child_inbox_followups() else {
@@ -962,7 +963,7 @@ fn emit(
 ) {
     let answer = matches!(frame, DaemonToWrapper::ChildRequestAnswer { .. });
     let remote = if answer {
-        let st = state.lock().unwrap_or_else(|e| e.into_inner());
+        let st = state.lock().recover_poison();
         let Ok(Some(row)) = st.delegation_store.get_child_request(id) else {
             return;
         };
@@ -1080,7 +1081,7 @@ fn emit(
     let had_emit_permit = permit.is_some();
     drop(permit);
     if result.is_err() && had_emit_permit {
-        let st = state.lock().unwrap_or_else(|e| e.into_inner());
+        let st = state.lock().recover_poison();
         if let Ok(Some(row)) = st.delegation_store.get_child_request(id)
             && row.delivery_state == "sent" && !receipt {
                 let _ = st.delegation_store.settle_sent_child_request(

@@ -1,4 +1,5 @@
 //! Dernier contrôle de portée sur l'identité courante, avant les effets natifs.
+use bridget_transport::poison::RecoverPoison;
 use super::*;
 use crate::mobile::store::{Operation, Store};
 use bridget_transport::protocol::{MobileOperation, MobileOperationRequest};
@@ -75,7 +76,7 @@ fn agent_journal(
         return refusal("history_scope_unavailable");
     }
     let (task, identity, foreign, socket) = {
-        let st = state.lock().unwrap_or_else(|e| e.into_inner());
+        let st = state.lock().recover_poison();
         let task = match st.delegation_store.for_child(agent_id) {
             Ok(task) => task,
             Err(_) => return refusal("storage_unavailable"),
@@ -117,7 +118,7 @@ fn agent_journal(
         }
     };
     {
-        let st = state.lock().unwrap_or_else(|e| e.into_inner());
+        let st = state.lock().recover_poison();
         if let Some(snapshot) = &task {
             let current = match st.delegation_store.get(&snapshot.task_id) {
                 Ok(Some(task)) => task,
@@ -144,7 +145,7 @@ fn agent_journal(
     {
         return refusal(error.code());
     }
-    let agent_state={let st=state.lock().unwrap_or_else(|e|e.into_inner());
+    let agent_state={let st=state.lock().recover_poison();
         st.router.get_agent(agent_id).and_then(|route|st.conn_instances.get(&route.connection_id))
             .and_then(|instance|st.presences.get(instance)).map(|p|p.state.clone()).unwrap_or_else(||"unknown".into())};
     DaemonToWrapper::MobileOperationResult {
@@ -168,7 +169,7 @@ pub(super) fn handle(
             &[ClientCapability::MobileOperationsV1]
         };
     let root = {
-        let st = state.lock().unwrap_or_else(|e| e.into_inner());
+        let st = state.lock().recover_poison();
         if st.connection_roles.get(conn_id) != Some(&ConnectionRole::Client)
             || st.auxiliary_connections.contains(conn_id)
             || st.conn_names.contains_key(conn_id)
@@ -269,7 +270,7 @@ pub(super) fn handle(
             &request, &device, &root, agent_id, *after_seq, *limit, *tail, state,
         );
     }
-    let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+    let mut st = state.lock().recover_poison();
     if st.conn_names.contains_key(conn_id)
         || st.connection_roles.get(conn_id) != Some(&ConnectionRole::Client)
     {

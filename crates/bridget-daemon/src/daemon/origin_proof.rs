@@ -1,4 +1,5 @@
 //! Relais d'origine sur le worker provisionné, corrélé à son époque actuelle.
+use bridget_transport::poison::RecoverPoison;
 use super::*;
 use std::path::Path;
 use bridget_transport::protocol::{
@@ -72,7 +73,7 @@ fn exchange(
     let deadline = Instant::now() + budget;
     let (tx, rx) = mpsc::sync_channel(1);
     let (writer, request, connection) = {
-        let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+        let mut st = state.lock().recover_poison();
         if !worker_is_current(&st,host) {return Err("origin_worker_unavailable".into());}
         let worker=st.remote_workers.get(host).ok_or("origin_worker_unavailable")?;
         if let OriginProofOperation::PrepareProject {return_context,..}=&mut operation {
@@ -144,7 +145,7 @@ fn exchange(
     } else {
         None
     };
-    let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+    let mut st = state.lock().recover_poison();
     st.pending_origin_proofs.remove(&correlation);
     if Instant::now() >= deadline
         || !st.remote_workers.get(host).is_some_and(|w| {
@@ -311,7 +312,7 @@ pub(super) fn reattest(
     state: &Arc<Mutex<DaemonState>>,
 ) -> Result<crate::t3code_mcp::SessionProof, String> {
     let binding = {
-        let st = state.lock().unwrap_or_else(|e| e.into_inner());
+        let st = state.lock().recover_poison();
         let (owner, instance) = live_connection_identity(&st, connection)
             .ok_or("permission_attestation_unavailable")?;
         let route = st
@@ -354,7 +355,7 @@ pub(super) fn reattest(
             proof
         }
     };
-    let st = state.lock().unwrap_or_else(|e| e.into_inner());
+    let st = state.lock().recover_poison();
     if attested.thread_id != binding.3
         || live_connection_identity(&st, connection) != Some((binding.0.clone(), binding.1.clone()))
         || st
@@ -394,7 +395,7 @@ pub(super) fn sources(
             return Err("admission_authority_invalid".into());
         }
         let host = {
-            let st = state.lock().unwrap_or_else(|e| e.into_inner());
+            let st = state.lock().recover_poison();
             let current = st.delegation_store.get(&task.task_id)?.ok_or("task_unavailable")?;
             super::native_delegation::recheck_remote_dispatch(&st, &current, task)?;
             if current.state != task.state || matches!(current.state.as_str(), "cancelled" | "failed")
@@ -408,7 +409,7 @@ pub(super) fn sources(
         // L'hôte vient de la Task attestée. Aucune route de tour, ni credential,
         // n'est nécessaire pour relire les mêmes fichiers sur cet hôte provisionné.
         let response = exchange(state, &host, operation, Duration::from_secs(30))?;
-        let st = state.lock().unwrap_or_else(|e| e.into_inner());
+        let st = state.lock().recover_poison();
         let current = st.delegation_store.get(&task.task_id)?.ok_or("task_unavailable")?;
         super::native_delegation::recheck_remote_dispatch(&st, &current, task)?;
         if current.state != task.state || current.guard_released != task.guard_released {
@@ -436,7 +437,7 @@ pub(super) fn prepare_project(
     let budget=deadline.saturating_duration_since(Instant::now()).min(Duration::from_secs(595));
     if budget.is_zero() {return Err("project_preparation_timeout".into());}
     let (registry_path,expected,origin_host)={
-        let st=state.lock().unwrap_or_else(|e|e.into_inner());
+        let st=state.lock().recover_poison();
         let registry=AgentRegistry::load_from_path_quiet(st.registry.source().to_path_buf())?;
         (registry.source().to_path_buf(),registry.machine(target_machine)?.clone(),host_for_owner(&st,owner)?)
     };
@@ -488,7 +489,7 @@ fn parent_operation(
     operation:OriginProofOperation,budget:Duration,
 )->Result<Option<OriginProofResult>,String>{
     let binding = {
-        let st = state.lock().unwrap_or_else(|e| e.into_inner());
+        let st = state.lock().recover_poison();
         let Some(host) = foreign_host(&st, owner)? else {
             return Ok(None);
         };
@@ -512,7 +513,7 @@ fn parent_operation(
         operation,
         budget,
     )?;
-    let st = state.lock().unwrap_or_else(|e| e.into_inner());
+    let st = state.lock().recover_poison();
     if st
         .router
         .get_agent(owner)

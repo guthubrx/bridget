@@ -1,5 +1,6 @@
 //! État désiré durable des équipiers gérés par le daemon.
 
+use bridget_transport::poison::RecoverPoison;
 use bridget_transport::ResolvedAgentDefinition;
 use bridget_transport::fsutil::{AtomicWritePhase, write_private_file_atomic_observed};
 use bridget_transport::protocol::ProjectReference;
@@ -270,7 +271,7 @@ impl DesiredStateStore {
         let _transition = self
             .transition_lock
             .lock()
-            .unwrap_or_else(|poison| poison.into_inner());
+            .recover_poison();
         self.load_unlocked()
     }
 
@@ -279,7 +280,7 @@ impl DesiredStateStore {
         let _transition = self
             .transition_lock
             .lock()
-            .unwrap_or_else(|poison| poison.into_inner());
+            .recover_poison();
         self.persist_unlocked(fleet)
     }
 
@@ -293,7 +294,7 @@ impl DesiredStateStore {
         let _transition = self
             .transition_lock
             .lock()
-            .unwrap_or_else(|poison| poison.into_inner());
+            .recover_poison();
         self.persist_unlocked_observed(fleet, observer)
     }
 
@@ -306,7 +307,7 @@ impl DesiredStateStore {
         let _transition = self
             .transition_lock
             .lock()
-            .unwrap_or_else(|poison| poison.into_inner());
+            .recover_poison();
         let mut fleet = self.load_unlocked()?;
         let mut migrated = BTreeMap::new();
         for (legacy, entry) in std::mem::take(&mut fleet.equipiers) {
@@ -332,7 +333,7 @@ impl DesiredStateStore {
         let _transition = self
             .transition_lock
             .lock()
-            .unwrap_or_else(|poison| poison.into_inner());
+            .recover_poison();
         let mut fleet = self.load_unlocked()?;
         let previous = fleet.equipiers.insert(name, equipier);
         self.persist_unlocked(&fleet)?;
@@ -344,7 +345,7 @@ impl DesiredStateStore {
         let _transition = self
             .transition_lock
             .lock()
-            .unwrap_or_else(|poison| poison.into_inner());
+            .recover_poison();
         let mut fleet = self.load_unlocked()?;
         let removed = fleet.equipiers.remove(name);
         if removed.is_some() {
@@ -363,7 +364,7 @@ impl DesiredStateStore {
         let _transition = self
             .transition_lock
             .lock()
-            .unwrap_or_else(|poison| poison.into_inner());
+            .recover_poison();
         let mut fleet = self.load_unlocked()?;
         let Some(entry) = fleet.equipiers.get_mut(name) else {
             return Ok(None);
@@ -388,7 +389,7 @@ impl DesiredStateStore {
         let _transition = self
             .transition_lock
             .lock()
-            .unwrap_or_else(|poison| poison.into_inner());
+            .recover_poison();
         let mut fleet = self.load_unlocked()?;
         let mut present = Vec::new();
         let mut changed = false;
@@ -417,7 +418,7 @@ impl DesiredStateStore {
         let _transition = self
             .transition_lock
             .lock()
-            .unwrap_or_else(|poison| poison.into_inner());
+            .recover_poison();
         let mut fleet = self.load_unlocked()?;
         let Some(entry) = fleet.equipiers.get_mut(name) else {
             return Ok(false);
@@ -441,7 +442,7 @@ impl DesiredStateStore {
         let _transition = self
             .transition_lock
             .lock()
-            .unwrap_or_else(|poison| poison.into_inner());
+            .recover_poison();
         let mut fleet = self.load_unlocked()?;
         let mut changed = Vec::new();
         for (name, entry) in &mut fleet.equipiers {
@@ -466,7 +467,7 @@ impl DesiredStateStore {
         let _transition = self
             .transition_lock
             .lock()
-            .unwrap_or_else(|poison| poison.into_inner());
+            .recover_poison();
         let mut fleet = self.load_unlocked()?;
         let Some(entry) = fleet.equipiers.get_mut(name) else {
             return Ok(false);

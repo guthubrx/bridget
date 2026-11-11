@@ -1,6 +1,7 @@
 //! Harnais commun 012/089 : enfants réels isolés, watchdog, sockets et MCP.
 //! Déplacé sans modifier les barrières ni les oracles de la matrice historique.
 
+use bridget_transport::poison::RecoverPoison;
 use bridget_core::BridgetMessage;
 use bridget_daemon::registry::AgentRegistry;
 use bridget_daemon::store::Store;
@@ -62,7 +63,7 @@ extern "C" fn remove_created_roots() {
     let roots = std::mem::take(
         &mut *created_roots()
             .lock()
-            .unwrap_or_else(|error| error.into_inner()),
+            .recover_poison(),
     );
     for root in roots {
         let _ = fs::remove_dir_all(root);
@@ -77,7 +78,7 @@ pub fn track(child: &Child) {
 pub fn untrack(child: &Child) {
     children()
         .lock()
-        .unwrap_or_else(|error| error.into_inner())
+        .recover_poison()
         .retain(|pid| *pid != child.id() as i32);
 }
 pub fn is_owned_running_process(pid: i32) -> bool {
@@ -501,7 +502,7 @@ pub fn test_root(_label: &str) -> PathBuf {
             thread::sleep(GLOBAL_TIMEOUT);
             let pids = children()
                 .lock()
-                .unwrap_or_else(|error| error.into_inner())
+                .recover_poison()
                 .clone();
             for pid in pids {
                 if is_owned_running_process(pid) {
@@ -528,7 +529,7 @@ pub fn test_root(_label: &str) -> PathBuf {
     });
     created_roots()
         .lock()
-        .unwrap_or_else(|error| error.into_inner())
+        .recover_poison()
         .push(root.clone());
     root
 }
