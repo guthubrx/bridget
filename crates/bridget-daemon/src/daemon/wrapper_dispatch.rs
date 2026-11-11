@@ -4738,3 +4738,17 @@ pub(super) fn on_register_auxiliary(
         credential,
     ))
 }
+
+pub(super) fn on_runtime_selection_reported(token: String, outcome: bridget_transport::protocol::RuntimeSelectionOutcome, conn_id: &str, state: &Arc<Mutex<DaemonState>>) -> Option<DaemonToWrapper> {
+            let mut st = state.lock().recover_poison();
+            // Un wrapper voisin ou un client MCP ne peut pas forger le reçu.
+            if st
+                .pending_runtime_selections
+                .get(&token)
+                .is_some_and(|(target, _)| target == conn_id)
+                && let Some((_, sender)) = st.pending_runtime_selections.remove(&token)
+            {
+                let _ = sender.send(outcome);
+            }
+            None
+        }
