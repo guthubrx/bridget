@@ -16764,53 +16764,7 @@ fn handle_wrapper_message_with_peer(
             Some(DaemonToWrapper::LedgerReadResult { outcome })
         }
         WrapperToDaemon::ObservationRequest { request } => wrapper_dispatch::on_observation_request(request, conn_id, state),
-        WrapperToDaemon::ObservedActivity { seq, event, file } => {
-            use bridget_transport::protocol::ObservationKind;
-            let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
-            let (agent, instance) = live_connection_identity(&st, conn_id)?;
-            if st.auxiliary_connections.contains(conn_id)
-                || !st.observations.accepts(conn_id, event)
-                || seq == 0
-                || st
-                    .observation_sequences
-                    .get(conn_id)
-                    .is_some_and(|last| seq <= *last)
-                || !matches!(
-                    event,
-                    ObservationKind::FileWritten
-                        | ObservationKind::PermissionRequired
-                        | ObservationKind::TurnEnded
-                )
-                || (event == ObservationKind::FileWritten && file.is_none())
-                || (event != ObservationKind::FileWritten && file.is_some())
-            {
-                return None;
-            }
-            st.observation_sequences.insert(conn_id.into(), seq);
-            if event==ObservationKind::TurnEnded {
-                let agent=agent.clone();let instance=instance.clone();
-                drop(st);
-                specialists222::observe_history(state,&agent,&instance,seq);
-                st=state.lock().unwrap_or_else(|e|e.into_inner());
-                if live_connection_identity(&st,conn_id)!=Some((agent,instance)){return None;}
-            }
-            let host = st
-                .presences
-                .get(&instance)
-                .map(|p| p.host.clone())
-                .unwrap_or_else(|| st.host.clone());
-            observe_fact(
-                &mut st,
-                crate::observation::Fact {
-                    event,
-                    agent,
-                    host,
-                    file,
-                    other_agent: None,
-                },
-            );
-            None
-        }
+        WrapperToDaemon::ObservedActivity { seq, event, file } => wrapper_dispatch::on_observed_activity(seq, event, file, conn_id, state),
         WrapperToDaemon::RoleHandshake { .. } => unreachable!("handshake traité avant le dispatch"),
         WrapperToDaemon::DelegationOverviewRead {
             version,
