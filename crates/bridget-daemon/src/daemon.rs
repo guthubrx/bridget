@@ -18301,37 +18301,7 @@ fn handle_wrapper_message_with_peer(
         WrapperToDaemon::AttachRejected {
             subscription_id,
             reason,
-        } => {
-            let (control, view) = {
-                let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
-                let subscription_id = subscription_id?;
-                let subscription = st.attach_subscriptions.get(&subscription_id).cloned()?;
-                if subscription.wrapper_conn != conn_id {
-                    return None;
-                }
-                let control =
-                    st.connections
-                        .get(&subscription.attach_conn)
-                        .map(|writer| DeferredControl {
-                            writer: writer.clone(),
-                            message: DaemonToWrapper::AttachRejected {
-                                subscription_id: Some(subscription_id.clone()),
-                                reason,
-                                mode: None,
-                                location: None,
-                            },
-                        });
-                st.attach_subscriptions.remove(&subscription_id);
-                (control, st.attach_views.remove(&subscription_id))
-            };
-            if let Some(control) = control {
-                let _ = execute_controls(vec![control]);
-            }
-            if let Some(view) = view {
-                view.close_and_join();
-            }
-            None
-        }
+        } => wrapper_dispatch::on_attach_rejected(subscription_id, reason, conn_id, state),
         WrapperToDaemon::End {
             subscription_id,
             reason,
