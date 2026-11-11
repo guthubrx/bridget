@@ -2360,6 +2360,7 @@ fn route_selected_admission(
     })
 }
 
+// 13 paramètres : regroupement différé (programme 260, lot 9).
 fn choose_routing_admission(
     conn: &str,
     request: &AutoDelegateV2,
@@ -3577,6 +3578,7 @@ fn finalise_auto_local_choice(
 /// Le choix est toujours durci dans le reçu avant tout effet. Les candidats
 /// locaux restent au puits déjà verrouillé ; un candidat distant passe ensuite
 /// par Prepare162 avec le même reçu chosen, sans réordonner les profils.
+// 12 paramètres : regroupement différé (programme 260, lot 9).
 fn finalise_auto_choice(
     conn: &str,
     request: &AutoDelegateV1,
@@ -8273,6 +8275,7 @@ fn resolve_target(args: ResolveTargetArgs<'_>) -> Result<
 /// R8 : un préparateur commun, lié à une entrée et jeté après ses trois postures.
 /// O(B+3P+3log q) : définition/préflight/lectures une fois, politiques dérivées,
 /// quota relu après les options à chaque verdict ; aucun état partagé ou durable.
+// 13 paramètres : regroupement différé (programme 260, lot 9).
 fn target_resolver<'a>(
     registry: &'a AgentRegistry,
     source: &'a crate::lifecycle::SourceEnvironment,
@@ -8492,6 +8495,7 @@ mod catalogue212_tests {
     }
 }
 
+// 14 paramètres : regroupement différé (programme 260, lot 9).
 fn target_resolver_in_catalogue171<'a>(
     registry: &'a AgentRegistry,
     source: &'a crate::lifecycle::SourceEnvironment,

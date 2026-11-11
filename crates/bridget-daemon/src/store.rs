@@ -142,6 +142,7 @@ impl Store {
         Ok(conn)
     }
 
+    // Exemption lot 9 : définition SQL du schéma, sa longueur n'est pas de la logique.
     fn init_schema(conn: &Connection) -> Result<(), StoreError> {
         crate::agent_tracking::ensure_schema(conn).map_err(StoreError::Sqlite)?;
         wake_schedules::ensure_schema(conn)?;

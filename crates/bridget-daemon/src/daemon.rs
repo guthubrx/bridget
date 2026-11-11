@@ -8686,6 +8686,7 @@ fn handle_register_with_channel(
 #[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 /// Simule les enregistrements antérieurs à FR-2407, donc sans canal explicite.
+// 14 paramètres : regroupement différé (programme 260, lot 9).
 fn handle_register(
     conn_id: &str,
     agent_type: String,

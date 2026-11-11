@@ -528,6 +528,7 @@ impl IdempotencyStore {
         Ok(scope)
     }
 
+    // Exemption lot 9 : définition SQL du schéma, sa longueur n'est pas de la logique.
     fn init_schema(conn: &mut Connection) -> Result<(), IdempotencyError> {
         crate::store_schema::validate(conn).map_err(IdempotencyError::Schema)?;
         conn.execute_batch("PRAGMA foreign_keys = ON;")?;

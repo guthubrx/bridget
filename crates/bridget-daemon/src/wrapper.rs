@@ -4221,6 +4221,7 @@ fn record_attention(
 /// Point d'entrée du wrapper supervisé. Le FD `managed-status` est fermé
 /// uniquement après Register, transport ACP, journal et relais initialisés.
 #[allow(clippy::too_many_arguments)]
+// 12 paramètres : regroupement différé (programme 260, lot 9).
 fn spawn_managed_session_transport(
     agent_type: &str,
     definition: &crate::registry::AgentDefinition,

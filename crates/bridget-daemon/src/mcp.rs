@@ -2649,6 +2649,7 @@ fn discovery_tools() -> Vec<Value> {
     catalogue
 }
 
+// Exemption lot 9 : fonction de données (liste d'outils), sa longueur n'est pas de la logique.
 pub(crate) fn tools() -> Vec<Value> {
     // maxLength est en caractères JSON Schema ; le contrat natif compte les
     // octets UTF-8. Publier aussi cette unité, sans changer le validateur.

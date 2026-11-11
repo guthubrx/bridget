@@ -21,6 +21,7 @@ impl IdempotencyStore {
     /// l'unique point de décision du consommateur 009 : le code `fleet` ne
     /// refait ni lookup, ni comparaison canonique, ni logique de rejeu.
     #[allow(clippy::too_many_arguments)]
+    // 13 paramètres : regroupement différé (programme 260, lot 9).
     pub fn reserve_spawn(
         &mut self,
         key: &IdempotencyKey,

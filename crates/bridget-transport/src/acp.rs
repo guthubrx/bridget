@@ -1153,6 +1153,7 @@ fn finish_turn(
 // Les huit ressources sont les extrémités explicites du pipeline stdio ; les
 // regrouper masquerait l'unique propriétaire de stdout imposé par D-204.
 #[allow(clippy::too_many_arguments)]
+// 14 paramètres : regroupement différé (programme 260, lot 9).
 fn spawn_reader(
     stdout: ChildStdout,
     writer: Writer,
