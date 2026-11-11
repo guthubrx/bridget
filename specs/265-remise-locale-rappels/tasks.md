@@ -5,6 +5,8 @@
 - [x] Corriger le routage local, la clôture durable et les niveaux de rappel.
 - [x] Qualifier les gardes de sécurité et la reprise après échec SQL.
 - [x] Faire relire le correctif indépendamment.
-- [ ] Pousser les sources et activer la correction sur les cibles.
-- [ ] Remettre les réponses conservées et préciser le sort des tâches expirées.
-- [ ] Nettoyer les intermédiaires propres sans toucher aux missions actives.
+- [x] Pousser les sources et activer la correction sur les cibles.
+- [x] Remettre les réponses conservées et préciser le sort des tâches expirées.
+- [x] Nettoyer les intermédiaires propres sans toucher aux missions actives.
+
+Ménage effectué dans le périmètre qualifié ; les conservations gardées sont détaillées dans implementation.md.
