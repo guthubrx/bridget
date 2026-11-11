@@ -17118,16 +17118,7 @@ fn handle_wrapper_message_with_peer(
         WrapperToDaemon::RuntimeCatalogueReported { token, outcome } => wrapper_dispatch::on_runtime_catalogue_reported(token, outcome, conn_id, state),
         WrapperToDaemon::Send(bridge_msg) => wrapper_dispatch::on_send(bridge_msg, conn_id, state),
 
-        WrapperToDaemon::Heartbeat => {
-            let mut st = state.lock().recover_poison();
-            if let Some(instance_id) = st.conn_instances.get(conn_id).cloned()
-                && let Some(presence) = st.presences.get_mut(&instance_id)
-            {
-                // Lien ≠ capacité : le heartbeat prouve le socket, pas l'exécution.
-                presence.touch_link();
-            }
-            None
-        }
+        WrapperToDaemon::Heartbeat => wrapper_dispatch::on_heartbeat(conn_id, state),
 
         WrapperToDaemon::TurnState { in_progress } => {
             wrapper_dispatch::on_turn_state(in_progress, conn_id, state)
