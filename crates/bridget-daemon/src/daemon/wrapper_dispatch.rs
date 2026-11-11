@@ -3073,3 +3073,39 @@ pub(super) fn on_observed_activity(seq: u64, event: bridget_transport::protocol:
             );
             None
         }
+
+pub(super) fn on_display_name_resolve(request: bridget_transport::protocol::DisplayNameRequest, state: &Arc<Mutex<DaemonState>>) -> Option<DaemonToWrapper> {
+            use crate::agent_profile::AgentProfileStore;
+            use bridget_transport::protocol::{
+                DisplayNameRefusal as Refusal, DisplayNameResolution as Outcome,
+            };
+            let st = state.lock().unwrap_or_else(|e| e.into_inner());
+            let outcome = if request.version != 1
+                || request.display_name.chars().any(char::is_control)
+                || request.display_name.trim().is_empty()
+                || request.display_name.chars().count()
+                    > crate::agent_profile::MAX_DISPLAY_NAME_CHARS
+            {
+                Outcome::Rejected {
+                    reason: Refusal::InvalidRequest,
+                }
+            } else {
+                match AgentProfileStore::open(&st.db_path)
+                    .and_then(|profiles| profiles.agent_id_for_display_name(&request.display_name))
+                {
+                    Ok(Some(agent_id)) => {
+                        let active = st
+                            .router
+                            .list_agents()
+                            .iter()
+                            .any(|agent| agent.agent_id == agent_id);
+                        Outcome::Found { agent_id, active }
+                    }
+                    Ok(None) => Outcome::NotFound,
+                    Err(_) => Outcome::Rejected {
+                        reason: Refusal::StorageUnavailable,
+                    },
+                }
+            };
+            Some(DaemonToWrapper::DisplayNameResolved { outcome })
+        }
