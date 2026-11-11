@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.8.31
+
+- Capturer les réponses finales locales sans leur imposer le dépôt d’un worker distant.
+- Clore les demandes après sauvegarde du résultat et reprendre une clôture SQL différée sans rejouer la mission.
+- Empêcher les rappels répétés du même niveau ; conserver le palier suivant et l’identifiant complet.
+- Refuser explicitement une finale tardive non capturée, afin de préserver son texte et les tâches déjà closes.
+
 ## 0.8.30
 
 - Choisir le mode de remise de chaque nouvelle boucle : message ordinaire, guidage du tour en cours ou interruption.
