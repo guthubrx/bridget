@@ -55,8 +55,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 /// Variable d'environnement qui fixe le quota de flotte gérée au démarrage.
 pub const FLEET_QUOTA_ENV: &str = "BRIDGET_FLEET_QUOTA";
 
-/// Défaut relevé : la flotte légitime tourne autour de 10–12 équipiers.
-pub const DEFAULT_FLEET_QUOTA: usize = 16;
+/// Plafond global par défaut, relevé à 128 sur décision utilisateur.
+pub const DEFAULT_FLEET_QUOTA: usize = 128;
 
 #[derive(Debug, Clone, Copy)]
 pub struct FleetConfig {

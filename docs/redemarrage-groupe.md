@@ -34,7 +34,9 @@ printf '{}' | target/release/bridget hook claude-statusline   # exit 0, stdout v
 Label daemon : `com.bridget.daemon`  
 Plist : `~/Library/LaunchAgents/com.bridget.daemon.plist`  
 Programme : `…/target/release/bridget daemon` (`KeepAlive` + `RunAtLoad`)  
-Quota flotte : `BRIDGET_FLEET_QUOTA=24` (déjà dans le plist)
+Quota flotte : `BRIDGET_FLEET_QUOTA=128`, décision du 11 novembre 2026.
+Le réglage doit être chargé par le superviseur ; un export dans un terminal
+appelant ne modifie pas un service déjà démarré.
 
 **Geste canonique (déjà documenté chantier + CLI stale-warning) :**
 
@@ -79,7 +81,7 @@ toucher `~/.config/maicie/config.json` / greffe prod pour « tester ».
 3. **Sondes runtime** — colonnes modèle/effort non vides pour un échantillon Claude gérés ; pas de trou post-restart (domaine/mode/transport).
 4. **Carte de reprise** — `bridget reprise` : pertes éventuelles nommées (`vivant.pertes_reprise`), worktrees, build-id = `a3707b803a52`.
 5. **Greffe** — `maicie status --config ~/.config/maicie/config.json` (**après** le GO seulement).
-6. **Quota** — absents non amputés en silence (D20) ; `BRIDGET_FLEET_QUOTA=24`.
+6. **Quota** : absents non amputés en silence (D20) ; `BRIDGET_FLEET_QUOTA=128`.
 
 ## 4. Durée attendue du boot (correctif ramasse-copies)
 
