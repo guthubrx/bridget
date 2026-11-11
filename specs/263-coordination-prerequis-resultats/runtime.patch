@@ -40,14 +40,8 @@
  
 --- a/Makefile
 +++ b/Makefile
-@@ -12,6 +12,7 @@
- 
- release:
- 	python3 scripts/build.py cargo build --release
+@@ -14,0 +15 @@
 +	@if [ "$$(uname -s)" = Linux ]; then python3 scripts/check-linux-abi.py "$(RELEASE_BIN)"; fi
- 
- test:
- 	python3 scripts/build.py cargo test
 --- a/crates/bridget-daemon/src/attach.rs
 +++ b/crates/bridget-daemon/src/attach.rs
 @@ -439,7 +439,11 @@
