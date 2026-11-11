@@ -4887,7 +4887,7 @@ fn remote_start_error_message(error: &str) -> Option<&'static str> {
     if let Some(action) = admission_guidance211::worker_start_action(error) {
         return Some(action);
     }
-    let reason = error.strip_prefix("remote_start_failed:remote_workspace_prepare:")?;
+    let reason = error.strip_prefix(workspace_preparation210::REMOTE_WORKSPACE_PREPARE_PREFIX)?;
     Some(match reason {
         "DiskFull" => "Préparation distante impossible : espace disque insuffisant sur la machine cible. La tâche reste enregistrée.",
         "FilesystemAccessDenied" => "Préparation distante impossible : accès au disque refusé ou système de fichiers en lecture seule. La tâche reste enregistrée.",
@@ -4982,7 +4982,7 @@ fn task_view(task: &Task, phase: Option<&str>, full: bool) -> Value {
         && task.child_instance.is_none()
         && task.mission_issued_at.is_none()
         && task.error.as_deref().is_some_and(|error| {
-            error.starts_with("remote_start_failed:remote_workspace_prepare:")
+            error.starts_with(workspace_preparation210::REMOTE_WORKSPACE_PREPARE_PREFIX)
         });
     let result_reservation_failed = task.mission_issued_at.is_none()
         && task.error.as_deref().and_then(remote_result_slot_error_reason).is_some();

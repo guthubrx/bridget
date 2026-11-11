@@ -361,6 +361,8 @@ fn wait_request(
 const PRESENCE_RETENTION: Duration = Duration::from_secs(300);
 /// Seuil provisoire : un quart de la période du tour (1 s). À ajuster après mesure réelle (programme 260, D7).
 const NATIVE_TICK_SLOW: Duration = Duration::from_millis(250);
+/// Code de refus partagé entre l'émetteur et les comparaisons de texte (programme 260, lot 8).
+const CROSS_PROJECT_REASON_REQUIRED: &str = "cross_project_reason_required";
 
 #[cfg(test)]
 mod native151_sql_trace_tests {
@@ -11881,8 +11883,8 @@ fn prepare_dispatch(
             scope_reason.as_deref(),
         )
         .map_err(|reason| {
-            let category = if reason.starts_with("cross_project_reason_required") {
-                "cross_project_reason_required"
+            let category = if reason.starts_with(CROSS_PROJECT_REASON_REQUIRED) {
+                CROSS_PROJECT_REASON_REQUIRED
             } else {
                 "invalid_cross_project_reason"
             };
@@ -12750,7 +12752,7 @@ fn control_refusal_from_reason(reason: &str) -> ExecutionControlRefusal {
         "terminal_execution" => ExecutionControlRefusal::TerminalExecution,
         "target_unavailable" => ExecutionControlRefusal::TargetUnavailable,
         "message_required" => ExecutionControlRefusal::MessageRequired,
-        "cross_project_reason_required" => ExecutionControlRefusal::CrossProjectReasonRequired,
+        CROSS_PROJECT_REASON_REQUIRED => ExecutionControlRefusal::CrossProjectReasonRequired,
         "invalid_cross_project_reason" => ExecutionControlRefusal::InvalidCrossProjectReason,
         _ => ExecutionControlRefusal::InvalidCommand,
     }
@@ -12936,8 +12938,8 @@ fn handle_execution_control_authorized(
                         message.cross_project_reason.as_deref(),
                     )
                     .map_err(|error| {
-                        if error.starts_with("cross_project_reason_required") {
-                            "cross_project_reason_required"
+                        if error.starts_with(CROSS_PROJECT_REASON_REQUIRED) {
+                            CROSS_PROJECT_REASON_REQUIRED
                         } else {
                             "invalid_cross_project_reason"
                         }
@@ -12954,8 +12956,8 @@ fn handle_execution_control_authorized(
             None,
         )
         .map_err(|error| {
-            if error.starts_with("cross_project_reason_required") {
-                "cross_project_reason_required"
+            if error.starts_with(CROSS_PROJECT_REASON_REQUIRED) {
+                CROSS_PROJECT_REASON_REQUIRED
             } else {
                 "invalid_cross_project_reason"
             }

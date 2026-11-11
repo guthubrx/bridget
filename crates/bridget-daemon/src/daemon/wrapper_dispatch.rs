@@ -270,8 +270,8 @@ pub(super) fn on_cancel_request(id: String, sender: String, reason: Option<Strin
                         None,
                     );
                     if let Err(reason) = project {
-                        let code = if reason.starts_with("cross_project_reason_required") {
-                            "cross_project_reason_required"
+                        let code = if reason.starts_with(CROSS_PROJECT_REASON_REQUIRED) {
+                            CROSS_PROJECT_REASON_REQUIRED
                         } else {
                             "invalid_cross_project_reason"
                         };

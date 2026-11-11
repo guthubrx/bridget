@@ -8,8 +8,11 @@ pub(super) fn error_code(reason: WorkerRefusal, failure: F) -> String {
     format!("remote_workspace_prepare:{reason:?}:stage={}:cause={}",
         value["stage"].as_str().unwrap(), value["cause"].as_str().unwrap())
 }
+/// Préfixes d'erreur partagés avec la lecture de la tâche (programme 260, lot 8).
+pub(super) const REMOTE_WORKSPACE_PREPARE_PREFIX: &str = "remote_start_failed:remote_workspace_prepare:";
+pub(super) const REMOTE_COMMIT_VIEW_PREPARE_PREFIX: &str = "remote_start_failed:remote_commit_view_prepare:";
 fn parse(error: &str) -> Option<F> {
-    let suffix = error.strip_prefix("remote_start_failed:remote_workspace_prepare:")?;
+    let suffix = error.strip_prefix(REMOTE_WORKSPACE_PREPARE_PREFIX)?;
     let mut fields = suffix.split(':');
     let reason = match fields.next()? {
         "WorkspacePrepareFailed" => WorkerRefusal::WorkspacePrepareFailed,
@@ -35,7 +38,7 @@ pub(super) fn view_error_code(reason:WorkerRefusal,failure:bridget_transport::pr
 }
 
 fn parse_view(error:&str)->Option<(WorkerRefusal,bridget_transport::protocol::CommitViewFailure)> {
-    let suffix=error.strip_prefix("remote_start_failed:remote_commit_view_prepare:")?;
+    let suffix=error.strip_prefix(REMOTE_COMMIT_VIEW_PREPARE_PREFIX)?;
     if suffix.len()>320 {return None;}
     let (reason,cause)=suffix.split_once(":cause=")?;
     let reason:WorkerRefusal=serde_json::from_value(json!(reason)).ok()?;
@@ -105,11 +108,11 @@ fn project_view(task:&Task,view:&mut Value,error:&str) {
 
 pub(super) fn project(task: &Task, view: &mut Value) {
     let Some(error) = task.projected_error() else { return; };
-    if error.starts_with("remote_start_failed:remote_commit_view_prepare:") {
+    if error.starts_with(REMOTE_COMMIT_VIEW_PREPARE_PREFIX) {
         project_view(task,view,error);return;
     }
-    if !error.starts_with("remote_start_failed:remote_workspace_prepare:") { return; }
-    let suffix=error.strip_prefix("remote_start_failed:remote_workspace_prepare:").unwrap();
+    if !error.starts_with(REMOTE_WORKSPACE_PREPARE_PREFIX) { return; }
+    let suffix=error.strip_prefix(REMOTE_WORKSPACE_PREPARE_PREFIX).unwrap();
     let recognized = matches!(suffix, "WorkspacePrepareFailed" | "WorkspacePrepareIncomplete"
         | "DiskFull" | "FilesystemAccessDenied") || parse(error).is_some();
     if !recognized { return; }
