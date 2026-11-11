@@ -4125,3 +4125,23 @@ pub(super) fn on_send_idempotent(mut message: bridget_core::BridgetMessage, mess
             let _ = execute_controls(controls);
             Some(response)
         }
+
+pub(super) fn on_journal_fragment(subscription_id: String, seq: u64, offset: u64, final_fragment: bool, bytes: Vec<u8>, conn_id: &str, state: &Arc<Mutex<DaemonState>>) -> Option<DaemonToWrapper> {
+            let view = {
+                let st = state.lock().recover_poison();
+                st.attach_subscriptions
+                    .get(&subscription_id)
+                    .filter(|subscription| subscription.wrapper_conn == conn_id)
+                    .and_then(|_| st.attach_views.get(&subscription_id).cloned())
+            };
+            if let Some(view) = view {
+                let _ = view.enqueue(DaemonToWrapper::JournalFragment {
+                    subscription_id,
+                    seq,
+                    offset,
+                    final_fragment,
+                    bytes,
+                });
+            }
+            None
+        }

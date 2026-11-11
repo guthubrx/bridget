@@ -17253,25 +17253,7 @@ fn handle_wrapper_message_with_peer(
             offset,
             final_fragment,
             bytes,
-        } => {
-            let view = {
-                let st = state.lock().recover_poison();
-                st.attach_subscriptions
-                    .get(&subscription_id)
-                    .filter(|subscription| subscription.wrapper_conn == conn_id)
-                    .and_then(|_| st.attach_views.get(&subscription_id).cloned())
-            };
-            if let Some(view) = view {
-                let _ = view.enqueue(DaemonToWrapper::JournalFragment {
-                    subscription_id,
-                    seq,
-                    offset,
-                    final_fragment,
-                    bytes,
-                });
-            }
-            None
-        }
+        } => wrapper_dispatch::on_journal_fragment(subscription_id, seq, offset, final_fragment, bytes, conn_id, state),
         WrapperToDaemon::LiveJournalFragment {
             seq,
             offset,
