@@ -6976,9 +6976,9 @@ pub fn run(config: DaemonConfig) -> Result<(), Box<dyn std::error::Error>> {
                         };
                         if let Some(target_writer) = target_writer {
                             let body = format!(
-                                "Rappel : {} attend ta reponse au message #{}.\nReponds avec: bridget reply \"ta reponse\"",
+                                "Rappel : {} attend une réponse au message #{}.\nPour une mission native, rendez votre réponse finale normale : le wrapper la remet au parent. Ne renvoyez pas ce résultat avec bridget_send ou bridget reply. Pour une demande ordinaire, utilisez bridget_send avec in_reply_to égal à cet identifiant complet. Ce rappel concerne cette demande ; les autres travaux autorisés suivent leur propre état.",
                                 from,
-                                &msg_id[..msg_id.len().min(8)]
+                                msg_id
                             );
                             match deliver_to_agent(&target_writer, &to, &body) {
                                 Ok(reminder_message_id) => attest_reminder_sent(
@@ -7007,9 +7007,9 @@ pub fn run(config: DaemonConfig) -> Result<(), Box<dyn std::error::Error>> {
                         };
                         if let Some(target_writer) = target_writer {
                             let body = format!(
-                                "URGENT : {} attend toujours ta reponse au message #{}.\nTu DOIS repondre maintenant avec: bridget reply \"ta reponse\"\nSi tu ne peux pas repondre, notifie-le : bridget reply \"impossible de repondre : <raison>\"",
+                                "Rappel prioritaire : {} attend toujours une réponse au message #{}.\nPour une mission native, rendez votre résultat ou blocage précis par la réponse finale normale : le wrapper le remet au parent. Ne renvoyez pas ce résultat avec bridget_send ou bridget reply. Pour une demande ordinaire, répondez avec bridget_send et in_reply_to égal à cet identifiant complet. Ce rappel concerne cette demande ; il ne relance aucune mission et ne suspend pas les autres travaux autorisés.",
                                 from,
-                                &msg_id[..msg_id.len().min(8)]
+                                msg_id
                             );
                             match deliver_to_agent(&target_writer, &to, &body) {
                                 Ok(reminder_message_id) => attest_reminder_sent(
@@ -9389,7 +9389,7 @@ fn collect_reminder_actions(state: &mut DaemonState, now: Instant) -> Vec<Remind
         .pending_replies
         .iter()
         .filter(|pending| {
-            native_delegation::remote_result_suppresses_reminders(state, &pending.msg_id)
+            native_delegation::result_suppresses_reminders(state, &pending.msg_id)
         })
         .map(|pending| pending.msg_id.clone())
         .collect();
@@ -9456,7 +9456,7 @@ fn collect_reminder_actions(state: &mut DaemonState, now: Instant) -> Vec<Remind
             elapsed,
             timeout,
         ) {
-            if pending.deferred_level != Some(level) {
+            if level > pending.escalation_level && pending.deferred_level != Some(level) {
                 pending.deferred_level = Some(level);
                 deferred_events.push((pending.msg_id.clone(), level));
                 actions.push(ReminderAction::Deferred {
@@ -12233,8 +12233,8 @@ enum RetainedSendAuthority<'a> {
     Lineage(&'a native_lineage::ComposeAuthority),
 }
 
-/// Une réponse automatique ordinaire garde les droits de sa connexion primaire.
-/// Ce chemin ne transporte jamais le résultat courant ou passé d'une mission.
+/// Une réponse automatique garde les droits de sa connexion primaire.
+/// Seuls les résultats distants exigent le dépôt attesté du worker.
 fn authorize_wrapper_reply(
     st: &DaemonState,
     conn: &str,
@@ -12264,11 +12264,11 @@ fn authorize_wrapper_reply(
     if request.sender != message.to || request.target != message.from {
         return Err("wrapper_reply_correlation_mismatch".into());
     }
-    if st.delegation_store.for_mission(correlation)?.is_some()
-        || st
-            .delegation_store
-            .past_mission_task(correlation)?
-            .is_some()
+    if st
+        .delegation_store
+        .for_mission(correlation)?
+        .or(st.delegation_store.past_mission_task(correlation)?)
+        .is_some_and(|task| task.remote_placement.is_some())
     {
         return Err("remote_result_requires_worker".into());
     }

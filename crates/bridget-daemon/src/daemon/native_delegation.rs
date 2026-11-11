@@ -12837,6 +12837,7 @@ pub(super) fn capture_reply(
     // Un résultat est durable avant l'ACK au wrapper. Le parent sera réveillé
     // seulement quand tous les mandats descendants ont fini.
     st.delegation_store.save(&task)?;
+    settle_result_tracked_request(st, &task)?;
     Ok(true)
 }
 
@@ -13094,7 +13095,7 @@ pub(super) fn capture_remote_result(
             .get(&task.task_id)
             .map_err(|_| E::StoreUnavailable)?
             .ok_or(E::UnknownExecution)?;
-        if let Err(error) = settle_remote_tracked_request(st, &accepted) {
+        if let Err(error) = settle_result_tracked_request(st, &accepted) {
             warn!(
                 "suivi de mission distante {} non clôturé après résultat accepté, nouvel essai à l'entretien suivant: {}",
                 accepted.mission, error
@@ -15103,7 +15104,7 @@ pub(super) fn tick(state: &Arc<Mutex<DaemonState>>) {
                 return;
             }
         };
-        // `pending()` peut légitimement exclure une tâche distante déjà
+        // `pending()` peut légitimement exclure une tâche native déjà
         // nettoyée. Les suivis encore ouverts sont donc la source de reprise
         // après une panne SQL de `mark_answered`, sans dépendre du rejeu
         // worker qui retourne tôt sur un reçu Accepted.
@@ -15116,12 +15117,12 @@ pub(super) fn tick(state: &Arc<Mutex<DaemonState>>) {
                         }
                         continue;
                     }
-                    if task.remote_placement.is_none() || task.result.is_none() {
+                    if task.result.is_none() {
                         continue;
                     }
-                    if let Err(error) = settle_remote_tracked_request(&mut st, &task) {
+                    if let Err(error) = settle_result_tracked_request(&mut st, &task) {
                         warn!(
-                            "suivi de mission distante {} non clôturé pendant la reprise des demandes ouvertes: {}",
+                            "suivi de mission native {} non clôturé pendant la reprise des demandes ouvertes: {}",
                             task.mission, error
                         );
                     }
@@ -15143,12 +15144,11 @@ pub(super) fn tick(state: &Arc<Mutex<DaemonState>>) {
             }
         }
         for mut task in tasks.iter().cloned() {
-            if task.remote_placement.is_some()
-                && task.result.is_some()
-                && let Err(error) = settle_remote_tracked_request(&mut st, &task)
+            if task.result.is_some()
+                && let Err(error) = settle_result_tracked_request(&mut st, &task)
             {
                 warn!(
-                    "suivi de mission distante {} illisible ou non clôturé, nouvel essai d'entretien: {}",
+                    "suivi de mission native {} illisible ou non clôturé, nouvel essai d'entretien: {}",
                     task.mission, error
                 );
             }
@@ -16703,16 +16703,16 @@ fn settle_cancelled_tracked_request247(st: &mut DaemonState, task: &Task) -> Res
 /// `delivery_acked` reste exclusivement le fait du transport : ne jamais le
 /// fabriquer pour supprimer un rappel. Le filtre de reçu accepté évite qu'une
 /// tâche distante étrangère, refusée ou seulement préparée ne ferme une demande.
-fn settle_remote_tracked_request(st: &mut DaemonState, task: &Task) -> Result<bool, String> {
+fn settle_result_tracked_request(st: &mut DaemonState, task: &Task) -> Result<bool, String> {
     use bridget_transport::protocol::RemoteResultDisposition;
 
-    if task.remote_placement.is_none()
-        || task.result.is_none()
-        || !task.remote_result_receipts.iter().any(|receipt| {
-            receipt.disposition == (RemoteResultDisposition::Accepted {})
-                && receipt.identity.mission_id == task.mission
-                && receipt.identity.round == task.round_no()
-        })
+    if task.result.is_none()
+        || (task.remote_placement.is_some()
+            && !task.remote_result_receipts.iter().any(|receipt| {
+                receipt.disposition == (RemoteResultDisposition::Accepted {})
+                    && receipt.identity.mission_id == task.mission
+                    && receipt.identity.round == task.round_no()
+            }))
     {
         return Ok(false);
     }
@@ -16743,20 +16743,21 @@ fn settle_remote_tracked_request(st: &mut DaemonState, task: &Task) -> Result<bo
     Ok(answered)
 }
 
-/// Garde le collecteur de rappels pendant la fenêtre où le résultat distant
+/// Garde le collecteur de rappels pendant la fenêtre où le résultat natif
 /// est durable mais où `mark_answered` doit encore être rejoué après une panne
 /// SQL. Elle ne ferme rien et ne fabrique aucun ACK de transport.
-pub(super) fn remote_result_suppresses_reminders(st: &DaemonState, mission: &str) -> bool {
+pub(super) fn result_suppresses_reminders(st: &DaemonState, mission: &str) -> bool {
     let Ok(Some(task)) = st.delegation_store.for_mission(mission) else {
         return false;
     };
-    task.remote_placement.is_some()
-        && task.result.is_some()
-        && task.remote_result_receipts.iter().any(|receipt| {
-            receipt.disposition == bridget_transport::protocol::RemoteResultDisposition::Accepted {}
-                && receipt.identity.mission_id == task.mission
-                && receipt.identity.round == task.round_no()
-        })
+    task.result.is_some()
+        && (task.remote_placement.is_none()
+            || task.remote_result_receipts.iter().any(|receipt| {
+                receipt.disposition
+                    == bridget_transport::protocol::RemoteResultDisposition::Accepted {}
+                    && receipt.identity.mission_id == task.mission
+                    && receipt.identity.round == task.round_no()
+            }))
 }
 
 /// Purge les arbres de tâches soldés, sous le verrou du daemon (R2, R6, R10).

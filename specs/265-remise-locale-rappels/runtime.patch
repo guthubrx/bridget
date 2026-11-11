@@ -1,0 +1,408 @@
+--- a/crates/bridget-daemon/src/daemon.rs
++++ b/crates/bridget-daemon/src/daemon.rs
+@@ -6902,9 +6902,9 @@
+                         };
+                         if let Some(target_writer) = target_writer {
+                             let body = format!(
+-                                "Rappel : {} attend ta reponse au message #{}.\nReponds avec: bridget reply \"ta reponse\"",
++                                "Rappel : {} attend une réponse au message #{}.\nPour une mission native, rendez votre réponse finale normale : le wrapper la remet au parent. Ne renvoyez pas ce résultat avec bridget_send ou bridget reply. Pour une demande ordinaire, utilisez bridget_send avec in_reply_to égal à cet identifiant complet. Ce rappel concerne cette demande ; les autres travaux autorisés suivent leur propre état.",
+                                 from,
+-                                &msg_id[..msg_id.len().min(8)]
++                                msg_id
+                             );
+                             match deliver_to_agent(&target_writer, &to, &body) {
+                                 Ok(reminder_message_id) => attest_reminder_sent(
+@@ -6933,9 +6933,9 @@
+                         };
+                         if let Some(target_writer) = target_writer {
+                             let body = format!(
+-                                "URGENT : {} attend toujours ta reponse au message #{}.\nTu DOIS repondre maintenant avec: bridget reply \"ta reponse\"\nSi tu ne peux pas repondre, notifie-le : bridget reply \"impossible de repondre : <raison>\"",
++                                "Rappel prioritaire : {} attend toujours une réponse au message #{}.\nPour une mission native, rendez votre résultat ou blocage précis par la réponse finale normale : le wrapper le remet au parent. Ne renvoyez pas ce résultat avec bridget_send ou bridget reply. Pour une demande ordinaire, répondez avec bridget_send et in_reply_to égal à cet identifiant complet. Ce rappel concerne cette demande ; il ne relance aucune mission et ne suspend pas les autres travaux autorisés.",
+                                 from,
+-                                &msg_id[..msg_id.len().min(8)]
++                                msg_id
+                             );
+                             match deliver_to_agent(&target_writer, &to, &body) {
+                                 Ok(reminder_message_id) => attest_reminder_sent(
+@@ -9280,7 +9280,7 @@
+         .pending_replies
+         .iter()
+         .filter(|pending| {
+-            native_delegation::remote_result_suppresses_reminders(state, &pending.msg_id)
++            native_delegation::result_suppresses_reminders(state, &pending.msg_id)
+         })
+         .map(|pending| pending.msg_id.clone())
+         .collect();
+@@ -9347,7 +9347,7 @@
+             elapsed,
+             timeout,
+         ) {
+-            if pending.deferred_level != Some(level) {
++            if level > pending.escalation_level && pending.deferred_level != Some(level) {
+                 pending.deferred_level = Some(level);
+                 deferred_events.push((pending.msg_id.clone(), level));
+                 actions.push(ReminderAction::Deferred {
+@@ -12063,20 +12063,43 @@
+     Lineage(&'a native_lineage::ComposeAuthority),
+ }
+ 
+-/// Une réponse automatique ordinaire garde les droits de sa connexion primaire.
+-/// Ce chemin ne transporte jamais le résultat courant ou passé d'une mission.
+-fn authorize_wrapper_reply(st:&DaemonState,conn:&str,message:&bridget_core::BridgetMessage,instance:&str)->Result<(),String> {
++/// Une réponse automatique garde les droits de sa connexion primaire.
++/// Seuls les résultats distants exigent le dépôt attesté du worker.
++fn authorize_wrapper_reply(
++    st: &DaemonState,
++    conn: &str,
++    message: &bridget_core::BridgetMessage,
++    instance: &str,
++) -> Result<(), String> {
+     if st.auxiliary_connections.contains(conn)
+-        || st.connection_roles.get(conn)==Some(&ConnectionRole::Attach)
+-        || live_connection_identity(st,conn)!=Some((message.from.clone(),instance.to_owned()))
+-        || message.reply || !matches!(message.intent,None|Some(bridget_core::MessageIntent::QueueOnly)) {
++        || st.connection_roles.get(conn) == Some(&ConnectionRole::Attach)
++        || live_connection_identity(st, conn) != Some((message.from.clone(), instance.to_owned()))
++        || message.reply
++        || !matches!(
++            message.intent,
++            None | Some(bridget_core::MessageIntent::QueueOnly)
++        )
++    {
+         return Err("wrapper_reply_identity_required".into());
+     }
+-    let correlation=message.in_reply_to.as_deref().ok_or("wrapper_reply_correlation_required")?;
+-    let request=st.store.get_request(correlation).map_err(|_|"wrapper_reply_request_unavailable")?
++    let correlation = message
++        .in_reply_to
++        .as_deref()
++        .ok_or("wrapper_reply_correlation_required")?;
++    let request = st
++        .store
++        .get_request(correlation)
++        .map_err(|_| "wrapper_reply_request_unavailable")?
+         .ok_or("wrapper_reply_request_unavailable")?;
+-    if request.sender!=message.to || request.target!=message.from {return Err("wrapper_reply_correlation_mismatch".into());}
+-    if st.delegation_store.for_mission(correlation)?.is_some() || st.delegation_store.past_mission_task(correlation)?.is_some() {
++    if request.sender != message.to || request.target != message.from {
++        return Err("wrapper_reply_correlation_mismatch".into());
++    }
++    if st
++        .delegation_store
++        .for_mission(correlation)?
++        .or(st.delegation_store.past_mission_task(correlation)?)
++        .is_some_and(|task| task.remote_placement.is_some())
++    {
+         return Err("remote_result_requires_worker".into());
+     }
+     Ok(())
+--- a/crates/bridget-daemon/src/daemon/native_delegation.rs
++++ b/crates/bridget-daemon/src/daemon/native_delegation.rs
+@@ -10640,6 +10640,7 @@
+     // Un résultat est durable avant l'ACK au wrapper. Le parent sera réveillé
+     // seulement quand tous les mandats descendants ont fini.
+     st.delegation_store.save(&task)?;
++    settle_result_tracked_request(st, &task)?;
+     Ok(true)
+ }
+ 
+@@ -10897,7 +10898,7 @@
+             .get(&task.task_id)
+             .map_err(|_| E::StoreUnavailable)?
+             .ok_or(E::UnknownExecution)?;
+-        if let Err(error) = settle_remote_tracked_request(st, &accepted) {
++        if let Err(error) = settle_result_tracked_request(st, &accepted) {
+             warn!(
+                 "suivi de mission distante {} non clôturé après résultat accepté, nouvel essai à l'entretien suivant: {}",
+                 accepted.mission, error
+@@ -12826,7 +12827,7 @@
+                 return;
+             }
+         };
+-        // `pending()` peut légitimement exclure une tâche distante déjà
++        // `pending()` peut légitimement exclure une tâche native déjà
+         // nettoyée. Les suivis encore ouverts sont donc la source de reprise
+         // après une panne SQL de `mark_answered`, sans dépendre du rejeu
+         // worker qui retourne tôt sur un reçu Accepted.
+@@ -12839,10 +12840,10 @@
+                         }
+                         continue;
+                     }
+-                    if task.remote_placement.is_none() || task.result.is_none() {continue;}
+-                    if let Err(error) = settle_remote_tracked_request(&mut st, &task) {
++                    if task.result.is_none() {continue;}
++                    if let Err(error) = settle_result_tracked_request(&mut st, &task) {
+                         warn!(
+-                            "suivi de mission distante {} non clôturé pendant la reprise des demandes ouvertes: {}",
++                            "suivi de mission native {} non clôturé pendant la reprise des demandes ouvertes: {}",
+                             task.mission, error
+                         );
+                     }
+@@ -12864,12 +12865,11 @@
+             }
+         }
+         for mut task in tasks.iter().cloned() {
+-            if task.remote_placement.is_some()
+-                && task.result.is_some()
+-                && let Err(error) = settle_remote_tracked_request(&mut st, &task)
++            if task.result.is_some()
++                && let Err(error) = settle_result_tracked_request(&mut st, &task)
+             {
+                 warn!(
+-                    "suivi de mission distante {} illisible ou non clôturé, nouvel essai d'entretien: {}",
++                    "suivi de mission native {} illisible ou non clôturé, nouvel essai d'entretien: {}",
+                     task.mission, error
+                 );
+             }
+@@ -14271,16 +14271,16 @@
+ /// `delivery_acked` reste exclusivement le fait du transport : ne jamais le
+ /// fabriquer pour supprimer un rappel. Le filtre de reçu accepté évite qu'une
+ /// tâche distante étrangère, refusée ou seulement préparée ne ferme une demande.
+-fn settle_remote_tracked_request(st: &mut DaemonState, task: &Task) -> Result<bool, String> {
++fn settle_result_tracked_request(st: &mut DaemonState, task: &Task) -> Result<bool, String> {
+     use bridget_transport::protocol::RemoteResultDisposition;
+ 
+-    if task.remote_placement.is_none()
+-        || task.result.is_none()
+-        || !task.remote_result_receipts.iter().any(|receipt| {
+-            receipt.disposition == (RemoteResultDisposition::Accepted {})
+-                && receipt.identity.mission_id == task.mission
+-                && receipt.identity.round == task.round_no()
+-        })
++    if task.result.is_none()
++        || (task.remote_placement.is_some()
++            && !task.remote_result_receipts.iter().any(|receipt| {
++                receipt.disposition == (RemoteResultDisposition::Accepted {})
++                    && receipt.identity.mission_id == task.mission
++                    && receipt.identity.round == task.round_no()
++            }))
+     {
+         return Ok(false);
+     }
+@@ -14311,20 +14311,21 @@
+     Ok(answered)
+ }
+ 
+-/// Garde le collecteur de rappels pendant la fenêtre où le résultat distant
++/// Garde le collecteur de rappels pendant la fenêtre où le résultat natif
+ /// est durable mais où `mark_answered` doit encore être rejoué après une panne
+ /// SQL. Elle ne ferme rien et ne fabrique aucun ACK de transport.
+-pub(super) fn remote_result_suppresses_reminders(st: &DaemonState, mission: &str) -> bool {
++pub(super) fn result_suppresses_reminders(st: &DaemonState, mission: &str) -> bool {
+     let Ok(Some(task)) = st.delegation_store.for_mission(mission) else {
+         return false;
+     };
+-    task.remote_placement.is_some()
+-        && task.result.is_some()
+-        && task.remote_result_receipts.iter().any(|receipt| {
+-            receipt.disposition == bridget_transport::protocol::RemoteResultDisposition::Accepted {}
+-                && receipt.identity.mission_id == task.mission
+-                && receipt.identity.round == task.round_no()
+-        })
++    task.result.is_some()
++        && (task.remote_placement.is_none()
++            || task.remote_result_receipts.iter().any(|receipt| {
++                receipt.disposition
++                    == bridget_transport::protocol::RemoteResultDisposition::Accepted {}
++                    && receipt.identity.mission_id == task.mission
++                    && receipt.identity.round == task.round_no()
++            }))
+ }
+ 
+ /// Purge les arbres de tâches soldés, sous le verrou du daemon (R2, R6, R10).
+--- a/crates/bridget-daemon/src/daemon/native_delegation_tests.rs
++++ b/crates/bridget-daemon/src/daemon/native_delegation_tests.rs
+@@ -1,4 +1,6 @@
+     use super::*;
++    #[path = "local_result265_tests.rs"]
++    mod local_result265_tests;
+     use std::os::unix::fs::PermissionsExt;
+     use std::path::Path;
+     const OWNER: &str = "89000000-0000-4000-8000-000000000102";
+@@ -14524,7 +14526,7 @@
+             disposition: RemoteResultDisposition::Accepted {},
+             conflict_seen: false,
+         });
+-        assert!(!settle_remote_tracked_request(&mut st, &task).unwrap());
++        assert!(!settle_result_tracked_request(&mut st, &task).unwrap());
+         assert_eq!(
+             st.store.get_request(&task.mission).unwrap().unwrap().state,
+             "open",
+--- /dev/null
++++ b/crates/bridget-daemon/src/daemon/local_result265_tests.rs
+@@ -0,0 +1,175 @@
++use super::*;
++
++#[test]
++fn spec265_remote_and_foreign_replies_still_require_their_authority() {
++    let (state, config, mut task, _parent, _child) = native160_mission(false);
++    let st = state.lock().unwrap();
++    let instance = task.child_instance.as_deref().unwrap();
++    let mut reply = bridget_core::BridgetMessage::new(&task.child, &task.owner, "rapport");
++    reply.in_reply_to = Some(task.mission.clone());
++    assert_eq!(
++        super::super::authorize_wrapper_reply(&st, "conn-1", &reply, instance),
++        Err("wrapper_reply_identity_required".into())
++    );
++    task.remote_placement = Some(bridget_transport::protocol::RemotePlacement {
++        machine_id: "worker-host".into(),
++        worker_id: "worker".into(),
++        provisioning_revision: 1,
++        project_id: "project".into(),
++        mapping_revision: 1,
++        origin_host: st.host.clone(),
++        origin_cwd: task.cwd.clone(),
++        source_root_identity: "git:test265".into(),
++        relative_cwd: ".".into(),
++        execution_cwd: task.cwd.clone(),
++        base_commit: None,
++        definition_digest: "a".repeat(64),
++        permission_digest: "b".repeat(64),
++    });
++    st.delegation_store.save(&task).unwrap();
++    assert_eq!(
++        super::super::authorize_wrapper_reply(&st, "child-conn", &reply, instance),
++        Err("remote_result_requires_worker".into())
++    );
++    assert!(
++        st.delegation_store
++            .get(&task.task_id)
++            .unwrap()
++            .unwrap()
++            .result
++            .is_none()
++    );
++    drop(st);
++    drop(state);
++    cleanup(&config);
++}
++
++#[test]
++fn spec265_local_result_settles_tracking_after_a_sql_failure_without_new_work() {
++    let (state, config, task, _parent, _child) = native160_mission(false);
++    let mut st = state.lock().unwrap();
++    st.store.connection().execute_batch("CREATE TRIGGER local265_answer_fail BEFORE UPDATE OF state ON tracked_requests WHEN NEW.state='answered' BEGIN SELECT RAISE(ABORT,'test265'); END;").unwrap();
++    let mut reply = bridget_core::BridgetMessage::new(&task.child, &task.owner, "rapport durable");
++    reply.in_reply_to = Some(task.mission.clone());
++    assert!(capture_reply(&mut st, "child-conn", &reply).is_err());
++    assert!(result_suppresses_reminders(&st, &task.mission));
++    assert_eq!(
++        st.delegation_store
++            .get(&task.task_id)
++            .unwrap()
++            .unwrap()
++            .result
++            .as_deref(),
++        Some("rapport durable")
++    );
++    assert_eq!(
++        st.store.get_request(&task.mission).unwrap().unwrap().state,
++        "open"
++    );
++    st.store
++        .connection()
++        .execute_batch("DROP TRIGGER local265_answer_fail;")
++        .unwrap();
++    drop(st);
++    tick(&state);
++    let st = state.lock().unwrap();
++    assert_eq!(
++        st.store.get_request(&task.mission).unwrap().unwrap().state,
++        "answered"
++    );
++    assert!(!st.pending_replies.iter().any(|p| p.msg_id == task.mission));
++    assert_eq!(
++        st.delegation_store
++            .get(&task.task_id)
++            .unwrap()
++            .unwrap()
++            .mission,
++        task.mission
++    );
++    drop(st);
++    drop(state);
++    cleanup(&config);
++}
++
++#[test]
++fn spec265_local_retained_final_is_captured_once_before_ack() {
++    let (state, config, task, _parent, _child) = native160_mission(false);
++    let root = config.db_path.parent().unwrap().join("outbox265");
++    let outbox =
++        crate::reply_outbox244::ReplyOutbox::open(&root, task.child_instance.as_deref().unwrap())
++            .unwrap();
++    let mut original = bridget_core::BridgetMessage::new(&task.owner, &task.child, "mission");
++    original.id = task.mission.clone();
++    original.reply = true;
++    let mut reply = bridget_core::BridgetMessage::new(&task.child, &task.owner, "rapport complet");
++    reply.in_reply_to = Some(task.mission.clone());
++    let reply = outbox.retain(&original, reply, unix_timestamp()).unwrap();
++    for _ in 0..2 {
++        let response =
++            handle_wrapper_message("child-conn", WrapperToDaemon::Send(reply.clone()), &state);
++        assert!(
++            matches!(response, Some(DaemonToWrapper::Ack { .. })),
++            "{response:?}"
++        );
++        let st = state.lock().unwrap();
++        let saved = st.delegation_store.get(&task.task_id).unwrap().unwrap();
++        assert_eq!(saved.result.as_deref(), Some("rapport complet"));
++        assert_eq!(saved.state, "waiting_for_children");
++        assert_eq!(
++            st.store.get_request(&task.mission).unwrap().unwrap().state,
++            "answered"
++        );
++        assert!(!st.pending_replies.iter().any(|p| p.msg_id == task.mission));
++    }
++    drop(state);
++    cleanup(&config);
++}
++
++#[test]
++fn spec265_busy_idle_cycles_do_not_repeat_an_already_sent_reminder() {
++    let (state, config, task, _parent, _child) = native160_mission(false);
++    let mut st = state.lock().unwrap();
++    let now = Instant::now();
++    let pending = st
++        .pending_replies
++        .iter_mut()
++        .find(|p| p.msg_id == task.mission)
++        .unwrap();
++    pending.created_at = now - Duration::from_secs(50);
++    pending.escalation_level = 1;
++    let instance = task.child_instance.as_ref().unwrap();
++    for _ in 0..3 {
++        st.presences.get_mut(instance).unwrap().state = "busy".into();
++        let busy = super::super::collect_reminder_actions(&mut st, now);
++        assert!(!busy.iter().any(|a| matches!(
++            a,
++            super::super::ReminderAction::Gentle { .. } | super::super::ReminderAction::Firm { .. }
++        )));
++        st.presences.get_mut(instance).unwrap().state = "idle".into();
++        let idle = super::super::collect_reminder_actions(&mut st, now);
++        assert!(
++            !idle.iter().any(|a| matches!(
++                a,
++                super::super::ReminderAction::Gentle { .. }
++                    | super::super::ReminderAction::Firm { .. }
++            )),
++            "un niveau déjà envoyé ne doit pas être réarmé"
++        );
++    }
++    // Le palier suivant reste autorisé, une fois, après le tour actif.
++    let later = now + Duration::from_secs(40);
++    st.presences.get_mut(instance).unwrap().state = "busy".into();
++    super::super::collect_reminder_actions(&mut st, later);
++    st.presences.get_mut(instance).unwrap().state = "idle".into();
++    let actions = super::super::collect_reminder_actions(&mut st, later);
++    assert_eq!(
++        actions
++            .iter()
++            .filter(|a| matches!(a, super::super::ReminderAction::Firm { .. }))
++            .count(),
++        1
++    );
++    drop(st);
++    drop(state);
++    cleanup(&config);
++}

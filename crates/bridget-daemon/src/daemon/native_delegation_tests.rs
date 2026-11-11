@@ -1,4 +1,6 @@
 use super::*;
+#[path = "local_result265_tests.rs"]
+mod local_result265_tests;
 use bridget_transport::poison::RecoverPoison;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
@@ -17254,7 +17256,7 @@ fn remote170_recu_accepte_etranger_ne_cloture_pas_le_guichet() {
         disposition: RemoteResultDisposition::Accepted {},
         conflict_seen: false,
     });
-    assert!(!settle_remote_tracked_request(&mut st, &task).unwrap());
+    assert!(!settle_result_tracked_request(&mut st, &task).unwrap());
     assert_eq!(
         st.store.get_request(&task.mission).unwrap().unwrap().state,
         "open",
