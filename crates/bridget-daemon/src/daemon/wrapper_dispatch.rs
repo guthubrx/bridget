@@ -1393,3 +1393,40 @@ pub(super) fn on_delivery_indeterminate(delivery_id: String, delivery_generation
                 }),
             }
         }
+
+pub(super) fn on_list_requests(sender: String, limit: u16, state: &Arc<Mutex<DaemonState>>) -> Option<DaemonToWrapper> {
+            let st = state.lock().unwrap_or_else(|e| e.into_inner());
+            match st
+                .store
+                .requests_for_participant(&sender, usize::from(limit))
+            {
+                Ok(requests) => match requests
+                    .into_iter()
+                    .map(|request| -> Result<_, crate::store::StoreError> {
+                        let deferred = st.store.latest_deferred_reminder(&request.id)?;
+                        Ok(bridget_transport::protocol::RequestInfo {
+                            id: request.id,
+                            sender: request.sender,
+                            target: request.target,
+                            state: request.state,
+                            created_at: request.created_at,
+                            deadline_at: request.deadline_at,
+                            cancel_reason: request.cancel_reason,
+                            deferred_reminder_level: deferred.map(|event| event.0),
+                            deferred_reminder_at: deferred.map(|event| event.1),
+                        })
+                    })
+                    .collect::<Result<Vec<_>, _>>()
+                {
+                    Ok(requests) => Some(DaemonToWrapper::RequestList { requests }),
+                    Err(error) => Some(DaemonToWrapper::Nack {
+                        id: "requests".to_string(),
+                        reason: error.to_string(),
+                    }),
+                },
+                Err(error) => Some(DaemonToWrapper::Nack {
+                    id: "requests".to_string(),
+                    reason: error.to_string(),
+                }),
+            }
+        }

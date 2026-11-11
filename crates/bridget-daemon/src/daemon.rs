@@ -19342,42 +19342,7 @@ fn handle_wrapper_message_with_peer(
 
         WrapperToDaemon::CancelRequest { id, sender, reason } => wrapper_dispatch::on_cancel_request(id, sender, reason, conn_id, state),
 
-        WrapperToDaemon::ListRequests { sender, limit } => {
-            let st = state.lock().unwrap_or_else(|e| e.into_inner());
-            match st
-                .store
-                .requests_for_participant(&sender, usize::from(limit))
-            {
-                Ok(requests) => match requests
-                    .into_iter()
-                    .map(|request| -> Result<_, crate::store::StoreError> {
-                        let deferred = st.store.latest_deferred_reminder(&request.id)?;
-                        Ok(bridget_transport::protocol::RequestInfo {
-                            id: request.id,
-                            sender: request.sender,
-                            target: request.target,
-                            state: request.state,
-                            created_at: request.created_at,
-                            deadline_at: request.deadline_at,
-                            cancel_reason: request.cancel_reason,
-                            deferred_reminder_level: deferred.map(|event| event.0),
-                            deferred_reminder_at: deferred.map(|event| event.1),
-                        })
-                    })
-                    .collect::<Result<Vec<_>, _>>()
-                {
-                    Ok(requests) => Some(DaemonToWrapper::RequestList { requests }),
-                    Err(error) => Some(DaemonToWrapper::Nack {
-                        id: "requests".to_string(),
-                        reason: error.to_string(),
-                    }),
-                },
-                Err(error) => Some(DaemonToWrapper::Nack {
-                    id: "requests".to_string(),
-                    reason: error.to_string(),
-                }),
-            }
-        }
+        WrapperToDaemon::ListRequests { sender, limit } => wrapper_dispatch::on_list_requests(sender, limit, state),
 
         WrapperToDaemon::UserInput { request } => Some(user_input::handle(conn_id, &request, state, None)),
         WrapperToDaemon::ChildRequest { request } => {
