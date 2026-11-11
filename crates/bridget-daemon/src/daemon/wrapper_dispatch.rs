@@ -1558,3 +1558,432 @@ pub(super) fn on_live_journal_fragment(seq: u64, offset: u64, final_fragment: bo
             }
             None
         }
+
+pub(super) fn on_send(mut bridge_msg: bridget_core::BridgetMessage, conn_id: &str, state: &Arc<Mutex<DaemonState>>) -> Option<DaemonToWrapper> {
+            if bridge_msg.intent == Some(bridget_core::MessageIntent::StoreOnly) {
+                return Some(DaemonToWrapper::Nack { id: bridge_msg.id.clone(), reason:
+                    "information_requires_idempotent_send : utilisez send --intent information ou bridget_send intent=information avec négociation ; aucun envoi normal de remplacement.".into() });
+            }
+            // Session 102 : aucune notice de fil ne vient d'un client.
+            bridge_msg.thread_notice = None;
+            bridge_msg.thread_display_title = None;
+            eprintln!(
+                "[BRIDGET] Send de {}: to={}, body={}",
+                conn_id,
+                bridge_msg.to,
+                bridge_msg.body.chars().take(40).collect::<String>()
+            );
+            let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+            let is_attach = st.connection_roles.get(conn_id) == Some(&ConnectionRole::Attach);
+            purge_expired_attach_sends(&mut st);
+            if is_attach && st.pending_attach_sends.len() >= MAX_PENDING_ATTACH_SENDS {
+                return Some(DaemonToWrapper::Nack {
+                    id: bridge_msg.id.clone(),
+                    reason: "trop d envois humains en attente".to_string(),
+                });
+            }
+            let sender_name = st.conn_names.get(conn_id).cloned().unwrap_or_default();
+            let ephemeral_cli = is_ephemeral_cli_route(conn_id, st.router.get_agent(&sender_name));
+            if is_attach {
+                bridge_msg.from = "humain".to_string();
+                bridge_msg.in_reply_to = None;
+            } else {
+                // Un terminal extérieur a sa propre route temporaire, jamais
+                // celle d'un agent dont il connaît simplement l'UUID.
+                if ephemeral_cli
+                    && matches!(bridge_msg.from.as_str(), "" | "human" | "humain")
+                    && resolve_sender_attribution(
+                        true,
+                        bridge_msg.from_declared,
+                        st.router.get_agent(&bridge_msg.from).is_some(),
+                    ) == SenderAttribution::UseConnectionName
+                {
+                    bridge_msg.from = sender_name;
+                }
+                if !sender_is_authorized(&st, conn_id, &bridge_msg.from) {
+                    return Some(DaemonToWrapper::Nack {
+                        id: bridge_msg.id.clone(),
+                        reason: "identité expéditeur non attestée : --from ne permet pas d'emprunter une identité".into(),
+                    });
+                }
+            }
+
+            normalize_guidance_origin(&st, conn_id, &mut bridge_msg, false);
+            if bridge_msg.reply
+                && bridge_msg.intent == Some(bridget_core::MessageIntent::SteerCurrent)
+            {
+                return Some(DaemonToWrapper::Nack {
+                    id: bridge_msg.id.clone(),
+                    reason: "invalid_intent".into(),
+                });
+            }
+            if bridge_msg.id.starts_with("reply244-") && bridge_msg.in_reply_to.is_some()
+                && let Some((_,instance))=live_connection_identity(&st,conn_id)
+            {
+                return Some(retain_wrapper_reply(conn_id,bridge_msg,&instance,&mut st));
+            }
+            let logical_sender = bridge_msg.from.clone();
+            let captured = match native_delegation::capture_reply(&mut st, conn_id, &bridge_msg) {
+                Ok(captured) => captured,
+                Err(error) => {
+                    error!("capture native non persistée: {error}");
+                    return Some(DaemonToWrapper::Nack {
+                        id: bridge_msg.id.clone(),
+                        reason: if error == "remote_result_requires_worker" || error.starts_with("retained_reply_") {
+                            error
+                        } else {
+                            "native_result_not_persisted".into()
+                        },
+                    });
+                }
+            };
+            if captured {
+                return Some(DaemonToWrapper::Ack {
+                    id: bridge_msg.id.clone(),
+                    project_warnings: Vec::new(),
+                });
+            }
+            let content_key = bridge_msg.content_key();
+            let message_guard_id = bridge_msg.id.clone();
+            let guidance_action = match bridge_msg.intent {
+                Some(bridget_core::MessageIntent::SteerCurrent) => {
+                    Some(crate::guidance::GuidanceAction::Steer)
+                }
+                Some(bridget_core::MessageIntent::InterruptAndStart) => {
+                    Some(crate::guidance::GuidanceAction::Interrupt)
+                }
+                _ => None,
+            };
+            let prepared = match prepare_dispatch(
+                &mut st,
+                &mut bridge_msg,
+                conn_id,
+                logical_sender,
+                content_key,
+                message_guard_id,
+                false,
+            ) {
+                Ok(prepared) => prepared,
+                Err((category, reason)) => {
+                    record_guidance_refusal(
+                        &st,
+                        Some(conn_id),
+                        &bridge_msg.to,
+                        &bridge_msg.id,
+                        guidance_action,
+                        crate::guidance::GuidancePath::Send,
+                        category,
+                    );
+                    return Some(DaemonToWrapper::Nack {
+                        id: bridge_msg.id.clone(),
+                        reason,
+                    });
+                }
+            };
+            let guidance_admission = match guidance_action {
+                Some(action) => {
+                    match check_guidance(
+                        &st,
+                        Some(conn_id),
+                        &bridge_msg.to,
+                        action,
+                        crate::guidance::GuidancePath::Send,
+                        None,
+                        bridge_msg.delegated_origin.is_some(),
+                        &bridge_msg.id,
+                    ) {
+                        Ok(facts) => Some(facts),
+                        Err((code, reason)) => {
+                            return Some(DaemonToWrapper::Nack {
+                                id: bridge_msg.id.clone(),
+                                reason: format!("{code}:{reason}"),
+                            });
+                        }
+                    }
+                }
+                _ => None,
+            };
+            let is_ephemeral_cli_sender =
+                ephemeral_cli && prepared.reply_sender_conn.as_deref() == Some(conn_id);
+            if bridge_msg.reply && is_ephemeral_cli_sender {
+                if let Some(facts) = &guidance_admission
+                    && let Err(error) = record_guidance_outcome(
+                        &st,
+                        facts,
+                        &bridge_msg.to,
+                        &bridge_msg.id,
+                        "refused:reply_sender_unavailable",
+                    )
+                {
+                    warn!("refus de guidage non journalisé : {error}");
+                }
+                return Some(DaemonToWrapper::Nack {
+                    id: bridge_msg.id.clone(),
+                    reason: "--reply requiert un agent Bridget connecté ; lance la commande depuis un wrapper actif ou envoie sans --reply".to_string(),
+                });
+            }
+            let target_conn = prepared.target_conn;
+            let conv_key = format!("{}|{}", bridge_msg.from, bridge_msg.to);
+            if bridge_msg.intent == Some(bridget_core::MessageIntent::ControlOnly) {
+                return Some(DaemonToWrapper::Nack {
+                    id: bridge_msg.id.clone(),
+                    reason: "ControlOnly requiert une commande ControlExecution versionnée"
+                        .to_string(),
+                });
+            }
+
+            match st.store.record_message(&bridge_msg, &conv_key) {
+                Ok(()) => {
+                    // Même frontière que la voie idempotente : le message est
+                    // durable avant de rafraîchir la capacité de l'expéditeur.
+                    touch_message_sender_activity(&mut st, &bridge_msg.from);
+                }
+                Err(error) => {
+                    if let Some(facts) = &guidance_admission
+                        && let Err(error) = record_guidance_outcome(
+                            &st,
+                            facts,
+                            &bridge_msg.to,
+                            &bridge_msg.id,
+                            "refused:persistence_failed",
+                        )
+                    {
+                        warn!("refus de guidage non journalisé : {error}");
+                    }
+                    return Some(DaemonToWrapper::Nack {
+                        id: bridge_msg.id.clone(),
+                        reason: format!("message non persisté: {error}"),
+                    });
+                }
+            }
+            st.circuit_breaker
+                .record(&prepared.logical_sender, &bridge_msg.to);
+            st.deduplicator
+                .mark_sent(&prepared.content_key, &bridge_msg.to);
+            st.envelope_guard
+                .mark_relayed(&prepared.message_guard_id, &bridge_msg.to);
+
+            let execution_delivery = match bridge_msg.intent {
+                Some(bridget_core::MessageIntent::QueueOnly) => {
+                    match st.execution_store.admit_message_submission(
+                        &bridge_msg,
+                        crate::execution_store::ExecutionStore::queue_priority_for(&bridge_msg, 0),
+                        unix_now_secs(),
+                    ) {
+                        Ok(admitted) => {
+                            if admitted {
+                                get_metrics().record_execution_admitted();
+                            }
+                            return Some(DaemonToWrapper::Ack {
+                                project_warnings: Vec::new(),
+                                id: bridge_msg.id.clone(),
+                            });
+                        }
+                        Err(error) => {
+                            return Some(DaemonToWrapper::Nack {
+                                id: bridge_msg.id.clone(),
+                                reason: format!("admission non persistée: {error}"),
+                            });
+                        }
+                    }
+                }
+                Some(
+                    bridget_core::MessageIntent::TriggerTurn
+                    | bridget_core::MessageIntent::InterruptAndStart,
+                ) => {
+                    let execution_id = format!("execution-{}", bridge_msg.id);
+                    match st.execution_store.admit_starting_message(
+                        &bridge_msg,
+                        &execution_id,
+                        unix_now_secs(),
+                    ) {
+                        Ok(true) => {
+                            get_metrics().record_execution_admitted();
+                            Some((execution_id, 1_u64, 0_u64))
+                        }
+                        Ok(false) => {
+                            return Some(DaemonToWrapper::Ack {
+                                project_warnings: Vec::new(),
+                                id: bridge_msg.id.clone(),
+                            });
+                        }
+                        Err(error) => {
+                            if let Some(facts) = &guidance_admission
+                                && let Err(error) = record_guidance_outcome(
+                                    &st,
+                                    facts,
+                                    &bridge_msg.to,
+                                    &bridge_msg.id,
+                                    "refused:persistence_failed",
+                                )
+                            {
+                                warn!("refus de guidage non journalisé : {error}");
+                            }
+                            return Some(DaemonToWrapper::Nack {
+                                id: bridge_msg.id.clone(),
+                                reason: format!("démarrage non persisté: {error}"),
+                            });
+                        }
+                    }
+                }
+                _ => None,
+            };
+
+            // Le daemon est l'autorité de l'échéance de TOUR (pas seulement
+            // reply=yes) : relire la valeur courante et la pousser en absolu.
+            // Sans cela, worker.notify_timeout figé au spawn ignore agents.json.
+            let mut delivered_message = bridge_msg.clone();
+            // Ne jamais remplacer l'Agent ID dans le message routé : le
+            // wrapper a encore besoin de `from` pour reply. Le display name
+            // est une projection d'injection sans sémantique de routage.
+            delivered_message.from_display_name = provider_display_name(&st, &bridge_msg.from);
+            delivered_message.thread_display_title =
+                provider_thread_display_title(&st, &delivered_message);
+            let agent_type = st
+                .conn_instances
+                .get(&target_conn)
+                .and_then(|instance_id| st.presences.get(instance_id))
+                .map(|presence| presence.agent_type.as_str())
+                .unwrap_or("");
+            stamp_turn_deadline_for_delivery(&mut delivered_message, &st.registry, agent_type);
+            // Push vers le destinataire
+            let mid_turn_ok = Some(guidance_mid_turn_ok(
+                &st,
+                &bridge_msg,
+                &bridge_msg.to,
+                None,
+                Some(conn_id),
+            ));
+            let execution_attempt = execution_delivery.clone();
+            let dtw = match execution_delivery {
+                Some((execution_id, generation, revision)) => DaemonToWrapper::DeliverExecution {
+                    message: delivered_message,
+                    execution_id,
+                    generation,
+                    revision,
+                },
+                None => DaemonToWrapper::Deliver {
+                    message: delivered_message,
+                    mid_turn_ok,
+                },
+            };
+            // Le destinataire peut répondre dès le premier octet remis : son
+            // suivi et la route attach doivent donc exister AVANT le push.
+            if let Err(reason) = track_reply_cycle(
+                &mut st,
+                &bridge_msg,
+                prepared.reply_sender_conn.clone(),
+                target_conn.clone(),
+            ) {
+                if let Some(facts) = &guidance_admission
+                    && let Err(error) = record_guidance_outcome(
+                        &st,
+                        facts,
+                        &bridge_msg.to,
+                        &bridge_msg.id,
+                        "refused:persistence_failed",
+                    )
+                {
+                    warn!("refus de guidage non journalisé : {error}");
+                }
+                return Some(DaemonToWrapper::Nack {
+                    id: bridge_msg.id.clone(),
+                    reason,
+                });
+            }
+            if is_attach {
+                st.pending_attach_sends.insert(
+                    bridge_msg.id.clone(),
+                    PendingAttachSend {
+                        conn_id: conn_id.to_string(),
+                        expires_at: Instant::now() + PENDING_ATTACH_SEND_TTL,
+                    },
+                );
+            }
+            if let Some(facts) = &guidance_admission
+                && let Err(error) =
+                    record_guidance_outcome(&st, facts, &bridge_msg.to, &bridge_msg.id, "admitted")
+            {
+                if let Some(facts) = &guidance_admission
+                    && let Err(error) = record_guidance_outcome(
+                        &st,
+                        facts,
+                        &bridge_msg.to,
+                        &bridge_msg.id,
+                        "refused:persistence_failed",
+                    )
+                {
+                    warn!("refus de guidage non journalisé : {error}");
+                }
+                return Some(DaemonToWrapper::Nack {
+                    id: bridge_msg.id.clone(),
+                    reason: format!("guidage non persisté: {error}"),
+                });
+            }
+            let target_writer = st.connections.get(&target_conn).cloned();
+            drop(st);
+            let delivery = target_writer
+                .ok_or_else(|| {
+                    std::io::Error::new(std::io::ErrorKind::NotConnected, "cible disparue")
+                })
+                .and_then(|writer| {
+                    push_control_message_until(
+                        &writer,
+                        &dtw,
+                        Instant::now() + CANCEL_NOTIFICATION_BUDGET,
+                    )
+                });
+            let delivery_succeeded = delivery.is_ok();
+            // Aucun writer n'est détenu à la reprise du verrou global. Le
+            // suivi peut déjà être terminal ; ne jamais le recréer ici.
+            let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+            if !delivery_succeeded
+                && let Some((execution_id, generation, revision)) = execution_attempt
+            {
+                get_metrics().record_execution_delivery_failure();
+                if let Err(error) = st.execution_store.transition_if_current(
+                    &execution_id,
+                    "starting",
+                    revision,
+                    generation,
+                    "unreachable",
+                    "provider_unavailable",
+                    unix_now_secs(),
+                ) {
+                    error!("transition exécution {execution_id} après remise échouée: {error}");
+                }
+            }
+
+            if delivery_succeeded
+                && prepared.valid_tracked_reply
+                && let Some(request_id) = bridge_msg.in_reply_to.as_deref()
+                && st
+                    .store
+                    .mark_answered(
+                        request_id,
+                        &bridge_msg.from,
+                        &bridge_msg.to,
+                        Some(&crate::store::request_reply_summary(&bridge_msg)),
+                    )
+                    .unwrap_or(false)
+            {
+                st.pending_replies
+                    .retain(|pending| pending.msg_id != request_id);
+                info!("demande {} répondue après livraison", request_id);
+                st.delegation_store.wait_epoch().bump();
+            }
+
+            if let Err(error) = delivery {
+                st.pending_attach_sends.remove(&bridge_msg.id);
+                return Some(DaemonToWrapper::Nack {
+                    id: bridge_msg.id.clone(),
+                    reason: format!(
+                        "remise indéterminée: écriture vers le destinataire échouée ({error}); vérifier le suivi avant tout rejeu"
+                    ),
+                });
+            }
+            Some(DaemonToWrapper::Ack {
+                id: bridge_msg.id.clone(),
+                project_warnings: prepared.project_warnings,
+            })
+        }
