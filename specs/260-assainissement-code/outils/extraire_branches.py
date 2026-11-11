@@ -178,7 +178,7 @@ def proto_variants():
                 part = strip_attr(part.strip())
                 if ":" in part:
                     n, ty = part.split(":", 1)
-                    n = n.replace("pub", "").strip()
+                    n = re.sub(r"^pub(\([a-z]+\))?\s+", "", n.strip())
                     d[n] = ty.strip()
                     order.append(n)
             res[name] = ("struct", d)
@@ -256,6 +256,46 @@ def bindings(pattern, kind, defs, variant):
     return out
 
 
+_TYPE_MAP = None
+
+
+def type_map():
+    """identifiant -> chemin complet, d'après les `use` et les définitions de protocol.rs."""
+    global _TYPE_MAP
+    if _TYPE_MAP is not None:
+        return _TYPE_MAP
+    t = PROTO.read_text(encoding="utf-8")
+    mp = {}
+    for m in re.finditer(r"^(?:pub(?:\([a-z]+\))?\s+)?use\s+([^;]+);", t, re.M):
+        spec = m.group(1)
+        def walk(prefix, body):
+            body = body.strip()
+            if "{" in body:
+                head, rest = body.split("{", 1)
+                inner = rest.rsplit("}", 1)[0]
+                for part in split_top(inner):
+                    walk(prefix + head.strip(), part)
+            else:
+                names = body.split(" as ")
+                last = names[-1].strip().split("::")[-1]
+                path = (prefix + names[0].strip())
+                if last not in ("self", "*") and last:
+                    mp[last] = path
+        walk("", spec)
+    for m in re.finditer(r"^(?:pub(?:\([a-z]+\))?\s+)?(?:struct|enum|type|const)\s+(\w+)", t, re.M):
+        mp.setdefault(m.group(1), "bridget_transport::protocol::" + m.group(1))
+    _TYPE_MAP = mp
+    return mp
+
+
+def qualify(ty):
+    mp = type_map()
+    def rep(m):
+        ident = m.group(1)
+        return mp.get(ident, ident)
+    return re.sub(r"(?<![\w:])([A-Z][A-Za-z0-9_]*)", rep, ty)
+
+
 def run(variants):
     text = DAEMON.read_text(encoding="utf-8")
     a, b = match_bounds(text)
@@ -282,7 +322,7 @@ def run(variants):
             if re.search(r"(?<![\w.])%s\b" % w, fn_body):
                 raise Refus(f"le corps de {v} utilise {w}")
         ctx = [c for c in CTX if re.search(r"(?<![\w.])%s\b" % c, fn_body)]
-        params = ", ".join([("mut " if m else "") + n + ": " + ty for m, n, ty in bind] + [f"{c}: {CTX[c]}" for c in ctx])
+        params = ", ".join([("mut " if m else "") + n + ": " + qualify(ty) for m, n, ty in bind] + [f"{c}: {CTX[c]}" for c in ctx])
         args = ", ".join([n for m, n, ty in bind] + ctx)
         name = "on_" + snake(v)
         fn = f"pub(super) fn {name}({params}) -> Option<DaemonToWrapper> {fn_body}\n"

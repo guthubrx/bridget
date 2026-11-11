@@ -28,9 +28,9 @@ use bridget_transport::protocol::{
     ARTIFACT_READ_VERSION, ArtifactReadOutcome, ArtifactReadRefusal, ArtifactReadRequest,
 };
 use bridget_transport::protocol::{
-    AdoptStoppedOutcome, AgentLinkEventFrame, AttachRefusal, CLIENT_CONTRACT_VERSION,
+    AttachRefusal, CLIENT_CONTRACT_VERSION,
     COORDINATION_EVENTS_VERSION, COORDINATION_STREAM_VERSION, ClientCapability, ClientRefusal,
-    ConnectionRole, DecommissionOutcome, DelegatedRuntimeEventFrame, DiskSpaceFact,
+    ConnectionRole, DelegatedRuntimeEventFrame, DiskSpaceFact,
     ExecutionControlCommand, ExecutionControlOperation, ExecutionControlOutcome,
     ExecutionControlRefusal, ExecutionDeliveryContext, IdempotencyIssue, PresenceMode,
     ProjectAdminOutcome, ProjectAdminRequest, ProjectBindOutcome, ProjectBindRequest,
@@ -16847,7 +16847,7 @@ fn handle_wrapper_message_with_peer(
             }
             None
         }
-        WrapperToDaemon::Send(mut bridge_msg) => wrapper_dispatch::on_send(bridge_msg, conn_id, state),
+        WrapperToDaemon::Send(bridge_msg) => wrapper_dispatch::on_send(bridge_msg, conn_id, state),
 
         WrapperToDaemon::Heartbeat => {
             let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
