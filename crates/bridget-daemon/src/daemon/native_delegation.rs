@@ -14806,6 +14806,199 @@ const START_MONITOR_BUDGET: Duration = crate::workspace_git::WORKTREE_ADD_TIMEOU
     .saturating_add(crate::workspace_git::READ_TIMEOUT.saturating_mul(4))
     .saturating_add(Duration::from_secs(10));
 
+/// Choisit au plus une sonde de démarrage distante par cadence (programme 260, lot 9).
+/// Le corps reprend le bloc d'origine de `tick`, sans autre changement.
+fn start_probe(
+    state: &Arc<Mutex<DaemonState>>,
+) -> Option<(
+    bridget_transport::protocol::WorkerIdentity,
+    bridget_transport::protocol::WorkerCommandIdentity,
+    mpsc::SyncSender<()>,
+)> {
+    use bridget_transport::protocol::*;
+    let mut st = state.lock().recover_poison();
+    {
+        let DaemonState {
+            remote_workers,
+            remote_start_reconciles,
+            ..
+        } = &mut *st;
+        remote_start_reconciles.retain(|machine, (epoch, receiver)| {
+            remote_workers.get(machine).is_some_and(|worker| {
+                worker.epoch == *epoch && worker.contact == WorkerContactState::Connected
+            }) && matches!(receiver.try_recv(), Err(mpsc::TryRecvError::Empty))
+        });
+    }
+    let due = st
+        .remote_start_reconcile_last
+        .as_ref()
+        .is_none_or(|(_, at)| at.elapsed() >= CANCEL_NOTIFICATION_BUDGET);
+    let mut candidates = if due {
+        st.delegation_store.pending().unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+    candidates.retain(|task| {
+        task.remote_placement.is_some()
+            && task.state == "starting"
+            && task.child_instance.is_some()
+            && task.mission_issued_at.is_none()
+            && !task
+                .start_recovery
+                .as_ref()
+                .is_some_and(|plan| plan.in_progress())
+            && task.remote_placement.as_ref().is_some_and(|placement| {
+                !st.remote_start_reconciles
+                    .contains_key(&placement.machine_id)
+            })
+    });
+    let candidate = if candidates.is_empty() {
+        None
+    } else {
+        let offset = st
+            .remote_start_reconcile_last
+            .as_ref()
+            .map_or(0, |(previous, _)| {
+                candidates.partition_point(|task| task.task_id <= *previous)
+            });
+        let index = if offset == candidates.len() {
+            0
+        } else {
+            offset
+        };
+        Some(candidates.swap_remove(index))
+    };
+    if let Some(task) = &candidate {
+        st.remote_start_reconcile_last = Some((task.task_id.clone(), Instant::now()));
+    }
+    candidate.and_then(|task| {
+        let command = remote_command_identity(&st, &task).ok()?;
+        let stopped = st
+            .fleet
+            .desired_entry(&task.child)
+            .ok()
+            .flatten()
+            .is_some_and(|entry| {
+                entry.command_id == command.command_id
+                    && entry.generation == command.generation
+                    && entry.remote_placement == task.remote_placement
+                    && entry.lifecycle_state == DesiredLifecycleState::Stopped
+            });
+        if stopped {
+            return None;
+        }
+        let placement = task.remote_placement.as_ref()?;
+        let provision = st.registry.machines().get(&placement.machine_id)?;
+        if provision.worker_id != placement.worker_id
+            || provision.provisioning_revision != placement.provisioning_revision
+        {
+            return None;
+        }
+        let worker = st.remote_workers.get(&placement.machine_id)?;
+        if !placement.matches_worker(&worker.identity)
+            || worker.contact != WorkerContactState::Connected
+            || worker.last_contact.elapsed() >= Duration::from_secs(WORKER_STALE_SECS as u64)
+        {
+            return None;
+        }
+        st.connections.get(&worker.conn_id)?;
+        let identity = worker.identity.clone();
+        let epoch = worker.epoch.clone();
+        let (done, receiver) = mpsc::sync_channel(1);
+        st.remote_start_reconciles
+            .insert(identity.machine_id.clone(), (epoch, receiver));
+        Some((identity, command, done))
+    })
+}
+
+/// Réserve au plus un créneau de résultat distant par cadence (programme 260, lot 9).
+/// Le corps reprend le bloc d'origine de `tick`, sans autre changement.
+fn remote_pending(
+    state: &Arc<Mutex<DaemonState>>,
+    remote_proofs: &mut HashMap<String, crate::delegation::Task>,
+) -> Option<(
+    String,
+    mpsc::Sender<Result<Option<crate::delegation::Task>, String>>,
+)> {
+    let mut st = state.lock().recover_poison();
+    if let Some(receiver) = st.remote_result_reservation.take() {
+        match receiver.try_recv() {
+            Ok(Ok(Some(proof))) => {
+                remote_proofs.insert(proof.task_id.clone(), proof);
+            }
+            Ok(Ok(None)) => {}
+            Ok(Err(error)) => warn!("réservation résultat distant différée: {error}"),
+            Err(mpsc::TryRecvError::Empty) => st.remote_result_reservation = Some(receiver),
+            Err(mpsc::TryRecvError::Disconnected) => {
+                warn!("réservation résultat distant interrompue")
+            }
+        }
+    }
+    let due = st.remote_result_reservation.is_none()
+        && remote_proofs.is_empty()
+        && st
+            .remote_result_reservation_last
+            .as_ref()
+            .is_none_or(|(_, at)| at.elapsed() >= Duration::from_secs(1));
+    let pending = if due {
+        st.delegation_store.pending().unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+    let mut candidates = pending
+        .into_iter()
+        .filter(|task| {
+            if task.remote_placement.is_none()
+                || !task.remote_prepared
+                || task.child_instance.is_none()
+            {
+                return false;
+            }
+            if task.state == "mission_pending" {
+                return true;
+            }
+            if task.state != "working" {
+                return false;
+            }
+            let quota = task.quota_waits.last().is_some_and(|wait| {
+                wait.phase != QuotaWaitPhase::Done && wait.resume_execution_id.is_some()
+            });
+            quota
+                || st
+                    .execution_store
+                    .latest_in_chain(&format!("execution-{}", task.mission))
+                    .ok()
+                    .flatten()
+                    .is_some_and(|execution| {
+                        execution.state == "starting"
+                            && pause_covers(&st, &execution.execution_id, true).unwrap_or(false)
+                    })
+        })
+        .map(|task| task.task_id)
+        .collect::<Vec<_>>();
+    if candidates.is_empty() {
+        None
+    } else {
+        // pending() est trié par task_id ; avancer même après un refus du worker.
+        let offset = st
+            .remote_result_reservation_last
+            .as_ref()
+            .map_or(0, |(previous, _)| {
+                candidates.partition_point(|id| id <= previous)
+            });
+        let index = if offset == candidates.len() {
+            0
+        } else {
+            offset
+        };
+        let task_id = candidates.swap_remove(index);
+        st.remote_result_reservation_last = Some((task_id.clone(), Instant::now()));
+        let (sender, receiver) = mpsc::channel();
+        st.remote_result_reservation = Some(receiver);
+        Some((task_id, sender))
+    }
+}
+
 pub(super) fn tick(state: &Arc<Mutex<DaemonState>>) {
     {
         let mut st = state.lock().recover_poison();
@@ -14828,102 +15021,7 @@ pub(super) fn tick(state: &Arc<Mutex<DaemonState>>) {
     // (f entrées, désérialisation BTreeMap O(f log f)), plus le lien SQL indexé.
     // Hors décodage des payloads, aucun facteur n ne multiplie ces lectures ; au plus
     // un envoi par cadence, même si le candidat choisi est invalide ou injoignable.
-    let start_probe = {
-        use bridget_transport::protocol::*;
-        let mut st = state.lock().recover_poison();
-        {
-            let DaemonState {
-                remote_workers,
-                remote_start_reconciles,
-                ..
-            } = &mut *st;
-            remote_start_reconciles.retain(|machine, (epoch, receiver)| {
-                remote_workers.get(machine).is_some_and(|worker| {
-                    worker.epoch == *epoch && worker.contact == WorkerContactState::Connected
-                }) && matches!(receiver.try_recv(), Err(mpsc::TryRecvError::Empty))
-            });
-        }
-        let due = st
-            .remote_start_reconcile_last
-            .as_ref()
-            .is_none_or(|(_, at)| at.elapsed() >= CANCEL_NOTIFICATION_BUDGET);
-        let mut candidates = if due {
-            st.delegation_store.pending().unwrap_or_default()
-        } else {
-            Vec::new()
-        };
-        candidates.retain(|task| {
-            task.remote_placement.is_some()
-                && task.state == "starting"
-                && task.child_instance.is_some()
-                && task.mission_issued_at.is_none()
-                && !task
-                    .start_recovery
-                    .as_ref()
-                    .is_some_and(|plan| plan.in_progress())
-                && task.remote_placement.as_ref().is_some_and(|placement| {
-                    !st.remote_start_reconciles
-                        .contains_key(&placement.machine_id)
-                })
-        });
-        let candidate = if candidates.is_empty() {
-            None
-        } else {
-            let offset = st
-                .remote_start_reconcile_last
-                .as_ref()
-                .map_or(0, |(previous, _)| {
-                    candidates.partition_point(|task| task.task_id <= *previous)
-                });
-            let index = if offset == candidates.len() {
-                0
-            } else {
-                offset
-            };
-            Some(candidates.swap_remove(index))
-        };
-        if let Some(task) = &candidate {
-            st.remote_start_reconcile_last = Some((task.task_id.clone(), Instant::now()));
-        }
-        candidate.and_then(|task| {
-            let command = remote_command_identity(&st, &task).ok()?;
-            let stopped = st
-                .fleet
-                .desired_entry(&task.child)
-                .ok()
-                .flatten()
-                .is_some_and(|entry| {
-                    entry.command_id == command.command_id
-                        && entry.generation == command.generation
-                        && entry.remote_placement == task.remote_placement
-                        && entry.lifecycle_state == DesiredLifecycleState::Stopped
-                });
-            if stopped {
-                return None;
-            }
-            let placement = task.remote_placement.as_ref()?;
-            let provision = st.registry.machines().get(&placement.machine_id)?;
-            if provision.worker_id != placement.worker_id
-                || provision.provisioning_revision != placement.provisioning_revision
-            {
-                return None;
-            }
-            let worker = st.remote_workers.get(&placement.machine_id)?;
-            if !placement.matches_worker(&worker.identity)
-                || worker.contact != WorkerContactState::Connected
-                || worker.last_contact.elapsed() >= Duration::from_secs(WORKER_STALE_SECS as u64)
-            {
-                return None;
-            }
-            st.connections.get(&worker.conn_id)?;
-            let identity = worker.identity.clone();
-            let epoch = worker.epoch.clone();
-            let (done, receiver) = mpsc::sync_channel(1);
-            st.remote_start_reconciles
-                .insert(identity.machine_id.clone(), (epoch, receiver));
-            Some((identity, command, done))
-        })
-    };
+    let start_probe = start_probe(state);
     if let Some((worker, command, done)) = start_probe {
         let state = state.clone();
         let _ = thread::Builder::new()
@@ -14944,85 +15042,7 @@ pub(super) fn tick(state: &Arc<Mutex<DaemonState>>) {
     // O(n) tâches triées par SQL, une opération réseau en vol pour tous les ticks.
     // Le canal ne contient qu'un résultat ; aucun thread n'attend dans cette boucle.
     let mut remote_proofs = HashMap::new();
-    let remote_pending = {
-        let mut st = state.lock().recover_poison();
-        if let Some(receiver) = st.remote_result_reservation.take() {
-            match receiver.try_recv() {
-                Ok(Ok(Some(proof))) => {
-                    remote_proofs.insert(proof.task_id.clone(), proof);
-                }
-                Ok(Ok(None)) => {}
-                Ok(Err(error)) => warn!("réservation résultat distant différée: {error}"),
-                Err(mpsc::TryRecvError::Empty) => st.remote_result_reservation = Some(receiver),
-                Err(mpsc::TryRecvError::Disconnected) => {
-                    warn!("réservation résultat distant interrompue")
-                }
-            }
-        }
-        let due = st.remote_result_reservation.is_none()
-            && remote_proofs.is_empty()
-            && st
-                .remote_result_reservation_last
-                .as_ref()
-                .is_none_or(|(_, at)| at.elapsed() >= Duration::from_secs(1));
-        let pending = if due {
-            st.delegation_store.pending().unwrap_or_default()
-        } else {
-            Vec::new()
-        };
-        let mut candidates = pending
-            .into_iter()
-            .filter(|task| {
-                if task.remote_placement.is_none()
-                    || !task.remote_prepared
-                    || task.child_instance.is_none()
-                {
-                    return false;
-                }
-                if task.state == "mission_pending" {
-                    return true;
-                }
-                if task.state != "working" {
-                    return false;
-                }
-                let quota = task.quota_waits.last().is_some_and(|wait| {
-                    wait.phase != QuotaWaitPhase::Done && wait.resume_execution_id.is_some()
-                });
-                quota
-                    || st
-                        .execution_store
-                        .latest_in_chain(&format!("execution-{}", task.mission))
-                        .ok()
-                        .flatten()
-                        .is_some_and(|execution| {
-                            execution.state == "starting"
-                                && pause_covers(&st, &execution.execution_id, true).unwrap_or(false)
-                        })
-            })
-            .map(|task| task.task_id)
-            .collect::<Vec<_>>();
-        if candidates.is_empty() {
-            None
-        } else {
-            // pending() est trié par task_id ; avancer même après un refus du worker.
-            let offset = st
-                .remote_result_reservation_last
-                .as_ref()
-                .map_or(0, |(previous, _)| {
-                    candidates.partition_point(|id| id <= previous)
-                });
-            let index = if offset == candidates.len() {
-                0
-            } else {
-                offset
-            };
-            let task_id = candidates.swap_remove(index);
-            st.remote_result_reservation_last = Some((task_id.clone(), Instant::now()));
-            let (sender, receiver) = mpsc::channel();
-            st.remote_result_reservation = Some(receiver);
-            Some((task_id, sender))
-        }
-    };
+    let remote_pending = remote_pending(state, &mut remote_proofs);
     if let Some((task_id, sender)) = remote_pending {
         let state = Arc::clone(state);
         if let Err(error) = thread::Builder::new()
