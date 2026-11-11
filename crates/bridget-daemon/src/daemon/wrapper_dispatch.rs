@@ -4145,3 +4145,25 @@ pub(super) fn on_journal_fragment(subscription_id: String, seq: u64, offset: u64
             }
             None
         }
+
+pub(super) fn on_snapshot_caught_up(subscription_id: String, through_seq: Option<u64>, conn_id: &str, state: &Arc<Mutex<DaemonState>>) -> Option<DaemonToWrapper> {
+            let view = {
+                let mut st = state.lock().recover_poison();
+                let accepted = st
+                    .attach_subscriptions
+                    .get_mut(&subscription_id)
+                    .filter(|subscription| subscription.wrapper_conn == conn_id)
+                    .map(|subscription| subscription.caught_up = true)
+                    .is_some();
+                accepted
+                    .then(|| st.attach_views.get(&subscription_id).cloned())
+                    .flatten()
+            };
+            if let Some(view) = view {
+                let _ = view.enqueue(DaemonToWrapper::SnapshotCaughtUp {
+                    subscription_id,
+                    through_seq,
+                });
+            }
+            None
+        }

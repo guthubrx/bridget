@@ -17270,27 +17270,7 @@ fn handle_wrapper_message_with_peer(
         WrapperToDaemon::SnapshotCaughtUp {
             subscription_id,
             through_seq,
-        } => {
-            let view = {
-                let mut st = state.lock().recover_poison();
-                let accepted = st
-                    .attach_subscriptions
-                    .get_mut(&subscription_id)
-                    .filter(|subscription| subscription.wrapper_conn == conn_id)
-                    .map(|subscription| subscription.caught_up = true)
-                    .is_some();
-                accepted
-                    .then(|| st.attach_views.get(&subscription_id).cloned())
-                    .flatten()
-            };
-            if let Some(view) = view {
-                let _ = view.enqueue(DaemonToWrapper::SnapshotCaughtUp {
-                    subscription_id,
-                    through_seq,
-                });
-            }
-            None
-        }
+        } => wrapper_dispatch::on_snapshot_caught_up(subscription_id, through_seq, conn_id, state),
         WrapperToDaemon::Gap {
             subscription_id,
             from_seq,
