@@ -17266,23 +17266,7 @@ fn handle_wrapper_message_with_peer(
             ))
         }
 
-        WrapperToDaemon::Availability { agent, until_secs } => {
-            let mut st = state.lock().recover_poison();
-            let instance_id = match self_mutation_instance(&st, conn_id, &agent, "availability") {
-                Ok(instance_id) => instance_id,
-                Err(response) => return Some(*response),
-            };
-            let result =
-                handle_availability_for_instance(&agent, until_secs, Some(&instance_id), &mut st);
-            let available = st.presences.get(&instance_id).is_some_and(|p| !p.is_dnd());
-            let _ = st
-                .store
-                .observation_owner_presence(&agent, available, unix_now_secs());
-            drop(st);
-            let return_clock = Instant::now();
-            observer_return_tick(state, unix_now_secs(), return_clock);
-            Some(result)
-        }
+        WrapperToDaemon::Availability { agent, until_secs } => wrapper_dispatch::on_availability(agent, until_secs, conn_id, state),
 
         WrapperToDaemon::DeliveryRejected {
             id,
