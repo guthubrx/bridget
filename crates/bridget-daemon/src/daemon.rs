@@ -18220,39 +18220,7 @@ fn handle_wrapper_message_with_peer(
         WrapperToDaemon::AdoptStoppedOrder {
             agent_id: name,
             command_id,
-        } => {
-            info!(
-                "cycle_vie action=adopt_stopped phase=request name={name} command_id={command_id}"
-            );
-            let mut st = state.lock().unwrap_or_else(|error| error.into_inner());
-            let visible = st
-                .agent_infos()
-                .into_iter()
-                .find(|agent| agent.agent_id == name);
-            let outcome = match visible {
-                Some(agent) if agent.persistent.is_some() => AdoptStoppedOutcome::AlreadyManaged,
-                Some(agent) if agent.state != "stopped" => AdoptStoppedOutcome::NotStopped,
-                Some(_) | None => match st.fleet.adopt_stopped(&name, unix_timestamp()) {
-                    Ok(AdoptStoppedResult::Adopted { generation }) => {
-                        AdoptStoppedOutcome::Adopted { generation }
-                    }
-                    Ok(AdoptStoppedResult::AlreadyManaged) => AdoptStoppedOutcome::AlreadyManaged,
-                    Ok(AdoptStoppedResult::NoManagedHistory) => {
-                        AdoptStoppedOutcome::NoManagedHistory
-                    }
-                    Err(error) => AdoptStoppedOutcome::IncompleteHistory {
-                        reason: error.to_string(),
-                    },
-                },
-            };
-            info!(
-                "cycle_vie action=adopt_stopped phase=result name={name} command_id={command_id} outcome={outcome:?}"
-            );
-            Some(DaemonToWrapper::AdoptStoppedResult {
-                command_id,
-                outcome,
-            })
-        }
+        } => wrapper_dispatch::on_adopt_stopped_order(name, command_id, state),
         WrapperToDaemon::Subscribe { agent, window } => {
             let (subscription_id, control) = {
                 let mut st = state.lock().unwrap_or_else(|e| e.into_inner());

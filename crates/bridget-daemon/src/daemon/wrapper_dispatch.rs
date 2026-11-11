@@ -1430,3 +1430,37 @@ pub(super) fn on_list_requests(sender: String, limit: u16, state: &Arc<Mutex<Dae
                 }),
             }
         }
+
+pub(super) fn on_adopt_stopped_order(name: String, command_id: String, state: &Arc<Mutex<DaemonState>>) -> Option<DaemonToWrapper> {
+            info!(
+                "cycle_vie action=adopt_stopped phase=request name={name} command_id={command_id}"
+            );
+            let mut st = state.lock().unwrap_or_else(|error| error.into_inner());
+            let visible = st
+                .agent_infos()
+                .into_iter()
+                .find(|agent| agent.agent_id == name);
+            let outcome = match visible {
+                Some(agent) if agent.persistent.is_some() => AdoptStoppedOutcome::AlreadyManaged,
+                Some(agent) if agent.state != "stopped" => AdoptStoppedOutcome::NotStopped,
+                Some(_) | None => match st.fleet.adopt_stopped(&name, unix_timestamp()) {
+                    Ok(AdoptStoppedResult::Adopted { generation }) => {
+                        AdoptStoppedOutcome::Adopted { generation }
+                    }
+                    Ok(AdoptStoppedResult::AlreadyManaged) => AdoptStoppedOutcome::AlreadyManaged,
+                    Ok(AdoptStoppedResult::NoManagedHistory) => {
+                        AdoptStoppedOutcome::NoManagedHistory
+                    }
+                    Err(error) => AdoptStoppedOutcome::IncompleteHistory {
+                        reason: error.to_string(),
+                    },
+                },
+            };
+            info!(
+                "cycle_vie action=adopt_stopped phase=result name={name} command_id={command_id} outcome={outcome:?}"
+            );
+            Some(DaemonToWrapper::AdoptStoppedResult {
+                command_id,
+                outcome,
+            })
+        }
