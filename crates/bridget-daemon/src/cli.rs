@@ -1,5 +1,7 @@
 //! CLI — point d'entrée unifié pour toutes les sous-commandes bridget.
 
+mod loop_control;
+
 use crate::cli_table::{table_print as print, table_println as println};
 use crate::communication::client::DaemonConnection;
 use crate::daemon::{self, DaemonConfig};
@@ -424,6 +426,7 @@ fn run_with_args(args: Vec<String>) {
         "decommission" => cmd_decommission(&args[2..]),
         "adopt-stopped" => cmd_adopt_stopped(&args[2..]),
         "send" => cmd_send(&args[2..]),
+        "loop-control" => loop_control::command(&args[2..]),
         "guichet" => cmd_guichet(&args[2..]),
         "queue" => cmd_queue(&args[2..]),
         "cancel" => cmd_cancel(&args[2..]),
@@ -5262,6 +5265,10 @@ pub(crate) fn send_idempotent_to_daemon_at_with_project(
     identity: Option<&crate::mcp_identity::ResolvedIdentity>,
     project_root: Option<&std::path::Path>,
 ) -> Result<DaemonToWrapper, String> {
+    let loop_file = std::env::var_os("BRIDGET_LOOP_CONTROL_FILE").map(std::path::PathBuf::from);
+    if loop_file.is_some() && (identity.is_some() || project_root.is_none()) {
+        return Err("loop_control_requires_autonomous_client_and_project : aucun envoi".into());
+    }
     let mut connection = DaemonConnection::connect(path).map_err(|error| error.to_string())?;
     match connection
         .exchange(&WrapperToDaemon::RoleHandshake {
@@ -5289,6 +5296,9 @@ pub(crate) fn send_idempotent_to_daemon_at_with_project(
     }
 
     let mut requested_capabilities = vec![ClientCapability::SendIdempotent];
+    if loop_file.is_some() {
+        requested_capabilities.push(ClientCapability::LoopControlV1);
+    }
     if message.cross_project_reason.is_some() || project_root.is_some() {
         requested_capabilities.push(ClientCapability::CommunicationProjectsV1);
     }
@@ -5308,6 +5318,11 @@ pub(crate) fn send_idempotent_to_daemon_at_with_project(
             build_id,
             ..
         } if capabilities.contains(&ClientCapability::SendIdempotent) => {
+            if loop_file.is_some() && !capabilities.contains(&ClientCapability::LoopControlV1) {
+                return Err(
+                    "loop_control_unsupported : aucun envoi ; charger un daemon compatible".into(),
+                );
+            }
             if message.intent == Some(bridget_core::MessageIntent::StoreOnly)
                 && !capabilities.contains(&ClientCapability::SendInformationV1)
             {
@@ -5334,6 +5349,10 @@ pub(crate) fn send_idempotent_to_daemon_at_with_project(
     {
         crate::communication::client::announce_client_project(&mut connection, root)
             .map_err(|error| error.to_string())?;
+    }
+
+    if let Some(file) = loop_file {
+        loop_control::bind(&mut connection, &file)?;
     }
 
     connection

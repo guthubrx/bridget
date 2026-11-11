@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.8.30
+
+- Choisir le mode de remise de chaque nouvelle boucle : message ordinaire, guidage du tour en cours ou interruption.
+- Autoriser le contrôle autonome d'une boucle pour son seul mode, son projet et ses destinataires désignés, sans emprunter une identité humaine ou parentale.
+- Conserver ce choix dans les reprises ; révoquer le mandat à la clôture et relire les anciens reçus sans nouvelle remise.
+- Conserver les gardes de pause, de tranquillité, de rythme et de mission native active, avec refus explicite sans changement de mode.
+
 ## 0.8.29
 
 - Borner les dossiers ouverts par l’audit à la profondeur de la vue, pour respecter les limites de descripteurs des systèmes.

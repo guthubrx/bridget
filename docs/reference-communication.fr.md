@@ -174,6 +174,26 @@ Les anciennes commandes rendent [] pour les warnings de projet. Interrupt sans
 message suit désormais la garde de droits156 décrite ci-dessous.
 ### Guidage, interruption et lecture de file (156)
 
+Les boucles264 choisissent leur mode à la création : `queue`, `steer` ou
+`interrupt`. La compétence Bridget Loop recueille ce choix auprès de l'humain.
+La CLI de Loop le demande en terminal ; un appel automatique sans choix refuse
+avant création. Les anciennes boucles sans mode restent ordinaires.
+
+Le mode de contrôle exige les UUID explicitement autorisés. Le mandat privé
+lie la portée de la boucle, son projet attesté, ses cibles et un seul mode.
+Le client périodique présente ce mandat avec `LoopControlV1` ; il ne devient
+ni Attach ni parent. Le fichier privé est exclu de Git. La clôture le révoque ;
+un ancien reçu reste relisible, sans nouvel effet. Pause, tranquillité, quotas
+et protection des missions natives actives restent applicables. Une nouvelle
+cible ou un mode nouveau exige une nouvelle autorisation humaine. Aucun refus
+ne provoque un changement automatique de mode.
+
+Administration locale explicite : `bridget loop-control authorize --file
+FICHIER_PRIVE --approve` ou `bridget loop-control revoke --file FICHIER_PRIVE`.
+Loop prépare le fichier ; ne jamais mettre son contenu dans les arguments ou
+dans un message. Le client autonome utilise sa référence via
+`BRIDGET_LOOP_CONTROL_FILE`, après négociation du projet et de la portée.
+
 Le contrat156 ajoute `intent` à `bridget_send` et `--intent` à `bridget send`.
 Vérifier les capacités du daemon et le catalogue MCP chargé avant de les employer.
 La présence de cette documentation ne prouve pas leur installation.

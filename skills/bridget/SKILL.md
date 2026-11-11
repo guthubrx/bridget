@@ -744,7 +744,17 @@ Le client exige `CommunicationProjectsV1` avant de transmettre un motif ou la
 nouvelle portée. Un ancien serveur sans cette capacité provoque un refus client.
 Ne pas retirer le motif ou utiliser un annuaire global comme repli silencieux.
 
-Les boucles gardent des mandats explicites par UUID/rôle. Les rappels du worker,
+Les boucles gardent des mandats explicites par UUID/rôle.
+
+À chaque nouvelle boucle264, demander le mode si l'utilisateur ne l'a pas déjà
+choisi : message ordinaire (`queue`), guidage (`steer`) ou interruption
+(`interrupt`). Charger la compétence `bridget-loop`, puis transmettre ce choix
+à sa création. Les modes de contrôle exigent les UUID explicitement autorisés
+et un mandat privé limité. Le contrôleur reste autonome ; aucun `from=human`
+ni rôle parent emprunté. Un refus conserve son mode, sa clé et son enveloppe.
+Les boucles historiques restent ordinaires.
+
+Les rappels du worker,
 du coordinateur et de ROOT déjà mandatés restent possibles. Un ROOT extérieur
 configuré sans motif produit une décision visible. Avant la première tentative,
 figer corps, cible, motif et racine de source. Un retry conserve cette enveloppe,

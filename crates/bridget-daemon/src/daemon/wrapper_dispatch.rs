@@ -1051,6 +1051,7 @@ pub(super) fn on_client_hello(
             matches!(
                 capability,
                 ClientCapability::MobileAdministrationV1
+                    | ClientCapability::LoopControlV1
                     | ClientCapability::MobileOperationsV1
                     | ClientCapability::UserInputV1
                     | ClientCapability::SendIdempotent
@@ -3621,6 +3622,7 @@ pub(super) fn service_refusal(
                 | WrapperToDaemon::ObservationCapabilities { .. }
                 | WrapperToDaemon::ObservationGap { .. }
                 | WrapperToDaemon::ClientHello { .. }
+                | WrapperToDaemon::LoopControl { .. }
                 | WrapperToDaemon::ArtifactPublish { .. }
                 | WrapperToDaemon::ArtifactRead { .. }
                 | WrapperToDaemon::ProjectRoundRequest { .. }
@@ -3761,6 +3763,7 @@ pub(super) fn client_refusal(
                 WrapperToDaemon::QueueEditRequest { .. } => None,
                 WrapperToDaemon::WakeRequest { .. } if !st.client_negotiations.contains_key(conn_id) => Some(ClientRefusal::NegotiationRequired),
                 WrapperToDaemon::WakeRequest { .. } => None,
+                WrapperToDaemon::LoopControl { .. } => None,
                 WrapperToDaemon::QueueList { .. } if !st.client_negotiations.contains_key(conn_id) => Some(ClientRefusal::NegotiationRequired),
                 WrapperToDaemon::QueueList { .. } if !st.client_negotiations.get(conn_id).is_some_and(|n| n.capabilities.contains(&ClientCapability::QueueListV1)) => Some(ClientRefusal::CapabilityNotNegotiated),
                 WrapperToDaemon::QueueList { .. } => None,

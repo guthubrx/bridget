@@ -146,6 +146,7 @@ impl Store {
     fn init_schema(conn: &Connection) -> Result<(), StoreError> {
         crate::agent_tracking::ensure_schema(conn).map_err(StoreError::Sqlite)?;
         wake_schedules::ensure_schema(conn)?;
+        crate::daemon::loop_control::ensure_schema(conn).map_err(StoreError::Sqlite)?;
         observation_missed::ensure_schema(conn)?;
         crate::referent_control::ensure_schema(conn).map_err(StoreError::Sqlite)?;
         crate::human_inbox::ensure_schema(conn).map_err(StoreError::Sqlite)?;

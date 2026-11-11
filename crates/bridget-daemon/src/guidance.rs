@@ -25,6 +25,7 @@ pub(crate) enum GuidanceActor {
     AttachedHuman,
     BareClient,
     Agent { id: String },
+    Loop { id: String },
     InternalPause,
 }
 
@@ -145,7 +146,12 @@ pub(crate) fn authorize(facts: &GuidanceFacts) -> Result<(), GuidanceRefusal> {
             })
         };
     }
-    if !(facts.actor_is_parent || facts.action == MidTurnDelivery && facts.actor_is_child) {
+    if !(facts.actor_is_parent
+        || facts.action == MidTurnDelivery && facts.actor_is_child
+        || matches!(facts.actor, GuidanceActor::Loop { .. })
+            && facts.path == GuidancePath::SendIdempotent
+            && matches!(facts.action, GuidanceAction::Steer | Interrupt))
+    {
         return Err(IntentNotPermitted {
             reason: "not_parent",
         });

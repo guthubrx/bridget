@@ -196,6 +196,8 @@ pub const HUMAN_INBOX_CONTRACT_VERSION: u16 = 1;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ClientCapability {
+    /// Contrôle limité d'une boucle264 ; ne confère aucune identité d'agent.
+    LoopControlV1,
     UserInputV1,
     MobileAdministrationV1,
     MobileOperationsV1,
@@ -236,6 +238,40 @@ pub enum ClientCapability {
     AgentTrackingV1,
     /// Admission de flotte168 : reste distincte de la forme163.
     AutoDelegateV2,
+}
+
+/// Mandat explicite d'une boucle ; le secret n'est jamais un champ du message.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
+pub enum LoopControlRequest {
+    Authorize {
+        token: String,
+        issuer_scope: String,
+        project: CommunicationProject,
+        targets: Vec<String>,
+        intent: bridget_core::MessageIntent,
+    },
+    Use {
+        token: String,
+    },
+    Revoke {
+        token: String,
+    },
+}
+
+impl std::fmt::Debug for LoopControlRequest {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("LoopControlRequest(<secret omis>)")
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "status", rename_all = "snake_case", deny_unknown_fields)]
+pub enum LoopControlOutcome {
+    Authorized { grant_id: String },
+    Bound { grant_id: String },
+    Revoked { grant_id: String },
+    Refused { code: String, recovery: String },
 }
 
 /// Édition finale de file159B ; aucune phase intermédiaire n'est publique.
@@ -5694,6 +5730,9 @@ pub struct ThreadResult {
 #[serde(tag = "type")]
 #[allow(clippy::large_enum_variant)]
 pub enum WrapperToDaemon {
+    LoopControl {
+        request: LoopControlRequest,
+    },
     AgentTracking {
         request: crate::agent_tracking::AgentTrackingRequest,
     },
@@ -6765,6 +6804,9 @@ pub struct ResolvedAgentDefinition {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum DaemonToWrapper {
+    LoopControlResult {
+        result: LoopControlOutcome,
+    },
     AgentTrackingResult {
         result: serde_json::Value,
     },

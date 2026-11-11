@@ -1,4 +1,6 @@
 use super::*;
+#[path = "daemon/loop_control_tests.rs"]
+mod loop_control_tests;
 use bridget_core::BridgetMessage;
 use std::os::unix::fs::DirBuilderExt;
 

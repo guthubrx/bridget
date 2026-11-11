@@ -133,6 +133,17 @@ structured briefs and the child lifecycle.
 
 ## Queue, steer and interrupt
 
+Loop264 asks the user to choose `queue`, `steer` or `interrupt` for each new
+loop. Non-interactive creation requires an explicit choice. Existing loops
+without this field retain ordinary delivery. Control modes use a private,
+revocable grant bound to the loop's issuer scope, attested project, explicit
+recipient UUIDs and selected mode. The autonomous client negotiates
+`LoopControlV1`; it never becomes an attached human or a parent agent.
+Pause, do-not-disturb, rate limits and active native mission protection still
+apply. Frozen deliveries retain their mode and authorization reference.
+Revocation prevents new effects while allowing previous receipts to replay.
+No refusal silently changes the requested delivery mode.
+
 `bridget_send.intent` and CLI `--intent` distinguish:
 
 | Intent | Behavior |

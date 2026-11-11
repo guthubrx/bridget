@@ -8,6 +8,7 @@ mod native_delegation;
 mod native_provider_catalogue;
 pub(crate) use native_delegation::catalogue_entries177;
 mod agent_tracking;
+pub(crate) mod loop_control;
 mod mobile_admin;
 mod mobile_artifacts;
 mod mobile_operations;
@@ -1165,6 +1166,7 @@ struct DaemonState {
     /// Une négociation appartient à la connexion, tandis que le scope peut
     /// volontairement être partagé par plusieurs retries coopératifs.
     client_negotiations: HashMap<String, NegotiatedClient>,
+    loop_control_connections: HashMap<String, String>,
     /// La capacité du guichet ne dépend jamais d'un nom déclaré : elle est
     /// attachée à cette négociation de service et disparaît avec la connexion.
     service_negotiations: HashMap<String, NegotiatedService>,
@@ -4938,6 +4940,7 @@ impl DaemonState {
             pending_candidate_probes_v2: HashMap::new(),
             terminal_sessions: HashSet::new(),
             client_negotiations: HashMap::new(),
+            loop_control_connections: HashMap::new(),
             service_negotiations: HashMap::new(),
             peer_uids: HashMap::new(),
             coordination_subscriptions: HashMap::new(),
@@ -7520,6 +7523,7 @@ fn handle_connection(
         st.worker_probe_connections.remove(&conn_id);
         st.terminal_sessions.remove(&conn_id);
         st.client_negotiations.remove(&conn_id);
+        st.loop_control_connections.remove(&conn_id);
         st.human_thread_watches.remove(&conn_id);
         st.lineage_watches.remove(&conn_id);
         if let Some(journal) = st.lineage_journals.remove(&conn_id)
@@ -11211,6 +11215,8 @@ fn guidance_source(
         && !st.conn_names.contains_key(conn)
     {
         GuidanceActor::AttachedHuman
+    } else if let Some(actor) = loop_control::actor(st, conn) {
+        actor
     } else if ui {
         GuidanceActor::BareClient
     } else if let Some((agent, _)) = &identity {
@@ -11315,7 +11321,7 @@ fn guidance_facts(
         crate::referent_control::Admission::Deferred { .. }
     );
     let (pair_count, last_pair, target_count, third_target) = if action == GuidanceAction::Interrupt
-        && let GuidanceActor::Agent { id } = &actor
+        && let GuidanceActor::Agent { id } | GuidanceActor::Loop { id } = &actor
     {
         let (pair, last) = st
             .idempotency
@@ -11332,7 +11338,9 @@ fn guidance_facts(
     Ok(GuidanceFacts {
         action,
         path,
-        identity_attested: identity.is_some() || actor == GuidanceActor::AttachedHuman,
+        identity_attested: identity.is_some()
+            || actor == GuidanceActor::AttachedHuman
+            || matches!(actor, GuidanceActor::Loop { .. }),
         actor_is_target: identity.as_ref().is_some_and(|(agent, _)| agent == target),
         actor_is_parent: parent,
         actor_is_child: child,
@@ -11371,7 +11379,7 @@ fn guidance_event_labels(
 ) -> (&str, &'static str, &'static str) {
     use crate::guidance::{GuidanceAction, GuidanceActor, GuidancePath};
     let actor = match actor {
-        GuidanceActor::Agent { id } => id.as_str(),
+        GuidanceActor::Agent { id } | GuidanceActor::Loop { id } => id.as_str(),
         GuidanceActor::AttachedHuman => "human",
         GuidanceActor::BareClient => "unattested",
         GuidanceActor::InternalPause => "internal_pause",
@@ -11469,6 +11477,17 @@ fn check_guidance(
     child_proof: bool,
     id: &str,
 ) -> Result<crate::guidance::GuidanceFacts, (String, String)> {
+    if let Some(conn) = conn {
+        loop_control::check(st, conn, routing_agent_id(target), action, path).map_err(
+            |reason| {
+                record_guidance_refusal(st, Some(conn), target, id, Some(action), path, reason);
+                (
+                    "intent_not_permitted".into(),
+                    loop_control::guidance_recovery(reason),
+                )
+            },
+        )?;
+    }
     let facts = guidance_facts(
         st,
         conn,
@@ -11943,6 +11962,12 @@ fn prepare_dispatch(
 ) -> Result<PreparedDispatch, (&'static str, String)> {
     let routing_from = routing_agent_id(&message.from).to_string();
     let routing_to = routing_agent_id(&message.to).to_string();
+    loop_control::check_message(st, conn_id, message).map_err(|code| {
+        (
+            "intent_not_permitted",
+            loop_control::guidance_recovery(code),
+        )
+    })?;
     match crate::agent_tracking::dormant(st.store.connection(),&routing_to) {
         Ok(true) if !native_task_exchange && message.intent != Some(bridget_core::MessageIntent::StoreOnly)=>return Err(("agent_dormant",crate::agent_tracking::DORMANT_MESSAGE.into())),
         Ok(true)=>{},
@@ -16514,6 +16539,9 @@ fn handle_wrapper_message_with_peer(
                             )
                         })
                 }
+                WrapperToDaemon::LoopControl {
+                    request: bridget_transport::protocol::LoopControlRequest::Authorize { .. },
+                } => true,
                 WrapperToDaemon::QueueList { .. } | WrapperToDaemon::QueueEditRequest { .. } => {
                     true
                 }
@@ -16547,6 +16575,14 @@ fn handle_wrapper_message_with_peer(
     }
 
     match msg {
+        WrapperToDaemon::LoopControl { request } => {
+            let mut st = state
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            Some(DaemonToWrapper::LoopControlResult {
+                result: loop_control::handle(conn_id, request, &mut st),
+            })
+        }
         // Le contrat est disponible ; T008 ajoute son admission authentifiée.
         // Aucune trame distante ne rejoint entre-temps la voie locale.
         WrapperToDaemon::WorkerHello { .. }
