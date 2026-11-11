@@ -16574,25 +16574,7 @@ fn handle_wrapper_message_with_peer(
         WrapperToDaemon::DirectoryScoped { scope } => {
             wrapper_dispatch::on_directory_scoped(scope, conn_id, state)
         }
-        WrapperToDaemon::ObservationGap { dropped } => {
-            use bridget_transport::protocol::ObservationKind;
-            let mut st = state.lock().recover_poison();
-            let (agent, _) = live_connection_identity(&st, conn_id)?;
-            if st.auxiliary_connections.contains(conn_id)
-                || ![
-                    ObservationKind::TurnEnded,
-                    ObservationKind::PermissionRequired,
-                    ObservationKind::FileWritten,
-                ]
-                .into_iter()
-                .any(|kind| st.observations.accepts(conn_id, kind))
-            {
-                return None;
-            }
-            let notices = st.observations.report_gap(&agent, dropped, Instant::now());
-            queue_observation_notifications(&mut st, notices);
-            None
-        }
+        WrapperToDaemon::ObservationGap { dropped } => wrapper_dispatch::on_observation_gap(dropped, conn_id, state),
         WrapperToDaemon::ObservationCapabilities {
             events,
             runtime_catalogue,

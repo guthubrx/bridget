@@ -4387,3 +4387,23 @@ pub(super) fn on_thread_notice_capability(versions: Vec<u16>, conn_id: &str, sta
             }
             None
         }
+
+pub(super) fn on_observation_gap(dropped: u64, conn_id: &str, state: &Arc<Mutex<DaemonState>>) -> Option<DaemonToWrapper> {
+            use bridget_transport::protocol::ObservationKind;
+            let mut st = state.lock().recover_poison();
+            let (agent, _) = live_connection_identity(&st, conn_id)?;
+            if st.auxiliary_connections.contains(conn_id)
+                || ![
+                    ObservationKind::TurnEnded,
+                    ObservationKind::PermissionRequired,
+                    ObservationKind::FileWritten,
+                ]
+                .into_iter()
+                .any(|kind| st.observations.accepts(conn_id, kind))
+            {
+                return None;
+            }
+            let notices = st.observations.report_gap(&agent, dropped, Instant::now());
+            queue_observation_notifications(&mut st, notices);
+            None
+        }
