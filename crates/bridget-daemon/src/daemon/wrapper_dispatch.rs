@@ -4752,3 +4752,17 @@ pub(super) fn on_runtime_selection_reported(token: String, outcome: bridget_tran
             }
             None
         }
+
+pub(super) fn on_ledger_projection(scope: bridget_transport::protocol::LedgerScope, limit: u16, state: &Arc<Mutex<DaemonState>>) -> Option<DaemonToWrapper> {
+            let st = state.lock().recover_poison();
+            match crate::ledger::read_projection(&st.store, scope, usize::from(limit)) {
+                Ok(projection) => Some(DaemonToWrapper::LedgerProjection {
+                    messages: projection.messages,
+                    requests: projection.requests,
+                }),
+                Err(error) => Some(DaemonToWrapper::Nack {
+                    id: "ledger".to_string(),
+                    reason: error.to_string(),
+                }),
+            }
+        }

@@ -17352,19 +17352,7 @@ fn handle_wrapper_message_with_peer(
         | WrapperToDaemon::Specialists { .. }
         | WrapperToDaemon::MobileAdministration { .. }
         | WrapperToDaemon::MobileOperation { .. } => None,
-        WrapperToDaemon::LedgerProjection { scope, limit } => {
-            let st = state.lock().recover_poison();
-            match crate::ledger::read_projection(&st.store, scope, usize::from(limit)) {
-                Ok(projection) => Some(DaemonToWrapper::LedgerProjection {
-                    messages: projection.messages,
-                    requests: projection.requests,
-                }),
-                Err(error) => Some(DaemonToWrapper::Nack {
-                    id: "ledger".to_string(),
-                    reason: error.to_string(),
-                }),
-            }
-        }
+        WrapperToDaemon::LedgerProjection { scope, limit } => wrapper_dispatch::on_ledger_projection(scope, limit, state),
     }
 }
 
