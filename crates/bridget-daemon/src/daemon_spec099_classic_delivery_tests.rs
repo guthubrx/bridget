@@ -18,7 +18,7 @@ fn spec244_entree_publique_conserve_les_reponses_modernes_et_historiques_closes(
             reply.in_reply_to = Some(original.id.clone());
             if modern {
                 let outbox =
-                    crate::reply_outbox244::ReplyOutbox::open(&root, "spec099-target").unwrap();
+                    crate::reply_outbox::ReplyOutbox::open(&root, "spec099-target").unwrap();
                 reply = outbox.retain(&original, reply, unix_now_secs()).unwrap();
                 assert!(
                     reply.id.starts_with("reply244-"),
@@ -178,13 +178,13 @@ fn tracking230_sommeil_refuse_envoi_classique_et_principal_agent() {
         synchronize: None,
         expected_revision: None,
     };
-    let refused = agent_tracking230::human("sender", &request, &state);
+    let refused = agent_tracking::human("sender", &request, &state);
     assert!(
         matches!(refused,DaemonToWrapper::AgentTrackingResult{result} if result["code"]=="human_principal_required")
     );
     {
         let mut st = state.lock().unwrap();
-        let agent = agent_tracking230::directory(&mut st)
+        let agent = agent_tracking::directory(&mut st)
             .unwrap()
             .into_iter()
             .find(|a| a.agent.agent_id == TARGET)
@@ -253,7 +253,7 @@ fn tracking230_reponse_admise_conservee_sans_solliciter_parent_dormant() {
     ));
     {
         let mut st = state.lock().unwrap();
-        let agent = agent_tracking230::directory(&mut st)
+        let agent = agent_tracking::directory(&mut st)
             .unwrap()
             .into_iter()
             .find(|a| a.agent.agent_id == SENDER)

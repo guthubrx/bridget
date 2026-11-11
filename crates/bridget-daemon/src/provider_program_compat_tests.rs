@@ -279,8 +279,8 @@ fn spec221_program_compat_checker_revision_invalidates_proof() {
             include_bytes!("provider_program_compat.rs").as_slice(),
         ),
         (
-            "crates/bridget-daemon/src/provider_catalogue220.rs",
-            include_bytes!("provider_catalogue220.rs").as_slice(),
+            "crates/bridget-daemon/src/provider_catalogue.rs",
+            include_bytes!("provider_catalogue.rs").as_slice(),
         ),
         (
             "crates/bridget-transport/src/codex_app_server.rs",

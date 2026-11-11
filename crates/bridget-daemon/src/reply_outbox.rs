@@ -11,7 +11,7 @@ pub(crate) struct ReplyOutbox {
 impl ReplyOutbox {
     pub(crate) fn open(state: &Path, instance: &str) -> Result<Self, String> {
         let key = format!("{:x}", Sha256::digest(instance.as_bytes()));
-        let conn = crate::delivery_spool244::private_connection(
+        let conn = crate::delivery_spool::private_connection(
             &state
                 .join("native-replies244")
                 .join(format!("{key}.sqlite")),

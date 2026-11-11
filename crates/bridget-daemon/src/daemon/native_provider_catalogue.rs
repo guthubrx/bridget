@@ -500,7 +500,7 @@ fn project_connection_at(
                 "machine_disabled":"Le serveur est désactivé. Demander la décision d'activation à son responsable ; les autres travaux suivent leur état propre."
             },
             "model_options_status":options_status,
-            "model_options_selection":if crate::provider_catalogue220::MODEL_OPTIONS_LAUNCH_ENABLED {"explicit_only"} else {"not_activated"},
+            "model_options_selection":if crate::provider_catalogue::MODEL_OPTIONS_LAUNCH_ENABLED {"explicit_only"} else {"not_activated"},
             "account_scope":observation.and_then(|o|o.account_scope.as_ref()),"observed_at":observation.map(|o|o.observed_at),"age_secs":age,"ttl_secs":CATALOGUE_TTL_SECS,"refresh_target_secs":120,"scheduling":"sequential_per_connection",
             "last_observed_at":cached.map(|v|v.value.observed_at),"received_at":cached.map(|v|v.received_at),
             "source_age_secs":source_age,"received_age_secs":received_age,"expires_at":expires_at,

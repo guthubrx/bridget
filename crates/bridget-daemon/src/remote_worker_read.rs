@@ -519,7 +519,7 @@ impl WorkerReadView<'_> {
             )
         {
             trace.at("workspace_receipt");
-            let receipt = proof198::read_workspace_receipt(
+            let receipt = proof::read_workspace_receipt(
                 &self.config.state_root.join("store"),
                 self.identity,
                 &prepared.command,
@@ -2116,7 +2116,7 @@ pub(super) fn read_worker_command(
         && receipt.worker == *worker
         && receipt.identity == *identity
     {
-        proof198::overlay_fence(root, worker, receipt)?;
+        proof::overlay_fence(root, worker, receipt)?;
     }
     if let Some(receipt) = &result {
         if receipt.worker != *worker
@@ -2129,9 +2129,7 @@ pub(super) fn read_worker_command(
         let expected_fence = receipt
             .pre_start_fence
             .as_ref()
-            .map(|_| {
-                proof198::fence_digest(worker, identity, &receipt.placement, receipt.deadline_at)
-            })
+            .map(|_| proof::fence_digest(worker, identity, &receipt.placement, receipt.deadline_at))
             .transpose()?;
         if !receipt.placement.matches_worker(worker)
             || !valid_digest(&receipt.command_digest)

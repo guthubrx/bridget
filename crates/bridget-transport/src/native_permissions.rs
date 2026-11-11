@@ -521,7 +521,7 @@ pub fn recheck_permission_context_sources(context: &Value) -> Result<(), String>
 /// des révisions et des sources ci-dessous restent intégralement exécutées.
 pub fn recheck_permission_context_sources_with_profile(
     context: &Value,
-    verified: &super::native_hook_profile171::VerifiedGuardedHookProfile,
+    verified: &super::native_hook_profile::VerifiedGuardedHookProfile,
 ) -> Result<(), String> {
     recheck_permission_context_sources_inner(context, Some(verified))
 }
@@ -553,7 +553,7 @@ fn recheck_cli_revisions(
 
 fn recheck_permission_context_sources_inner(
     context: &Value,
-    verified: Option<&super::native_hook_profile171::VerifiedGuardedHookProfile>,
+    verified: Option<&super::native_hook_profile::VerifiedGuardedHookProfile>,
 ) -> Result<(), String> {
     use std::path::Path;
     let changed = || "settings_revision_changed".to_string();
@@ -592,7 +592,7 @@ fn recheck_permission_context_sources_inner(
         if let Some(verified) = verified {
             verified.profile(context)?;
         } else {
-            super::native_hook_profile171::recheck_guarded_hook_profile(context)?;
+            super::native_hook_profile::recheck_guarded_hook_profile(context)?;
         }
     } else if let Some(witness) = context.get("source_equivalence") {
         use std::os::unix::fs::MetadataExt;
@@ -1231,7 +1231,7 @@ pub fn validate_permission_source_equivalence(context: &Value) -> Result<(), Str
         return Ok(());
     };
     if witness["version"] == 2 {
-        return super::native_hook_profile171::validate_guarded_hook_witness(context);
+        return super::native_hook_profile::validate_guarded_hook_witness(context);
     }
     if context["attestation_version"] != 2 || witness["version"] != 1 {
         return Err(fail());

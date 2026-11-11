@@ -21,7 +21,7 @@ fn spec214_candidate_refusal_distinguishes_unknown_translation_from_changed_righ
 }
 #[test]
 fn spec220_observation_correlation_expiry_definition_and_refresh_preserve_tasks() {
-    use super::super::native_provider_catalogue220 as catalogue;
+    use super::super::native_provider_catalogue as catalogue;
     use bridget_transport::protocol::{WorkerCapability, WorkerContactState, WorkerIdentity};
     use bridget_transport::provider_catalogue::*;
     let (shared, config, _rx, _reader, _request, _root) = super::tests::routing168_fixture(1);
@@ -271,7 +271,7 @@ fn spec220_observation_correlation_expiry_definition_and_refresh_preserve_tasks(
 }
 
 fn observed221_fixture() -> (Arc<Mutex<DaemonState>>, DaemonConfig, i64, Instant) {
-    use super::super::native_provider_catalogue220 as catalogue;
+    use super::super::native_provider_catalogue as catalogue;
     use bridget_transport::protocol::{WorkerCapability, WorkerContactState, WorkerIdentity};
     use bridget_transport::provider_catalogue::*;
     let (shared, config, _rx, _reader, _request, _root) = super::tests::routing168_fixture(1);
@@ -344,7 +344,7 @@ fn observed221_fixture() -> (Arc<Mutex<DaemonState>>, DaemonConfig, i64, Instant
 
 #[test]
 fn spec221_c07_model_checks_distinguish_announcement_absence_and_expired_observation() {
-    use super::super::native_provider_catalogue220 as catalogue;
+    use super::super::native_provider_catalogue as catalogue;
     let (shared, config, now, clock) = observed221_fixture();
     let mut st = shared.lock().unwrap();
     let tasks = serde_json::to_vec(&st.delegation_store.tasks().unwrap()).unwrap();
@@ -395,7 +395,7 @@ fn spec221_c05_unsupported_selection_is_guided_and_consumes_no_admission() {
     let before =
         serde_json::to_vec(&shared.lock().unwrap().delegation_store.tasks().unwrap()).unwrap();
     request.service_tier = Some("priority".into());
-    assert!(crate::provider_catalogue220::MODEL_OPTIONS_LAUNCH_ENABLED);
+    assert!(crate::provider_catalogue::MODEL_OPTIONS_LAUNCH_ENABLED);
     let error =
         admit_auto_routing("conn-1", &request, None, None, None, None, &shared).unwrap_err();
     assert_eq!(error, "routing_candidate_unavailable:catalogue_no_match");
@@ -438,7 +438,7 @@ fn spec221_c05_unsupported_selection_is_guided_and_consumes_no_admission() {
 
 #[test]
 fn spec221_c05_catalogue_options_require_negotiation_and_keep_the_account_context() {
-    use super::super::native_provider_catalogue220 as catalogue;
+    use super::super::native_provider_catalogue as catalogue;
     use bridget_transport::protocol::*;
     use bridget_transport::provider_catalogue::*;
     let (shared, config, now, clock) = observed221_fixture();
@@ -612,7 +612,7 @@ fn spec221_c05_local_admission_keeps_the_option_in_probe_and_saved_launch() {
 
 #[test]
 fn spec221_c05_option_requires_current_model_connection_account_and_profile() {
-    use super::super::native_provider_catalogue220 as catalogue;
+    use super::super::native_provider_catalogue as catalogue;
     use bridget_transport::protocol::WorkerCapability;
     let (shared, config, now, _clock) = observed221_fixture();
     let mut st = shared.lock().unwrap();
@@ -857,7 +857,7 @@ fn spec221_c05_option_requires_current_model_connection_account_and_profile() {
 
 #[test]
 fn spec221_l2a_dates_distinguish_source_receipt_and_expire_on_either_clock() {
-    use super::super::native_provider_catalogue220 as catalogue;
+    use super::super::native_provider_catalogue as catalogue;
     let (shared, config, now, clock) = observed221_fixture();
     let mut st = shared.lock().unwrap();
     let at = clock + Duration::from_secs(30);
@@ -918,7 +918,7 @@ fn spec221_l2a_dates_distinguish_source_receipt_and_expire_on_either_clock() {
 
 #[test]
 fn spec221_l2a_effort_mismatch_is_an_observation_without_mutating_admission() {
-    use super::super::native_provider_catalogue220 as catalogue;
+    use super::super::native_provider_catalogue as catalogue;
     let (shared, config, now, clock) = observed221_fixture();
     let st = shared.lock().unwrap();
     let before = serde_json::to_vec(&st.registry.routing_catalogue(now).unwrap()).unwrap();
@@ -957,7 +957,7 @@ fn spec221_l2a_effort_mismatch_is_an_observation_without_mutating_admission() {
 
 #[test]
 fn spec221_l2a_same_model_on_two_servers_keeps_its_account_and_connection_context() {
-    use super::super::native_provider_catalogue220 as catalogue;
+    use super::super::native_provider_catalogue as catalogue;
     use bridget_transport::protocol::*;
     let (shared, config, now, clock) = observed221_fixture();
     let mut st = shared.lock().unwrap();
@@ -1108,7 +1108,7 @@ fn spec221_l2a_same_model_on_two_servers_keeps_its_account_and_connection_contex
 
 #[test]
 fn spec221_l2a_maximum_declared_connections_and_observed_models_fit_one_daemon_frame() {
-    use super::super::native_provider_catalogue220 as catalogue;
+    use super::super::native_provider_catalogue as catalogue;
     use bridget_transport::protocol::*;
     use bridget_transport::provider_catalogue::*;
     let (shared, config, _rx, _reader, _request, _root) = super::tests::routing168_fixture(1);
@@ -1261,7 +1261,7 @@ fn spec221_l2a_maximum_declared_connections_and_observed_models_fit_one_daemon_f
 
 #[test]
 fn spec221_l2a_stop_constraint_is_kept_on_registry_failure_and_policy_disable() {
-    use super::super::native_provider_catalogue220 as catalogue;
+    use super::super::native_provider_catalogue as catalogue;
     use bridget_transport::provider_catalogue::*;
     let (shared, config, now, clock) = observed221_fixture();
     let mut st = shared.lock().unwrap();
@@ -1404,7 +1404,7 @@ fn spec221_l2a_unavailable_global_catalogue_never_implies_probe_stopped() {
 
 #[test]
 fn spec221_l2a_refresh_over_connection_bound_sends_no_control_or_probe() {
-    use super::super::native_provider_catalogue220 as catalogue;
+    use super::super::native_provider_catalogue as catalogue;
     let (shared, config, now, clock) = observed221_fixture();
     let mut st = shared.lock().unwrap();
     let mut raw: Value =
@@ -1572,7 +1572,7 @@ fn spec220_refresh_requires_native_identity_or_negotiated_same_uid_client() {
 
 #[test]
 fn spec220_hello_clears_old_epoch_then_restores_retained_constraint() {
-    use super::super::native_provider_catalogue220 as catalogue;
+    use super::super::native_provider_catalogue as catalogue;
     use bridget_transport::protocol::*;
     use bridget_transport::provider_catalogue::*;
     use sha2::{Digest, Sha256};

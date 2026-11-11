@@ -15,12 +15,12 @@ pub mod communication;
 mod connection_channel;
 pub mod daemon;
 pub(crate) mod decision_service;
-mod delivery_spool244;
+mod delivery_spool;
 pub mod desired_state;
 pub mod disk_hygiene;
 pub mod environment;
 pub mod execution_store;
-mod reply_outbox244;
+mod reply_outbox;
 pub use execution_store::{
     ConditionalTransition, ExecutionSnapshot, ExecutionStore, QueuedSubmission,
 };
@@ -53,7 +53,7 @@ pub(crate) mod native_permissions;
 mod observation;
 pub mod project_compat;
 pub(crate) mod project_preparation;
-pub(crate) mod provider_catalogue220;
+pub(crate) mod provider_catalogue;
 pub(crate) mod provider_limits;
 pub(crate) mod provider_program_compat;
 pub mod reaper;
@@ -64,7 +64,7 @@ pub mod registry;
 pub mod remote_worker;
 pub mod reprise;
 pub mod runtime;
-pub(crate) mod sentinel244;
+pub(crate) mod sentinel;
 mod service_limits;
 mod storage_compatibility;
 pub mod store;
@@ -77,7 +77,7 @@ mod t3code_mcp;
 #[cfg(feature = "test-support")]
 pub mod test_sync;
 pub mod threads;
-mod workspace_failure210;
+mod workspace_failure;
 pub(crate) mod workspace_git;
 pub mod wrapper;
 

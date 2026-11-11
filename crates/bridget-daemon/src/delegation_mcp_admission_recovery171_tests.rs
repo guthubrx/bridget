@@ -38,7 +38,7 @@ fn spec232_lost_admission_reply_then_attestation_refusal_keeps_same_key_and_unce
 #[allow(clippy::assertions_on_constants)] // le drapeau de lancement est une constante : l'assertion garde le test
 fn spec221_c05_client_exposes_only_the_explicit_typed_option() {
     use std::os::unix::net::UnixListener;
-    assert!(crate::provider_catalogue220::MODEL_OPTIONS_LAUNCH_ENABLED);
+    assert!(crate::provider_catalogue::MODEL_OPTIONS_LAUNCH_ENABLED);
     let definitions = tools(&json!({}));
     let auto = definitions
         .iter()

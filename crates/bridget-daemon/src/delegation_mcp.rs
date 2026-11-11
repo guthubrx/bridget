@@ -143,7 +143,7 @@ pub(crate) fn tools(brief_schema: &Value) -> Vec<Value> {
     ];
     for tool in &mut definitions {
         if tool["name"] == "bridget_auto_delegate" {
-            if crate::provider_catalogue220::MODEL_OPTIONS_LAUNCH_ENABLED {
+            if crate::provider_catalogue::MODEL_OPTIONS_LAUNCH_ENABLED {
                 tool["inputSchema"]["properties"]["service_tier"] = json!({
                     "type":"string","minLength":1,"maxLength":256,
                     "description":"Niveau de service explicite du modèle, annoncé sur cette connexion et autorisé par son profil. Aucun défaut ni remplacement automatique ; peut consommer davantage de quota ou de crédits."});
@@ -223,7 +223,7 @@ fn execute_with_proof(
     }
     if name == "bridget_auto_delegate"
         && object.contains_key("service_tier")
-        && !crate::provider_catalogue220::MODEL_OPTIONS_LAUNCH_ENABLED
+        && !crate::provider_catalogue::MODEL_OPTIONS_LAUNCH_ENABLED
     {
         return Err(ClientError::InvalidParams(
             "service_tier : le choix d'un niveau de service n'est pas encore activé. Faire terminer son activation par le responsable Bridget avant de le demander pour une mission. Cet appel n'a pas été envoyé ; conserver la clé et vérifier toute demande antérieure avant un nouvel essai. Les autres travaux autorisés suivent leur propre état.".into()));

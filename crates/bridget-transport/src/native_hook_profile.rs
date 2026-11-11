@@ -397,14 +397,14 @@ pub fn recheck_guarded_hook_profile(context: &Value) -> Result<Value, String> {
                 }
                 return Err(guarded_hook_refusal(&raw));
             }
-            // SAFETY: kill ne déréférence aucun pointeur ; ses arguments sont des entiers.
             Err(_) => {
+                // SAFETY: kill ne déréférence aucun pointeur ; ses arguments sont des entiers.
                 let _ = unsafe { libc::kill(child.id() as i32, libc::SIGTERM) };
                 let _ = child.wait();
                 return Err(fail());
             }
-            // SAFETY: kill ne déréférence aucun pointeur ; ses arguments sont des entiers.
             _ if Instant::now() >= deadline => {
+                // SAFETY: kill ne déréférence aucun pointeur ; ses arguments sont des entiers.
                 let _ = unsafe { libc::kill(child.id() as i32, libc::SIGTERM) };
                 let _ = child.wait();
                 return Err("permission_hook_profile_timeout".into());

@@ -1098,7 +1098,7 @@ pub(crate) struct IdempotentDeliveryTracker {
     receipts: ReceiptStore,
     pending: BTreeMap<String, VecDeque<PendingAcpDispatch>>,
     ordinary: BTreeMap<String, usize>,
-    reply_outbox: Option<crate::reply_outbox244::ReplyOutbox>,
+    reply_outbox: Option<crate::reply_outbox::ReplyOutbox>,
     reply_state_home: std::path::PathBuf,
     modern_reply_core: bool,
     requires_binding: bool,
@@ -1144,7 +1144,7 @@ impl IdempotentDeliveryTracker {
             pending: BTreeMap::new(),
             ordinary: BTreeMap::new(),
             reply_outbox: if state_home.join("native-replies244").exists() {
-                Some(crate::reply_outbox244::ReplyOutbox::open(
+                Some(crate::reply_outbox::ReplyOutbox::open(
                     state_home,
                     instance_id,
                 )?)
@@ -1164,7 +1164,7 @@ impl IdempotentDeliveryTracker {
         reply: bridget_core::BridgetMessage,
     ) -> Result<bridget_core::BridgetMessage, String> {
         if self.reply_outbox.is_none() {
-            self.reply_outbox = Some(crate::reply_outbox244::ReplyOutbox::open(
+            self.reply_outbox = Some(crate::reply_outbox::ReplyOutbox::open(
                 &self.reply_state_home,
                 &self.instance_id,
             )?);
@@ -4950,7 +4950,7 @@ fn launch_session_with_status(
         .join("state")
         .join(format!("native-inbox-{instance_id}.sqlite"));
     let mut durable_inbox = if inbox_path.exists() {
-        Some(crate::delivery_spool244::DeliverySpool::open(
+        Some(crate::delivery_spool::DeliverySpool::open(
             &inbox_path,
             &instance_id,
         )?)
@@ -5496,10 +5496,8 @@ fn launch_session_with_status(
                         ) =>
                 {
                     if durable_inbox.is_none() {
-                        match crate::delivery_spool244::DeliverySpool::open(
-                            &inbox_path,
-                            &instance_id,
-                        ) {
+                        match crate::delivery_spool::DeliverySpool::open(&inbox_path, &instance_id)
+                        {
                             Ok(inbox) => durable_inbox = Some(inbox),
                             Err(error) => {
                                 error!(

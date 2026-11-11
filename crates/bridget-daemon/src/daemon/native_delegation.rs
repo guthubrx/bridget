@@ -1,14 +1,14 @@
 //! Effets de la saga native, sous les mêmes gardes que la flotte et les remises.
-#[path = "native_admission_guidance211.rs"]
-mod admission_guidance211;
+#[path = "native_admission_guidance.rs"]
+mod admission_guidance;
 #[path = "native_permission_change.rs"]
 mod permission_change;
-#[path = "native_quota_questions246.rs"]
-mod quota_questions246;
+#[path = "native_quota_questions.rs"]
+mod quota_questions;
 #[path = "native_start_recovery.rs"]
 mod start_recovery;
-#[path = "native_workspace_preparation210.rs"]
-mod workspace_preparation210;
+#[path = "native_workspace_preparation.rs"]
+mod workspace_preparation;
 #[path = "native_workspace_repair.rs"]
 pub(super) mod workspace_repair;
 use super::*;
@@ -1172,7 +1172,7 @@ fn prepare_routing_projects(
     plan.candidates
         .retain(|candidate| !refused.contains_key(&candidate.machine_id));
     if plan.candidates.is_empty() {
-        return Err(admission_guidance211::mapping_context_error(
+        return Err(admission_guidance::mapping_context_error(
             "project_preparation",
             &refused,
         ));
@@ -1565,7 +1565,7 @@ fn observe_routing_candidates_for_project(
             .collect::<HashSet<_>>();
         for (index, candidate) in plan.candidates.iter().enumerate() {
             let candidate_id = routing_candidate_id(index);
-            let option_account = match super::native_provider_catalogue220::model_option_account(
+            let option_account = match super::native_provider_catalogue::model_option_account(
                 &st,
                 &registry,
                 candidate,
@@ -2031,7 +2031,7 @@ fn observe_routing_candidates_for_project(
                 "worker_candidate_probe_v2_unsupported".into()
             }
         } else if !mapping_refusals.is_empty() {
-            admission_guidance211::mapping_context_error("candidate_mapping", &mapping_refusals)
+            admission_guidance::mapping_context_error("candidate_mapping", &mapping_refusals)
         } else if let Some(quota) = plan
             .connections
             .iter()
@@ -3190,7 +3190,7 @@ fn admit_auto_routing(
             return Err("model_options_invalid".into());
         }
         if request.service_tier.is_some()
-            && !crate::provider_catalogue220::MODEL_OPTIONS_LAUNCH_ENABLED
+            && !crate::provider_catalogue::MODEL_OPTIONS_LAUNCH_ENABLED
         {
             return Err("model_options_not_activated".into());
         }
@@ -3211,7 +3211,7 @@ fn admit_auto_routing(
                     .is_some_and(|q| q["launch_blocked"] == true)
             });
             let st = state.lock().recover_poison();
-            if let Err(code) = quota_questions246::pre_admission(
+            if let Err(code) = quota_questions::pre_admission(
                 &st,
                 conn,
                 &NativeDelegationRequest::AutoDelegateV2(request.clone()),
@@ -4789,7 +4789,7 @@ fn routing_failure_admission(
             "next_action":"Faire vérifier la projection des tâches par le responsable Bridget ; une absence de diagnostic ne prouve pas le dossier libre. Conserver demande, clé et autres travaux sans libérer de garde."});
     }
     if let Some((owner, _)) = live_connection_identity(&st, conn)
-        && let Err(_) = crate::sentinel244::record_admission_observation(
+        && let Err(_) = crate::sentinel::record_admission_observation(
             st.store.connection(),
             &owner,
             &request.request_id,
@@ -4867,7 +4867,7 @@ fn failure(code: &str) -> Value {
         return json!({"version":1,"status":"refused","code":code,"scope":"this_request","message":"Relisez la fiche de cet agent avant une nouvelle ronde. Son état de sommeil est illisible ; cette nouvelle ronde n'est pas admise. Conservez tâche et clé. Si la lecture reste indisponible, le responsable Bridget doit vérifier le stockage de cette fiche. Les travaux déjà acceptés et les autres travaux autorisés suivent leur propre état."});
     }
     if let Some(encoded) = code.strip_prefix("routing_project_refused:") {
-        return admission_guidance211::contextual_refusal(encoded);
+        return admission_guidance::contextual_refusal(encoded);
     }
     if matches!(
         code,
@@ -5030,7 +5030,7 @@ fn failure(code: &str) -> Value {
         };
         return json!({"status":"refused","code":code,"message":message,"detail":{"recovery":action,"human_action":"Si cette vérification exige un accès indisponible, demander au responsable une intervention ciblée sur ce serveur. Ne pas changer de compte ni de droits.","scope":"Ce refus concerne cette demande d’observation. Les autres travaux autorisés suivent leur propre état."}});
     }
-    if let Some(view) = admission_guidance211::refusal(code) {
+    if let Some(view) = admission_guidance::refusal(code) {
         return view;
     }
     if permission_change::recognizes(code) {
@@ -5844,10 +5844,10 @@ fn remote_start_error_message(error: &str) -> Option<&'static str> {
             }
         });
     }
-    if let Some(action) = admission_guidance211::worker_start_action(error) {
+    if let Some(action) = admission_guidance::worker_start_action(error) {
         return Some(action);
     }
-    let reason = error.strip_prefix(workspace_preparation210::REMOTE_WORKSPACE_PREPARE_PREFIX)?;
+    let reason = error.strip_prefix(workspace_preparation::REMOTE_WORKSPACE_PREPARE_PREFIX)?;
     Some(match reason {
         "DiskFull" => {
             "Préparation distante impossible : espace disque insuffisant sur la machine cible. La tâche reste enregistrée."
@@ -5976,7 +5976,7 @@ fn task_view(task: &Task, phase: Option<&str>, full: bool) -> Value {
         && task.child_instance.is_none()
         && task.mission_issued_at.is_none()
         && task.error.as_deref().is_some_and(|error| {
-            error.starts_with(workspace_preparation210::REMOTE_WORKSPACE_PREPARE_PREFIX)
+            error.starts_with(workspace_preparation::REMOTE_WORKSPACE_PREPARE_PREFIX)
         });
     let result_reservation_failed = task.mission_issued_at.is_none()
         && task
@@ -6181,7 +6181,7 @@ fn task_view(task: &Task, phase: Option<&str>, full: bool) -> Value {
     view["mission_reply_timeout_secs"] =
         json!(task.reply_timeout.unwrap_or(MISSION_REPLY_LIMIT_SECS));
     permission_change::project_task(task, &mut view);
-    workspace_preparation210::project(task, &mut view);
+    workspace_preparation::project(task, &mut view);
     project_sender_and_prepare_refusals(task, &mut view);
     if task.projected_error() == Some("terminal Codex: failed:cause=server_overloaded") {
         view["error_message"] = json!(
@@ -6721,7 +6721,7 @@ fn current_task_view(st: &DaemonState, task: &Task, full: bool) -> Result<Value,
     view["recent_requests"]=json!(rows.iter().filter(|row|row.state!="open").take(10).map(|row|
         json!({"request_id":row.request_id,"kind":row.kind,"outcome":row.outcome,"decision":row.decision,"decided_at":row.decided_at,"delivery_state":row.delivery_state,"delivery_error":row.void_reason.as_deref().map(|reason| match reason { "permission_source_unavailable" | "delivery_check_unavailable" | "provider_quota_exhausted" | "revoked" => reason, _ => "delivery_invalidated" })})).collect::<Vec<_>>());
     st.dispatch_diagnostics.attach(task, &mut view, full);
-    quota_questions246::attach(st, task, &mut view);
+    quota_questions::attach(st, task, &mut view);
     if full
         && matches!(
             task.projected_error(),
@@ -7413,7 +7413,7 @@ fn read_commit_file(
         view["detail"]["cause"] = json!(failure);
         if let Some(cause) = failure {
             view["detail"]["cause_kind"] = json!("commit_view");
-            let action = workspace_preparation210::view_failure_action(cause);
+            let action = workspace_preparation::view_failure_action(cause);
             let file_action = if cause == CommitViewFailure::OperationCapacity {
                 " Après sa fin attestée, demander de nouveau le même fichier sur cette tâche, sans boucle serrée."
             } else {
@@ -7518,7 +7518,7 @@ fn foreign_catalogue177(
     );
     let origin_machine = super::origin_proof::host_for_owner(&st, &owner)?;
     result["verdict_context"]["machine_id"] = json!(origin_machine);
-    super::native_provider_catalogue220::enrich(&st, &mut result, &origin_machine);
+    super::native_provider_catalogue::enrich(&st, &mut result, &origin_machine);
     Ok(Some(result))
 }
 
@@ -7649,8 +7649,7 @@ fn handle_with_fact(
                 }));
         if known && result["task_id"].is_null() {
             let st = state.lock().recover_poison();
-            if let Err(code) = quota_questions246::pre_admission(&st, conn, &request, true, result)
-            {
+            if let Err(code) = quota_questions::pre_admission(&st, conn, &request, true, result) {
                 result["quota_question_error"] = json!(code);
             }
         }
@@ -7680,14 +7679,14 @@ fn handle_with_fact_inner(
                 parent_fact(&st, &owner, &instance, None, fact.as_ref())?
                     .ok_or("permission_attestation_unavailable")?;
                 let native =
-                    super::specialists222::prepare_temporary(&st, conn, &owner, operation)?;
+                    super::specialist_requests::prepare_temporary(&st, conn, &owner, operation)?;
                 Ok((owner, native))
             })();
             let (owner, native) = match prepared {
                 Ok(v) => v,
                 Err(code) => {
                     return DaemonToWrapper::NativeDelegationResult {
-                        result: super::specialists222::failure(&code),
+                        result: super::specialist_requests::failure(&code),
                     };
                 }
             };
@@ -7702,10 +7701,10 @@ fn handle_with_fact_inner(
             );
             if let DaemonToWrapper::NativeDelegationResult { result } = &mut response {
                 let st = state.lock().recover_poison();
-                if let Err(code) =
-                    super::specialists222::attach_temporary_result(&st, &owner, operation, result)
-                {
-                    result["specialist_attachment"] = super::specialists222::failure(&code);
+                if let Err(code) = super::specialist_requests::attach_temporary_result(
+                    &st, &owner, operation, result,
+                ) {
+                    result["specialist_attachment"] = super::specialist_requests::failure(&code);
                     result["next_action"] = json!(
                         "Conserver la tâche native déjà admise. Faire vérifier son rattachement au profil ; aucune nouvelle mission ni nouvelle clé."
                     );
@@ -7731,7 +7730,7 @@ fn handle_with_fact_inner(
                     live_connection_identity(&st, conn).ok_or("identity_unavailable")?;
                 parent_fact(&st, &owner, &instance, None, fact.as_ref())?
                     .ok_or("permission_attestation_unavailable")?;
-                Ok(super::specialists222::agent_principal(
+                Ok(super::specialist_requests::agent_principal(
                     &st,
                     &owner,
                     agent_communication_project(&st, &owner).as_ref(),
@@ -7739,9 +7738,9 @@ fn handle_with_fact_inner(
             })();
             let result = match principal {
                 Ok(principal) => {
-                    super::specialists222::capture_history(operation, &principal, state)
+                    super::specialist_requests::capture_history(operation, &principal, state)
                 }
-                Err(code) => super::specialists222::failure(&code),
+                Err(code) => super::specialist_requests::failure(&code),
             };
             return DaemonToWrapper::NativeDelegationResult { result };
         }
@@ -7754,7 +7753,7 @@ fn handle_with_fact_inner(
             parent_fact(&st, &owner, &instance, None, fact.as_ref())?
                 .ok_or("permission_attestation_unavailable")?;
             let project = agent_communication_project(&st, &owner);
-            super::specialists222::handle_agent(
+            super::specialist_requests::handle_agent(
                 &mut st,
                 conn,
                 &owner,
@@ -7763,7 +7762,7 @@ fn handle_with_fact_inner(
                 &mut controls,
             )
         })()
-        .unwrap_or_else(|code| super::specialists222::failure(&code));
+        .unwrap_or_else(|code| super::specialist_requests::failure(&code));
         let _failed = execute_controls(controls);
         return DaemonToWrapper::NativeDelegationResult { result };
     }
@@ -7850,7 +7849,7 @@ fn handle_with_fact_inner(
                 // The ordinary own-state capability gate remains authoritative.
             }
             if *refresh {
-                super::native_provider_catalogue220::refresh(
+                super::native_provider_catalogue::refresh(
                     &mut st,
                     machine_id.as_deref(),
                     &mut controls,
@@ -7862,7 +7861,7 @@ fn handle_with_fact_inner(
                 {
                     return Err("provider_catalogue_machine_invalid".into());
                 }
-                let mut view = super::native_provider_catalogue220::view(&st)?;
+                let mut view = super::native_provider_catalogue::view(&st)?;
                 if let Some(machine) = machine_id {
                     for key in ["options", "connection_catalogues"] {
                         if let Some(values) = view[key].as_array_mut() {
@@ -7874,7 +7873,7 @@ fn handle_with_fact_inner(
             }
         })()
         .unwrap_or_else(|code: String| failure(&code));
-        let failed = super::native_provider_catalogue220::send_controls(controls);
+        let failed = super::native_provider_catalogue::send_controls(controls);
         if !failed.is_empty() {
             result["status"] = json!("unconfirmed");
             result["code"] = json!("provider_catalogue_refresh_unconfirmed");
@@ -8557,7 +8556,7 @@ fn delegate_remote_with_routing(
             return Err("routing_connection_changed:worker_prepare:worker_epoch".into());
         }
         if let Some((auto, candidate, observed)) = &routing {
-            let current = super::native_provider_catalogue220::model_option_account(
+            let current = super::native_provider_catalogue::model_option_account(
                 &st,
                 &st.registry,
                 candidate,
@@ -8745,10 +8744,10 @@ fn delegate_remote_with_routing(
             )
             .map_err(|e| format!("remote_workspace_prepare:{e:?}"))?;
             if let WorkerResponseOperation::CommitViewRejected { reason, failure } = &response {
-                return Err(workspace_preparation210::view_error_code(*reason, *failure));
+                return Err(workspace_preparation::view_error_code(*reason, *failure));
             }
             if let WorkerResponseOperation::WorkspaceRejected { reason, failure } = &response {
-                return Err(workspace_preparation210::error_code(*reason, *failure));
+                return Err(workspace_preparation::error_code(*reason, *failure));
             }
             let WorkerResponseOperation::Prepared { prepared: isolated } = response else {
                 return Err("remote_prepare_invalid".into());
@@ -10840,7 +10839,7 @@ fn admit_delegate(
         {
             return Err("workspace_creation_in_progress".into());
         }
-        super::specialists222::guard_child_admission(st, &owner)?;
+        super::specialist_requests::guard_child_admission(st, &owner)?;
         let fact = parent_fact(st, &owner, &instance, Some(request_id), attested)?;
         if child_requests.as_deref() == Some("forward")
             && fact.as_ref().is_none_or(|fact| {
@@ -11572,7 +11571,7 @@ fn handle_locked_with_remote_proof(
                 permission.as_ref(),
                 verdict_cwd.as_deref(),
             );
-            super::native_provider_catalogue220::enrich(
+            super::native_provider_catalogue::enrich(
                 st,
                 &mut result,
                 &crate::build_info::local_host(),
@@ -12035,7 +12034,7 @@ pub(super) fn recheck_task_model_option(st: &DaemonState, task: &Task) -> Result
     // La fraîcheur, l'identité courante, le profil et la capacité sont relus
     // par model_option_account. Une nouvelle époque n'est pas un nouveau
     // compte : le nonce du même service observateur reste la continuité.
-    let current = super::native_provider_catalogue220::model_option_account(
+    let current = super::native_provider_catalogue::model_option_account(
         st,
         &registry,
         candidate,
@@ -12744,8 +12743,8 @@ pub(super) fn capture_reply(
     conn: &str,
     message: &bridget_core::BridgetMessage,
 ) -> Result<bool, String> {
-    super::specialists222::capture_correlated_reply(st, conn, message);
-    if super::specialists222::capture_human_reply(st, conn, message)? {
+    super::specialist_requests::capture_correlated_reply(st, conn, message);
+    if super::specialist_requests::capture_human_reply(st, conn, message)? {
         return Ok(true);
     }
     let Some(correlation) = message.in_reply_to.as_deref() else {
@@ -12773,7 +12772,7 @@ pub(super) fn capture_reply(
         // Une ancienne ronde est absorbée seulement sous l'identité courante
         // de cet enfant. Cette lecture ne répare aucun lien ni checkpoint.
         let Some(past) = past else {
-            return super::agent_tracking230::retain_classic_reply(st, conn, message);
+            return super::agent_tracking::retain_classic_reply(st, conn, message);
         };
         return Ok(past.child == message.from
             && past.owner == message.to
@@ -15360,7 +15359,7 @@ pub(super) fn tick(state: &Arc<Mutex<DaemonState>>) {
             }
             if task.state == "failed" {
                 if task.acknowledged_at.is_none()
-                    && let Err(code) = quota_questions246::ensure(&st, &task)
+                    && let Err(code) = quota_questions::ensure(&st, &task)
                 {
                     warn!(
                         "question de reprise quota non déposée ({code}) ; tâche et refus conservés"
@@ -15390,7 +15389,7 @@ pub(super) fn tick(state: &Arc<Mutex<DaemonState>>) {
                         || error.to_string(),
                         |reset| format!("{error} (retour quota : {reset})"),
                     );
-                    let recovery = quota_questions246::notice(&st, &task);
+                    let recovery = quota_questions::notice(&st, &task);
                     let provider_recovery = provider_error_recovery(error).unwrap_or("");
                     let mut notice = bridget_core::BridgetMessage::new(
                         &task.owner,
@@ -15732,7 +15731,7 @@ pub(super) fn tick(state: &Arc<Mutex<DaemonState>>) {
                 }
             }
             if task.state == "result_available" && !task.result_sent {
-                super::specialists222::capture_task(&st, &task);
+                super::specialist_requests::capture_task(&st, &task);
                 let Some(child_instance) = task.child_instance.as_deref() else {
                     task.state = "failed".into();
                     task.error = Some("native_result_invalid".into());

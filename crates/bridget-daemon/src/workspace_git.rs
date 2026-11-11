@@ -1176,7 +1176,7 @@ pub(crate) fn create(
         std::sync::Arc::clone(locks.entry(preflight.toplevel.clone()).or_default())
     };
     let _serialized = lock.lock().recover_poison();
-    let compact = crate::workspace_failure210::stage(
+    let compact = crate::workspace_failure::stage(
         bridget_transport::protocol::WorkspacePrepareStage::CompactPlan,
         compact::plan(preflight),
     )?;
@@ -1263,7 +1263,7 @@ pub(crate) fn create(
         ));
     }
     if let Some(plan) = compact {
-        crate::workspace_failure210::stage(
+        crate::workspace_failure::stage(
             bridget_transport::protocol::WorkspacePrepareStage::CompactApply,
             compact::apply(&path, plan),
         )

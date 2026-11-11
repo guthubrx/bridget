@@ -169,7 +169,7 @@ def fingerprint(binary, registry, state=None):
         # Réutiliser exclusivement les liens natifs dont le reçu, les fichiers
         # et le namespace sont déjà vérifiés par la préparation de projet.
         helper = {"__name__":"sentinel_prepare_helper"}
-        # Invariant : la source exécutée est celle que le démon injecte (include_str! de scripts/prepare-project.py dans sentinel244.rs),
+        # Invariant : la source exécutée est celle que le démon injecte (include_str! de scripts/prepare-project.py dans sentinel.rs),
         # de même confiance que ce script (programme 260, décision D11 : mécanisme conservé).
         exec(os.environ["BRIDGET_SENTINEL_PREPARE_SOURCE"], helper)  # noqa: S102
         links = helper["installed_links"](state)

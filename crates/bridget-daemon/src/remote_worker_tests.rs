@@ -2056,7 +2056,7 @@ fn spec221_c19_worker_reader_reopens_receipt_but_rejects_new_prepare_without_eff
     drop(store);
     let reopened = fixture.open();
     reopened.health().unwrap();
-    let receipt = proof198::read_workspace_receipt(&reopened.root, &worker(), &command)
+    let receipt = proof::read_workspace_receipt(&reopened.root, &worker(), &command)
         .unwrap()
         .unwrap();
     assert!(same_workspace_anchor(
@@ -2226,7 +2226,7 @@ fn spec221_c19_worker_reserves_view_bytes_before_private_writes_and_keeps_reserv
         .unwrap();
     let after = store.inventory().unwrap();
     assert_eq!(after.3, 1);
-    let receipt = proof198::read_workspace_receipt(&store.root, &worker(), &command)
+    let receipt = proof::read_workspace_receipt(&store.root, &worker(), &command)
         .unwrap()
         .unwrap();
     let receipt_bytes = fs::metadata(store.workspace_path(&command)).unwrap().len();
@@ -2395,7 +2395,7 @@ fn spec221_c19_start_fence_must_not_ignore_live_source_export() {
     }
     let expires = worker_now() + 300;
     let fenced = store.fence_unstarted(&command(), &placement(), expires, worker_now());
-    let stored = proof198::read_workspace_receipt(&store.root, &worker(), &prep)
+    let stored = proof::read_workspace_receipt(&store.root, &worker(), &prep)
         .unwrap()
         .unwrap();
     let owned_marker = stored
@@ -2444,7 +2444,7 @@ fn spec221_c19_start_fence_must_not_ignore_live_source_export() {
     store
         .fence_unstarted(&command(), &placement(), expires, worker_now())
         .unwrap();
-    let stopped = proof198::read_workspace_receipt(&store.root, &worker(), &prep)
+    let stopped = proof::read_workspace_receipt(&store.root, &worker(), &prep)
         .unwrap()
         .unwrap();
     assert!(stopped.commit_view.as_ref().unwrap().source_stopped);
@@ -2524,7 +2524,7 @@ fn spec221_c19_worker_publishes_only_after_source_group_stop_and_private_audit()
     }
     // La récolte et la suppression du sidecar ne suffisent pas : le reçu
     // conserve encore son marqueur, source_stopped=false jusqu'au constat.
-    let previous = proof198::read_workspace_receipt(&store.root, &worker(), &prep)
+    let previous = proof::read_workspace_receipt(&store.root, &worker(), &prep)
         .unwrap()
         .unwrap();
     assert!(
@@ -2543,7 +2543,7 @@ fn spec221_c19_worker_publishes_only_after_source_group_stop_and_private_audit()
             .exists()
     );
     let record = store.publish_view_workspace(&prep, &intent).unwrap();
-    let current = proof198::read_workspace_receipt(&store.root, &worker(), &prep)
+    let current = proof::read_workspace_receipt(&store.root, &worker(), &prep)
         .unwrap()
         .unwrap();
     assert!(current.commit_view.as_ref().unwrap().source_stopped);
@@ -2765,7 +2765,7 @@ fn spec221_c19_runtime_fence_stops_only_owned_source_after_validating_the_reques
         assert!(Instant::now() < until);
         std::thread::sleep(Duration::from_millis(10));
     }
-    let stopped = proof198::read_workspace_receipt(&runtime.store.root, &worker(), &prep)
+    let stopped = proof::read_workspace_receipt(&runtime.store.root, &worker(), &prep)
         .unwrap()
         .unwrap();
     assert!(stopped.commit_view.as_ref().unwrap().source_stopped);
@@ -2951,7 +2951,7 @@ fn spec221_c19_restarted_runtime_recovers_receipt_identity_without_second_export
     reopened
         .fence_unstarted(&command(), &placement(), worker_now() + 300)
         .unwrap();
-    let stopped = proof198::read_workspace_receipt(&reopened.store.root, &worker(), &prep)
+    let stopped = proof::read_workspace_receipt(&reopened.store.root, &worker(), &prep)
         .unwrap()
         .unwrap();
     assert!(stopped.commit_view.as_ref().unwrap().source_stopped);
@@ -4709,7 +4709,7 @@ fn spec221_c19_missing_reservation_with_even_empty_orphan_proof_remains_unknown(
         WorkerRefusal::UnknownExecution
     );
     assert!(
-        proof198::read_workspace_receipt(&runtime.store.root, &runtime.identity, &prepare)
+        proof::read_workspace_receipt(&runtime.store.root, &runtime.identity, &prepare)
             .unwrap()
             .is_none()
     );
@@ -4771,7 +4771,7 @@ fn spec221_c19_prepare_rechecks_definition_after_export_and_keeps_view_on_refusa
         b"committed"
     );
     assert!(
-        proof198::read_workspace_receipt(&runtime.store.root, &runtime.identity, &command)
+        proof::read_workspace_receipt(&runtime.store.root, &runtime.identity, &command)
             .unwrap()
             .unwrap()
             .record
@@ -7018,7 +7018,7 @@ fn spec221_c19_fenced_file_requires_bind_canon_and_original_unclosed_anchor() {
     let mut prep = execution.command.clone();
     prep.instance_id.clear();
     prep.generation = 0;
-    let bind = proof198::bind_path(&runtime.store.root, &prep);
+    let bind = proof::bind_path(&runtime.store.root, &prep);
     let saved = fs::read(&bind).unwrap();
     fs::remove_file(&bind).unwrap();
     assert!(runtime.store.active_view_execution(&execution).is_err());
@@ -9777,7 +9777,7 @@ fn worker162_prepare_worktree_rejoue_et_rapport_preserve_modifications() {
             runtime.handle(&legacy, "epoch210", &disconnected),
             Err(WorkerRefusal::WorkspacePrepareFailed)
         );
-        assert!(crate::workspace_failure210::take().is_some());
+        assert!(crate::workspace_failure::take().is_some());
         let mut stale = frame.clone();
         stale.connection_epoch = "foreign".into();
         assert_eq!(
@@ -10043,7 +10043,7 @@ fn worker162_prepare_worktree_rejoue_et_rapport_preserve_modifications() {
         WorkerRefusal::CapabilityRequired
     );
     assert!(!runtime.store.workspace_path(&next).exists());
-    assert!(!proof198::bind_path(&runtime.store.root, &next).exists());
+    assert!(!proof::bind_path(&runtime.store.root, &next).exists());
     let fresh = runtime
         .prepare_fenced(
             &next,
@@ -10092,7 +10092,7 @@ fn worker162_prepare_worktree_rejoue_et_rapport_preserve_modifications() {
         later_turn.parent,
         "Release doit employer la révision actuelle, même quand le token reste identique"
     );
-    let proof_before = fs::read(proof198::bind_path(&runtime.store.root, &next)).unwrap();
+    let proof_before = fs::read(proof::bind_path(&runtime.store.root, &next)).unwrap();
     let restart_config = WorkerRuntimeConfig {
         machine_id: runtime.config.machine_id.clone(),
         worker_id: runtime.config.worker_id.clone(),
@@ -10121,7 +10121,7 @@ fn worker162_prepare_worktree_rejoue_et_rapport_preserve_modifications() {
         )
         .unwrap();
     assert_eq!(
-        fs::read(proof198::bind_path(&runtime.store.root, &next)).unwrap(),
+        fs::read(proof::bind_path(&runtime.store.root, &next)).unwrap(),
         proof_before,
         "ACK perdu puis redémarrage et parent renouvelé : canon durable inchangé"
     );
@@ -10165,7 +10165,7 @@ fn worker162_prepare_worktree_rejoue_et_rapport_preserve_modifications() {
             )
             .is_err()
     );
-    let bound = proof198::read_workspace_receipt(&runtime.store.root, &runtime.store.worker, &next)
+    let bound = proof::read_workspace_receipt(&runtime.store.root, &runtime.store.worker, &next)
         .unwrap()
         .unwrap();
     assert_eq!(bound.fenced_previous, Some(previous.clone()));
@@ -10179,7 +10179,7 @@ fn worker162_prepare_worktree_rejoue_et_rapport_preserve_modifications() {
         raw.get("fenced_previous").is_none(),
         "reçu workspace strictement au format183"
     );
-    assert!(proof198::bind_path(&runtime.store.root, &next).exists());
+    assert!(proof::bind_path(&runtime.store.root, &next).exists());
     assert!(runtime.store.inventory().is_ok());
     assert!(assert_legacy183_readable(&runtime.store.root) >= 1);
     runtime
@@ -11468,7 +11468,7 @@ fn spec198_fence_reste_lisible_format183_et_preuve_seule_bloque_start() {
         "reçu commande strictement au format183"
     );
     assert!(raw["deadline_at"].as_i64().unwrap() > raw["created_at"].as_i64().unwrap());
-    let proof = proof198::read_fence(&runtime.store.root, &runtime.store.worker, &command())
+    let proof = proof::read_fence(&runtime.store.root, &runtime.store.worker, &command())
         .unwrap()
         .unwrap();
     assert_eq!(
@@ -11489,13 +11489,13 @@ fn spec198_fence_reste_lisible_format183_et_preuve_seule_bloque_start() {
     };
     let created_at = worker_now();
     let digest =
-        proof198::fence_digest(&runtime.store.worker, &other, &placement(), deadline).unwrap();
-    proof198::ensure_dir(&runtime.store.root).unwrap();
+        proof::fence_digest(&runtime.store.worker, &other, &placement(), deadline).unwrap();
+    proof::ensure_dir(&runtime.store.root).unwrap();
     runtime
         .store
         .persist(
-            &proof198::fence_path(&runtime.store.root, &other),
-            &proof198::FenceProof {
+            &proof::fence_path(&runtime.store.root, &other),
+            &proof::FenceProof {
                 version: STORE_VERSION,
                 worker: runtime.store.worker.clone(),
                 identity: other.clone(),
@@ -12065,10 +12065,10 @@ fn spec234_recovery_refuses_live_orphan_marker_and_invalid_record() {
     let enrolled = runtime.store.enrollment.clone();
     private_dir(&root.join("markers")).unwrap();
     let marker = root.join("markers/live-orphan.json");
-    // SAFETY: getpgrp ne déréférence aucun pointeur ; ses arguments sont des entiers.
     write_json(
         &marker,
         &ManagedMarker {
+            // SAFETY: getpgrp ne déréférence aucun pointeur ; ses arguments sont des entiers.
             pgid: unsafe { libc::getpgrp() } as u32,
             birth: 1,
             instance_id: command.task_id.clone(),

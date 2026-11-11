@@ -622,7 +622,7 @@ fn execute(
             return failure("forbidden_scope");
         }
         drop(store);
-        return match crate::sentinel244::read_remote(&gateway.socket) {
+        return match crate::sentinel::read_remote(&gateway.socket) {
             Ok(report) => result(report),
             Err(_) => failure("endpoint_unavailable"),
         };

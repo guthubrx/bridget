@@ -22,13 +22,13 @@ use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-#[path = "remote_worker_capacity234.rs"]
-mod capacity234;
-#[path = "remote_worker_proof198.rs"]
-mod proof198;
+#[path = "remote_worker_capacity.rs"]
+mod capacity;
+#[path = "remote_worker_proof.rs"]
+mod proof;
 #[path = "remote_worker_read.rs"]
 mod read;
-pub(crate) use capacity234::recover_view_capacity;
+pub(crate) use capacity::recover_view_capacity;
 #[cfg(test)]
 use read::diagnose_local;
 pub(crate) use read::{
@@ -736,8 +736,8 @@ fn exact_fence_at(
         .join(format!("{}.json", marker_key(previous)));
     let mut receipt: WorkerCommandReceipt =
         read_optional(&path, MAX_METADATA_BYTES)?.ok_or(WorkerStoreError::Unknown)?;
-    proof198::overlay_fence(root, worker, &mut receipt)?;
-    let digest = proof198::fence_digest(worker, previous, &receipt.placement, receipt.deadline_at)?;
+    proof::overlay_fence(root, worker, &mut receipt)?;
+    let digest = proof::fence_digest(worker, previous, &receipt.placement, receipt.deadline_at)?;
     if receipt.version != STORE_VERSION
         || receipt.worker != *worker
         || receipt.identity != *previous
@@ -778,7 +778,7 @@ fn original_workspace_at(
         if !visited.insert(command.command_id.clone()) {
             return Err(WorkerStoreError::Conflict);
         }
-        let receipt = proof198::read_workspace_receipt(root, worker, &command)?
+        let receipt = proof::read_workspace_receipt(root, worker, &command)?
             .ok_or(WorkerStoreError::Unknown)?;
         if receipt.version != STORE_VERSION
             || receipt.worker != *worker
@@ -818,8 +818,8 @@ fn view_anchor_receipt_at(
     request: Option<&WorkerPrepare>,
 ) -> Result<WorkspacePreparationReceipt, WorkerStoreError> {
     command.validate_preparation()?;
-    let current = proof198::read_workspace_receipt(root, worker, command)?
-        .ok_or(WorkerStoreError::Unknown)?;
+    let current =
+        proof::read_workspace_receipt(root, worker, command)?.ok_or(WorkerStoreError::Unknown)?;
     if current.worker != *worker || current.command != *command || current.version != STORE_VERSION
     {
         return Err(WorkerStoreError::Conflict);
@@ -847,7 +847,7 @@ fn view_anchor_receipt_at(
     {
         return Err(WorkerStoreError::Conflict);
     }
-    let anchor = proof198::read_workspace_receipt(root, worker, &reference.binding.command)?
+    let anchor = proof::read_workspace_receipt(root, worker, &reference.binding.command)?
         .ok_or(WorkerStoreError::Unknown)?;
     let view = anchor
         .commit_view
@@ -1026,7 +1026,7 @@ impl WorkerStore {
             return Ok(CommandReservation::Existing(receipt));
         }
         // Une preuve de fence198 sans reçu (crash) interdit encore tout Start.
-        if proof198::read_fence(&self.root, &self.worker, identity)?.is_some() {
+        if proof::read_fence(&self.root, &self.worker, identity)?.is_some() {
             return Err(WorkerStoreError::Conflict);
         }
         self.admit(MAX_METADATA_BYTES as u64 * 2 + DRAIN_PROOF_RESERVATION, 1)?;
@@ -1077,9 +1077,9 @@ impl WorkerStore {
         if !placement.matches_worker(&self.worker) || deadline_at <= 0 || now < 0 {
             return Err(WorkerRefusal::InvalidEnvelope.into());
         }
-        let digest = proof198::fence_digest(&self.worker, identity, placement, deadline_at)?;
+        let digest = proof::fence_digest(&self.worker, identity, placement, deadline_at)?;
         // La preuve est écrite avant le reçu ; seule elle reste après un crash.
-        let existing = proof198::read_fence(&self.root, &self.worker, identity)?;
+        let existing = proof::read_fence(&self.root, &self.worker, identity)?;
         if existing.as_ref().is_some_and(|proof| {
             proof.digest != digest
                 || proof.placement != *placement
@@ -1120,7 +1120,7 @@ impl WorkerStore {
             }
             None => {
                 self.admit(MAX_METADATA_BYTES as u64 * 3 + DRAIN_PROOF_RESERVATION, 2)?;
-                let proof = proof198::FenceProof {
+                let proof = proof::FenceProof {
                     version: STORE_VERSION,
                     worker: self.worker.clone(),
                     identity: identity.clone(),
@@ -1129,8 +1129,8 @@ impl WorkerStore {
                     created_at: now,
                     digest: digest.clone(),
                 };
-                proof198::ensure_dir(&self.root)?;
-                self.persist(&proof198::fence_path(&self.root, identity), &proof)?;
+                proof::ensure_dir(&self.root)?;
+                self.persist(&proof::fence_path(&self.root, identity), &proof)?;
                 proof
             }
         };
@@ -1141,7 +1141,7 @@ impl WorkerStore {
             command_digest: digest,
             pre_start_fence: None,
             placement: placement.clone(),
-            deadline_at: proof198::legacy_deadline(proof.deadline_at, proof.created_at),
+            deadline_at: proof::legacy_deadline(proof.deadline_at, proof.created_at),
             phase: WorkerCommandPhase::Refused,
             marker: None,
             permit: None,
@@ -1723,7 +1723,7 @@ impl WorkerStore {
                 workspace_repair::collect_markers(&self.root, &command)?;
                 // Preuve annexe d'abord : un crash laisse au pire un refus ordinaire.
                 if command.pre_start_fence.is_some() {
-                    fs::remove_file(proof198::fence_path(&self.root, &command.identity))?;
+                    fs::remove_file(proof::fence_path(&self.root, &command.identity))?;
                     File::open(self.root.join("start198"))?.sync_all()?;
                 }
                 fs::remove_file(self.command_path(&command.identity))?;
@@ -1974,7 +1974,7 @@ impl WorkerStore {
                     read_optional(&path, MAX_METADATA_BYTES)?
                         .ok_or(WorkerStoreError::Quarantined)?;
                 validate_prepare_command(&receipt.command)?;
-                proof198::overlay_bind(&self.root, &self.worker, &mut receipt)?;
+                proof::overlay_bind(&self.root, &self.worker, &mut receipt)?;
                 if receipt.version != STORE_VERSION
                     || receipt.worker != self.worker
                     || !valid_digest(&receipt.prepare_digest)
@@ -2007,7 +2007,7 @@ impl WorkerStore {
         let count = commands.len()
             + slots.len()
             + workspaces
-            + proof198::count(&self.root, &self.worker)?
+            + proof::count(&self.root, &self.worker)?
             + self.view_orphan_entries(&view_keys)?;
         if used > MAX_WORKER_STORE_BYTES as u64 || count > MAX_WORKER_STORE_ENTRIES {
             return Err(WorkerStoreError::Quota);
@@ -2146,8 +2146,7 @@ impl WorkerStore {
         }) {
             return Err(WorkerStoreError::InvalidTransition);
         }
-        if let Some(receipt) = proof198::read_workspace_receipt(&self.root, &self.worker, command)?
-        {
+        if let Some(receipt) = proof::read_workspace_receipt(&self.root, &self.worker, command)? {
             if receipt.version != STORE_VERSION
                 || receipt.worker != self.worker
                 || receipt.command != *command
@@ -2164,7 +2163,7 @@ impl WorkerStore {
                 return Err(WorkerStoreError::Conflict);
             }
         } else {
-            if proof198::read_bind(&self.root, &self.worker, command)?.is_some() {
+            if proof::read_bind(&self.root, &self.worker, command)?.is_some() {
                 return Err(WorkerStoreError::Conflict);
             }
             self.admit(2 * MAX_METADATA_BYTES as u64 + view.reserved_bytes, 1)?;
@@ -2211,8 +2210,7 @@ impl WorkerStore {
         let digest = seed.proof_digest().map_err(workspace_failure)?;
         let key = seed.binding.key().map_err(workspace_failure)?;
         // Relecture exacte : ne jamais recréer un délai ni retenter après fork.
-        if let Some(receipt) = proof198::read_workspace_receipt(&self.root, &self.worker, command)?
-        {
+        if let Some(receipt) = proof::read_workspace_receipt(&self.root, &self.worker, command)? {
             self.view_receipt_for_binding(&seed.binding)?;
             let view = receipt
                 .commit_view
@@ -2602,7 +2600,7 @@ impl WorkerStore {
         intent: &crate::workspace_git::ViewIntent,
     ) -> Result<WorkspacePreparationReceipt, WorkerStoreError> {
         self.health()?;
-        let receipt = proof198::read_workspace_receipt(&self.root, &self.worker, command)?
+        let receipt = proof::read_workspace_receipt(&self.root, &self.worker, command)?
             .ok_or(WorkerStoreError::Unknown)?;
         let binding = crate::workspace_git::ViewBinding {
             worker: self.worker.clone(),
@@ -2666,7 +2664,7 @@ impl WorkerStore {
         binding: &crate::workspace_git::ViewBinding,
     ) -> Result<WorkspacePreparationReceipt, WorkerStoreError> {
         self.health()?;
-        let receipt = proof198::read_workspace_receipt(&self.root, &self.worker, &binding.command)?
+        let receipt = proof::read_workspace_receipt(&self.root, &self.worker, &binding.command)?
             .ok_or(WorkerStoreError::Unknown)?;
         let view = receipt
             .commit_view
@@ -3116,7 +3114,7 @@ impl WorkerStore {
             return Err(WorkerStoreError::Conflict);
         }
         validate_prepare_command(&binding.command)?;
-        if proof198::read_workspace_receipt(&self.root, &self.worker, &binding.command)?.is_some()
+        if proof::read_workspace_receipt(&self.root, &self.worker, &binding.command)?.is_some()
             || !self
                 .view_receipts(Some(&binding.command.task_id))?
                 .is_empty()
@@ -3589,7 +3587,7 @@ impl WorkerStore {
         let mut prep = command.clone();
         prep.instance_id.clear();
         prep.generation = 0;
-        let Some(mut receipt) = proof198::read_workspace_receipt(&self.root, &self.worker, &prep)?
+        let Some(mut receipt) = proof::read_workspace_receipt(&self.root, &self.worker, &prep)?
         else {
             return Ok(true);
         };
@@ -3743,19 +3741,18 @@ impl WorkerStore {
         self.fenced_workspace_locked(previous, placement, workspace)?;
         let digest = fenced_prepare_digest(command, request)?;
         let path = self.workspace_path(command);
-        let proof = proof198::BindProof {
+        let proof = proof::BindProof {
             version: STORE_VERSION,
             worker: self.worker.clone(),
             command: command.clone(),
             prepare_digest: digest.clone(),
             previous: previous.clone(),
         };
-        let stored = proof198::read_bind(&self.root, &self.worker, command)?;
+        let stored = proof::read_bind(&self.root, &self.worker, command)?;
         if stored.as_ref().is_some_and(|stored| *stored != proof) {
             return Err(WorkerStoreError::Conflict);
         }
-        if let Some(existing) = proof198::read_workspace_receipt(&self.root, &self.worker, command)?
-        {
+        if let Some(existing) = proof::read_workspace_receipt(&self.root, &self.worker, command)? {
             return if existing.version == STORE_VERSION
                 && existing.worker == self.worker
                 && existing.command == *command
@@ -3770,8 +3767,8 @@ impl WorkerStore {
         }
         if stored.is_none() {
             self.admit(3 * MAX_METADATA_BYTES as u64, 2)?;
-            proof198::ensure_dir(&self.root)?;
-            self.persist(&proof198::bind_path(&self.root, command), &proof)?;
+            proof::ensure_dir(&self.root)?;
+            self.persist(&proof::bind_path(&self.root, command), &proof)?;
         } else {
             self.admit(2 * MAX_METADATA_BYTES as u64, 1)?;
         }
@@ -3798,8 +3795,7 @@ impl WorkerStore {
         self.health()?;
         let digest = json_digest(&(command, request))?;
         let path = self.workspace_path(command);
-        if let Some(receipt) = proof198::read_workspace_receipt(&self.root, &self.worker, command)?
-        {
+        if let Some(receipt) = proof::read_workspace_receipt(&self.root, &self.worker, command)? {
             if receipt.worker != self.worker
                 || receipt.command != *command
                 || receipt.prepare_digest != digest
@@ -3810,7 +3806,7 @@ impl WorkerStore {
             let record = receipt.record.ok_or(WorkerStoreError::Workspace(
                 WorkerRefusal::WorkspacePrepareIncomplete,
             ))?;
-            crate::workspace_failure210::stage(
+            crate::workspace_failure::stage(
                 bridget_transport::protocol::WorkspacePrepareStage::Report,
                 crate::workspace_git::report(&record),
             )
@@ -3823,13 +3819,13 @@ impl WorkerStore {
             return Err(WorkerRefusal::InvalidEnvelope.into());
         };
         if let Some(commit) = request.base_commit.as_deref() {
-            crate::workspace_failure210::stage(
+            crate::workspace_failure::stage(
                 bridget_transport::protocol::WorkspacePrepareStage::Import,
                 crate::workspace_git::import_remote_commit(root, commit),
             )
             .map_err(workspace_failure)?;
         }
-        let plan = crate::workspace_failure210::stage(
+        let plan = crate::workspace_failure::stage(
             bridget_transport::protocol::WorkspacePrepareStage::Preflight,
             crate::workspace_git::preflight_remote(root, base_ref.as_deref(), branch.as_deref()),
         )
@@ -3856,7 +3852,7 @@ impl WorkerStore {
                 .lock()
                 .map_err(|_| WorkerStoreError::Quarantined)?;
             // Un lien198 sans reçu interdit de créer un autre worktree.
-            if proof198::read_bind(&self.root, &self.worker, command)?.is_some() {
+            if proof::read_bind(&self.root, &self.worker, command)?.is_some() {
                 return Err(WorkerStoreError::Conflict);
             }
             self.admit(2 * MAX_METADATA_BYTES as u64, 1)?;
@@ -3865,7 +3861,7 @@ impl WorkerStore {
         }
         // Le maître a réservé sa Task avant ce second Prepare. Aucun bootstrap
         // n'existe encore et aucun verrou métier ne traverse cette E/S Git.
-        let record = crate::workspace_failure210::stage(
+        let record = crate::workspace_failure::stage(
             bridget_transport::protocol::WorkspacePrepareStage::Create,
             crate::workspace_git::create(&plan, &command.task_id),
         )
@@ -4924,7 +4920,7 @@ impl WorkerRuntime {
             command: command.clone(),
             prepare_digest: prepare_digest.into(),
         };
-        if proof198::read_workspace_receipt(&self.store.root, &self.identity, command)
+        if proof::read_workspace_receipt(&self.store.root, &self.identity, command)
             .map_err(refuse)?
             .is_none()
         {
@@ -5474,7 +5470,7 @@ impl WorkerRuntime {
         let binding = commit_view_preparation_binding(&self.identity, command, request)
             .map_err(|reason| (reason, None))?;
         // Une graine persistée est l'unique échéance au rejeu.
-        if proof198::read_workspace_receipt(&self.store.root, &self.identity, command)
+        if proof::read_workspace_receipt(&self.store.root, &self.identity, command)
             .map_err(view_file_error)?
             .is_some()
         {
@@ -6451,7 +6447,7 @@ impl WorkerRuntime {
                         .unwrap_or(false)
                 } else {
                     // L'absence en mémoire n'atteste pas l'arrêt d'un helper.
-                    proof198::read_workspace_receipt(
+                    proof::read_workspace_receipt(
                         &self.store.root,
                         &self.identity,
                         &pending.read.binding.command,
@@ -6893,13 +6889,10 @@ impl WorkerRuntime {
         let execution = &read.execution;
         let request = &read.request;
         let key = format!("file-{}", marker_key(&read.binding.command));
-        let receipt = proof198::read_workspace_receipt(
-            &self.store.root,
-            &self.identity,
-            &read.binding.command,
-        )
-        .map_err(view_file_error)?
-        .ok_or((WorkerRefusal::UnknownExecution, None))?;
+        let receipt =
+            proof::read_workspace_receipt(&self.store.root, &self.identity, &read.binding.command)
+                .map_err(view_file_error)?
+                .ok_or((WorkerRefusal::UnknownExecution, None))?;
         let view = receipt
             .commit_view
             .as_ref()
@@ -6980,13 +6973,10 @@ impl WorkerRuntime {
         };
         self.recheck_view_file_actor(execution, Some(path))
             .map_err(|reason| (reason, None))?;
-        let done = proof198::read_workspace_receipt(
-            &self.store.root,
-            &self.identity,
-            &read.binding.command,
-        )
-        .map_err(view_file_error)?
-        .ok_or((WorkerRefusal::UnknownExecution, None))?;
+        let done =
+            proof::read_workspace_receipt(&self.store.root, &self.identity, &read.binding.command)
+                .map_err(view_file_error)?
+                .ok_or((WorkerRefusal::UnknownExecution, None))?;
         let operation = done
             .commit_view
             .as_ref()
@@ -9022,7 +9012,7 @@ impl WorkerRuntime {
         epoch: &str,
         disconnected: &AtomicBool,
     ) -> Result<WorkerResponseOperation, WorkerRefusal> {
-        crate::workspace_failure210::clear();
+        crate::workspace_failure::clear();
         if let Err(reason) = request.validate() {
             return if matches!(
                 request.request,
@@ -9081,7 +9071,7 @@ impl WorkerRuntime {
                 let mut inner = request.clone();
                 inner.request = *prepare.clone();
                 let outcome = self.handle(&inner, epoch, disconnected);
-                let failure = crate::workspace_failure210::take();
+                let failure = crate::workspace_failure::take();
                 match (outcome, failure) {
                     (Err(reason), Some(failure)) if failure.validate(reason).is_ok() => {
                         eprintln!(
@@ -9835,13 +9825,13 @@ fn unexpected_frame_diagnostic235(
 /// ni processus relâché ni reçu ; seuls les permis en mémoire sont abandonnés.
 pub fn run_worker(config: WorkerRuntimeConfig) -> Result<(), String> {
     let mut runtime = WorkerRuntime::new(config)?;
-    let catalogues = crate::provider_catalogue220::CatalogueService::start(
+    let catalogues = crate::provider_catalogue::CatalogueService::start(
         runtime.config.registry_path.clone(),
         runtime.config.state_root.clone(),
         runtime.identity.machine_id.clone(),
         runtime.source.clone(),
     );
-    let _catalogue_guard = crate::provider_catalogue220::ServiceGuard(catalogues.clone());
+    let _catalogue_guard = crate::provider_catalogue::ServiceGuard(catalogues.clone());
     let origin_slots = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let origin_preparation_slots = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     // Unique pour toutes les reconnexions ; aucune seconde lecture tant que
@@ -10450,8 +10440,8 @@ mod catalogue220_tests {
         );
         let (a, _peer) = UnixStream::pair().unwrap();
         let size: libc::c_int = 4096;
-        // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
         assert_eq!(
+            // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
             unsafe {
                 libc::setsockopt(
                     a.as_raw_fd(),
@@ -10471,8 +10461,8 @@ mod catalogue220_tests {
             },
         };
         let reader = writer.lock().unwrap().try_clone().unwrap();
-        // SAFETY: fcntl avec une commande à argument entier ne déréférence aucun pointeur.
         assert_eq!(
+            // SAFETY: fcntl avec une commande à argument entier ne déréférence aucun pointeur.
             unsafe { libc::fcntl(reader.as_raw_fd(), libc::F_GETFL) } & libc::O_NONBLOCK,
             0
         );
@@ -10480,8 +10470,8 @@ mod catalogue220_tests {
         assert!(send_catalogue_frame(&writer, &large).is_err());
         assert!(start.elapsed() < Duration::from_secs(1));
         assert_eq!(writer.lock().unwrap().write_timeout().unwrap(), None);
-        // SAFETY: fcntl avec une commande à argument entier ne déréférence aucun pointeur.
         assert_eq!(
+            // SAFETY: fcntl avec une commande à argument entier ne déréférence aucun pointeur.
             unsafe { libc::fcntl(reader.as_raw_fd(), libc::F_GETFL) } & libc::O_NONBLOCK,
             0
         );

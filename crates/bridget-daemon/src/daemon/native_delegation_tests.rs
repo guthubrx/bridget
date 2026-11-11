@@ -9801,7 +9801,7 @@ fn tracking230_continuation_refuse_nouvelle_ronde_dormante_et_conserve_rejeu_adm
     {
         let mut st = shared.lock().unwrap();
         let target = st.delegation_store.get(&id).unwrap().unwrap().child;
-        let agent = super::agent_tracking230::directory(&mut st)
+        let agent = super::agent_tracking::directory(&mut st)
             .unwrap()
             .into_iter()
             .find(|a| a.agent.agent_id == target)
@@ -9830,7 +9830,7 @@ fn tracking230_continuation_refuse_nouvelle_ronde_dormante_et_conserve_rejeu_adm
         let original = st.delegation_store.get(&id).unwrap().unwrap();
         assert!(original.rounds.is_empty());
         assert_eq!(original.result.as_deref(), Some("résultat conservé"));
-        let agent = super::agent_tracking230::directory(&mut st)
+        let agent = super::agent_tracking::directory(&mut st)
             .unwrap()
             .into_iter()
             .find(|a| a.agent.agent_id == original.child)
@@ -9853,7 +9853,7 @@ fn tracking230_continuation_refuse_nouvelle_ronde_dormante_et_conserve_rejeu_adm
         if index == 1 {
             let mut st = shared.lock().unwrap();
             let target = st.delegation_store.get(&id).unwrap().unwrap().child;
-            let agent = super::agent_tracking230::directory(&mut st)
+            let agent = super::agent_tracking::directory(&mut st)
                 .unwrap()
                 .into_iter()
                 .find(|a| a.agent.agent_id == target)
@@ -15406,7 +15406,7 @@ fn spec210_preparation_diagnostic_is_durable_pure_and_scoped() {
     let (state, config, rx, _reader, request, _root) = routing168_fixture(1);
     let admitted = admit_auto_routing("conn-1", &request, None, None, None, None, &state).unwrap();
     let id = admitted["task_id"].as_str().unwrap();
-    let code = workspace_preparation210::error_code(
+    let code = workspace_preparation::error_code(
         R::WorkspacePrepareFailed,
         F {
             stage: S::CompactPlan,
@@ -15488,7 +15488,7 @@ fn spec210_preparation_diagnostic_is_durable_pure_and_scoped() {
         let mut specific = task.clone();
         specific.error = Some(format!(
             "remote_start_failed:{}",
-            workspace_preparation210::error_code(
+            workspace_preparation::error_code(
                 R::WorkspacePrepareFailed,
                 F {
                     stage: S::Preflight,
@@ -20913,7 +20913,7 @@ fn spec247_parent_coordonne_enfant_distant_sans_faux_autre_projet() {
         serde_json::to_vec(&st.delegation_store.get(&task_id).unwrap().unwrap()).unwrap(),
         before
     );
-    let agent = super::agent_tracking230::directory(&mut st)
+    let agent = super::agent_tracking::directory(&mut st)
         .unwrap()
         .into_iter()
         .find(|a| a.agent.agent_id == task.child)
@@ -21178,7 +21178,7 @@ fn native174_projet_autorite_limitee_au_contrat_et_aux_instances() {
             capabilities: vec![ClientCapability::SendIdempotent],
         },
     );
-    let agent = super::agent_tracking230::directory(&mut st)
+    let agent = super::agent_tracking::directory(&mut st)
         .unwrap()
         .into_iter()
         .find(|a| a.agent.agent_id == task.child)

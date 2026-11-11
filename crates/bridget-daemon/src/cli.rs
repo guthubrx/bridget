@@ -443,22 +443,21 @@ fn run_with_args(args: Vec<String>) {
         "discover" => cmd_discover(),
         "status" => cmd_status(),
         "sentinel" => match args.get(2).map(String::as_str) {
-            Some("status") if args.len() == 3 => {
-                match crate::sentinel244::read_remote(&socket_path()) {
-                    Ok(report) => println!("{report}"),
-                    other => {
-                        eprintln!("sentinel status indisponible : {other:?}");
-                        crate::cli_table::exit(1);
-                    }
+            Some("status") if args.len() == 3 => match crate::sentinel::read_remote(&socket_path())
+            {
+                Ok(report) => println!("{report}"),
+                other => {
+                    eprintln!("sentinel status indisponible : {other:?}");
+                    crate::cli_table::exit(1);
                 }
-            }
+            },
             Some(action @ ("run" | "tick" | "activation")) if args.len() == 3 => {
                 let config = DaemonConfig::default();
                 let result =
                     std::env::current_exe()
                         .map_err(|e| e.to_string())
                         .and_then(|binary| {
-                            crate::sentinel244::run(
+                            crate::sentinel::run(
                                 &binary,
                                 config.db_path.parent().unwrap(),
                                 if action == "run" { "manual" } else { action },

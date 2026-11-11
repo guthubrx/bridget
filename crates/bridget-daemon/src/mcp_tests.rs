@@ -754,8 +754,8 @@ fn spec259_ack_scope_timeout_is_pre_dispatch_without_ack() {
             events: libc::POLLIN,
             revents: 0,
         };
-        // SAFETY: `fd` est une structure pollfd locale valide ; le nombre d'éléments passé vaut 1.
         assert_eq!(
+            // SAFETY: `fd` est une structure pollfd locale valide ; le nombre d'éléments passé vaut 1.
             unsafe { libc::poll(&mut fd, 1, 100) },
             0,
             "aucune nouvelle connexion"

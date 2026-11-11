@@ -2,12 +2,12 @@
 //! entre les wrappers connectés, persiste l'état en SQLite.
 
 mod dispatch_diagnostics;
-mod late_worker_prepares240;
+mod late_worker_prepares;
 mod native_child_requests;
 mod native_delegation;
-mod native_provider_catalogue220;
+mod native_provider_catalogue;
 pub(crate) use native_delegation::catalogue_entries177;
-mod agent_tracking230;
+mod agent_tracking;
 mod mobile_admin;
 mod mobile_artifacts;
 mod mobile_operations;
@@ -16,7 +16,7 @@ mod mobile_queue;
 mod mobile_tasks;
 mod native_lineage;
 mod origin_proof;
-mod specialists222;
+mod specialist_requests;
 mod user_input;
 mod wrapper_dispatch;
 
@@ -1148,7 +1148,7 @@ struct DaemonState {
     remote_result_reservation: Option<Receiver<Result<Option<crate::delegation::Task>, String>>>,
     worker_probe_connections: HashSet<String>,
     pending_worker_responses: HashMap<String, PendingWorkerResponse>,
-    late_worker_prepares: late_worker_prepares240::Cache,
+    late_worker_prepares: late_worker_prepares::Cache,
     pending_workspace_repairs: HashMap<String, native_delegation::workspace_repair::Pending>,
     pending_origin_proofs: HashMap<String, origin_proof::Pending>,
     user_input_dispatch_after: Option<(i64, String)>,
@@ -1205,7 +1205,7 @@ struct RemoteWorkerConnection {
     /// Négociées à l'ouverture seulement : reconnexion ou remplacement les
     /// efface avec l'ancienne époque, sans déduire une capacité du build.
     capabilities: Vec<bridget_transport::protocol::WorkerCapability>,
-    catalogues: HashMap<String, native_provider_catalogue220::CachedCatalogue>,
+    catalogues: HashMap<String, native_provider_catalogue::CachedCatalogue>,
     catalogue_refresh_id: String,
     catalogue_refresh_at: Option<Instant>,
     last_contact: Instant,
@@ -6364,13 +6364,14 @@ fn schedule_execution_recovery(
         }
     };
     let continuation_id = format!("continuation-recovery-{parent_execution_id}");
-    let specialist_budget = match specialists222::budget_for_execution(state, parent_execution_id) {
-        Ok(policy) => policy,
-        Err(code) => {
-            warn!("continuation conservée sans départ : {code}");
-            return;
-        }
-    };
+    let specialist_budget =
+        match specialist_requests::budget_for_execution(state, parent_execution_id) {
+            Ok(policy) => policy,
+            Err(code) => {
+                warn!("continuation conservée sans départ : {code}");
+                return;
+            }
+        };
     match reserve_governed_continuation(
         &state.execution_store,
         specialist_budget,
@@ -8691,7 +8692,11 @@ fn handle_register_with_channel(
 
             state.restore_pending_for_agent(&final_agent_id, conn_id);
             let mut specialist_controls = Vec::new();
-            specialists222::resume_for_registered(state, &final_agent_id, &mut specialist_controls);
+            specialist_requests::resume_for_registered(
+                state,
+                &final_agent_id,
+                &mut specialist_controls,
+            );
             // Une entrée vide ferait croire à une activité en attente
             // (contrôle de maintenance) jusqu'à la vidange après réponse.
             if !specialist_controls.is_empty() {
@@ -11949,7 +11954,7 @@ fn prepare_dispatch(
         .map(|agent| agent.connection_id.clone());
     if message.reply
         && reply_sender_conn.is_none()
-        && !specialists222::is_human_request(st, message)
+        && !specialist_requests::is_human_request(st, message)
     {
         return Err((
             "reply_sender_unavailable",
@@ -12172,7 +12177,7 @@ fn handle_idempotent_send(
 enum RetainedSendAuthority<'a> {
     WrapperReply(&'a str),
     Result(&'a native_delegation::RetainedResultAuthority),
-    Specialist(&'a specialists222::SpecialistSendAuthority),
+    Specialist(&'a specialist_requests::SpecialistSendAuthority),
     Lineage(&'a native_lineage::ComposeAuthority),
 }
 
@@ -12333,7 +12338,7 @@ fn handle_idempotent_send_with_result_authority(
                 native_delegation::authorize_retained_result(st, authority, conn_id, &message)
             }
             RetainedSendAuthority::Specialist(authority) => {
-                specialists222::authorize_prepared_send(st, authority, &message)
+                specialist_requests::authorize_prepared_send(st, authority, &message)
             }
             RetainedSendAuthority::WrapperReply(instance) => {
                 authorize_wrapper_reply(st, conn_id, &message, instance)
@@ -15342,7 +15347,7 @@ fn handle_worker_message(
     };
     match message {
         WrapperToDaemon::ProviderCatalogueUpdate { update } => {
-            native_provider_catalogue220::ingest(&mut st, conn_id, update)
+            native_provider_catalogue::ingest(&mut st, conn_id, update)
         }
         WrapperToDaemon::Heartbeat => {
             let worker = &st.remote_workers[&machine];
@@ -15985,7 +15990,7 @@ fn remote_worker_roundtrip_with_send_deadline(
         (writer, request, conn_id)
     };
     let epoch = request.connection_epoch.clone();
-    let initial_prepare = late_worker_prepares240::initial_prepare(command, &request.request);
+    let initial_prepare = late_worker_prepares::initial_prepare(command, &request.request);
     let written = push_control_message_until(
         &writer,
         &DaemonToWrapper::WorkerRequest { request },
@@ -16340,10 +16345,10 @@ fn handle_wrapper_message_with_peer(
         }
     }
     if let WrapperToDaemon::Specialists { request } = &msg {
-        return Some(specialists222::handle_human(conn_id, request, state));
+        return Some(specialist_requests::handle_human(conn_id, request, state));
     }
     if let WrapperToDaemon::AgentTracking { request } = &msg {
-        return Some(agent_tracking230::human(conn_id, request, state));
+        return Some(agent_tracking::human(conn_id, request, state));
     }
     if let WrapperToDaemon::UserInput { request } = &msg {
         return Some(user_input::handle(conn_id, request, state, peer));
@@ -17553,7 +17558,7 @@ fn handle_wrapper_message_with_peer(
         WrapperToDaemon::SentinelStatusRead => {
             let path = { state.lock().recover_poison().db_path.clone() };
             Some(DaemonToWrapper::SentinelStatus {
-                report: crate::sentinel244::status(path.parent().unwrap()),
+                report: crate::sentinel::status(path.parent().unwrap()),
             })
         }
 

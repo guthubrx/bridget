@@ -19,7 +19,7 @@ fn main() {
     let mut contract = Sha256::new();
     for relative in [
         "crates/bridget-daemon/src/provider_program_compat.rs",
-        "crates/bridget-daemon/src/provider_catalogue220.rs",
+        "crates/bridget-daemon/src/provider_catalogue.rs",
         "crates/bridget-transport/src/codex_app_server.rs",
     ] {
         let path = root.join(relative);

@@ -30,8 +30,8 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::time::Instant;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-#[path = "mcp_directory211.rs"]
-mod directory211;
+#[path = "mcp_directory.rs"]
+mod directory;
 
 pub const PROTOCOL_VERSION: &str = "2025-06-18";
 const MAX_IN_FLIGHT_TOOL_CALLS: usize = 8;
@@ -1812,7 +1812,7 @@ fn execute_who(
         arguments,
         &["domain", "scope", "limit", "cursor", "include_stopped"],
     )?;
-    let options = directory211::Options::parse(arguments)?;
+    let options = directory::Options::parse(arguments)?;
     let scope = match arguments.get("scope") {
         None => bridget_transport::protocol::CommunicationDirectoryScope::SameProject,
         Some(Value::String(scope)) if scope == "same_project" => {
@@ -1846,7 +1846,7 @@ fn execute_who(
             agents,
             project,
             project_warnings,
-        } => directory211::page(
+        } => directory::page(
             agents,
             &options,
             domain.as_deref(),

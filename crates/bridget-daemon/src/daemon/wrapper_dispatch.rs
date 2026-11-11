@@ -1258,7 +1258,7 @@ pub(super) fn on_t3_thread_binding_fact(
         .get(conn_id)
         .is_some_and(|prior| prior.as_deref() != Some(&t3_thread_id));
     let response = if valid && !contradictory {
-        if let Err(code) = agent_tracking230::bind_live(
+        if let Err(code) = agent_tracking::bind_live(
             &mut st,
             &crate::t3code::stable_uuid(&t3_thread_id),
             &t3_thread_id,
@@ -1328,7 +1328,7 @@ pub(super) fn on_daemon_identity_request(
             if crate::workspace_git::COMMIT_VIEW_LAUNCH_ENABLED {
                 features.push("worker_workspace_view_create_v1".to_string());
             }
-            if crate::provider_catalogue220::MODEL_OPTIONS_LAUNCH_ENABLED {
+            if crate::provider_catalogue::MODEL_OPTIONS_LAUNCH_ENABLED {
                 features.push("model_options_v1".to_string());
             }
             features
@@ -3259,7 +3259,7 @@ pub(super) fn on_observed_activity(
         let agent = agent.clone();
         let instance = instance.clone();
         drop(st);
-        specialists222::observe_history(state, &agent, &instance, seq);
+        specialist_requests::observe_history(state, &agent, &instance, seq);
         st = state.lock().recover_poison();
         if live_connection_identity(&st, conn_id) != Some((agent, instance)) {
             return None;
@@ -3329,7 +3329,7 @@ pub(super) fn on_directory_scoped(
     use bridget_transport::protocol::{CommunicationDirectoryScope, ProjectRelation};
     let mut st = state.lock().recover_poison();
     let project = connection_communication_project(&st, conn_id);
-    let all = match agent_tracking230::directory(&mut st) {
+    let all = match agent_tracking::directory(&mut st) {
         Ok(all) => all,
         Err(reason) => {
             return Some(DaemonToWrapper::Nack {

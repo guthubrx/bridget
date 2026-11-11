@@ -10,9 +10,9 @@ pub use lineage_protocol::*;
 #[path = "native_permissions.rs"]
 mod native_permissions;
 pub use native_permissions::*;
-#[path = "native_hook_profile171.rs"]
-mod native_hook_profile171;
-pub use native_hook_profile171::*;
+#[path = "native_hook_profile.rs"]
+mod native_hook_profile;
+pub use native_hook_profile::*;
 
 use bridget_core::BridgetMessage;
 use serde::{Deserialize, Serialize};

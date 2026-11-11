@@ -398,13 +398,13 @@ fn spec221_c19_preparation_capacity_never_recommends_replaying_a_file_read() {
     let (state, config, mut task, _) = c19_master_file_fixture();
     task.error = Some(format!(
         "remote_start_failed:{}",
-        workspace_preparation210::view_error_code(
+        workspace_preparation::view_error_code(
             WorkerRefusal::ResourceLimit,
             CommitViewFailure::OperationCapacity
         )
     ));
     let mut view = json!({});
-    workspace_preparation210::project(&task, &mut view);
+    workspace_preparation::project(&task, &mut view);
     let message = view["error_message"].as_str().unwrap();
     assert!(!message.contains("fichier"));
     assert!(message.contains("relire l'état de la même tâche"));
@@ -1051,7 +1051,7 @@ fn spec221_c19_preparation_failure_names_cause_scope_owner_action_and_preserves_
     ] {
         task.error = Some(format!(
             "remote_start_failed:{}",
-            workspace_preparation210::view_error_code(WorkerRefusal::WorkspacePrepareFailed, cause)
+            workspace_preparation::view_error_code(WorkerRefusal::WorkspacePrepareFailed, cause)
         ));
         let before = serde_json::to_value(&task).unwrap();
         let view = task_view(&task, None, true);

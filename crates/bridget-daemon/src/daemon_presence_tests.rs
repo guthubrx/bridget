@@ -2760,7 +2760,7 @@ fn tracking230_echeance_dormante_close_sans_rattrapage() {
         .clone();
     {
         let mut st = state.lock().unwrap();
-        let agent = agent_tracking230::directory(&mut st)
+        let agent = agent_tracking::directory(&mut st)
             .unwrap()
             .into_iter()
             .find(|a| a.agent.agent_id == owner)
@@ -2787,7 +2787,7 @@ fn tracking230_echeance_dormante_close_sans_rattrapage() {
             WakePhase::MissedBeforeDeparture
         );
         assert_eq!(schedule.next_at, now + 120);
-        let agent = agent_tracking230::directory(&mut st)
+        let agent = agent_tracking::directory(&mut st)
             .unwrap()
             .into_iter()
             .find(|a| a.agent.agent_id == owner)
@@ -3866,7 +3866,7 @@ fn spec251_observation_dormant_conserve_fait_sans_job_et_actif_reste_notifie() {
         clock,
     );
     for sleeping in [true, false] {
-        let agent = agent_tracking230::directory(&mut st)
+        let agent = agent_tracking::directory(&mut st)
             .unwrap()
             .into_iter()
             .find(|a| a.agent.agent_id == owner)
@@ -14828,7 +14828,7 @@ fn spec251_information_dix_depots_sans_reveil_puis_vraie_demande() {
             .push(ClientCapability::SendInformationV1);
         st.presences.get_mut("instance-1").unwrap().dnd_until =
             Some(Instant::now() + Duration::from_secs(60));
-        let agent = agent_tracking230::directory(&mut st)
+        let agent = agent_tracking::directory(&mut st)
             .unwrap()
             .into_iter()
             .find(|a| a.agent.agent_id.ends_with("102"))
@@ -14959,7 +14959,7 @@ fn spec251_information_dix_depots_sans_reveil_puis_vraie_demande() {
     {
         let mut st = shared.lock().unwrap();
         st.presences.get_mut("instance-1").unwrap().dnd_until = None;
-        let agent = agent_tracking230::directory(&mut st)
+        let agent = agent_tracking::directory(&mut st)
             .unwrap()
             .into_iter()
             .find(|a| a.agent.agent_id.ends_with("102"))
@@ -16626,10 +16626,8 @@ fn spec240_late_prepare_expiry_preserves_worker_without_creating_a_task() {
         let operation = WorkerRequestOperation::PrepareDiagnosed {
             prepare: Box::new(WorkerRequestOperation::Prepare { prepare }),
         };
-        assert!(late_worker_prepares240::initial_prepare(
-            &command, &operation
-        ));
-        assert!(!late_worker_prepares240::initial_prepare(
+        assert!(late_worker_prepares::initial_prepare(&command, &operation));
+        assert!(!late_worker_prepares::initial_prepare(
             &command,
             &WorkerRequestOperation::Cancel {
                 target: WorkerCancelScope::Command {}

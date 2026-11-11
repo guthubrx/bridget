@@ -6,8 +6,8 @@
 //! les messages par le protocole natif V1/V2 et renvoie à l'expéditeur la
 //! réponse du tour attesté. Tout l'état est sous `<BRIDGET_HOME>/t3code`.
 
-#[path = "t3code_agent_tracking230.rs"]
-mod agent_tracking230;
+#[path = "t3code_agent_tracking.rs"]
+mod agent_tracking;
 use bridget_transport::poison::RecoverPoison;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::io::{BufRead, BufReader, BufWriter};
@@ -1321,7 +1321,7 @@ fn serve(paths: &Paths) -> Result<(), String> {
             .filter(|incarnation| runtime_incarnation(&t3_base).as_ref() == Some(incarnation))
             .map(|(runtime, birth)| (snapshot_started, runtime, birth));
         let counts = relation_counts(&snapshot.threads);
-        match agent_tracking230::sync(paths, &session, &snapshot) {
+        match agent_tracking::sync(paths, &session, &snapshot) {
             Err(error) => {
                 if tracking_issue.as_ref() != Some(&error) {
                     warn!("synchronisation des agents dormants en attente : {error}");
@@ -1943,7 +1943,7 @@ struct LinkWorker {
     detail_page_cap: Option<u32>,
     turn_wait: Duration,
     queue: VecDeque<(DaemonToWrapper, Instant)>,
-    overflow: crate::delivery_spool244::DeliverySpool,
+    overflow: crate::delivery_spool::DeliverySpool,
     requests: BTreeMap<String, RequestInfo>,
     daemon_alive: Arc<AtomicBool>,
     cancelled: Arc<Mutex<BTreeMap<String, Instant>>>,
@@ -2042,7 +2042,7 @@ impl LinkWorker {
             Arc::new(move |message| send_wrapper_message(&relay_writer, message)),
         );
         let state_path = paths.thread_state(&summary.id);
-        let overflow = crate::delivery_spool244::DeliverySpool::open(
+        let overflow = crate::delivery_spool::DeliverySpool::open(
             &state_path.with_extension(format!("inbox-{instance_id}.sqlite")),
             &instance_id,
         )?;
@@ -2613,7 +2613,7 @@ impl LinkWorker {
         if let DaemonToWrapper::DeliverIdempotent { delivery_id, .. } = &delivery {
             if let Some((queued, _)) = self.queue.iter_mut().find(|(frame,_)|
                 matches!(frame,DaemonToWrapper::DeliverIdempotent{delivery_id:id,..} if id==delivery_id)) {
-                match crate::delivery_spool244::reconcile_delivery_replay(queued,&delivery) {
+                match crate::delivery_spool::reconcile_delivery_replay(queued,&delivery) {
                     Ok(frozen)=>*queued=frozen,
                     Err(_)=>{
                         error!("remise {delivery_id} divergente : lien fermé, copie maître conservée");
