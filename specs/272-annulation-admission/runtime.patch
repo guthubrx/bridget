@@ -1,0 +1,728 @@
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -192,7 +192,7 @@
+ 
+ [[package]]
+ name = "bridget-core"
+-version = "0.8.37"
++version = "0.8.38"
+ dependencies = [
+  "serde",
+  "serde_json",
+@@ -201,7 +201,7 @@
+ 
+ [[package]]
+ name = "bridget-daemon"
+-version = "0.8.37"
++version = "0.8.38"
+ dependencies = [
+  "axum",
+  "base64",
+@@ -229,7 +229,7 @@
+ 
+ [[package]]
+ name = "bridget-transport"
+-version = "0.8.37"
++version = "0.8.38"
+ dependencies = [
+  "bridget-core",
+  "libc",
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -7,7 +7,7 @@
+ ]
+ 
+ [workspace.package]
+-version = "0.8.37"
++version = "0.8.38"
+ edition = "2024"
+ license = "MIT"
+ 
+--- a/crates/bridget-daemon/src/daemon/native_admission_guidance211.rs
++++ b/crates/bridget-daemon/src/daemon/native_admission_guidance211.rs
+@@ -3,6 +3,16 @@
+ 
+ 
+ pub(super) fn refusal(code:&str)->Option<Value>{
++    if let Some(encoded) = code.strip_prefix("admission_cancelled:") {
++        let workspace: Value = serde_json::from_str(encoded).ok()?;
++        if !workspace["path"].is_string() || !workspace["branch"].is_string() {
++            return None;
++        }
++        let mut view = refusal("admission_cancelled")?;
++        view["detail"]["retained_workspace"] = workspace;
++        return Some(view);
++    }
++
+     if let Some(detail)=code.strip_prefix("origin_request_invalid:") {
+         let (field,cause)=detail.split_once(':').unwrap_or((detail,"unobserved"));
+         let cause_text=match cause {
+@@ -26,6 +36,12 @@
+         return Some(view);
+     }
+     let (message,recovery,field)=match code {
++        "admission_cancelled" => (
++            "Cette admission a été annulée par son propriétaire avant création de tâche.",
++            "La clé conserve ce refus terminal : son rejeu ne crée aucune mission. Conserver les éventuels dossiers préparés ; si une création de worktree était déjà en cours, le journal du coordinateur conserve bridget_admission_workspace_retained avec la clé et le chemin laissé, sans annoncer un échec Git ni supprimer ce dossier. Une autre mission exige une nouvelle clé et son autorisation propre. Ce refus concerne cette admission ; les autres travaux autorisés suivent leur propre état.",
++            None,
++        ),
++
+         "project_preparation_process_failed" => (
+             "Faites lire le refus de préparation à la même heure dans la sortie d’erreur du worker source.",
+             "La commande ssh de préparation a rendu un code de sortie non nul. Le responsable Bridget doit lire l’événement bridget_project_preparation à l’heure de ce refus dans la sortie d’erreur du service worker de la machine source du parent : journal de l’unité sous systemd, ou StandardErrorPath du plist chargé sous launchd. Rapprocher heure, opération inspect/prepare et exit_code ; correlation_id identifie le contrôle dans ce journal, mais ne figure pas dans ce reçu et ne suffit pas seul à retrouver la demande. Ces faits ne prouvent ni panne de réseau ni défaut de compte ou de droits ; la cause amont reste à vérifier avant une reprise. Conserver la clé, l’enveloppe et tout dépôt préparé ; lire detail.admission pour suivre une tâche existante ou une admission encore incertaine. Ne pas recréer une mission pour tester la liaison. Les autres travaux autorisés suivent leur propre état.",
+--- a/crates/bridget-daemon/src/daemon/native_delegation.rs
++++ b/crates/bridget-daemon/src/daemon/native_delegation.rs
+@@ -12,6 +12,8 @@
+ #[path = "native_admission_guidance211.rs"]
+ mod admission_guidance211;
+ use super::*;
++#[path = "native_admission_cancel.rs"]
++mod admission_cancel;
+ use crate::decision_service::{
+     CallerDeadline, DecisionBrief, DecisionCandidate, DecisionChoice, HealthStatus,
+     LayaDecisionRequest, RoutingDecisionCandidate, RoutingDecisionChoice, RoutingDecisionFact,
+@@ -3143,6 +3145,17 @@
+     receipt: &AutoAdmissionReceipt,
+     code: String,
+ ) -> Result<String, String> {
++    if let Some(current) = st.delegation_store.auto_admission_receipt(&receipt.owner, &receipt.request_id)?
++        && current.state == AutoAdmissionState::Refused
++    {
++        // Garder le contexte local déjà observé, jamais une autre cause tardive.
++        if current.refusal_code.as_deref() == Some("admission_cancelled")
++            && code.starts_with("admission_cancelled:")
++        {
++            return Ok(code);
++        }
++        return Ok(auto_refusal_error(&current));
++    }
+     let Some(refusal) = auto_terminal_refusal_code(&code) else {
+         return Ok(code);
+     };
+@@ -3153,7 +3166,7 @@
+         st.delegation_store.refuse_auto_admission(receipt, refusal, unix_timestamp())
+     };
+     match closed {
+-        Ok(closed) if capacity.is_some() || routing_change_detail(&code).is_some() => Ok(auto_refusal_error(&closed)),
++        Ok(closed) if closed.refusal_code.as_deref() != Some(refusal) || capacity.is_some() || routing_change_detail(&code).is_some() => Ok(auto_refusal_error(&closed)),
+         Ok(_) => Ok(code),
+         Err(refusal_error) if refusal_error == "admission_pending" => {
+             let current = st
+@@ -8082,6 +8095,13 @@
+         expected_path.display(),
+         branch
+     );
++    if let Some(receipt) = auto_receipt {
++        info!("bridget_admission_workspace_preparing {}", json!({
++            "version":1,"scope":"this_admission","owner":receipt.owner,
++            "request_id":receipt.request_id,"path":expected_path,"branch":branch,
++            "task_created":false,"physical_outcome":"not_observed"
++        }));
++    }
+     // La réservation est seulement en RAM. Un échec de création peut laisser
+     // des effets Git : Auto conserve le choix et le diagnostic complet.
+     let record = crate::workspace_git::create(&plan, &reserved.task_id).map_err(|error| {
+@@ -8118,6 +8138,22 @@
+         Ok(WorkspaceAdmission::View(view)) => Ok(view),
+         Ok(_) => unreachable!("seconde passe métier"),
+         Err(reason) => {
++            if let Some(receipt) = auto_receipt {
++                let st = state.lock().unwrap_or_else(|e|e.into_inner());
++                if st.delegation_store.auto_admission_receipt(&receipt.owner, &receipt.request_id)?
++                    .is_some_and(|current| current.state == AutoAdmissionState::Refused
++                        && current.refusal_code.as_deref() == Some("admission_cancelled"))
++                {
++                    warn!("bridget_admission_workspace_retained {}", json!({
++                        "version":1,"scope":"this_admission","owner":receipt.owner,
++                        "request_id":receipt.request_id,"path":record.path,"branch":record.branch,
++                        "cause":"admission_cancelled","task_created":false
++                    }));
++                    return Err(format!("admission_cancelled:{}", json!({
++                        "path":record.path,"branch":record.branch
++                    })));
++                }
++            }
+             let code = if reason.starts_with("workspace_path_unsafe") {
+                 "workspace_path_unsafe"
+             } else {
+@@ -9628,6 +9664,7 @@
+             }
+             current_task_view(st, &task, true)
+         }
++        NativeDelegationRequest::CancelAdmission { request_id } => {admission_cancel::cancel(st,&owner,request_id)}
+         NativeDelegationRequest::Cancel { task_id } => {
+             let mut task = st
+                 .delegation_store
+--- a/crates/bridget-daemon/src/daemon/native_delegation_tests.rs
++++ b/crates/bridget-daemon/src/daemon/native_delegation_tests.rs
+@@ -1,4 +1,157 @@
+     use super::*;
++#[test]
++fn spec272_admission_cancel_fences_creation_and_preserves_owner_and_terminal_states() {
++    let (state, config, task, _parent, _child) = native160_mission(false);
++    let st = state.lock().unwrap();
++    let owner = task.owner.clone();
++    let make = |key: &str, phase| AutoAdmissionReceipt {
++        owner: owner.clone(),
++        request_id: key.into(),
++        canonical: b"{}".to_vec(),
++        metadata: b"{}".to_vec(),
++        metadata_version: 1,
++        state: phase,
++        coordinator_epoch: st.coordinator_epoch,
++        revision: 0,
++        policy_revision: 1,
++        policy_digest: "a".repeat(64),
++        candidate_id: None,
++        delegate_canonical: None,
++        mode: None,
++        reason: None,
++        task_id: None,
++        refusal_code: None,
++        created_at: 10,
++        updated_at: 10,
++    };
++    let mut receipts = Vec::new();
++    for (key, phase) in [
++        ("pending272", AutoAdmissionState::Pending),
++        ("deciding272", AutoAdmissionState::DecisionStarted),
++        ("chosen272", AutoAdmissionState::Chosen),
++        ("admitted272", AutoAdmissionState::Admitted),
++        ("refused272", AutoAdmissionState::Refused),
++    ] {
++        let mut receipt = make(key, phase);
++        if matches!(
++            phase,
++            AutoAdmissionState::Chosen | AutoAdmissionState::Admitted
++        ) {
++            receipt.candidate_id = Some("c01".into());
++            receipt.delegate_canonical = Some(serde_json::to_vec(&task.request).unwrap());
++            receipt.mode = Some(AutoAdmissionMode::Explicit);
++        }
++        if phase == AutoAdmissionState::Admitted {
++            receipt.task_id = Some(task.task_id.clone());
++        }
++        if phase == AutoAdmissionState::Refused {
++            receipt.refusal_code = Some("decision_interrupted".into());
++        }
++        st.delegation_store
++            .insert_auto_admission_receipt(&receipt)
++            .unwrap();
++        receipts.push(receipt);
++    }
++    drop(st);
++    let hint = super::super::handle_wrapper_message("conn-1", WrapperToDaemon::CancelRequest {
++        id:"pending272".into(), sender:owner.clone(), reason:None
++    }, &state).unwrap();
++    assert!(
++        matches!(hint,DaemonToWrapper::Nack {ref reason,..} if reason.contains("kind=admission") && reason.contains("rien annulé"))
++    );
++    let mut st = state.lock().unwrap();
++    let task_before =
++        serde_json::to_value(st.delegation_store.get(&task.task_id).unwrap().unwrap()).unwrap();
++    for old in &receipts[..3] {
++        // Une autre identité voit seulement sa propre absence et ne ferme rien.
++        let foreign = admission_cancel::cancel(&st, "foreign272", &old.request_id).unwrap();
++        assert_eq!(foreign["status"], "not_recorded");
++        assert_eq!(
++            st.delegation_store
++                .auto_admission_receipt(&owner, &old.request_id)
++                .unwrap()
++                .unwrap(),
++            *old
++        );
++        let reply = handle_locked(
++            "conn-1",
++            NativeDelegationRequest::CancelAdmission {
++                request_id: old.request_id.clone(),
++            },
++            &mut st,
++        )
++        .unwrap();
++        assert_eq!(reply["status"], "cancelled");
++        assert!(reply["task_id"].is_null());
++        let saved = st
++            .delegation_store
++            .auto_admission_receipt(&owner, &old.request_id)
++            .unwrap()
++            .unwrap();
++        assert_eq!(saved.state, AutoAdmissionState::Refused);
++        assert_eq!(saved.refusal_code.as_deref(), Some("admission_cancelled"));
++        assert_eq!(close_auto_admission_error(&st,old,"decision_interrupted".into()).unwrap(),"admission_cancelled","la première cause durable reste celle du reçu");
++        let contextual = "admission_cancelled:{\"path\":\"/tmp/retained272\",\"branch\":\"branch272\"}";
++        assert_eq!(close_auto_admission_error(&st,old,contextual.into()).unwrap(),contextual);
++        let guidance = failure(contextual);
++        assert_eq!(guidance["code"],"admission_cancelled");
++        assert_eq!(guidance["detail"]["retained_workspace"]["path"],"/tmp/retained272");
++        assert!(guidance["detail"]["recovery"].as_str().unwrap().contains("Conserver"));
++        assert_eq!(
++            admission_cancel::cancel(&st, &owner, &old.request_id).unwrap(),
++            reply
++        );
++        if old.state == AutoAdmissionState::Chosen {
++            let mut would_be = task.clone();
++            would_be.task_id = Uuid::new_v4().to_string();
++            let result = st.delegation_store.admit_auto_task(
++                old,
++                &would_be,
++                &old.request_id,
++                old.delegate_canonical.as_ref().unwrap(),
++                20,
++            );
++            assert_eq!(result.unwrap_err(), "admission_pending");
++            assert!(
++                st.delegation_store
++                    .get(&would_be.task_id)
++                    .unwrap()
++                    .is_none(),
++                "aucune Task après le refus atomique"
++            );
++        }
++    }
++    let admitted = admission_cancel::cancel(&st, &owner, "admitted272").unwrap();
++    assert_eq!(admitted["status"], "task_exists");
++    assert_eq!(admitted["task_id"], task.task_id);
++    assert_eq!(
++        serde_json::to_value(st.delegation_store.get(&task.task_id).unwrap().unwrap()).unwrap(),
++        task_before,
++        "pas d’annulation implicite de tâche"
++    );
++    let refused = admission_cancel::cancel(&st, &owner, "refused272").unwrap();
++    assert_eq!(refused["status"], "already_refused");
++    assert_eq!(refused["code"], "decision_interrupted");
++    let missing = admission_cancel::cancel(&st, &owner, "absent272").unwrap();
++    assert_eq!(missing["status"], "not_recorded");
++    assert!(
++        missing["detail"]["recovery"]
++            .as_str()
++            .unwrap()
++            .contains("appel concurrent")
++    );
++    assert!(
++        st.delegation_store
++            .auto_admission_receipt(&owner, "absent272")
++            .unwrap()
++            .is_none()
++    );
++    drop(st);
++    drop(state);
++    cleanup(&config);
++}
++
++
+     #[path = "local_result265_tests.rs"]
+     mod local_result265_tests;
+     use std::os::unix::fs::PermissionsExt;
+--- a/crates/bridget-daemon/src/daemon.rs
++++ b/crates/bridget-daemon/src/daemon.rs
+@@ -11427,7 +11427,7 @@
+     match refusal {
+         GuidanceRefusal::IntentNotPermitted { reason } => ("intent_not_permitted", reason.to_string()),
+         GuidanceRefusal::ReferentPaused => ("referent_paused", "referent_paused".into()),
+-        GuidanceRefusal::MissionActive => ("mission_active", "mission_active".into()),
++        GuidanceRefusal::MissionActive => ("mission_active", "Lire bridget_task_status pour la mission native de cet enfant. Un message intent=interrupt ne remplace pas le contrôle de cette mission active et n’a pas interrompu son travail. Pour une consigne différée, intent=queue attend le prochain tour ; après résultat, task_continue ouvre une nouvelle ronde si l’enfant est encore gardé. Si le travail courant est devenu périmé, seul son propriétaire peut demander bridget_task_cancel, puis vérifier la clôture et conserver les fichiers avant toute suite autorisée. Ne pas recréer une mission d’issue inconnue ni employer un autre canal pour contourner ce refus. Portée : cet envoi ; les autres travaux autorisés suivent leur propre état.".into()),
+         GuidanceRefusal::NotEditable => ("not_held", "not_held".into()),
+         GuidanceRefusal::NoActiveTurn => ("no_active_turn", "no_active_turn".into()),
+         GuidanceRefusal::SteerUnavailable => ("steer_unavailable", "steer_unavailable".into()),
+@@ -12513,7 +12513,7 @@
+             let _ = record_guidance_outcome(st, facts, &message.to, &message.id, "refused:steer_unavailable");
+         }
+         return reject_idempotent_send(st, &key, "steer_unavailable",
+-            "Ce pilote natif ne prend pas en charge le guidage pendant un tour. Cette demande est refusée avant remise, sans interrompre l’agent. Pour attendre sa fin de tour, envoyer explicitement un message ordinaire intent=queue ; aucun repli automatique n’a été effectué. Si la consigne doit être appliquée immédiatement, demander au propriétaire de choisir une interruption autorisée. Les autres travaux autorisés suivent leur propre état.")
++            "Ce pilote natif ne prend pas en charge le guidage pendant un tour. Cette demande est refusée avant remise, sans interrompre l’agent. Pour attendre sa fin de tour, envoyer explicitement intent=queue ; aucun repli automatique n’a été effectué. Si une mission native est active, intent=interrupt ne l’annule pas et peut rendre mission_active. Si le travail est devenu périmé, son propriétaire peut demander bridget_task_cancel, vérifier la clôture et conserver ses fichiers avant une suite autorisée. Après résultat, task_continue exige un enfant encore gardé. Les autres travaux autorisés suivent leur propre état.")
+             .unwrap_or_else(|reason| DaemonToWrapper::Nack { id: message.id.clone(), reason });
+     }
+     // O(log N): messages mobiles retenus avant le porteur, même pour T3.
+@@ -20247,6 +20247,7 @@
+                     "worker_candidate_probe_v1".to_string(),
+                     "auto_delegate_v1".to_string(),
+                     "auto_delegate_v2".to_string(),
++                    "admission_cancel_v1".to_string(),
+                     "worker_candidate_probe_v2".to_string(),
+                     "worker_candidate_probe_permission_reasons_v1".to_string(),
+                     "worker_workload_tools_v1".to_string(),
+@@ -20769,9 +20770,13 @@
+                         warn!("refus de guidage non journalisé : {error}");
+                     }
+                     Some(DaemonToWrapper::Nack {
+-                        id,
+-                        reason: "demande introuvable".to_string(),
+-                    })
++                reason: match st.delegation_store.auto_admission_receipt(&sender, &id) {
++                    Ok(Some(_)) => "Cette clé désigne une admission, pas une demande de message suivie. Utiliser bridget_cancel avec le même id et kind=admission ; si une tâche existe déjà, le reçu donnera son task_id pour bridget_task_cancel. Cette commande n’a rien annulé. Ne pas rejouer l’admission pour l’annuler ; les autres travaux autorisés suivent leur propre état.".into(),
++                    Ok(None) => "demande introuvable".into(),
++                    Err(_) => "La demande de message n’a pas été trouvée et le reçu d’admission n’a pas pu être vérifié. Aucune annulation confirmée : conserver la clé et faire vérifier son reçu avant toute autre action.".into(),
++                },
++                id,
++            })
+                 }
+                 Err(error) => {
+                     if let (Some(facts), Some(request)) = (&guidance_admission, &pending_request)
+--- a/crates/bridget-daemon/src/delegation_mcp.rs
++++ b/crates/bridget-daemon/src/delegation_mcp.rs
+@@ -108,9 +108,9 @@
+         json!({"name":"bridget_refresh_models","description":"Demande une nouvelle observation des modèles annoncés par Codex sur les serveurs. Aucun login, modèle, profil, droit ou mission modifié. La réponse requested n’atteste pas une lecture terminée : relire ensuite bridget_capabilities et fleet.connection_catalogues. Une demande par serveur au plus toutes les 30 secondes. Un ancien worker reste non vérifié.","inputSchema":{"type":"object","properties":{"machine_id":{"type":"string","minLength":1,"maxLength":256}},"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":false,"idempotentHint":false}}),
+         json!({"name":"bridget_capabilities","description":"Catalogue natif : providers contient les verdicts locaux sur la machine d’origine ; ces refus ne décrivent pas les serveurs. fleet.options donne les choix distants déclarés pour auto_delegate (machine_id, engine, model). Ces choix ne prouvent ni éligibilité ni authentification : l’admission vérifie la cible, les droits et le dossier. Fonctionne sans T3.","inputSchema":{"type":"object","properties":{},"additionalProperties":false},"annotations":{"readOnlyHint":true,"destructiveHint":false,"idempotentHint":true}}),
+         json!({"name":"bridget_delegate","description":"Crée un enfant Bridget et remet sa mission en un appel natif. Conserver request_id sur retry identique ; tâche, résultat et annulation appartiennent au parent. keep_alive_secs garde l'enfant après la remise pour une nouvelle ronde. Le brief est déclaré par le parent ; sources_not_verified : aucune source citée n'est vérifiée. Le journal peut être lu plus largement que l'enfant ; aucun secret dans le brief. Corps du dossier ≤ 16 Kio, refusé plutôt que tronqué.","inputSchema":{"type":"object","properties":{"quota_fallback_authorized":{"type":"boolean","description":"true seulement après accord humain explicite pour une bascule de moteur ou de compte en cas de quota dans cette mission. Absent/faux : question humaine. Aucun droit ni budget supplémentaire."},"request_id":{"type":"string","minLength":1,"maxLength":128},"agent_type":{"type":"string"},"model":{"type":"string"},"effort":{"type":["string","null"]},"task":{"type":"string","minLength":1,"maxLength":65536},"machine_id":{"type":"string","minLength":1,"maxLength":256,"description":"Machine de destination de la mission. Vérifier les prérequis propres au projet : données externes, accès SSH et outils ne sont pas garantis par le placement du dépôt. Le champ cwd reste le dossier source sur la machine du parent."},"project_id":{"type":"string","minLength":1,"maxLength":256},"cwd":{"type":"string","minLength":1,"description":"Chemin absolu du dossier source sur la machine du parent appelant. Même avec machine_id distant, ne pas fournir le chemin de destination ; Bridget traduit le chemin via le mapping du projet."},"posture":{"type":"string","enum":["discovery","development"],"description":"Omettre pour hériter des droits attestés du parent. discovery réduit à la lecture seule ; avec Claude/GLM, seuls Read, Glob et Grep sont permis, sans WebSearch, WebFetch ni Bash. Ne convient pas à une recherche web. Changer de machine ne lève pas cette limite. development reste borné par les droits du parent."},"reply_timeout":{"type":"integer","minimum":60,"maximum":86400,"description":"Délai de réponse de la mission en secondes (défaut 3600)."},"workspace":workspace_schema,"child_requests":{"type":"string","enum":["deny","forward"],"description":"Remonter les demandes de l’enfant Codex ; absent : deny, politique inchangée."},"keep_alive_secs":{"type":"integer","minimum":60,"maximum":7200,"description":"Durée de garde après la remise du résultat ; absent : aucune garde."},"resume_on_limit":{"type":"boolean","description":"Attendre puis reprendre après une limite d’usage attestée ; absent ou faux : inactif. Au plus 6 h et 2 rondes, même fournisseur."},"brief":brief_schema,"fallback":{"type":"array","minItems":1,"maxItems":3,"items":{"type":"object","properties":{"agent_type":{"type":"string","minLength":1},"model":{"type":"string","minLength":1},"effort":{"type":"string","minLength":1}},"required":["agent_type","model"],"additionalProperties":false}}},"required":["request_id","agent_type","model","task","cwd"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":true,"idempotentHint":true,"openWorldHint":true}}),
+-        json!({"name":"bridget_auto_delegate","description":"Demande une admission de flotte V2. Les axes machine, moteur, connexion, modèle et effort restent indépendants. Omettre agent_type : utiliser engine pour le moteur et, seulement si nécessaire, connection_id issu du catalogue pour une connexion précise. cwd désigne le dossier source sur la machine du parent ; machine_id désigne la destination. expected_base_commit est obligatoire dans un dépôt Git, en worktree ou pour compilation ; hors Git seulement, general/shared peut l’omettre : dossier local sur la machine source, ou dossier distant déjà présent et mappé ; aucun transfert automatique hors Git. La stratégie commit_view exige explicitement posture=discovery et expected_base_commit ; pour écrire, utiliser shared ou worktree avec posture=development. Il exige un SHA complet (40 caractères hexadécimaux (SHA-1)). Conserver request_id au rejeu strict. Un maître sans auto_delegate_v2 refuse explicitement.","inputSchema":{"type":"object","properties":{"quota_fallback_authorized":{"type":"boolean","description":"true seulement si l’utilisateur a déjà autorisé explicitement le changement de moteur ou de compte en cas de quota pour cette mission. Omettre sinon : une question humaine sera ouverte après un refus fournisseur constaté. Aucun accord n’est déduit du choix automatique initial ; aucun droit ni budget supplémentaire."},"request_id":{"type":"string","minLength":1,"maxLength":128},"machine_id":{"type":"string","minLength":1,"maxLength":256,"description":"Machine de destination de la mission. Vérifier les prérequis propres au projet : données externes, accès SSH et outils ne sont pas garantis par le placement du dépôt. Le champ cwd reste le dossier source sur la machine du parent."},"project_id":{"type":"string","minLength":1,"maxLength":256},"engine":{"type":"string","minLength":1,"maxLength":256},"connection_id":{"type":"string","minLength":1,"maxLength":256},"model":{"type":"string","minLength":1,"maxLength":256},"effort":{"type":"string","minLength":1,"maxLength":256},"workload":{"type":"string","enum":["general","compilation"],"default":"general"},"expected_base_commit":{"type":"string","minLength":40,"maxLength":40,"pattern":"^[0-9a-fA-F]{40}$","description":"Obligatoire dans un dépôt Git et pour compilation/worktree. Omission permise seulement hors Git en general/shared. SHA source complet : exactement 40 caractères hexadécimaux (SHA-1), jamais un nom de branche. En shared : HEAD source ; en worktree : commit résolu de workspace.base_ref (HEAD si absent)."},"task":{"type":"string","minLength":1,"maxLength":65536},"cwd":{"type":"string","minLength":1,"description":"Chemin absolu du dossier source sur la machine du parent appelant. Même avec machine_id distant, ne pas fournir le chemin de destination ; Bridget traduit le chemin via le mapping du projet."},"posture":{"type":"string","enum":["discovery","development"],"description":"Omettre pour hériter des droits attestés du parent. discovery réduit à la lecture seule ; avec Claude/GLM, seuls Read, Glob et Grep sont permis, sans WebSearch, WebFetch ni Bash. Ne convient pas à une recherche web. Changer de machine ne lève pas cette limite. development reste borné par les droits du parent."},"reply_timeout":{"type":"integer","minimum":60,"maximum":86400,"default":3600,"description":"Durée maximale de chaque ronde en secondes, à partir de sa remise effective. Une nouvelle ronde admise renouvelle ce budget ; un rejeu strict ne le renouvelle pas. Défaut : 3600 (1 h), y compris development. Pour un travail long, fournir par exemple 14400 (4 h), au plus 86400 et dans la limite du parent. Ce délai est distinct de wait_timeout et keep_alive_secs. Fixer la valeur avant la première admission ; ne pas modifier une enveloppe déjà admise au rejeu."},"workspace":workspace_schema,"child_requests":{"type":"string","enum":["deny","forward"]},"keep_alive_secs":{"type":"integer","minimum":60,"maximum":7200},"brief":brief_schema,"urgent":{"type":"boolean"},"deliverable":{"type":"string","minLength":1,"maxLength":128}},"required":["request_id","task","cwd"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":true,"idempotentHint":true,"openWorldHint":true}}),
++        json!({"name":"bridget_auto_delegate","description":"Demande une admission de flotte V2. Les axes machine, moteur, connexion, modèle et effort restent indépendants. Omettre agent_type : utiliser engine pour le moteur et, seulement si nécessaire, connection_id issu du catalogue pour une connexion précise. cwd désigne le dossier source sur la machine du parent ; machine_id désigne la destination. expected_base_commit est obligatoire dans un dépôt Git, en worktree ou pour compilation ; hors Git seulement, general/shared peut l’omettre : dossier local sur la machine source, ou dossier distant déjà présent et mappé ; aucun transfert automatique hors Git. La stratégie commit_view exige explicitement posture=discovery et expected_base_commit ; pour écrire, utiliser shared ou worktree avec posture=development. Il exige un SHA complet (40 caractères hexadécimaux (SHA-1)). Conserver request_id au rejeu strict. Un maître sans auto_delegate_v2 refuse explicitement. Le placement du dépôt ne transmet ni données externes ni clés ou alias SSH : vérifier ces prérequis sur la destination. Une admission devenue périmée s’annule avec bridget_cancel, kind=admission, id=request_id.","inputSchema":{"type":"object","properties":{"quota_fallback_authorized":{"type":"boolean","description":"true seulement si l’utilisateur a déjà autorisé explicitement le changement de moteur ou de compte en cas de quota pour cette mission. Omettre sinon : une question humaine sera ouverte après un refus fournisseur constaté. Aucun accord n’est déduit du choix automatique initial ; aucun droit ni budget supplémentaire."},"request_id":{"type":"string","minLength":1,"maxLength":128},"machine_id":{"type":"string","minLength":1,"maxLength":256,"description":"Machine de destination de la mission. Vérifier les prérequis propres au projet : données externes, accès SSH et outils ne sont pas garantis par le placement du dépôt. Le champ cwd reste le dossier source sur la machine du parent."},"project_id":{"type":"string","minLength":1,"maxLength":256},"engine":{"type":"string","minLength":1,"maxLength":256},"connection_id":{"type":"string","minLength":1,"maxLength":256},"model":{"type":"string","minLength":1,"maxLength":256},"effort":{"type":"string","minLength":1,"maxLength":256},"workload":{"type":"string","enum":["general","compilation"],"default":"general"},"expected_base_commit":{"type":"string","minLength":40,"maxLength":40,"pattern":"^[0-9a-fA-F]{40}$","description":"Obligatoire dans un dépôt Git et pour compilation/worktree. Omission permise seulement hors Git en general/shared. SHA source complet : exactement 40 caractères hexadécimaux (SHA-1), jamais un nom de branche. En shared : HEAD source ; en worktree : commit résolu de workspace.base_ref (HEAD si absent)."},"task":{"type":"string","minLength":1,"maxLength":65536},"cwd":{"type":"string","minLength":1,"description":"Chemin absolu du dossier source sur la machine du parent appelant. Même avec machine_id distant, ne pas fournir le chemin de destination ; Bridget traduit le chemin via le mapping du projet."},"posture":{"type":"string","enum":["discovery","development"],"description":"Omettre pour hériter des droits attestés du parent. discovery réduit à la lecture seule ; avec Claude/GLM, seuls Read, Glob et Grep sont permis, sans WebSearch, WebFetch ni Bash. Ne convient pas à une recherche web. Changer de machine ne lève pas cette limite. development reste borné par les droits du parent."},"reply_timeout":{"type":"integer","minimum":60,"maximum":86400,"default":3600,"description":"Durée maximale de chaque ronde en secondes, à partir de sa remise effective. Une nouvelle ronde admise renouvelle ce budget ; un rejeu strict ne le renouvelle pas. Défaut : 3600 (1 h), y compris development. Pour un travail long, fournir par exemple 14400 (4 h), au plus 86400 et dans la limite du parent. Ce délai est distinct de wait_timeout et keep_alive_secs. Fixer la valeur avant la première admission ; ne pas modifier une enveloppe déjà admise au rejeu."},"workspace":workspace_schema,"child_requests":{"type":"string","enum":["deny","forward"]},"keep_alive_secs":{"type":"integer","minimum":60,"maximum":7200},"brief":brief_schema,"urgent":{"type":"boolean"},"deliverable":{"type":"string","minLength":1,"maxLength":128}},"required":["request_id","task","cwd"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":true,"idempotentHint":true,"openWorldHint":true}}),
+         json!({"name":"bridget_task_repair_workspace","description":"Répare explicitement le dossier déplacé de sa même tâche distante, après résultat remis. Conserver request_id sur rejeu identique. Aucun tour métier créé. Les pairs ou adaptations non qualifiés refusent sans forçage.","inputSchema":{"type":"object","properties":{"task_id":{"type":"string","minLength":1},"request_id":{"type":"string","minLength":1,"maxLength":128},"target_cwd":{"type":"string","minLength":1,"maxLength":4096},"expected_head":{"type":"string","pattern":"^[0-9a-fA-F]{40}$","minLength":40,"maxLength":40}},"required":["task_id","request_id","target_cwd","expected_head"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":true,"idempotentHint":true,"openWorldHint":true}}),
+-        json!({"name":"bridget_task_continue","description":"Ouvre une nouvelle ronde sur son enfant encore gardé, après la remise du résultat. Employer une nouvelle request_id à chaque ronde et la conserver sur retry identique. Le brief est déclaré par le parent ; sources_not_verified : aucune source citée n'est vérifiée. Le journal peut être lu plus largement que l'enfant ; aucun secret dans le brief. Corps du dossier ≤ 16 Kio, refusé plutôt que tronqué. Dans brief.references, chaque objet exige kind et label ; kind=file exige aussi host et path absolu.","inputSchema":{"type":"object","properties":{"task_id":{"type":"string","minLength":1},"request_id":{"type":"string","minLength":1,"maxLength":128},"task":{"type":"string","minLength":1,"maxLength":65536},"brief":brief_schema},"required":["task_id","request_id","task"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":false,"idempotentHint":true,"openWorldHint":true}}),
++        json!({"name":"bridget_task_continue","description":"Ouvre une nouvelle ronde sur son enfant encore gardé, après la remise du résultat. Prévoir keep_alive_secs dès l’admission si une suite est nécessaire ; une tâche déjà terminée sans garde ne peut plus continuer. Un SHA cité dans task ou brief n’est ni importé ni synchronisé : rendre les objets et données autorisés disponibles avant la ronde, sans déplacer silencieusement son dossier. Employer une nouvelle request_id à chaque ronde et la conserver sur retry identique. Le brief est déclaré par le parent ; sources_not_verified : aucune source citée n'est vérifiée. Le journal peut être lu plus largement que l'enfant ; aucun secret dans le brief. Corps du dossier ≤ 16 Kio, refusé plutôt que tronqué. Dans brief.references, chaque objet exige kind et label ; kind=file exige aussi host et path absolu.","inputSchema":{"type":"object","properties":{"task_id":{"type":"string","minLength":1},"request_id":{"type":"string","minLength":1,"maxLength":128},"task":{"type":"string","minLength":1,"maxLength":65536},"brief":brief_schema},"required":["task_id","request_id","task"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":false,"idempotentHint":true,"openWorldHint":true}}),
+         json!({"name":"bridget_task_respond","description":"Répond à une question de son enfant avec l'identifiant lu dans le statut ou l'avis. Les approbations appartiennent à l'humain. Aucun secret dans la réponse.","inputSchema":{"type":"object","properties":{"task_id":{"type":"string","minLength":1},"request_id":{"type":"string","minLength":1},"decision":{"type":"string","enum":["accept","decline","cancel"]},"answer":{"type":"object","description":"Pour accept uniquement : chaque identifiant de question porte un tableau de chaînes, 8 Kio au plus."}},"required":["task_id","request_id","decision"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":false,"idempotentHint":true,"openWorldHint":true}}),
+         json!({"name":"bridget_task_status","description":"Lit l'état durable et le résultat stable de sa mission native. Une fin de tour ne vaut pas résultat disponible tant que les enfants travaillent.","inputSchema":{"type":"object","properties":{"task_id":{"type":"string"}},"required":["task_id"],"additionalProperties":false},"annotations":{"readOnlyHint":true,"destructiveHint":false,"idempotentHint":true}}),
+         json!({"name":"bridget_task_wait","description":"Attend le résultat d'une ou plusieurs de ses tâches natives, sans polling ni modification de la remise. Une expiration n'annule aucun enfant. Le message de résultat peut arriver après ce retour.","inputSchema":{"type":"object","properties":{"task_ids":{"type":"array","minItems":1,"maxItems":16,"uniqueItems":true,"items":{"type":"string","minLength":1}},"wait_timeout":{"type":"integer","minimum":1,"maximum":WAIT_TIMEOUT_MAX_SECS,"default":WAIT_TIMEOUT_DEFAULT_SECS}},"required":["task_ids"],"additionalProperties":false},"annotations":{"readOnlyHint":true,"destructiveHint":false,"idempotentHint":true}}),
+@@ -240,6 +240,7 @@
+         "bridget_task_continue" => &["task_id", "request_id", "task", "brief"],
+         "bridget_task_respond" => &["task_id", "request_id", "decision", "answer"],
+         "bridget_task_status" | "bridget_task_cancel" => &["task_id"],
++        "bridget_admission_cancel" => &["request_id"],
+         "bridget_task_wait" => &["task_ids", "wait_timeout"],
+         "bridget_task_ack" => &["task_ids"],
+         _ => return Err(ClientError::InvalidParams("outil natif inconnu".into())),
+@@ -506,6 +507,7 @@
+         "bridget_task_cancel" => NativeDelegationRequest::Cancel {
+             task_id: string("task_id")?,
+         },
++        "bridget_admission_cancel" => NativeDelegationRequest::CancelAdmission {request_id:string("request_id")?},
+         "bridget_task_wait" => NativeDelegationRequest::Wait {
+             task_ids: parse_task_ids(args)?,
+             wait_timeout: Some(parse_wait_timeout(object)?),
+@@ -574,6 +576,7 @@
+         }
+     }
+     let required_feature = match &request {
++        NativeDelegationRequest::CancelAdmission { .. } => Some(("admission_cancel_v1","admission_cancel_master_upgrade_required")),
+         NativeDelegationRequest::ReadCommitFile{..}=>
+             Some(("commit_view_files_v1","commit_view_file_master_upgrade_required")),
+         NativeDelegationRequest::RepairWorkspace {..} =>
+@@ -610,7 +613,9 @@
+         if !supported {
+             return Err(ClientError::Technical {
+                 code: "native_delegation_refused",
+-                message: if refusal=="commit_view_master_upgrade_required" {
++                message: if refusal == "admission_cancel_master_upgrade_required" {
++                    "admission_cancel_master_upgrade_required : Faire charger le parcours admission_cancel_v1 sur le maître. Cette commande n’a pas été transmise et n’a rien annulé. Conserver la clé et tout task_id connu ; ne pas rejouer l’admission pour l’annuler ni changer de canal ou d’identité. Les autres travaux autorisés suivent leur propre état.".into()
++                } else if refusal=="commit_view_master_upgrade_required" {
+                     "commit_view_master_upgrade_required : Le maître ne déclare pas le parcours de création des vues. Demandez au responsable Bridget de charger et qualifier ce parcours et son retour compatible. Cette demande n'a pas été transmise pour admission ; conservez la clé et toute tâche ou reçu antérieur avant un rejeu strict après résolution. Ne créez pas de worktree pour contourner ce refus. Les autres travaux autorisés suivent leur propre état.".into()
+                 } else if refusal=="model_options_master_upgrade_required" {
+                     "model_options_master_upgrade_required : Le maître n'a pas confirmé les capacités d'admission et de choix d'options requises pour cette demande. Faire charger et qualifier ce parcours par le responsable Bridget. Cet appel n'a pas été transmis pour admission ; conserver la clé et tout reçu antérieur. Ne pas changer le modèle, le compte, le niveau ou les droits. Les autres travaux autorisés suivent leur propre état.".into()
+--- a/crates/bridget-daemon/src/mcp.rs
++++ b/crates/bridget-daemon/src/mcp.rs
+@@ -1046,7 +1046,7 @@
+                 Ok(json!(excerpt))
+             }
+         }
+-        "bridget_cancel" => execute_cancel(principal, instance_id, arguments, socket),
++        "bridget_cancel" => execute_cancel(identity, arguments, socket),
+         "bridget_publish_artifact" => {
+             execute_publish_artifact(principal, instance_id, arguments, socket)
+         }
+@@ -1581,16 +1581,42 @@
+ }
+ 
+ fn execute_cancel(
+-    identity: &str,
+-    instance_id: &str,
++    identity: &crate::mcp_identity::ResolvedIdentity,
+     arguments: &serde_json::Map<String, Value>,
+     socket: &Path,
+ ) -> Result<Value, ToolError> {
+-    reject_unknown_arguments(arguments, &["id", "reason"])?;
++    reject_unknown_arguments(arguments, &["id", "reason", "kind"])?;
+     let id = required_non_empty_string(arguments, "id")?;
+     let reason = optional_non_empty_string(arguments, "reason")?;
+-    match crate::communication::client::cancel_request(identity, instance_id, socket, &id, reason)?
+-    {
++    match arguments.get("kind").and_then(Value::as_str) {
++        Some("admission") => {
++            return crate::delegation_mcp::execute(
++                identity,
++                "bridget_admission_cancel",
++                &json!({"request_id":id}),
++                socket,
++            );
++        }
++        None if arguments.contains_key("kind") => {
++            return Err(ToolError::InvalidParams(
++                "kind doit être message ou admission.".into(),
++            ));
++        }
++        None | Some("message") => {}
++        _ => {
++            return Err(ToolError::InvalidParams(
++                "kind doit être message ou admission.".into(),
++            ));
++        }
++    }
++
++    match crate::communication::client::cancel_request(
++        &identity.name,
++        &identity.instance_id,
++        socket,
++        &id,
++        reason,
++    )? {
+         DaemonToWrapper::RequestCancelled { id, state } => Ok(json!({"status": state, "id": id})),
+         DaemonToWrapper::Nack { id, reason } => {
+             Ok(json!({"status": "rejected", "id": id, "reason": reason}))
+@@ -2891,12 +2917,13 @@
+         }),
+         json!({
+             "name": "bridget_cancel",
+-            "description": "Annuler une demande suivie dont tu es l'émetteur. Le daemon vérifie l'identité connectée ; cette opération n'arrête pas l'agent et ne prouve pas la fin de sa mission.",
++            "description": "Annuler explicitement son admission avec kind=admission et id=request_id, avant création d’une tâche. Si une tâche existe déjà, le reçu donne task_id pour bridget_task_cancel, sans annulation implicite. Sans kind, ou avec kind=message, annuler seulement sa demande de message suivie : cela n’arrête pas l’agent et ne clôt pas une mission. Aucun choix automatique entre ces deux portées.",
+             "inputSchema": {
+                 "type": "object",
+                 "properties": {
+                     "id": { "type": "string", "minLength": 1 },
+-                    "reason": { "type": "string", "minLength": 1 }
++                    "kind": { "type": "string", "enum": ["message", "admission"], "default": "message" },
++                    "reason": { "type": "string", "minLength": 1, "description": "Motif facultatif transmis pour kind=message. Pour kind=admission, seul le code fermé admission_cancelled est conservé ; aucun motif libre n’est enregistré." }
+                 },
+                 "required": ["id"],
+                 "additionalProperties": false
+--- a/crates/bridget-daemon/src/mcp_tests.rs
++++ b/crates/bridget-daemon/src/mcp_tests.rs
+@@ -1,4 +1,114 @@
+     use super::*;
++#[test]
++fn spec272_cancel_admission_requires_feature_and_sends_only_native_operation() {
++    use std::io::{BufRead, BufReader, Write};
++    use std::os::unix::net::UnixListener;
++    for supported in [false, true] {
++        let socket = crate::mcp_identity::mock_socket("cancel272");
++        let listener = UnixListener::bind(&socket).unwrap();
++        crate::mcp_identity::mock_private_identity(&socket, "owner272", "instance272");
++        let backend = std::thread::spawn(move || {
++            let (mut stream, _) = listener.accept().unwrap();
++            stream
++                .set_read_timeout(Some(Duration::from_secs(5)))
++                .unwrap();
++            let mut reader = BufReader::new(stream.try_clone().unwrap());
++            let mut line = String::new();
++            reader.read_line(&mut line).unwrap();
++            assert_eq!(
++                serde_json::from_str::<Value>(&line).unwrap()["type"],
++                "RegisterAuxiliary"
++            );
++            writeln!(
++                stream,
++                "{}",
++                json!({"type":"Registered","agent_id":"owner272","credential":null})
++            )
++            .unwrap();
++            line.clear();
++            reader.read_line(&mut line).unwrap();
++            assert_eq!(
++                serde_json::from_str::<Value>(&line).unwrap()["type"],
++                "DaemonIdentityRequest"
++            );
++            writeln!(stream,"{}",json!({"type":"DaemonIdentityReport","host":"fixture","db_path":"fixture","instance_id":"fixture","features":if supported {vec!["admission_cancel_v1"]} else {vec![]}})).unwrap();
++            line.clear();
++            let count = reader.read_line(&mut line).unwrap();
++            if !supported {
++                assert_eq!(count, 0, "aucune opération nouvelle vers un ancien maître");
++                return;
++            }
++            let request: WrapperToDaemon = serde_json::from_str(&line).unwrap();
++            assert!(
++                matches!(request,WrapperToDaemon::NativeDelegation {request:bridget_transport::protocol::NativeDelegationRequest::CancelAdmission {ref request_id}} if request_id=="cancel272")
++            );
++            writeln!(stream,"{}",json!({"type":"NativeDelegationResult","result":{"version":1,"status":"cancelled","request_id":"cancel272","task_id":null}})).unwrap();
++        });
++        let identity = crate::mcp_identity::ResolvedIdentity {
++            name: "owner272".into(),
++            instance_id: "instance272".into(),
++            delegated_origin: None,
++        };
++        let answer = execute_cancel(
++            &identity,
++            json!({"id":"cancel272","kind":"admission","reason":"motif facultatif"})
++                .as_object()
++                .unwrap(),
++            &socket,
++        );
++        if supported {
++            assert_eq!(answer.unwrap()["status"], "cancelled");
++        } else {
++            assert!(
++                matches!(answer,Err(ToolError::Technical {message,..}) if message.contains("admission_cancel_master_upgrade_required"))
++            );
++        }
++        backend.join().unwrap();
++    }
++    let identity = crate::mcp_identity::ResolvedIdentity {
++        name: "owner272".into(),
++        instance_id: "instance272".into(),
++        delegated_origin: None,
++    };
++    for args in [
++        json!({"id":"x","kind":null}),
++        json!({"id":"x","kind":"admission","reason":42}),
++        json!({"id":"x","kind":"autre"}),
++    ] {
++        assert!(matches!(
++            execute_cancel(
++                &identity,
++                args.as_object().unwrap(),
++                Path::new("/absent272/socket")
++            ),
++            Err(ToolError::InvalidParams(_))
++        ));
++    }
++}
++
++#[test]
++fn spec272_cancel_admission_schema_is_explicit() {
++    let catalogue = tools();
++    let cancel = catalogue
++        .iter()
++        .find(|x| x["name"] == "bridget_cancel")
++        .unwrap();
++    assert_eq!(
++        cancel["inputSchema"]["properties"]["kind"]["enum"],
++        json!(["message", "admission"])
++    );
++    assert_eq!(
++        cancel["inputSchema"]["properties"]["kind"]["default"],
++        "message"
++    );
++    let args = json!({"id":"own272","kind":"admission"});
++    assert_eq!(
++        crate::mcp_scopes::scope_of("bridget_cancel", args.as_object().unwrap()),
++        Some(crate::mcp_scopes::Scope::Sends)
++    );
++}
++
++
+     use serde_json::Value;
+     use std::cell::Cell;
+     use std::collections::BTreeSet;
+--- a/crates/bridget-transport/src/claude_stream_json.rs
++++ b/crates/bridget-transport/src/claude_stream_json.rs
+@@ -1960,20 +1960,31 @@
+                     .get("permission_denials")
+                     .and_then(Value::as_array)
+                     .map_or(0, Vec::len);
+-                let (interrupted_for_permission, terminal, background_pending) = {
+-                    let state=queue.0.lock().unwrap_or_else(|e|e.into_inner());
+-                    let active=state.active.as_ref();
+-                    let interrupted=active.is_some_and(|active|active.permission_denied);
+-                    let terminal=classify_claude_result(&value,interrupted,
+-                        active.is_some_and(|active|active.latest_assistant_rate_limited),
+-                        active.filter(|active|active.latest_assistant_api_error).map(|active|active.response.as_str()));
+-                    (interrupted,terminal,active.is_some_and(|active| active.background_tasks.pending()))
++                let (interrupted_for_permission, terminal, background_pending, background_facts) = {
++                    let state = queue.0.lock().unwrap_or_else(|e|e.into_inner());
++                    let active = state.active.as_ref();
++                    let interrupted = active.is_some_and(|active| active.permission_denied);
++                    let terminal = classify_claude_result(
++                        &value,
++                        interrupted,
++                        active.is_some_and(|active| active.latest_assistant_rate_limited),
++                        active
++                            .filter(|active| active.latest_assistant_api_error)
++                            .map(|active| active.response.as_str()),
++                    );
++                    (
++                        interrupted,
++                        terminal,
++                        active.is_some_and(|active| active.background_tasks.pending()),
++                        active.map(|active| json!({"live_count":active.background_tasks.live.len(),"unconfirmed":active.background_tasks.unconfirmed})),
++                    )
+                 };
+                 let active_id = queue.0.lock().unwrap_or_else(|e| e.into_inner())
+                     .active.as_ref().map(|active| active.message_id.clone());
+                 if let Some(message_id) = active_id {
+                     let mut metadata=claude_result_metadata(&value,&terminal,interrupted_for_permission);
+                     metadata["finalization"]=json!(if matches!(terminal,ManagedTerminal::Completed)&&background_pending {"waiting_background_tasks"}else{"terminal_result"});
++                    metadata["background_tasks"] = background_facts.unwrap_or(Value::Null);
+                     record_or_terminal(&journal, &events, "provider_result", Some(&message_id),metadata);
+                 }
+                 if tool_denials > 0 {
+--- a/crates/bridget-transport/src/claude_stream_json_tests.rs
++++ b/crates/bridget-transport/src/claude_stream_json_tests.rs
+@@ -258,6 +258,8 @@
+     assert_eq!(results[0]["payload"]["finalization"], "waiting_background_tasks");
+     assert_eq!(results[1]["payload"]["finalization"], "waiting_background_tasks");
+     assert_eq!(results[2]["payload"]["finalization"], "terminal_result");
++    assert_eq!(results[0]["payload"]["background_tasks"],json!({"live_count":1,"unconfirmed":false}));
++    assert_eq!(results[2]["payload"]["background_tasks"],json!({"live_count":0,"unconfirmed":false}));
+     assert!(results.iter().all(|r| r["message_id"] == "background-mission"));
+     fs::remove_dir_all(root).unwrap();
+ }
+--- a/crates/bridget-transport/src/protocol.rs
++++ b/crates/bridget-transport/src/protocol.rs
+@@ -2323,6 +2323,9 @@
+     },
+     Cancel {
+         task_id: String,
++    },
++    CancelAdmission {
++        request_id: String,
+     },
+     Wait {
+         task_ids: Vec<String>,
+--- /dev/null
++++ b/crates/bridget-daemon/src/daemon/native_admission_cancel.rs
+@@ -0,0 +1,59 @@
++//! Annulation du reçu avant création de Task, sans toucher aux messages suivis.
++use super::*;
++
++pub(super) fn cancel(st: &DaemonState, owner: &str, request_id: &str) -> Result<Value, String> {
++    if request_id.is_empty()
++        || request_id.len() > 128
++        || request_id.chars().any(bridget_core::is_disallowed_control)
++    {
++        return Err("auto_admission_invalid".into());
++    }
++    let Some(receipt) = st
++        .delegation_store
++        .auto_admission_receipt(owner, request_id)?
++    else {
++        return Ok(
++            json!({"version":1,"status":"not_recorded","request_id":request_id,"task_id":null,
++            "code":"admission_not_recorded","detail":{"scope":"this_admission",
++            "recovery":"Aucun reçu n’a été trouvé pour cette clé et ce propriétaire. Aucune annulation n’est enregistrée : un appel concurrent encore en précontrôle peut créer son reçu plus tard. Attendre la fin de ces appels puis vérifier la même clé ; ne pas rejouer l’admission ni créer une clé neuve pour annuler. Les autres travaux autorisés suivent leur propre état."}}),
++        );
++    };
++    if receipt.state == AutoAdmissionState::Admitted {
++        let id = receipt
++            .task_id
++            .as_deref()
++            .ok_or("admission_task_unavailable")?;
++        let task = st
++            .delegation_store
++            .get(id)?
++            .filter(|task| task.owner == owner)
++            .ok_or("admission_task_unavailable")?;
++        return Ok(
++            json!({"version":1,"status":"task_exists","code":"admission_already_admitted",
++            "request_id":request_id,"task_id":task.task_id,"detail":{"scope":"this_admission",
++            "recovery":"La création de tâche a précédé cette annulation d’admission. Pour arrêter ce travail devenu périmé, le propriétaire utilise bridget_task_cancel avec ce task_id, puis vérifie sa clôture native et conserve ses fichiers. Cette commande n’a annulé ni la tâche ni une autre demande. Les autres travaux autorisés suivent leur propre état."}}),
++        );
++    }
++    // Le mutex du coordinateur est tenu. Le store reprend la révision dans sa
++    // transaction Immediate ; admit_auto_task refuse un reçu devenu Refused.
++    let receipt = if receipt.state == AutoAdmissionState::Refused {
++        receipt
++    } else {
++        st.delegation_store.refuse_auto_admission(
++            &receipt,
++            "admission_cancelled",
++            unix_timestamp(),
++        )?
++    };
++    let cancelled = receipt.refusal_code.as_deref() == Some("admission_cancelled");
++    Ok(
++        json!({"version":1,"status":if cancelled {"cancelled"} else {"already_refused"},
++        "code":receipt.refusal_code,"request_id":request_id,"task_id":null,
++        "detail":{"scope":"this_admission","admission_state":"refused",
++        "recovery":if cancelled {
++            "L’admission est annulée durablement avant création de tâche. Un choix ou contrôle déjà en cours peut finir, mais son résultat ne peut plus admettre une tâche pour cette clé. Conserver la clé et les éventuels dossiers préparés : cette annulation ne les efface pas. Un rejeu identique ne relance pas l’admission ; une nouvelle mission exige une nouvelle clé et son autorisation propre. Les autres travaux autorisés suivent leur propre état."
++        } else {
++            "Cette admission était déjà refusée ; sa cause et son reçu sont conservés. Cette commande ne la reclasse pas comme annulée et ne crée aucune tâche. Les autres travaux autorisés suivent leur propre état."
++        }}}),
++    )
++}

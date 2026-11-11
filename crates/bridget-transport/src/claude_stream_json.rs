@@ -1988,7 +1988,7 @@ fn spawn_reader(
                     .get("permission_denials")
                     .and_then(Value::as_array)
                     .map_or(0, Vec::len);
-                let (interrupted_for_permission, terminal, background_pending) = {
+                let (interrupted_for_permission, terminal, background_pending, background_facts) = {
                     let state = queue.0.lock().recover_poison();
                     let active = state.active.as_ref();
                     let interrupted = active.is_some_and(|active| active.permission_denied);
@@ -2004,6 +2004,7 @@ fn spawn_reader(
                         interrupted,
                         terminal,
                         active.is_some_and(|active| active.background_tasks.pending()),
+                        active.map(|active| json!({"live_count":active.background_tasks.live.len(),"unconfirmed":active.background_tasks.unconfirmed})),
                     )
                 };
                 let active_id = queue
@@ -2024,6 +2025,7 @@ fn spawn_reader(
                         } else {
                             "terminal_result"
                         });
+                    metadata["background_tasks"] = background_facts.unwrap_or(Value::Null);
                     record_or_terminal(
                         &journal,
                         &events,

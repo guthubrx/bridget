@@ -279,6 +279,14 @@ sys.stdin.readline()
         "waiting_background_tasks"
     );
     assert_eq!(results[2]["payload"]["finalization"], "terminal_result");
+    assert_eq!(
+        results[0]["payload"]["background_tasks"],
+        json!({"live_count":1,"unconfirmed":false})
+    );
+    assert_eq!(
+        results[2]["payload"]["background_tasks"],
+        json!({"live_count":0,"unconfirmed":false})
+    );
     assert!(
         results
             .iter()

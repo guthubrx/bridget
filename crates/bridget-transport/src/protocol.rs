@@ -2341,6 +2341,9 @@ pub enum NativeDelegationRequest {
     Cancel {
         task_id: String,
     },
+    CancelAdmission {
+        request_id: String,
+    },
     Wait {
         task_ids: Vec<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]

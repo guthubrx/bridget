@@ -1,4 +1,114 @@
 use super::*;
+
+#[test]
+fn spec272_cancel_admission_requires_feature_and_sends_only_native_operation() {
+    use std::io::{BufRead, BufReader, Write};
+    use std::os::unix::net::UnixListener;
+    for supported in [false, true] {
+        let socket = crate::mcp_identity::mock_socket("cancel272");
+        let listener = UnixListener::bind(&socket).unwrap();
+        crate::mcp_identity::mock_private_identity(&socket, "owner272", "instance272");
+        let backend = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut line = String::new();
+            reader.read_line(&mut line).unwrap();
+            assert_eq!(
+                serde_json::from_str::<Value>(&line).unwrap()["type"],
+                "RegisterAuxiliary"
+            );
+            writeln!(
+                stream,
+                "{}",
+                json!({"type":"Registered","agent_id":"owner272","credential":null})
+            )
+            .unwrap();
+            line.clear();
+            reader.read_line(&mut line).unwrap();
+            assert_eq!(
+                serde_json::from_str::<Value>(&line).unwrap()["type"],
+                "DaemonIdentityRequest"
+            );
+            writeln!(stream,"{}",json!({"type":"DaemonIdentityReport","host":"fixture","db_path":"fixture","instance_id":"fixture","features":if supported {vec!["admission_cancel_v1"]} else {vec![]}})).unwrap();
+            line.clear();
+            let count = reader.read_line(&mut line).unwrap();
+            if !supported {
+                assert_eq!(count, 0, "aucune opération nouvelle vers un ancien maître");
+                return;
+            }
+            let request: WrapperToDaemon = serde_json::from_str(&line).unwrap();
+            assert!(
+                matches!(request,WrapperToDaemon::NativeDelegation {request:bridget_transport::protocol::NativeDelegationRequest::CancelAdmission {ref request_id}} if request_id=="cancel272")
+            );
+            writeln!(stream,"{}",json!({"type":"NativeDelegationResult","result":{"version":1,"status":"cancelled","request_id":"cancel272","task_id":null}})).unwrap();
+        });
+        let identity = crate::mcp_identity::ResolvedIdentity {
+            name: "owner272".into(),
+            instance_id: "instance272".into(),
+            delegated_origin: None,
+        };
+        let answer = execute_cancel(
+            &identity,
+            json!({"id":"cancel272","kind":"admission","reason":"motif facultatif"})
+                .as_object()
+                .unwrap(),
+            &socket,
+        );
+        if supported {
+            assert_eq!(answer.unwrap()["status"], "cancelled");
+        } else {
+            assert!(
+                matches!(answer,Err(ToolError::Technical {message,..}) if message.contains("admission_cancel_master_upgrade_required"))
+            );
+        }
+        backend.join().unwrap();
+    }
+    let identity = crate::mcp_identity::ResolvedIdentity {
+        name: "owner272".into(),
+        instance_id: "instance272".into(),
+        delegated_origin: None,
+    };
+    for args in [
+        json!({"id":"x","kind":null}),
+        json!({"id":"x","kind":"admission","reason":42}),
+        json!({"id":"x","kind":"autre"}),
+    ] {
+        assert!(matches!(
+            execute_cancel(
+                &identity,
+                args.as_object().unwrap(),
+                Path::new("/absent272/socket")
+            ),
+            Err(ToolError::InvalidParams(_))
+        ));
+    }
+}
+
+#[test]
+fn spec272_cancel_admission_schema_is_explicit() {
+    let catalogue = tools();
+    let cancel = catalogue
+        .iter()
+        .find(|x| x["name"] == "bridget_cancel")
+        .unwrap();
+    assert_eq!(
+        cancel["inputSchema"]["properties"]["kind"]["enum"],
+        json!(["message", "admission"])
+    );
+    assert_eq!(
+        cancel["inputSchema"]["properties"]["kind"]["default"],
+        "message"
+    );
+    let args = json!({"id":"own272","kind":"admission"});
+    assert_eq!(
+        crate::mcp_scopes::scope_of("bridget_cancel", args.as_object().unwrap()),
+        Some(crate::mcp_scopes::Scope::Sends)
+    );
+}
+
 use serde_json::Value;
 use std::cell::Cell;
 use std::collections::BTreeSet;

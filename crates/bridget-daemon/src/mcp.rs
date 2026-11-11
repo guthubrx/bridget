@@ -1065,7 +1065,7 @@ fn execute_tool_at_with_identity_once(
                 Ok(json!(excerpt))
             }
         }
-        "bridget_cancel" => execute_cancel(principal, instance_id, arguments, socket),
+        "bridget_cancel" => execute_cancel(identity, arguments, socket),
         "bridget_publish_artifact" => {
             execute_publish_artifact(principal, instance_id, arguments, socket)
         }
@@ -1615,16 +1615,42 @@ pub(crate) fn execute_queue(
 }
 
 fn execute_cancel(
-    identity: &str,
-    instance_id: &str,
+    identity: &crate::mcp_identity::ResolvedIdentity,
     arguments: &serde_json::Map<String, Value>,
     socket: &Path,
 ) -> Result<Value, ToolError> {
-    reject_unknown_arguments(arguments, &["id", "reason"])?;
+    reject_unknown_arguments(arguments, &["id", "reason", "kind"])?;
     let id = required_non_empty_string(arguments, "id")?;
     let reason = optional_non_empty_string(arguments, "reason")?;
-    match crate::communication::client::cancel_request(identity, instance_id, socket, &id, reason)?
-    {
+    match arguments.get("kind").and_then(Value::as_str) {
+        Some("admission") => {
+            return crate::delegation_mcp::execute(
+                identity,
+                "bridget_admission_cancel",
+                &json!({"request_id":id}),
+                socket,
+            );
+        }
+        None if arguments.contains_key("kind") => {
+            return Err(ToolError::InvalidParams(
+                "kind doit être message ou admission.".into(),
+            ));
+        }
+        None | Some("message") => {}
+        _ => {
+            return Err(ToolError::InvalidParams(
+                "kind doit être message ou admission.".into(),
+            ));
+        }
+    }
+
+    match crate::communication::client::cancel_request(
+        &identity.name,
+        &identity.instance_id,
+        socket,
+        &id,
+        reason,
+    )? {
         DaemonToWrapper::RequestCancelled { id, state } => Ok(json!({"status": state, "id": id})),
         DaemonToWrapper::Nack { id, reason } => {
             Ok(json!({"status": "rejected", "id": id, "reason": reason}))
@@ -2958,12 +2984,13 @@ pub(crate) fn tools() -> Vec<Value> {
         }),
         json!({
             "name": "bridget_cancel",
-            "description": "Annuler une demande suivie dont tu es l'émetteur. Le daemon vérifie l'identité connectée ; cette opération n'arrête pas l'agent et ne prouve pas la fin de sa mission.",
+            "description": "Annuler explicitement son admission avec kind=admission et id=request_id, avant création d’une tâche. Si une tâche existe déjà, le reçu donne task_id pour bridget_task_cancel, sans annulation implicite. Sans kind, ou avec kind=message, annuler seulement sa demande de message suivie : cela n’arrête pas l’agent et ne clôt pas une mission. Aucun choix automatique entre ces deux portées.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "id": { "type": "string", "minLength": 1 },
-                    "reason": { "type": "string", "minLength": 1 }
+                    "kind": { "type": "string", "enum": ["message", "admission"], "default": "message" },
+                    "reason": { "type": "string", "minLength": 1, "description": "Motif facultatif transmis pour kind=message. Pour kind=admission, seul le code fermé admission_cancelled est conservé ; aucun motif libre n’est enregistré." }
                 },
                 "required": ["id"],
                 "additionalProperties": false

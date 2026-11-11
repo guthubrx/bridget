@@ -1409,3 +1409,19 @@ Model choices come from the existing target provider session. Codex App Server s
 
 
 A machine explicitly selected by the request or policy is no longer refused for high CPU usage or load average. Those observations still guide automatic placement; freshly observed available memory below the configured threshold remains blocking. Read-only worker inspections do not consume preparation slots or bootstraps and keep identity, permission and repository checks when creation slots are occupied. remote_prepare:ResourceLimit identifies an internal preparation bound, not a CPU or RAM measurement.
+
+
+### Annulation avant création de tâche (272)
+
+`bridget_cancel` avec `kind="admission"` et `id=request_id` ferme le reçu de
+son propriétaire avant création de tâche. `cancelled` est durable ; les retours
+concurrents ne peuvent plus créer cette tâche. `task_exists` fournit le task_id
+pour le parcours propriétaire `bridget_task_cancel`, sans annulation implicite.
+`not_recorded` ne crée aucune barrière contre un appel encore en précontrôle :
+attendre sa fin puis vérifier la même clé. Les dossiers déjà préparés sont
+conservés ; leur chemin est rendu si la création locale a précédé l’annulation.
+
+Sans `kind`, ou avec `kind="message"`, le comportement historique reste celui
+d’une demande de message suivie. Aucun aiguillage automatique entre ces portées.
+L’opération d’admission exige `admission_cancel_v1` ; un ancien maître est refusé
+avant transmission. Ni le rejeu d’une admission ni une clé neuve ne l’annulent.

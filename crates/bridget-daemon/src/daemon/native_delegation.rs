@@ -12,6 +12,8 @@ mod workspace_preparation;
 #[path = "native_workspace_repair.rs"]
 pub(super) mod workspace_repair;
 use super::*;
+#[path = "native_admission_cancel.rs"]
+mod admission_cancel;
 use crate::decision_service::{
     CallerDeadline, DecisionBrief, DecisionCandidate, DecisionChoice, HealthStatus,
     LayaDecisionRequest, RoutingDecisionCandidate, RoutingDecisionChoice, RoutingDecisionFact,
@@ -3790,6 +3792,17 @@ fn close_auto_admission_error(
     receipt: &AutoAdmissionReceipt,
     code: String,
 ) -> Result<String, String> {
+    if let Some(current) = st.delegation_store.auto_admission_receipt(&receipt.owner, &receipt.request_id)?
+        && current.state == AutoAdmissionState::Refused
+    {
+        // Garder le contexte local déjà observé, jamais une autre cause tardive.
+        if current.refusal_code.as_deref() == Some("admission_cancelled")
+            && code.starts_with("admission_cancelled:")
+        {
+            return Ok(code);
+        }
+        return Ok(auto_refusal_error(&current));
+    }
     let Some(refusal) = auto_terminal_refusal_code(&code) else {
         return Ok(code);
     };
@@ -3802,7 +3815,8 @@ fn close_auto_admission_error(
             .refuse_auto_admission(receipt, refusal, unix_timestamp())
     };
     match closed {
-        Ok(closed) if capacity.is_some() || routing_change_detail(&code).is_some() => {
+        Ok(closed) if closed.refusal_code.as_deref() != Some(refusal)
+            || capacity.is_some() || routing_change_detail(&code).is_some() => {
             Ok(auto_refusal_error(&closed))
         }
         Ok(_) => Ok(code),
@@ -10030,6 +10044,13 @@ fn delegate_worktree(
         expected_path.display(),
         branch
     );
+    if let Some(receipt) = auto_receipt {
+        info!("bridget_admission_workspace_preparing {}", json!({
+            "version":1,"scope":"this_admission","owner":receipt.owner,
+            "request_id":receipt.request_id,"path":expected_path,"branch":branch,
+            "task_created":false,"physical_outcome":"not_observed"
+        }));
+    }
     // La réservation est seulement en RAM. Un échec de création peut laisser
     // des effets Git : Auto conserve le choix et le diagnostic complet.
     let record = crate::workspace_git::create(&plan, &reserved.task_id).map_err(|error| {
@@ -10066,6 +10087,22 @@ fn delegate_worktree(
         Ok(WorkspaceAdmission::View(view)) => Ok(view),
         Ok(_) => unreachable!("seconde passe métier"),
         Err(reason) => {
+            if let Some(receipt) = auto_receipt {
+                let st = state.lock().recover_poison();
+                if st.delegation_store.auto_admission_receipt(&receipt.owner, &receipt.request_id)?
+                    .is_some_and(|current| current.state == AutoAdmissionState::Refused
+                        && current.refusal_code.as_deref() == Some("admission_cancelled"))
+                {
+                    warn!("bridget_admission_workspace_retained {}", json!({
+                        "version":1,"scope":"this_admission","owner":receipt.owner,
+                        "request_id":receipt.request_id,"path":record.path,"branch":record.branch,
+                        "cause":"admission_cancelled","task_created":false
+                    }));
+                    return Err(format!("admission_cancelled:{}", json!({
+                        "path":record.path,"branch":record.branch
+                    })));
+                }
+            }
             let code = if reason.starts_with("workspace_path_unsafe") {
                 "workspace_path_unsafe"
             } else {
@@ -11710,6 +11747,9 @@ fn handle_locked_with_remote_proof(
                 st.delegation_store.save(&task)?;
             }
             current_task_view(st, &task, true)
+        }
+        NativeDelegationRequest::CancelAdmission { request_id } => {
+            admission_cancel::cancel(st, &owner, request_id)
         }
         NativeDelegationRequest::Ack { task_ids } => {
             validate_task_ids(task_ids)?;

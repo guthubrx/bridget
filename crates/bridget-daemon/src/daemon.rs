@@ -11583,7 +11583,7 @@ fn guidance_refusal_fields(refusal: crate::guidance::GuidanceRefusal) -> (&'stat
     match refusal {
         GuidanceRefusal::IntentNotPermitted { reason } => ("intent_not_permitted", reason.to_string()),
         GuidanceRefusal::ReferentPaused => ("referent_paused", "referent_paused".into()),
-        GuidanceRefusal::MissionActive => ("mission_active", "mission_active".into()),
+        GuidanceRefusal::MissionActive => ("mission_active", "Lire bridget_task_status pour la mission native de cet enfant. Un message intent=interrupt ne remplace pas le contrôle de cette mission active et n’a pas interrompu son travail. Pour une consigne différée, intent=queue attend le prochain tour ; après résultat, task_continue ouvre une nouvelle ronde si l’enfant est encore gardé. Si le travail courant est devenu périmé, seul son propriétaire peut demander bridget_task_cancel, puis vérifier la clôture et conserver les fichiers avant toute suite autorisée. Ne pas recréer une mission d’issue inconnue ni employer un autre canal pour contourner ce refus. Portée : cet envoi ; les autres travaux autorisés suivent leur propre état.".into()),
         GuidanceRefusal::NotEditable => ("not_held", "not_held".into()),
         GuidanceRefusal::NoActiveTurn => ("no_active_turn", "no_active_turn".into()),
         GuidanceRefusal::SteerUnavailable => ("steer_unavailable", "steer_unavailable".into()),
@@ -12794,7 +12794,7 @@ fn handle_idempotent_send_with_result_authority(
             let _ = record_guidance_outcome(st, facts, &message.to, &message.id, "refused:steer_unavailable");
         }
         return reject_idempotent_send(st, &key, "steer_unavailable",
-            "Ce pilote natif ne prend pas en charge le guidage pendant un tour. Cette demande est refusée avant remise, sans interrompre l’agent. Pour attendre sa fin de tour, envoyer explicitement un message ordinaire intent=queue ; aucun repli automatique n’a été effectué. Si la consigne doit être appliquée immédiatement, demander au propriétaire de choisir une interruption autorisée. Les autres travaux autorisés suivent leur propre état.")
+            "Ce pilote natif ne prend pas en charge le guidage pendant un tour. Cette demande est refusée avant remise, sans interrompre l’agent. Pour attendre sa fin de tour, envoyer explicitement intent=queue ; aucun repli automatique n’a été effectué. Si une mission native est active, intent=interrupt ne l’annule pas et peut rendre mission_active. Si le travail est devenu périmé, son propriétaire peut demander bridget_task_cancel, vérifier la clôture et conserver ses fichiers avant une suite autorisée. Après résultat, task_continue exige un enfant encore gardé. Les autres travaux autorisés suivent leur propre état.")
             .unwrap_or_else(|reason| DaemonToWrapper::Nack { id: message.id.clone(), reason });
     }
     // O(log N): messages mobiles retenus avant le porteur, même pour T3.

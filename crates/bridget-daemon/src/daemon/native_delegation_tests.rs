@@ -1,6 +1,158 @@
 use super::*;
 
 #[test]
+fn spec272_admission_cancel_fences_creation_and_preserves_owner_and_terminal_states() {
+    let (state, config, task, _parent, _child) = native160_mission(false);
+    let st = state.lock().unwrap();
+    let owner = task.owner.clone();
+    let make = |key: &str, phase| AutoAdmissionReceipt {
+        owner: owner.clone(),
+        request_id: key.into(),
+        canonical: b"{}".to_vec(),
+        metadata: b"{}".to_vec(),
+        metadata_version: 1,
+        state: phase,
+        coordinator_epoch: st.coordinator_epoch,
+        revision: 0,
+        policy_revision: 1,
+        policy_digest: "a".repeat(64),
+        candidate_id: None,
+        delegate_canonical: None,
+        mode: None,
+        reason: None,
+        task_id: None,
+        refusal_code: None,
+        created_at: 10,
+        updated_at: 10,
+    };
+    let mut receipts = Vec::new();
+    for (key, phase) in [
+        ("pending272", AutoAdmissionState::Pending),
+        ("deciding272", AutoAdmissionState::DecisionStarted),
+        ("chosen272", AutoAdmissionState::Chosen),
+        ("admitted272", AutoAdmissionState::Admitted),
+        ("refused272", AutoAdmissionState::Refused),
+    ] {
+        let mut receipt = make(key, phase);
+        if matches!(
+            phase,
+            AutoAdmissionState::Chosen | AutoAdmissionState::Admitted
+        ) {
+            receipt.candidate_id = Some("c01".into());
+            receipt.delegate_canonical = Some(serde_json::to_vec(&task.request).unwrap());
+            receipt.mode = Some(AutoAdmissionMode::Explicit);
+        }
+        if phase == AutoAdmissionState::Admitted {
+            receipt.task_id = Some(task.task_id.clone());
+        }
+        if phase == AutoAdmissionState::Refused {
+            receipt.refusal_code = Some("decision_interrupted".into());
+        }
+        st.delegation_store
+            .insert_auto_admission_receipt(&receipt)
+            .unwrap();
+        receipts.push(receipt);
+    }
+    drop(st);
+    let hint = super::super::handle_wrapper_message("conn-1", WrapperToDaemon::CancelRequest {
+        id:"pending272".into(), sender:owner.clone(), reason:None
+    }, &state).unwrap();
+    assert!(
+        matches!(hint,DaemonToWrapper::Nack {ref reason,..} if reason.contains("kind=admission") && reason.contains("rien annulé"))
+    );
+    let mut st = state.lock().unwrap();
+    let task_before =
+        serde_json::to_value(st.delegation_store.get(&task.task_id).unwrap().unwrap()).unwrap();
+    for old in &receipts[..3] {
+        // Une autre identité voit seulement sa propre absence et ne ferme rien.
+        let foreign = admission_cancel::cancel(&st, "foreign272", &old.request_id).unwrap();
+        assert_eq!(foreign["status"], "not_recorded");
+        assert_eq!(
+            st.delegation_store
+                .auto_admission_receipt(&owner, &old.request_id)
+                .unwrap()
+                .unwrap(),
+            *old
+        );
+        let reply = handle_locked(
+            "conn-1",
+            NativeDelegationRequest::CancelAdmission {
+                request_id: old.request_id.clone(),
+            },
+            &mut st,
+        )
+        .unwrap();
+        assert_eq!(reply["status"], "cancelled");
+        assert!(reply["task_id"].is_null());
+        let saved = st
+            .delegation_store
+            .auto_admission_receipt(&owner, &old.request_id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(saved.state, AutoAdmissionState::Refused);
+        assert_eq!(saved.refusal_code.as_deref(), Some("admission_cancelled"));
+        assert_eq!(close_auto_admission_error(&st,old,"decision_interrupted".into()).unwrap(),"admission_cancelled","la première cause durable reste celle du reçu");
+        let contextual = "admission_cancelled:{\"path\":\"/tmp/retained272\",\"branch\":\"branch272\"}";
+        assert_eq!(close_auto_admission_error(&st,old,contextual.into()).unwrap(),contextual);
+        let guidance = failure(contextual);
+        assert_eq!(guidance["code"],"admission_cancelled");
+        assert_eq!(guidance["detail"]["retained_workspace"]["path"],"/tmp/retained272");
+        assert!(guidance["detail"]["recovery"].as_str().unwrap().contains("Conserver"));
+        assert_eq!(
+            admission_cancel::cancel(&st, &owner, &old.request_id).unwrap(),
+            reply
+        );
+        if old.state == AutoAdmissionState::Chosen {
+            let mut would_be = task.clone();
+            would_be.task_id = Uuid::new_v4().to_string();
+            let result = st.delegation_store.admit_auto_task(
+                old,
+                &would_be,
+                &old.request_id,
+                old.delegate_canonical.as_ref().unwrap(),
+                20,
+            );
+            assert_eq!(result.unwrap_err(), "admission_pending");
+            assert!(
+                st.delegation_store
+                    .get(&would_be.task_id)
+                    .unwrap()
+                    .is_none(),
+                "aucune Task après le refus atomique"
+            );
+        }
+    }
+    let admitted = admission_cancel::cancel(&st, &owner, "admitted272").unwrap();
+    assert_eq!(admitted["status"], "task_exists");
+    assert_eq!(admitted["task_id"], task.task_id);
+    assert_eq!(
+        serde_json::to_value(st.delegation_store.get(&task.task_id).unwrap().unwrap()).unwrap(),
+        task_before,
+        "pas d’annulation implicite de tâche"
+    );
+    let refused = admission_cancel::cancel(&st, &owner, "refused272").unwrap();
+    assert_eq!(refused["status"], "already_refused");
+    assert_eq!(refused["code"], "decision_interrupted");
+    let missing = admission_cancel::cancel(&st, &owner, "absent272").unwrap();
+    assert_eq!(missing["status"], "not_recorded");
+    assert!(
+        missing["detail"]["recovery"]
+            .as_str()
+            .unwrap()
+            .contains("appel concurrent")
+    );
+    assert!(
+        st.delegation_store
+            .auto_admission_receipt(&owner, "absent272")
+            .unwrap()
+            .is_none()
+    );
+    drop(st);
+    drop(state);
+    cleanup(&config);
+}
+
+#[test]
 fn spec269_refus_avant_lease_conserve_sans_inventer_un_rapport_git() {
     for commit_view in [false, true] {
         let (state, config, mut task, _parent, _child) = native160_mission(false);

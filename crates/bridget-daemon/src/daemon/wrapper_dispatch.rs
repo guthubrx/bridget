@@ -446,8 +446,12 @@ pub(super) fn on_cancel_request(
                 warn!("refus de guidage non journalisé : {error}");
             }
             Some(DaemonToWrapper::Nack {
+                reason: match st.delegation_store.auto_admission_receipt(&sender, &id) {
+                    Ok(Some(_)) => "Cette clé désigne une admission, pas une demande de message suivie. Utiliser bridget_cancel avec le même id et kind=admission ; si une tâche existe déjà, le reçu donnera son task_id pour bridget_task_cancel. Cette commande n’a rien annulé. Ne pas rejouer l’admission pour l’annuler ; les autres travaux autorisés suivent leur propre état.".into(),
+                    Ok(None) => "demande introuvable".into(),
+                    Err(_) => "La demande de message n’a pas été trouvée et le reçu d’admission n’a pas pu être vérifié. Aucune annulation confirmée : conserver la clé et faire vérifier son reçu avant toute autre action.".into(),
+                },
                 id,
-                reason: "demande introuvable".to_string(),
             })
         }
         Err(error) => {
@@ -1305,6 +1309,7 @@ pub(super) fn on_daemon_identity_request(
                 "worker_candidate_probe_v1".to_string(),
                 "auto_delegate_v1".to_string(),
                 "auto_delegate_v2".to_string(),
+                "admission_cancel_v1".to_string(),
                 "worker_candidate_probe_v2".to_string(),
                 "worker_candidate_probe_permission_reasons_v1".to_string(),
                 "worker_workload_tools_v1".to_string(),

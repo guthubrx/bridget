@@ -2116,3 +2116,19 @@ Historique d’un souvenir : memory_versions renvoie ses révisions avec curseur
 
 
 Une machine imposée par la demande ou par la politique n’est plus refusée pour CPU ou charge moyenne élevés. Ces mesures restent utiles au placement automatique ; une mémoire disponible fraîche sous le seuil reste bloquante. Les inspections worker sans effets ne consomment ni places de préparation ni bootstrap : elles gardent les contrôles d’identité, droits et dépôt, même quand les places de création sont occupées. Le code remote_prepare:ResourceLimit désigne une borne interne de préparation, pas une mesure CPU/RAM.
+
+
+### Annulation avant création de tâche (272)
+
+`bridget_cancel` avec `kind="admission"` et `id=request_id` ferme le reçu de
+son propriétaire avant création de tâche. `cancelled` est durable ; les retours
+concurrents ne peuvent plus créer cette tâche. `task_exists` fournit le task_id
+pour le parcours propriétaire `bridget_task_cancel`, sans annulation implicite.
+`not_recorded` ne crée aucune barrière contre un appel encore en précontrôle :
+attendre sa fin puis vérifier la même clé. Les dossiers déjà préparés sont
+conservés ; leur chemin est rendu si la création locale a précédé l’annulation.
+
+Sans `kind`, ou avec `kind="message"`, le comportement historique reste celui
+d’une demande de message suivie. Aucun aiguillage automatique entre ces portées.
+L’opération d’admission exige `admission_cancel_v1` ; un ancien maître est refusé
+avant transmission. Ni le rejeu d’une admission ni une clé neuve ne l’annulent.

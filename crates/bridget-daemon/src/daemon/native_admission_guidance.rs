@@ -1,6 +1,15 @@
 use super::*;
 
 pub(super) fn refusal(code: &str) -> Option<Value> {
+    if let Some(encoded) = code.strip_prefix("admission_cancelled:") {
+        let workspace: Value = serde_json::from_str(encoded).ok()?;
+        if !workspace["path"].is_string() || !workspace["branch"].is_string() {
+            return None;
+        }
+        let mut view = refusal("admission_cancelled")?;
+        view["detail"]["retained_workspace"] = workspace;
+        return Some(view);
+    }
     if let Some(detail) = code.strip_prefix("origin_request_invalid:") {
         let (field, cause) = detail.split_once(':').unwrap_or((detail, "unobserved"));
         let cause_text = match cause {
@@ -51,6 +60,11 @@ pub(super) fn refusal(code: &str) -> Option<Value> {
         return Some(view);
     }
     let (message, recovery, field) = match code {
+        "admission_cancelled" => (
+            "Cette admission a été annulée par son propriétaire avant création de tâche.",
+            "La clé conserve ce refus terminal : son rejeu ne crée aucune mission. Conserver les éventuels dossiers préparés ; si une création de worktree était déjà en cours, le journal du coordinateur conserve bridget_admission_workspace_retained avec la clé et le chemin laissé, sans annoncer un échec Git ni supprimer ce dossier. Une autre mission exige une nouvelle clé et son autorisation propre. Ce refus concerne cette admission ; les autres travaux autorisés suivent leur propre état.",
+            None,
+        ),
         "project_preparation_process_failed" => (
             "Faites lire le refus de préparation à la même heure dans la sortie d’erreur du worker source.",
             "La commande ssh de préparation a rendu un code de sortie non nul. Le responsable Bridget doit lire l’événement bridget_project_preparation à l’heure de ce refus dans la sortie d’erreur du service worker de la machine source du parent : journal de l’unité sous systemd, ou StandardErrorPath du plist chargé sous launchd. Rapprocher heure, opération inspect/prepare et exit_code ; correlation_id identifie le contrôle dans ce journal, mais ne figure pas dans ce reçu et ne suffit pas seul à retrouver la demande. Ces faits ne prouvent ni panne de réseau ni défaut de compte ou de droits ; la cause amont reste à vérifier avant une reprise. Conserver la clé, l’enveloppe et tout dépôt préparé ; lire detail.admission pour suivre une tâche existante ou une admission encore incertaine. Ne pas recréer une mission pour tester la liaison. Les autres travaux autorisés suivent leur propre état.",
