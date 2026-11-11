@@ -16723,74 +16723,7 @@ fn handle_wrapper_message_with_peer(
             }
             None
         }
-        WrapperToDaemon::ThreadRequest { request } => {
-            if matches!(
-                request.request,
-                bridget_transport::protocol::ThreadAction::AddMembers { .. }
-            ) {
-                let st = state.lock().unwrap_or_else(|e| e.into_inner());
-                if !st
-                    .client_negotiations
-                    .get(conn_id)
-                    .is_some_and(|negotiated| {
-                        negotiated
-                            .capabilities
-                            .contains(&ClientCapability::ThreadMembersV1)
-                    })
-                {
-                    return Some(DaemonToWrapper::ThreadResult {
-                        result: bridget_transport::protocol::ThreadResult {
-                            version: bridget_transport::protocol::THREAD_CONTRACT_VERSION,
-                            result: crate::threads::error(
-                                "thread_members_unsupported",
-                                "Capacité d'ajout de membres non négociée.",
-                                false,
-                            ),
-                        },
-                    });
-                }
-            }
-            // L'ajout de lecteurs invalide seulement la vue humaine après
-            // commit ; il ne dispatch même pas une ancienne intention pending.
-            let mutates = matches!(
-                request.request,
-                bridget_transport::protocol::ThreadAction::Post { .. }
-                    | bridget_transport::protocol::ThreadAction::Ack { .. }
-                    | bridget_transport::protocol::ThreadAction::Close { .. }
-            );
-            let (result, controls) = {
-                let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
-                let Some((owner, _)) = live_connection_identity(&st, conn_id) else {
-                    return Some(DaemonToWrapper::ThreadResult {
-                        result: bridget_transport::protocol::ThreadResult {
-                            version: bridget_transport::protocol::THREAD_CONTRACT_VERSION,
-                            result: crate::threads::error(
-                                "identity_unavailable",
-                                "identité active requise",
-                                false,
-                            ),
-                        },
-                    });
-                };
-                let now = unix_now_secs();
-                let (result, changed) = {
-                    let directory = DaemonDirectory { state: &st };
-                    crate::threads::handle_with_change(&st.store, &directory, &owner, request, now)
-                };
-                if let Some(thread_id) = changed {
-                    publish_human_thread_change(&mut st, &thread_id);
-                }
-                let mut controls = Vec::new();
-                // Un dépôt, une confirmation ou une clôture réévaluent les
-                // sollicitations tout de suite ; la poussée part hors verrou.
-                if mutates && result.result["status"] != "error" {
-                    dispatch_thread_wakes(&mut st, now, Instant::now(), &mut controls);
-                }
-                (result, controls)
-            };
-            let _ = execute_controls(controls);
-            Some(DaemonToWrapper::ThreadResult { result })
-        }
+        WrapperToDaemon::ThreadRequest { request } => wrapper_dispatch::on_thread_request(request, conn_id, state),
         // Session 104 : lecture seule hors verrou. Identité et permis sous
         // verrou bref ; SQL et repli sur le thread de connexion ; identité
         // revérifiée avant publication ; permis relâché par RAII.
