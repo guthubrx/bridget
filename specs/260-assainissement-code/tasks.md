@@ -1,6 +1,6 @@
 # Tâches 260 - Assainissement du code et du dépôt
 
-Statut : In Progress. 100 tâches cochées sur 157 (voir `implementation.md` pour le détail et les lots bloqués). La mise en oeuvre est en cours : lots 0, 1 (sauf T024), 2, 3, 4, 5, 6, 12, 14, 13 (T137 partiel), 15, 17 traités.
+Statut : In Progress. 111 tâches cochées sur 157 (voir `implementation.md` pour le détail et les lots bloqués). La mise en oeuvre est en cours : lots 0, 1 (sauf T024), 2, 3, 4, 5, 6, 7, 12, 14, 13 (T137 partiel), 15, 17 traités.
 Spécification : `spec.md`. Plan : `plan.md`. Règles : `contracts/regles-implementeur.md`. Portes : `decisions.md`. Démarrage et clôture : `quickstart.md`.
 
 ## Comment lire ce fichier
@@ -115,17 +115,17 @@ Spécification : `spec.md`. Plan : `plan.md`. Règles : `contracts/regles-implem
 
 ## Lot 7 - Concurrence observable (guide : `guides/lot-07-concurrence.md`)
 
-- [ ] T081 [L7] `poison.rs` : trait `RecoverPoison`, compteur, 2 tests.
-- [ ] T082 [L7] Relevé des sites `unwrap_or_else(|e| e.into_inner())` avant remplacement.
-- [ ] T083 [L7] Remplacer dans `daemon.rs`.
-- [ ] T084 [L7] Remplacer dans `native_delegation.rs` et `native_lineage.rs`.
-- [ ] T085 [L7] Remplacer dans `codex_app_server.rs`, `acp.rs`, `claude_stream_json.rs`.
-- [ ] T086 [L7] Remplacer dans `wrapper.rs` et `fleet.rs`.
-- [ ] T087 [L7] Remplacer dans les fichiers restants ; `C-CRATE` des deux crates.
-- [ ] T088 [L7] Câbler le compteur de connexions et son maximum (garde de sortie), 1 test.
-- [ ] T089 [L7] Mesure de la durée du tour de délégation et trace au-delà du seuil.
-- [ ] T090 [L7] [D7] Regroupement des requêtes du tour : fermée tant que D7 n'est pas tranchée ; note de mesure.
-- [ ] T091 [L7] Porte : `C-TESTS`, `C-ECHECS`, `C-NOMS` (+3 tests) ; base actualisée ; bilan ; fin de lot.
+- [x] T081 [L7] `poison.rs` : trait `RecoverPoison`, compteur, 2 tests.
+- [x] T082 [L7] Relevé des sites `unwrap_or_else(|e| e.into_inner())` avant remplacement.
+- [x] T083 [L7] Remplacer dans `daemon.rs`.
+- [x] T084 [L7] Remplacer dans `native_delegation.rs` et `native_lineage.rs`.
+- [x] T085 [L7] Remplacer dans `codex_app_server.rs`, `acp.rs`, `claude_stream_json.rs`.
+- [x] T086 [L7] Remplacer dans `wrapper.rs` et `fleet.rs`.
+- [x] T087 [L7] Remplacer dans les fichiers restants ; `C-CRATE` des deux crates.
+- [x] T088 [L7] Câbler le compteur de connexions et son maximum (garde de sortie), 1 test.
+- [x] T089 [L7] Mesure de la durée du tour de délégation et trace au-delà du seuil.
+- [x] T090 [L7] [D7] Regroupement des requêtes du tour : fermée tant que D7 n'est pas tranchée ; note de mesure.
+- [x] T091 [L7] Porte : `C-TESTS`, `C-ECHECS`, `C-NOMS` (+3 tests) ; base actualisée ; bilan ; fin de lot.
 
 ## Lot 8 - Erreurs sans texte fragile (guide : `guides/lot-08-erreurs.md`)
 

@@ -13,6 +13,7 @@ Statut du programme : In Progress. Règles : `contracts/regles-implementeur.md`.
 | 4 | intégré | T036 à T053 faits (desired_state.rs arrêté) |
 | 5 | intégré | T054 à T068 faits |
 | 6 | intégré | T069 à T080 faits (158 blocs en repli) |
+| 7 | intégré | T081 à T091 faits (T090 différée D7) |
 | 12 | intégré | T125 à T127 faits |
 | 13 | intégré | T128 à T136 faits ; T137 partiel (job CI différé) |
 | 14 | intégré | T138 à T140 faits |
@@ -253,3 +254,18 @@ Seul `effective_uid()` modifie du code exécutable (équivalent). Les commentair
 
 ### Bilan lot 5
 Code exécutable modifié (aiguillage du démon) : **activation en attente**.
+
+### Lot 7 - Concurrence observable (T081 à T091)
+- Statut : fait. T090 (regroupement des requêtes) différée : porte D7.
+- Commits : `poison.rs` (trait `RecoverPoison`, compteur, 2 tests) ; relevé (`validation/lot07-sites-avant.txt`) ; remplacement de 853 sites dans 55 fichiers ; compteur de connexions, maximum et durée du tour (`feat(daemon): Compter les connexions actives, leur maximum et la duree du tour`).
+- Vérifications : 853 sites `unwrap_or_else(|e| e.into_inner())` remplacés par `.recover_poison()` (0 restant) ; le diff ne contient que ce motif et les imports. Porte sur cliché isolé de `HEAD` : `C-ECHECS` identique à la base (24 échecs) ; `C-NOMS` = base + exactement 3 tests ajoutés (2 de `poison`, 1 de `Metrics`). La base de noms est actualisée.
+- Écarts :
+  - T088 et T089 sont dans un seul commit. Le compteur de connexions est décrémenté après le `catch_unwind` du fil de connexion (aucune sortie anticipée possible) : pas de structure de garde, donc aucune abstraction ajoutée.
+  - Deux imports du trait sont conditionnés aux tests (`act_kind.rs`, `communication/client.rs`) parce que le code qui l'appelle n'existe qu'en test.
+  - Aucune trace ni compteur n'est exposé dans `get_status` (pas de changement de protocole).
+  - Seuil de lenteur du tour : 250 ms (provisoire, commenté dans le code).
+- T090 : différée (porte D7 en attente). Après activation, relever le nombre de lignes de journal « tour de délégation lent » par heure et la durée maximale ; les requêtes à étudier sont dans `native_delegation.rs`, fonction `tick` (`open_requests()` puis `for_mission`, `failed_for_owner`). Aucun code de regroupement n'a été écrit.
+- Non vérifié : les mesures réelles (activation en attente).
+
+### Bilan lot 7
+Code exécutable modifié (traces et compteurs) : **activation en attente**.
