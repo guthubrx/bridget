@@ -4739,134 +4739,210 @@ pub(super) fn on_register_auxiliary(
     ))
 }
 
-pub(super) fn on_runtime_selection_reported(token: String, outcome: bridget_transport::protocol::RuntimeSelectionOutcome, conn_id: &str, state: &Arc<Mutex<DaemonState>>) -> Option<DaemonToWrapper> {
-            let mut st = state.lock().recover_poison();
-            // Un wrapper voisin ou un client MCP ne peut pas forger le reçu.
-            if st
-                .pending_runtime_selections
-                .get(&token)
-                .is_some_and(|(target, _)| target == conn_id)
-                && let Some((_, sender)) = st.pending_runtime_selections.remove(&token)
-            {
-                let _ = sender.send(outcome);
-            }
-            None
-        }
+pub(super) fn on_runtime_selection_reported(
+    token: String,
+    outcome: bridget_transport::protocol::RuntimeSelectionOutcome,
+    conn_id: &str,
+    state: &Arc<Mutex<DaemonState>>,
+) -> Option<DaemonToWrapper> {
+    let mut st = state.lock().recover_poison();
+    // Un wrapper voisin ou un client MCP ne peut pas forger le reçu.
+    if st
+        .pending_runtime_selections
+        .get(&token)
+        .is_some_and(|(target, _)| target == conn_id)
+        && let Some((_, sender)) = st.pending_runtime_selections.remove(&token)
+    {
+        let _ = sender.send(outcome);
+    }
+    None
+}
 
-pub(super) fn on_ledger_projection(scope: bridget_transport::protocol::LedgerScope, limit: u16, state: &Arc<Mutex<DaemonState>>) -> Option<DaemonToWrapper> {
-            let st = state.lock().recover_poison();
-            match crate::ledger::read_projection(&st.store, scope, usize::from(limit)) {
-                Ok(projection) => Some(DaemonToWrapper::LedgerProjection {
-                    messages: projection.messages,
-                    requests: projection.requests,
-                }),
-                Err(error) => Some(DaemonToWrapper::Nack {
-                    id: "ledger".to_string(),
-                    reason: error.to_string(),
-                }),
-            }
-        }
+pub(super) fn on_ledger_projection(
+    scope: bridget_transport::protocol::LedgerScope,
+    limit: u16,
+    state: &Arc<Mutex<DaemonState>>,
+) -> Option<DaemonToWrapper> {
+    let st = state.lock().recover_poison();
+    match crate::ledger::read_projection(&st.store, scope, usize::from(limit)) {
+        Ok(projection) => Some(DaemonToWrapper::LedgerProjection {
+            messages: projection.messages,
+            requests: projection.requests,
+        }),
+        Err(error) => Some(DaemonToWrapper::Nack {
+            id: "ledger".to_string(),
+            reason: error.to_string(),
+        }),
+    }
+}
 
-pub(super) fn on_domain(agent: String, domain: Option<String>, conn_id: &str, state: &Arc<Mutex<DaemonState>>) -> Option<DaemonToWrapper> {
-            let mut st = state.lock().recover_poison();
-            let instance_id = match self_mutation_instance(&st, conn_id, &agent, "domain") {
-                Ok(instance_id) => instance_id,
-                Err(response) => return Some(*response),
-            };
-            Some(handle_domain_for_instance(
-                &agent,
-                domain,
-                Some(&instance_id),
-                &mut st,
-            ))
-        }
+pub(super) fn on_domain(
+    agent: String,
+    domain: Option<String>,
+    conn_id: &str,
+    state: &Arc<Mutex<DaemonState>>,
+) -> Option<DaemonToWrapper> {
+    let mut st = state.lock().recover_poison();
+    let instance_id = match self_mutation_instance(&st, conn_id, &agent, "domain") {
+        Ok(instance_id) => instance_id,
+        Err(response) => return Some(*response),
+    };
+    Some(handle_domain_for_instance(
+        &agent,
+        domain,
+        Some(&instance_id),
+        &mut st,
+    ))
+}
 
-pub(super) fn on_communication_project_fact(root: String, source: bridget_transport::protocol::CommunicationProjectSource, host: String, worktree_root: Option<String>, conn_id: &str, state: &Arc<Mutex<DaemonState>>) -> Option<DaemonToWrapper> { Some(announce_communication_project(
-            state,
-            conn_id,
-            &root,
-            source,
-            &host,
-            worktree_root.as_deref(),
-        )) }
+pub(super) fn on_communication_project_fact(
+    root: String,
+    source: bridget_transport::protocol::CommunicationProjectSource,
+    host: String,
+    worktree_root: Option<String>,
+    conn_id: &str,
+    state: &Arc<Mutex<DaemonState>>,
+) -> Option<DaemonToWrapper> {
+    Some(announce_communication_project(
+        state,
+        conn_id,
+        &root,
+        source,
+        &host,
+        worktree_root.as_deref(),
+    ))
+}
 
-pub(super) fn on_runtime_catalogue_reported(token: String, outcome: bridget_transport::protocol::RuntimeCatalogueOutcome, conn_id: &str, state: &Arc<Mutex<DaemonState>>) -> Option<DaemonToWrapper> {
-            let mut st = state.lock().recover_poison();
-            if st
-                .pending_runtime_catalogues
-                .get(&token)
-                .is_some_and(|(target, _)| target == conn_id)
-                && let Some((_, sender)) = st.pending_runtime_catalogues.remove(&token)
-            {
-                let _ = sender.send(outcome);
-            }
-            None
-        }
+pub(super) fn on_runtime_catalogue_reported(
+    token: String,
+    outcome: bridget_transport::protocol::RuntimeCatalogueOutcome,
+    conn_id: &str,
+    state: &Arc<Mutex<DaemonState>>,
+) -> Option<DaemonToWrapper> {
+    let mut st = state.lock().recover_poison();
+    if st
+        .pending_runtime_catalogues
+        .get(&token)
+        .is_some_and(|(target, _)| target == conn_id)
+        && let Some((_, sender)) = st.pending_runtime_catalogues.remove(&token)
+    {
+        let _ = sender.send(outcome);
+    }
+    None
+}
 
-pub(super) fn on_lookup(operation_kind: String, idempotency_key: String, conn_id: &str, state: &Arc<Mutex<DaemonState>>) -> Option<DaemonToWrapper> {
-            let st = state.lock().recover_poison();
-            Some(handle_idempotency_lookup(
-                conn_id,
-                operation_kind,
-                idempotency_key,
-                &st,
-            ))
-        }
+pub(super) fn on_lookup(
+    operation_kind: String,
+    idempotency_key: String,
+    conn_id: &str,
+    state: &Arc<Mutex<DaemonState>>,
+) -> Option<DaemonToWrapper> {
+    let st = state.lock().recover_poison();
+    Some(handle_idempotency_lookup(
+        conn_id,
+        operation_kind,
+        idempotency_key,
+        &st,
+    ))
+}
 
-pub(super) fn on_request_wait(request_id: String, wait_timeout: u64, conn_id: &str, state: &Arc<Mutex<DaemonState>>, peer: Option<&UnixStream>) -> Option<DaemonToWrapper> { Some(wait_request(
-            conn_id,
-            &request_id,
-            wait_timeout,
-            state,
-            peer,
-            Duration::from_secs(5),
-        )) }
+pub(super) fn on_request_wait(
+    request_id: String,
+    wait_timeout: u64,
+    conn_id: &str,
+    state: &Arc<Mutex<DaemonState>>,
+    peer: Option<&UnixStream>,
+) -> Option<DaemonToWrapper> {
+    Some(wait_request(
+        conn_id,
+        &request_id,
+        wait_timeout,
+        state,
+        peer,
+        Duration::from_secs(5),
+    ))
+}
 
-pub(super) fn on_delegation_cancel(version: u16, task_id: String, request_id: String, conn_id: &str, state: &Arc<Mutex<DaemonState>>) -> Option<DaemonToWrapper> { Some(handle_delegation_cancel(
-            state,
-            conn_id,
-            version,
-            &task_id,
-            &request_id,
-        )) }
+pub(super) fn on_delegation_cancel(
+    version: u16,
+    task_id: String,
+    request_id: String,
+    conn_id: &str,
+    state: &Arc<Mutex<DaemonState>>,
+) -> Option<DaemonToWrapper> {
+    Some(handle_delegation_cancel(
+        state,
+        conn_id,
+        version,
+        &task_id,
+        &request_id,
+    ))
+}
 
-pub(super) fn on_child_request_closed(request_id: String, closed_state: bridget_transport::protocol::ChildRequestClosedState, conn_id: &str, state: &Arc<Mutex<DaemonState>>) -> Option<DaemonToWrapper> {
-            let st = state.lock().recover_poison();
-            if user_input::native_ack(conn_id, &request_id, None, Some(closed_state), &st) {
-                return None;
-            }
-            native_child_requests::closed(conn_id, &request_id, closed_state, &st);
-            None
-        }
+pub(super) fn on_child_request_closed(
+    request_id: String,
+    closed_state: bridget_transport::protocol::ChildRequestClosedState,
+    conn_id: &str,
+    state: &Arc<Mutex<DaemonState>>,
+) -> Option<DaemonToWrapper> {
+    let st = state.lock().recover_poison();
+    if user_input::native_ack(conn_id, &request_id, None, Some(closed_state), &st) {
+        return None;
+    }
+    native_child_requests::closed(conn_id, &request_id, closed_state, &st);
+    None
+}
 
-pub(super) fn on_child_request(request: bridget_transport::protocol::ChildProviderRequest, conn_id: &str, state: &Arc<Mutex<DaemonState>>) -> Option<DaemonToWrapper> {
-            let primary = {
-                let st = state.lock().recover_poison();
-                user_input::primary_request(conn_id, &request, &st)
-            };
-            if primary {
-                Some(user_input::receive_native(conn_id, request, state))
-            } else {
-                native_child_requests::receive(conn_id, request, state)
-            }
-        }
+pub(super) fn on_child_request(
+    request: bridget_transport::protocol::ChildProviderRequest,
+    conn_id: &str,
+    state: &Arc<Mutex<DaemonState>>,
+) -> Option<DaemonToWrapper> {
+    let primary = {
+        let st = state.lock().recover_poison();
+        user_input::primary_request(conn_id, &request, &st)
+    };
+    if primary {
+        Some(user_input::receive_native(conn_id, request, state))
+    } else {
+        native_child_requests::receive(conn_id, request, state)
+    }
+}
 
-pub(super) fn on_human_inbox_deposit(version: u16, dedup_key: String, kind: bridget_transport::protocol::HumanInboxKind, subject: bridget_transport::protocol::HumanInboxSubject, context: String, options: Vec<String>, state: &Arc<Mutex<DaemonState>>) -> Option<DaemonToWrapper> { Some(handle_human_inbox_deposit(
-            state, version, &dedup_key, kind, &subject, &context, &options,
-        )) }
+pub(super) fn on_human_inbox_deposit(
+    version: u16,
+    dedup_key: String,
+    kind: bridget_transport::protocol::HumanInboxKind,
+    subject: bridget_transport::protocol::HumanInboxSubject,
+    context: String,
+    options: Vec<String>,
+    state: &Arc<Mutex<DaemonState>>,
+) -> Option<DaemonToWrapper> {
+    Some(handle_human_inbox_deposit(
+        state, version, &dedup_key, kind, &subject, &context, &options,
+    ))
+}
 
-pub(super) fn on_heartbeat(conn_id: &str, state: &Arc<Mutex<DaemonState>>) -> Option<DaemonToWrapper> {
-            let mut st = state.lock().recover_poison();
-            if let Some(instance_id) = st.conn_instances.get(conn_id).cloned()
-                && let Some(presence) = st.presences.get_mut(&instance_id)
-            {
-                // Lien ≠ capacité : le heartbeat prouve le socket, pas l'exécution.
-                presence.touch_link();
-            }
-            None
-        }
+pub(super) fn on_heartbeat(
+    conn_id: &str,
+    state: &Arc<Mutex<DaemonState>>,
+) -> Option<DaemonToWrapper> {
+    let mut st = state.lock().recover_poison();
+    if let Some(instance_id) = st.conn_instances.get(conn_id).cloned()
+        && let Some(presence) = st.presences.get_mut(&instance_id)
+    {
+        // Lien ≠ capacité : le heartbeat prouve le socket, pas l'exécution.
+        presence.touch_link();
+    }
+    None
+}
 
-pub(super) fn on_usage_window(agent: String, from_secs: i64, to_secs: i64, state: &Arc<Mutex<DaemonState>>) -> Option<DaemonToWrapper> {
-            let st = state.lock().recover_poison();
-            Some(handle_usage_window(&agent, from_secs, to_secs, &st))
-        }
+pub(super) fn on_usage_window(
+    agent: String,
+    from_secs: i64,
+    to_secs: i64,
+    state: &Arc<Mutex<DaemonState>>,
+) -> Option<DaemonToWrapper> {
+    let st = state.lock().recover_poison();
+    Some(handle_usage_window(&agent, from_secs, to_secs, &st))
+}

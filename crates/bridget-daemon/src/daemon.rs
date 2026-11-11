@@ -16563,7 +16563,14 @@ fn handle_wrapper_message_with_peer(
             source,
             host,
             worktree_root,
-        } => wrapper_dispatch::on_communication_project_fact(root, source, host, worktree_root, conn_id, state),
+        } => wrapper_dispatch::on_communication_project_fact(
+            root,
+            source,
+            host,
+            worktree_root,
+            conn_id,
+            state,
+        ),
         WrapperToDaemon::DirectoryScoped { scope } => {
             wrapper_dispatch::on_directory_scoped(scope, conn_id, state)
         }
@@ -16675,7 +16682,9 @@ fn handle_wrapper_message_with_peer(
             subject,
             context,
             options,
-        } => wrapper_dispatch::on_human_inbox_deposit(version, dedup_key, kind, subject, context, options, state),
+        } => wrapper_dispatch::on_human_inbox_deposit(
+            version, dedup_key, kind, subject, context, options, state,
+        ),
         WrapperToDaemon::ControlFocusPublish { version, focus } => {
             Some(handle_control_focus_publish(state, version, focus))
         }
@@ -17114,8 +17123,12 @@ fn handle_wrapper_message_with_peer(
         WrapperToDaemon::SelectRuntime { agent, selection } => Some(select_runtime_from_attach(
             state, conn_id, &agent, selection,
         )),
-        WrapperToDaemon::RuntimeSelectionReported { token, outcome } => wrapper_dispatch::on_runtime_selection_reported(token, outcome, conn_id, state),
-        WrapperToDaemon::RuntimeCatalogueReported { token, outcome } => wrapper_dispatch::on_runtime_catalogue_reported(token, outcome, conn_id, state),
+        WrapperToDaemon::RuntimeSelectionReported { token, outcome } => {
+            wrapper_dispatch::on_runtime_selection_reported(token, outcome, conn_id, state)
+        }
+        WrapperToDaemon::RuntimeCatalogueReported { token, outcome } => {
+            wrapper_dispatch::on_runtime_catalogue_reported(token, outcome, conn_id, state)
+        }
         WrapperToDaemon::Send(bridge_msg) => wrapper_dispatch::on_send(bridge_msg, conn_id, state),
 
         WrapperToDaemon::Heartbeat => wrapper_dispatch::on_heartbeat(conn_id, state),
@@ -17221,7 +17234,9 @@ fn handle_wrapper_message_with_peer(
             to_secs,
         } => wrapper_dispatch::on_usage_window(agent, from_secs, to_secs, state),
 
-        WrapperToDaemon::Domain { agent, domain } => wrapper_dispatch::on_domain(agent, domain, conn_id, state),
+        WrapperToDaemon::Domain { agent, domain } => {
+            wrapper_dispatch::on_domain(agent, domain, conn_id, state)
+        }
 
         WrapperToDaemon::Availability { agent, until_secs } => {
             wrapper_dispatch::on_availability(agent, until_secs, conn_id, state)
@@ -17252,7 +17267,9 @@ fn handle_wrapper_message_with_peer(
         WrapperToDaemon::UserInput { request } => {
             Some(user_input::handle(conn_id, &request, state, None))
         }
-        WrapperToDaemon::ChildRequest { request } => wrapper_dispatch::on_child_request(request, conn_id, state),
+        WrapperToDaemon::ChildRequest { request } => {
+            wrapper_dispatch::on_child_request(request, conn_id, state)
+        }
         WrapperToDaemon::ChildRequestAnswered {
             request_id,
             applied,
@@ -17270,7 +17287,9 @@ fn handle_wrapper_message_with_peer(
         | WrapperToDaemon::Specialists { .. }
         | WrapperToDaemon::MobileAdministration { .. }
         | WrapperToDaemon::MobileOperation { .. } => None,
-        WrapperToDaemon::LedgerProjection { scope, limit } => wrapper_dispatch::on_ledger_projection(scope, limit, state),
+        WrapperToDaemon::LedgerProjection { scope, limit } => {
+            wrapper_dispatch::on_ledger_projection(scope, limit, state)
+        }
     }
 }
 
