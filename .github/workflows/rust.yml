@@ -33,3 +33,13 @@ jobs:
           umask 077
           export TMPDIR="$(mktemp -d /tmp/b.XXXX)"
           cargo test --workspace --locked --features bridget-daemon/test-support --no-fail-fast -- --test-threads=4
+  scripts:
+    runs-on: ubuntu-latest
+    continue-on-error: true   # observation : premier passage à lire avant de rendre bloquant
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - run: pipx run ruff==0.14.13 check scripts
+      - run: |
+          for f in scripts/*.sh; do bash -n "$f" || exit 1; done
