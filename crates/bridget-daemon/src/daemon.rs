@@ -16850,16 +16850,7 @@ fn handle_wrapper_message_with_peer(
             agent_id,
             instance_id,
             credential,
-        } => {
-            let mut st = state.lock().recover_poison();
-            Some(register_auxiliary(
-                &mut st,
-                conn_id,
-                agent_id,
-                instance_id,
-                credential,
-            ))
-        }
+        } => wrapper_dispatch::on_register_auxiliary(agent_id, instance_id, credential, conn_id, state),
         WrapperToDaemon::SendIdempotent {
             mut message,
             message_id,

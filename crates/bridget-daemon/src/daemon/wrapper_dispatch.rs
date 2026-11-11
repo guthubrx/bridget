@@ -4571,3 +4571,14 @@ pub(super) fn on_stop_order(name: String, command_id: String, state: &Arc<Mutex<
                 outcome,
             })
         }
+
+pub(super) fn on_register_auxiliary(agent_id: String, instance_id: String, credential: bridget_transport::protocol::IdentityCredential, conn_id: &str, state: &Arc<Mutex<DaemonState>>) -> Option<DaemonToWrapper> {
+            let mut st = state.lock().recover_poison();
+            Some(register_auxiliary(
+                &mut st,
+                conn_id,
+                agent_id,
+                instance_id,
+                credential,
+            ))
+        }
