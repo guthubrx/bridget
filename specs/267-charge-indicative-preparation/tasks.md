@@ -6,5 +6,6 @@
 - [x] Corriger la cible imposée, garder la protection mémoire et le classement automatique.
 - [x] Exempter l’inspection sans effets des places de création ; conserver les bornes des créations.
 - [x] Terminer tests, revue et reconstruction cumulative.
-- [ ] Distribuer et activer 267 sur services, rétablir la télémétrie et la protection mémoire.
-- [ ] Rendre les retours, pousser et nettoyer avec gardes.
+- [x] Distribuer et activer 267 sur les sept services, rétablir la télémétrie et la protection mémoire.
+- [x] Vérifier une admission Mac avec télémétrie rétablie, charge normalisée 100 % et résultat reçu.
+- [x] Rendre les retours, pousser et nettoyer avec gardes ; conserver les éléments dont les usages ne sont pas observables.
