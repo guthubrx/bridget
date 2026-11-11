@@ -561,6 +561,7 @@ impl Directory {
         let mut names = Vec::new();
         loop {
             #[cfg(target_os = "linux")]
+            // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
             let errno = unsafe { libc::__errno_location() };
             #[cfg(not(target_os = "linux"))]
             // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).

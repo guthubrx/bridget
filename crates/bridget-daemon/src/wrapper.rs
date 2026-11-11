@@ -639,11 +639,11 @@ impl RemoteDrainGuard {
                 let signal = crate::managed_process::remote_drain::signal_pass();
                 if !reported && started.elapsed() >= REMOTE_DRAIN_DIAGNOSTIC_AFTER {
                     let cause = if signal.is_err() { "signal_refused" } else { "owners_waiting" };
-                    if let Some(writer) = journal.as_ref().and_then(|j|j.writer.as_ref()) {
-                        if let Ok(payload) = remote_drain_wait_payload(&command, &machine, "closing_transport", cause) {
+                    if let Some(writer) = journal.as_ref().and_then(|j|j.writer.as_ref())
+                        && let Ok(payload) = remote_drain_wait_payload(&command, &machine, "closing_transport", cause)
+                    {
                             let _ = writer.enqueue("error", None, payload);
                         }
-                    }
                     eprintln!("bridget_remote_drain221 task={} command={} machine={} phase=closing_transport cause={cause}",
                         command.task_id, command.command_id, machine);
                     reported = true;
@@ -655,11 +655,11 @@ impl RemoteDrainGuard {
             Err(_) => {
                 // Pas de boucle infinie d'allocation de threads. Le transport
                 // garde son propre arrêt et aucune preuve de fin n'est créée.
-                if let Some(writer) = fallback.as_ref().and_then(|j|j.writer.as_ref()) {
-                    if let Ok(payload) = remote_drain_wait_payload(&self.command, &self.machine, "closing_transport", "signaler_unavailable") {
+                if let Some(writer) = fallback.as_ref().and_then(|j|j.writer.as_ref())
+                    && let Ok(payload) = remote_drain_wait_payload(&self.command, &self.machine, "closing_transport", "signaler_unavailable")
+                {
                         let _ = writer.enqueue("error", None, payload);
                     }
-                }
                 eprintln!("bridget_remote_drain221 task={} command={} machine={} phase=closing_transport cause=signaler_unavailable",
                     self.command.task_id, self.command.command_id, self.machine);
             }
@@ -4974,10 +4974,10 @@ fn launch_session_with_status(
     crate::environment::validate_existing_tree(&journal_root.join(&my_name))?;
     transport.activate_journal(&journal_root, &my_name, Some(live_feed.clone()))?;
     #[cfg(target_os = "linux")]
-    if let Some(guard) = &remote_drain {
-        if let Some((writer, session)) = transport.journal_writer() {
-            guard.set_journal(&journal_root, &my_name, &session, Some(writer));
-        }
+    if let Some(guard) = &remote_drain
+        && let Some((writer, session)) = transport.journal_writer()
+    {
+        guard.set_journal(&journal_root, &my_name, &session, Some(writer));
     }
     apply_pending_profile_instructions(socket, transport.as_mut(), &my_name, &instance_id);
     send_wrapper_message(
@@ -5683,15 +5683,10 @@ fn launch_session_with_status(
                             .is_ok()
                         {
                             #[cfg(target_os = "linux")]
-                            if let Some(guard) = &remote_drain {
-                                if let Some((writer, session)) = transport.journal_writer() {
-                                    guard.set_journal(
-                                        &journal_root,
-                                        &my_name,
-                                        &session,
-                                        Some(writer),
-                                    );
-                                }
+                            if let Some(guard) = &remote_drain
+                                && let Some((writer, session)) = transport.journal_writer()
+                            {
+                                guard.set_journal(&journal_root, &my_name, &session, Some(writer));
                             }
                             relay.shutdown();
                             let relay_writer = writer.clone();
@@ -5993,10 +5988,10 @@ fn launch_session_with_status(
                         warn!("journal après relance impossible: {error}");
                     } else {
                         #[cfg(target_os = "linux")]
-                        if let Some(guard) = &remote_drain {
-                            if let Some((writer, session)) = transport.journal_writer() {
-                                guard.set_journal(&journal_root, &my_name, &session, Some(writer));
-                            }
+                        if let Some(guard) = &remote_drain
+                            && let Some((writer, session)) = transport.journal_writer()
+                        {
+                            guard.set_journal(&journal_root, &my_name, &session, Some(writer));
                         }
                     }
                     apply_pending_profile_instructions(

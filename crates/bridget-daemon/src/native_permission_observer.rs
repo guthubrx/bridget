@@ -352,6 +352,7 @@ fn peer_is_provider_descendant(stream: &UnixStream, owner: (u32, u64)) -> bool {
     let peer = {
         let mut credentials = std::mem::MaybeUninit::<libc::ucred>::zeroed();
         let mut length = std::mem::size_of::<libc::ucred>() as libc::socklen_t;
+        // SAFETY: les pointeurs passés à getsockopt désignent des variables locales valides pendant l'appel.
         let result = unsafe {
             libc::getsockopt(
                 stream.as_raw_fd(),
@@ -364,6 +365,7 @@ fn peer_is_provider_descendant(stream: &UnixStream, owner: (u32, u64)) -> bool {
         if result != 0 || length as usize != std::mem::size_of::<libc::ucred>() {
             return false;
         }
+        // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
         let credentials = unsafe { credentials.assume_init() };
         if credentials.pid <= 0 {
             return false;

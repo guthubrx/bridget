@@ -160,8 +160,11 @@ fn spec221_drain_reaps_owned_foreign_uid_zombie_after_signal_refusal() {
     }
     let birth = process_birth(pid).unwrap();
     drop(child); // Barrière : aucun propriétaire Child ne peut encore wait ce PID.
+    // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
     assert_eq!(unsafe { libc::setgroups(0, std::ptr::null()) }, 0);
+    // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
     assert_eq!(unsafe { libc::setgid(65534) }, 0);
+    // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
     assert_eq!(unsafe { libc::setuid(65534) }, 0);
     assert_eq!(process_birth(pid).unwrap(), birth);
     let signal = remote_drain::signal_pass();
@@ -170,6 +173,7 @@ fn spec221_drain_reaps_owned_foreign_uid_zombie_after_signal_refusal() {
     if !matches!(drained, Ok(true)) {
         let mut status = 0;
         assert_eq!(
+            // SAFETY: les pointeurs passés à waitpid désignent des variables locales valides pendant l'appel.
             unsafe { libc::waitpid(pid as i32, &mut status, 0) },
             pid as i32
         );

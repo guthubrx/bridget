@@ -834,6 +834,7 @@ fn stamp(path: &Path) -> Result<Option<ReadStamp>, String> {
     }
 }
 #[cfg(any(test, target_os = "linux"))]
+#[allow(clippy::unnecessary_cast)] // libc::S_IFMT est un u16 sous macOS et un u32 sous Linux
 fn observe_stably(
     paths: &[PathBuf],
     read: impl FnOnce() -> Result<serde_json::Value, String>,

@@ -2395,6 +2395,7 @@ fn spec221_signaler_creation_refusal_is_explicit_without_retry() {
         rlim_max: 0,
     };
     assert_eq!(
+        // SAFETY: les pointeurs passés à getrlimit désignent des variables locales valides pendant l'appel.
         unsafe { libc::getrlimit(libc::RLIMIT_NPROC, &mut original) },
         0
     );
@@ -2402,10 +2403,12 @@ fn spec221_signaler_creation_refusal_is_explicit_without_retry() {
         rlim_cur: 0,
         rlim_max: original.rlim_max,
     };
+    // SAFETY: les pointeurs passés à setrlimit désignent des variables locales valides pendant l'appel.
     assert_eq!(unsafe { libc::setrlimit(libc::RLIMIT_NPROC, &limited) }, 0);
     let started = Instant::now();
     guard.begin_stop(); // Vrai refus EAGAIN de création, sans injection de fonction.
     let elapsed = started.elapsed();
+    // SAFETY: les pointeurs passés à setrlimit désignent des variables locales valides pendant l'appel.
     assert_eq!(unsafe { libc::setrlimit(libc::RLIMIT_NPROC, &original) }, 0);
     assert!(
         elapsed < Duration::from_secs(1),

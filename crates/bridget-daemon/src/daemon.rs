@@ -7560,8 +7560,10 @@ fn handle_connection(
 
 #[cfg(target_os = "linux")]
 pub(crate) fn unix_peer_uid(stream: &UnixStream) -> std::io::Result<u32> {
+    // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
     let mut credentials: libc::ucred = unsafe { std::mem::zeroed() };
     let mut length = std::mem::size_of::<libc::ucred>() as libc::socklen_t;
+    // SAFETY: les pointeurs passés à getsockopt désignent des variables locales valides pendant l'appel.
     let result = unsafe {
         libc::getsockopt(
             stream.as_raw_fd(),

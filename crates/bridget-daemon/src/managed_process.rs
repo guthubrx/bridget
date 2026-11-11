@@ -37,12 +37,15 @@ pub(crate) mod remote_drain {
     const MAX_CHILDREN: usize = 1024;
 
     pub fn arm() -> io::Result<()> {
+        // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
         if unsafe { libc::prctl(libc::PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0) } != 0 {
             return Err(io::Error::last_os_error());
         }
         // Refuser avant fournisseur les noyaux dépourvus de pidfd.
         let fd = pidfd(std::process::id())?;
+        // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
         let mut info = unsafe { std::mem::zeroed::<libc::siginfo_t>() };
+        // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
         let result = unsafe {
             libc::waitid(
                 libc::P_PIDFD,
@@ -58,10 +61,12 @@ pub(crate) mod remote_drain {
     }
 
     fn pidfd(pid: u32) -> io::Result<OwnedFd> {
+        // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
         let fd = unsafe { libc::syscall(libc::SYS_pidfd_open, pid, 0) };
         if fd < 0 {
             return Err(io::Error::last_os_error());
         }
+        // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
         Ok(unsafe { OwnedFd::from_raw_fd(fd as i32) })
     }
 
@@ -137,6 +142,7 @@ pub(crate) mod remote_drain {
                     continue;
                 }
             }
+            // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
             let result = unsafe {
                 libc::syscall(
                     libc::SYS_pidfd_send_signal,
@@ -166,7 +172,9 @@ pub(crate) mod remote_drain {
                 }
                 Err(error) => return Err(error),
             };
+            // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
             let mut info = unsafe { std::mem::zeroed::<libc::siginfo_t>() };
+            // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
             let rc = unsafe {
                 libc::waitid(
                     libc::P_PIDFD,
@@ -179,7 +187,9 @@ pub(crate) mod remote_drain {
                 return Err(io::Error::last_os_error());
             }
         }
+        // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
         let mut info = unsafe { std::mem::zeroed::<libc::siginfo_t>() };
+        // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
         let rc = unsafe {
             libc::waitid(
                 libc::P_ALL,
