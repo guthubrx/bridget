@@ -2591,3 +2591,77 @@ pub(super) fn on_guichet_reply(version: u16, issuer_scope: String, request_id: S
                 }
             }
         }
+
+pub(super) fn on_queue_edit_request(request_id: String, target: String, action: bridget_transport::protocol::QueueEditAction, message_id: String, before_message_id: Option<String>, conn_id: &str, state: &Arc<Mutex<DaemonState>>) -> Option<DaemonToWrapper> {
+            let mut controls = Vec::new();
+            let (response, notice) = {
+                let mut st = state.lock().unwrap_or_else(|error| error.into_inner());
+                handle_queue_edit(
+                    &mut st,
+                    conn_id,
+                    request_id,
+                    target,
+                    action,
+                    message_id,
+                    before_message_id,
+                    &mut controls,
+                )
+            };
+            // Le COMMIT et le relâchement de State précèdent toute poussée. Rejeu : zéro contrôle.
+            let failed_controls = execute_controls(controls);
+            if !failed_controls.is_empty() {
+                let mut st = state.lock().unwrap_or_else(|error| error.into_inner());
+                for control in failed_controls {
+                    if let DaemonToWrapper::DeliverIdempotent {
+                        delivery_id,
+                        recipient_instance_id,
+                        delivery_generation,
+                        ..
+                    } = control.message
+                        && let Err(error) = st.idempotency.mark_delivery_indeterminate(
+                            &delivery_id,
+                            &recipient_instance_id,
+                            delivery_generation,
+                        ) {
+                            warn!("poussée de promotion non confirmée: {error}");
+                        }
+                }
+            }
+            // Le retrait est committé et State relâché avant le writer. Rejeu: aucune notice fresh.
+            if let Some(notice) = notice {
+                use rusqlite::OptionalExtension;
+                let pending = {
+                    let st = state.lock().unwrap_or_else(|error| error.into_inner());
+                    let body = st.store.connection().query_row(
+                        "SELECT body FROM orphan_emitter_notices WHERE delivery_id=?1 AND notified_at IS NULL",
+                        [&notice.delivery_id], |row| row.get::<_, String>(0),
+                    ).optional();
+                    match body {
+                        Ok(Some(body)) => st
+                            .router
+                            .get_agent(&notice.sender)
+                            .and_then(|route| st.connections.get(&route.connection_id))
+                            .cloned()
+                            .map(|writer| (writer, body)),
+                        Ok(None) => None,
+                        Err(error) => {
+                            warn!("notice d'édition reste durable: {error}");
+                            None
+                        }
+                    }
+                };
+                if let Some((writer, body)) = pending {
+                    if let Err(error) = deliver_to_agent(&writer, &notice.sender, &body) {
+                        warn!("notice d'édition différée: {error}");
+                    } else if let Err(error) = state
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .idempotency
+                        .mark_orphan_emitter_notified(&notice.delivery_id, unix_now_secs())
+                    {
+                        warn!("accusé de notice d'édition refusé: {error}");
+                    }
+                }
+            }
+            Some(response)
+        }
