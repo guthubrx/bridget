@@ -1132,81 +1132,83 @@ fn audit_inventory(manifest: &Manifest, root: &Path) -> Result<Audit, String> {
         .collect::<BTreeMap<_, _>>();
     let (known_paths, _) = manifest_paths(manifest)?;
     let mut found = BTreeSet::new();
-    let mut stack = vec![(anchor, String::new())];
+    let mut names = anchor.names()?;
+    // Vérifier la carte avant de lire les contenus, comme pour l'ancien parcours.
+    let index = names
+        .iter()
+        .position(|name| name == NOTICE)
+        .ok_or_else(|| refusal("view_integrity_failed"))?;
+    names.swap(0, index);
+    // O(profondeur) descripteurs : ne pas ouvrir toute la fratrie à la fois.
+    // Les noms sont lus une fois par dossier, O(entrées + octets audités).
+    let mut stack = vec![(anchor, String::new(), names.into_iter())];
     let mut count = 0usize;
     let mut audited_bytes = 0u64;
-    while let Some((directory, prefix)) = stack.pop() {
+    while let Some((directory, prefix, names)) = stack.last_mut() {
         if Instant::now() >= deadline {
             return Err(refusal("view_audit_timeout"));
         }
-        let mut names = directory.names()?;
-        if prefix.is_empty() {
-            // La carte lie les tailles/objets au manifeste privé. La vérifier
-            // AVANT tout contenu évite de hacher un fichier volontairement
-            // gigantesque pour un manifeste déjà divergent.
-            let index = names
-                .iter()
-                .position(|name| name == NOTICE)
-                .ok_or_else(|| refusal("view_integrity_failed"))?;
-            names.swap(0, index);
+        let Some(name) = names.next() else {
+            stack.pop();
+            continue;
+        };
+        count += 1;
+        if count > MAX_ENTRIES + 1 {
+            return Err(limit_refusal(
+                bridget_transport::protocol::CommitViewLimitKind::Entries,
+                count as u64,
+                (MAX_ENTRIES + 1) as u64,
+            ));
         }
-        for name in names {
-            count += 1;
-            if count > MAX_ENTRIES + 1 {
-                return Err(limit_refusal(
-                    bridget_transport::protocol::CommitViewLimitKind::Entries,
-                    count as u64,
-                    (MAX_ENTRIES + 1) as u64,
-                ));
-            }
-            let relative = if prefix.is_empty() {
-                name.clone()
-            } else {
-                format!("{prefix}/{name}")
-            };
-            let kind = directory.kind(&name)?;
-            if relative == NOTICE {
-                if kind != libc::S_IFREG {
-                    return Err(refusal("view_integrity_failed"));
-                }
-                let expected = &expected_notice;
-                let mut file = directory.file(&name, false)?;
-                let meta = file.metadata().map_err(compact::io_failure)?;
-                if !meta.is_file() || meta.len() != expected.len() as u64 {
-                    return Err(refusal("view_integrity_failed"));
-                }
-                let mut actual = Vec::new();
-                Read::by_ref(&mut file)
-                    .take(expected.len() as u64 + 1)
-                    .read_to_end(&mut actual)
-                    .map_err(compact::io_failure)?;
-                if actual != *expected {
-                    return Err(refusal("view_integrity_failed"));
-                }
-            } else if kind == libc::S_IFDIR
-                && known_paths.contains(&relative)
-                && !entries.contains_key(relative.as_str())
-            {
-                stack.push((directory.child(&name)?, relative.clone()));
-            } else if let Some(entry) = entries.get(relative.as_str()) {
-                if kind
-                    != if entry.mode == "120000" {
-                        libc::S_IFLNK
-                    } else {
-                        libc::S_IFREG
-                    }
-                {
-                    return Err(refusal("view_integrity_failed"));
-                }
-                audited_bytes = audited_bytes
-                    .checked_add(entry.bytes)
-                    .ok_or_else(|| refusal("byte_count_overflow"))?;
-                check_file(entry, &directory, &name, deadline)?;
-            } else {
+        let relative = if prefix.is_empty() {
+            name.clone()
+        } else {
+            format!("{prefix}/{name}")
+        };
+        let kind = directory.kind(&name)?;
+        if relative == NOTICE {
+            if kind != libc::S_IFREG {
                 return Err(refusal("view_integrity_failed"));
             }
-            found.insert(relative);
+            let expected = &expected_notice;
+            let mut file = directory.file(&name, false)?;
+            let meta = file.metadata().map_err(compact::io_failure)?;
+            if !meta.is_file() || meta.len() != expected.len() as u64 {
+                return Err(refusal("view_integrity_failed"));
+            }
+            let mut actual = Vec::new();
+            Read::by_ref(&mut file)
+                .take(expected.len() as u64 + 1)
+                .read_to_end(&mut actual)
+                .map_err(compact::io_failure)?;
+            if actual != *expected {
+                return Err(refusal("view_integrity_failed"));
+            }
+        } else if kind == libc::S_IFDIR
+            && known_paths.contains(&relative)
+            && !entries.contains_key(relative.as_str())
+        {
+            let child = directory.child(&name)?;
+            let names = child.names()?;
+            stack.push((child, relative.clone(), names.into_iter()));
+        } else if let Some(entry) = entries.get(relative.as_str()) {
+            if kind
+                != if entry.mode == "120000" {
+                    libc::S_IFLNK
+                } else {
+                    libc::S_IFREG
+                }
+            {
+                return Err(refusal("view_integrity_failed"));
+            }
+            audited_bytes = audited_bytes
+                .checked_add(entry.bytes)
+                .ok_or_else(|| refusal("byte_count_overflow"))?;
+            check_file(entry, directory, &name, deadline)?;
+        } else {
+            return Err(refusal("view_integrity_failed"));
         }
+        found.insert(relative);
     }
     if !found.contains(NOTICE)
         || manifest

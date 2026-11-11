@@ -2285,3 +2285,49 @@ fn spec241_selected_volume_is_not_a_fixed_quota_but_overflow_still_refuses() {
         "le compteur reste fermé et sa cause reste classée"
     );
 }
+
+#[test]
+fn spec263_wide_view_audit_keeps_a_bounded_number_of_open_directories() {
+    use std::os::unix::process::CommandExt;
+    if std::env::var_os("B263_FD_LIMIT_CHILD").is_none() {
+        let mut command = Command::new(std::env::current_exe().unwrap());
+        command.args(["--exact", "workspace_git::commit_view::tests::spec263_wide_view_audit_keeps_a_bounded_number_of_open_directories", "--nocapture"])
+            .env("B263_FD_LIMIT_CHILD", "1");
+        // SAFETY: dans l'enfant isolé, setrlimit ne manipule que deux entiers.
+        unsafe {
+            command.pre_exec(|| {
+                let mut limit = std::mem::MaybeUninit::<libc::rlimit>::uninit();
+                if libc::getrlimit(libc::RLIMIT_NOFILE, limit.as_mut_ptr()) != 0 {
+                    return Err(io::Error::last_os_error());
+                }
+                let mut limit = limit.assume_init();
+                limit.rlim_cur = 64.min(limit.rlim_max);
+                if libc::setrlimit(libc::RLIMIT_NOFILE, &limit) != 0 {
+                    return Err(io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+        let result = command.output().unwrap();
+        assert!(
+            result.status.success(),
+            "{}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+        return;
+    }
+    let f = Fixture::new();
+    for index in 0..96 {
+        let directory = f.repo.join(format!("wide-{index:03}"));
+        fs::create_dir(&directory).unwrap();
+        fs::write(directory.join("file.rs"), b"proof").unwrap();
+    }
+    f.git(&["add", "."]);
+    f.git(&["commit", "-qm", "wide fixture"]);
+    let manifest = plan(&f.repo, &f.git(&["rev-parse", "HEAD"])).unwrap();
+    let before = f.snapshot();
+    let destination = f.root.join("view");
+    export(&f.repo, &manifest, &destination).unwrap();
+    audit(&manifest, &destination).unwrap();
+    assert_eq!(f.snapshot(), before);
+}

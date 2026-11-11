@@ -1,6 +1,6 @@
 # Correction 263
 
-Version 0.8.29, identité 263-coordination-resultats-r1. Corrections portables, sans chemin personnel ni nom de machine imposé dans le produit.
+Version 0.8.29, identité 263-coordination-resultats-r2. Corrections portables, sans chemin personnel ni nom de machine imposé dans le produit.
 
 ## Causes vérifiées
 
@@ -21,7 +21,7 @@ La coupure de transport signalée précède la maintenance de 262. Les traces co
 
 Revue indépendante en lecture seule : tâche 87bb84ef-ff37-472e-9318-45e4d1f288dc, clé bridget-263-result-message-review-20261111-r1. Le défaut de conservation est confirmé. Le signalement de message vide n’est pas confirmé. La mission de revue a rendu son résultat ; l’annulation propriétaire est enregistrée et l’arrêt de son enfant est confirmé. Sa vue reste conservée selon le contrôle natif.
 
-La décision D1 du programme 260 reste respectée. build-runtime.py reconstruit la base active 75259217a72b3177cc0f50ba58c1fc3f97e5e22e avec runtime.patch. La source obtenue reproduit exactement les 23 fichiers attendus. Les extractions réservées à une activation ultérieure restent hors du binaire.
+La décision D1 du programme 260 reste respectée. build-runtime.py reconstruit la base active 75259217a72b3177cc0f50ba58c1fc3f97e5e22e avec runtime.patch. La source obtenue reproduit exactement les 27 fichiers attendus. Les extractions réservées à une activation ultérieure restent hors du binaire.
 
 ## Validation et activation
 
@@ -30,3 +30,14 @@ La décision D1 du programme 260 reste respectée. build-runtime.py reconstruit 
 Les sept avertissements Linux préexistants de la base ont été corrigés sans changement de comportement : conversions entières explicites communes aux plateformes et conditions let regroupées. Ces ajustements ne déclenchent aucune extraction réservée au programme 260.
 
 La qualification de distribution a refusé le premier binaire Linux avant activation sur Debian 12 : il exigeait glibc 2.39. Le candidat commun est reconstruit sur Debian 12. Le script check-linux-abi.py impose désormais glibc 2.36 au plus à make release sur Linux ; une absence de preuve n’est pas un succès. Trois tests et un refus réel du premier binaire qualifient cette garde.
+
+
+## Défaut découvert sur le parcours Mac réel
+
+La nouvelle préparation locale franchit désormais le contrôle d’identité. Une revue de qualification a ensuite échoué pendant l’audit de la vue. Tâche 859861e4-4d51-4f78-91cd-d2119dd49792, clé bridget-263-portable-mac-review-20261111-r1 ; annulation confirmée, source arrêtée et matière conservée, aucune mission métier rejouée.
+
+La lecture brute du manifeste et des fichiers ne montre aucune divergence de contenu ni de mode. Le contrôle Rust de cette même vue passe sous la limite de descripteurs du terminal, puis échoue avec EMFILE sous la limite 256 de launchd. Le répertoire comporte une fratrie de 260 dossiers. L’ancien parcours ouvrait tous les frères avant de les traiter.
+
+Le parcours conserve maintenant un cadre par niveau : descripteurs O(profondeur), temps O(entrées + octets), noms lus une fois. Les contrôles par descripteur, les liens, la carte, les empreintes et le dépôt source restent vérifiés. La limite système n’est pas augmentée. Une régression isolée sous 64 descripteurs exporte puis audite 96 dossiers frères et confirme que le dépôt source est inchangé.
+
+Revue indépendante du parcours borné : tâche 22436410-ab54-4188-a6c4-b8abae8c919a, clé bridget-263-fd-audit-review-20261111-r1. Aucun défaut prouvé. Les 45 tests de vue passent sur Mac et Debian 12, dont les exports volumineux et le cas sous 64 descripteurs ; trois helpers réservés aux sous-processus sont ignorés par le lancement ordinaire. Analyse statique stricte réussie sur les deux plateformes.

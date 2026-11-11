@@ -2,6 +2,8 @@
 
 ## 0.8.29
 
+- Borner les dossiers ouverts par l’audit à la profondeur de la vue, pour respecter les limites de descripteurs des systèmes.
+
 - Conserver les comptes rendus précédents quand une tâche de fond retarde le résultat final.
 - Préparer une vue locale avec le registre du worker attesté, sans consulter une autre identité de profil.
 - Expliquer la ronde déjà terminée avant un refus de guidage et conserver les causes précises des limites de préparation.

@@ -1109,6 +1109,204 @@
 +    ));
 +    assert!(runtime.held.is_empty() && runtime.running.is_empty());
 +}
+--- a/crates/bridget-daemon/src/workspace_commit_view.rs
++++ b/crates/bridget-daemon/src/workspace_commit_view.rs
+@@ -1070,75 +1070,83 @@
+         .collect::<BTreeMap<_, _>>();
+     let (known_paths, _) = manifest_paths(manifest)?;
+     let mut found = BTreeSet::new();
+-    let mut stack = vec![(anchor, String::new())];
++    let mut names = anchor.names()?;
++    // Vérifier la carte avant de lire les contenus, comme pour l'ancien parcours.
++    let index = names
++        .iter()
++        .position(|name| name == NOTICE)
++        .ok_or_else(|| refusal("view_integrity_failed"))?;
++    names.swap(0, index);
++    // O(profondeur) descripteurs : ne pas ouvrir toute la fratrie à la fois.
++    // Les noms sont lus une fois par dossier, O(entrées + octets audités).
++    let mut stack = vec![(anchor, String::new(), names.into_iter())];
+     let mut count = 0usize;
+     let mut audited_bytes = 0u64;
+-    while let Some((directory, prefix)) = stack.pop() {
++    while let Some((directory, prefix, names)) = stack.last_mut() {
+         if Instant::now() >= deadline {
+             return Err(refusal("view_audit_timeout"));
+         }
+-        let mut names=directory.names()?;
+-        if prefix.is_empty() {
+-            // La carte lie les tailles/objets au manifeste privé. La vérifier
+-            // AVANT tout contenu évite de hacher un fichier volontairement
+-            // gigantesque pour un manifeste déjà divergent.
+-            let index=names.iter().position(|name|name==NOTICE)
+-                .ok_or_else(||refusal("view_integrity_failed"))?;
+-            names.swap(0,index);
+-        }
+-        for name in names {
+-            count += 1;
+-            if count > MAX_ENTRIES + 1 {
+-                return Err(limit_refusal(bridget_transport::protocol::CommitViewLimitKind::Entries, count as u64, (MAX_ENTRIES + 1) as u64));
+-            }
+-            let relative = if prefix.is_empty() {
+-                name.clone()
+-            } else {
+-                format!("{prefix}/{name}")
+-            };
+-            let kind = directory.kind(&name)?;
+-            if relative == NOTICE {
+-                if kind != libc::S_IFREG {
+-                    return Err(refusal("view_integrity_failed"));
++        let Some(name) = names.next() else {
++            stack.pop();
++            continue;
++        };
++        count += 1;
++        if count > MAX_ENTRIES + 1 {
++            return Err(limit_refusal(
++                bridget_transport::protocol::CommitViewLimitKind::Entries,
++                count as u64,
++                (MAX_ENTRIES + 1) as u64,
++            ));
++        }
++        let relative = if prefix.is_empty() {
++            name.clone()
++        } else {
++            format!("{prefix}/{name}")
++        };
++        let kind = directory.kind(&name)?;
++        if relative == NOTICE {
++            if kind != libc::S_IFREG {
++                return Err(refusal("view_integrity_failed"));
++            }
++            let expected = &expected_notice;
++            let mut file = directory.file(&name, false)?;
++            let meta = file.metadata().map_err(compact::io_failure)?;
++            if !meta.is_file() || meta.len() != expected.len() as u64 {
++                return Err(refusal("view_integrity_failed"));
++            }
++            let mut actual = Vec::new();
++            Read::by_ref(&mut file)
++                .take(expected.len() as u64 + 1)
++                .read_to_end(&mut actual)
++                .map_err(compact::io_failure)?;
++            if actual != *expected {
++                return Err(refusal("view_integrity_failed"));
++            }
++        } else if kind == libc::S_IFDIR
++            && known_paths.contains(&relative)
++            && !entries.contains_key(relative.as_str())
++        {
++            let child = directory.child(&name)?;
++            let names = child.names()?;
++            stack.push((child, relative.clone(), names.into_iter()));
++        } else if let Some(entry) = entries.get(relative.as_str()) {
++            if kind
++                != if entry.mode == "120000" {
++                    libc::S_IFLNK
++                } else {
++                    libc::S_IFREG
+                 }
+-                let expected = &expected_notice;
+-                let mut file = directory.file(&name, false)?;
+-                let meta = file.metadata().map_err(compact::io_failure)?;
+-                if !meta.is_file() || meta.len() != expected.len() as u64 {
+-                    return Err(refusal("view_integrity_failed"));
+-                }
+-                let mut actual = Vec::new();
+-                Read::by_ref(&mut file)
+-                    .take(expected.len() as u64 + 1)
+-                    .read_to_end(&mut actual)
+-                    .map_err(compact::io_failure)?;
+-                if actual != *expected {
+-                    return Err(refusal("view_integrity_failed"));
+-                }
+-            } else if kind == libc::S_IFDIR
+-                && known_paths.contains(&relative)
+-                && !entries.contains_key(relative.as_str())
+             {
+-                stack.push((directory.child(&name)?, relative.clone()));
+-            } else if let Some(entry) = entries.get(relative.as_str()) {
+-                if kind
+-                    != if entry.mode == "120000" {
+-                        libc::S_IFLNK
+-                    } else {
+-                        libc::S_IFREG
+-                    }
+-                {
+-                    return Err(refusal("view_integrity_failed"));
+-                }
+-                audited_bytes = audited_bytes
+-                    .checked_add(entry.bytes)
+-                    .ok_or_else(|| refusal("byte_count_overflow"))?;
+-                check_file(entry, &directory, &name, deadline)?;
+-            } else {
+                 return Err(refusal("view_integrity_failed"));
+             }
+-            found.insert(relative);
+-        }
++            audited_bytes = audited_bytes
++                .checked_add(entry.bytes)
++                .ok_or_else(|| refusal("byte_count_overflow"))?;
++            check_file(entry, directory, &name, deadline)?;
++        } else {
++            return Err(refusal("view_integrity_failed"));
++        }
++        found.insert(relative);
+     }
+     if !found.contains(NOTICE)
+         || manifest
+--- a/crates/bridget-daemon/src/workspace_commit_view_tests.rs
++++ b/crates/bridget-daemon/src/workspace_commit_view_tests.rs
+@@ -1969,3 +1969,49 @@
+     let overflow=validate_manifest(&manifest).unwrap_err();
+     assert_eq!(job::failure(&overflow),ExportFailure::ByteLimit,"le compteur reste fermé et sa cause reste classée");
+ }
++
++#[test]
++fn spec263_wide_view_audit_keeps_a_bounded_number_of_open_directories() {
++    use std::os::unix::process::CommandExt;
++    if std::env::var_os("B263_FD_LIMIT_CHILD").is_none() {
++        let mut command = Command::new(std::env::current_exe().unwrap());
++        command.args(["--exact", "workspace_git::commit_view::tests::spec263_wide_view_audit_keeps_a_bounded_number_of_open_directories", "--nocapture"])
++            .env("B263_FD_LIMIT_CHILD", "1");
++        // SAFETY: dans l'enfant isolé, setrlimit ne manipule que deux entiers.
++        unsafe {
++            command.pre_exec(|| {
++                let mut limit = std::mem::MaybeUninit::<libc::rlimit>::uninit();
++                if libc::getrlimit(libc::RLIMIT_NOFILE, limit.as_mut_ptr()) != 0 {
++                    return Err(io::Error::last_os_error());
++                }
++                let mut limit = limit.assume_init();
++                limit.rlim_cur = 64.min(limit.rlim_max);
++                if libc::setrlimit(libc::RLIMIT_NOFILE, &limit) != 0 {
++                    return Err(io::Error::last_os_error());
++                }
++                Ok(())
++            });
++        }
++        let result = command.output().unwrap();
++        assert!(
++            result.status.success(),
++            "{}",
++            String::from_utf8_lossy(&result.stderr)
++        );
++        return;
++    }
++    let f = Fixture::new();
++    for index in 0..96 {
++        let directory = f.repo.join(format!("wide-{index:03}"));
++        fs::create_dir(&directory).unwrap();
++        fs::write(directory.join("file.rs"), b"proof").unwrap();
++    }
++    f.git(&["add", "."]);
++    f.git(&["commit", "-qm", "wide fixture"]);
++    let manifest = plan(&f.repo, &f.git(&["rev-parse", "HEAD"])).unwrap();
++    let before = f.snapshot();
++    let destination = f.root.join("view");
++    export(&f.repo, &manifest, &destination).unwrap();
++    audit(&manifest, &destination).unwrap();
++    assert_eq!(f.snapshot(), before);
++}
 --- a/crates/bridget-daemon/src/wrapper.rs
 +++ b/crates/bridget-daemon/src/wrapper.rs
 @@ -630,11 +630,10 @@
