@@ -2422,3 +2422,92 @@ pub(super) fn on_spawn_order(posture: Option<bridget_transport::protocol::SpawnP
                 }),
             }
         }
+
+pub(super) fn on_artifact_publish(contract_version: u8, canonical_publication: Vec<u8>, conn_id: &str, state: &Arc<Mutex<DaemonState>>) -> Option<DaemonToWrapper> {
+            if contract_version != ARTIFACT_CONTRACT_VERSION {
+                return Some(artifact_publication_refusal(
+                    "invalid_contract",
+                    "Version de contrat d'artefact non prise en charge.",
+                ));
+            }
+            let publication =
+                match serde_json::from_slice::<ArtifactPublicationV1>(&canonical_publication) {
+                    Ok(publication) if publication.canonical_bytes() == canonical_publication => {
+                        publication
+                    }
+                    Ok(_) => {
+                        return Some(artifact_publication_refusal(
+                            "invalid_payload",
+                            "La publication d'artefact doit être sérialisée canoniquement.",
+                        ));
+                    }
+                    Err(_) => {
+                        return Some(artifact_publication_refusal(
+                            "invalid_payload",
+                            "La publication d'artefact ne respecte pas le contrat attendu.",
+                        ));
+                    }
+                };
+            let (context, database_path, artifact_root) = {
+                let st = state.lock().unwrap_or_else(|error| error.into_inner());
+                let (agent_name, instance_id, project_id) = match artifact_access_scope(
+                    &st, conn_id,
+                ) {
+                    Ok(scope) => scope,
+                    Err(reason) => {
+                        return Some(artifact_publication_refusal(
+                            match reason {
+                                ArtifactReadRefusal::ScopeUnavailable => {
+                                    "project_binding_unavailable"
+                                }
+                                ArtifactReadRefusal::StorageUnavailable => "storage_unavailable",
+                                _ => "identity_unavailable",
+                            },
+                            "La connexion ne porte pas une identité, une instance et une portée actives.",
+                        ));
+                    }
+                };
+                let context = ArtifactPublicationContext {
+                    conversation_reference: format!("conversation:{project_id}:{agent_name}"),
+                    project_id,
+                    turn_reference: format!("turn:{}:{}", instance_id, publication.idempotency_key),
+                    created_by: format!("agent:{agent_name}"),
+                    origin_instance: format!("instance:{instance_id}"),
+                    observed_at: unix_timestamp(),
+                };
+                (context, st.db_path.clone(), st.artifact_root.clone())
+            };
+            let result =
+                ArtifactService::open(&database_path, &artifact_root, ArtifactPolicy::default())
+                    .and_then(|mut service| service.publish(context, publication));
+            Some(match result {
+                Ok(ArtifactPersistResult::Created(receipt)) => {
+                    artifact_publication_success(receipt, false)
+                }
+                Ok(ArtifactPersistResult::Replayed(receipt)) => {
+                    artifact_publication_success(receipt, true)
+                }
+                Err(ArtifactServiceError::PolicyBlocked) => artifact_publication_refusal(
+                    "publication_capacity_reached",
+                    "Le quota de contenus publiés est atteint. Aucun contenu existant n'a été supprimé.",
+                ),
+                Err(ArtifactServiceError::BlobUnavailable) => artifact_publication_refusal(
+                    "blob_unavailable",
+                    "Le contenu binaire annoncé n'est pas présent dans le magasin privé Bridget.",
+                ),
+                Err(ArtifactServiceError::Interrupted) => artifact_publication_refusal(
+                    "publication_interrupted",
+                    "La publication a été interrompue avant validation. Aucun artefact partiel n'a été créé.",
+                ),
+                Err(ArtifactServiceError::Validation(_)) => artifact_publication_refusal(
+                    "publication_refused",
+                    "La publication ne respecte pas les règles d'artefact et de provenance.",
+                ),
+                Err(ArtifactServiceError::Store(_) | ArtifactServiceError::BlobStore(_)) => {
+                    artifact_publication_refusal(
+                        "storage_unavailable",
+                        "Bridget ne peut pas enregistrer cet artefact pour le moment.",
+                    )
+                }
+            })
+        }
