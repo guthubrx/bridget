@@ -4865,3 +4865,8 @@ pub(super) fn on_heartbeat(conn_id: &str, state: &Arc<Mutex<DaemonState>>) -> Op
             }
             None
         }
+
+pub(super) fn on_usage_window(agent: String, from_secs: i64, to_secs: i64, state: &Arc<Mutex<DaemonState>>) -> Option<DaemonToWrapper> {
+            let st = state.lock().recover_poison();
+            Some(handle_usage_window(&agent, from_secs, to_secs, &st))
+        }

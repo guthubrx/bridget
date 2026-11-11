@@ -17219,10 +17219,7 @@ fn handle_wrapper_message_with_peer(
             agent,
             from_secs,
             to_secs,
-        } => {
-            let st = state.lock().recover_poison();
-            Some(handle_usage_window(&agent, from_secs, to_secs, &st))
-        }
+        } => wrapper_dispatch::on_usage_window(agent, from_secs, to_secs, state),
 
         WrapperToDaemon::Domain { agent, domain } => wrapper_dispatch::on_domain(agent, domain, conn_id, state),
 
