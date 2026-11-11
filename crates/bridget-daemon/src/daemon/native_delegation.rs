@@ -15122,9 +15122,12 @@ pub(super) fn tick(state: &Arc<Mutex<DaemonState>>) {
         if let Ok(open_requests) = st.store.open_requests() {
             for request in open_requests {
                 if let Ok(Some(task)) = st.delegation_store.for_mission(&request.id) {
-                    if task.state == "cancelled" {
-                        if let Err(error) = settle_cancelled_tracked_request247(&mut st, &task) {
-                            warn!("suivi de mission annulée non clôturé : {error}");
+                    if task.state == "cancelled"
+                        || (task.state == "failed"
+                            && task.error.as_deref() == Some("mission_reply_timeout"))
+                    {
+                        if let Err(error) = settle_terminal_tracked_request247(&mut st, &task) {
+                            warn!("suivi de mission terminée non clôturé : {error}");
                         }
                         continue;
                     }
@@ -16688,10 +16691,12 @@ fn align_request_deadline(st: &DaemonState, task: &Task) {
     }
 }
 
-/// Une annulation native confirmée clôt aussi le suivi logique de la mission.
+/// Une annulation ou expiration native confirmée clôt le suivi de la mission.
 /// La preuve d’arrêt, les fichiers et les accusés de livraison restent séparés.
-fn settle_cancelled_tracked_request247(st: &mut DaemonState, task: &Task) -> Result<bool, String> {
-    if task.state != "cancelled" {
+fn settle_terminal_tracked_request247(st: &mut DaemonState, task: &Task) -> Result<bool, String> {
+    let timed_out =
+        task.state == "failed" && task.error.as_deref() == Some("mission_reply_timeout");
+    if task.state != "cancelled" && !timed_out {
         return Ok(false);
     }
     let Some(request) = st
@@ -16704,10 +16709,22 @@ fn settle_cancelled_tracked_request247(st: &mut DaemonState, task: &Task) -> Res
     if request.state != "open" || request.sender != task.owner || request.target != task.child {
         return Ok(false);
     }
-    st.store
-        .cancel_request(&task.mission, &task.owner, Some("mission_native_cancelled"))
-        .map(|closed| closed.is_some_and(|r| r.state == "cancelled"))
-        .map_err(|e| e.to_string())
+    let closed = if timed_out {
+        st.store
+            .mark_timed_out(&task.mission)
+            .map_err(|e| e.to_string())?
+    } else {
+        st.store
+            .cancel_request(&task.mission, &task.owner, Some("mission_native_cancelled"))
+            .map(|closed| closed.is_some_and(|r| r.state == "cancelled"))
+            .map_err(|e| e.to_string())?
+    };
+    if closed {
+        st.pending_replies
+            .retain(|pending| pending.msg_id != task.mission);
+        st.delegation_store.wait_epoch().bump();
+    }
+    Ok(closed)
 }
 
 /// Clôture le suivi de la mission avec la transition canonique du guichet.

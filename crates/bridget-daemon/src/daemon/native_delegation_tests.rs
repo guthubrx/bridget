@@ -21127,19 +21127,19 @@ fn spec247_refus_tardif_annulation_ne_devient_pas_echec() {
         if state == "cancelled" {
             let mut foreign = task.clone();
             foreign.owner = Uuid::new_v4().to_string();
-            assert!(!settle_cancelled_tracked_request247(&mut st, &foreign).unwrap());
+            assert!(!settle_terminal_tracked_request247(&mut st, &foreign).unwrap());
             assert_eq!(
                 st.store.get_request(&task.mission).unwrap().unwrap().state,
                 "open"
             );
-            assert!(settle_cancelled_tracked_request247(&mut st, &task).unwrap());
+            assert!(settle_terminal_tracked_request247(&mut st, &task).unwrap());
             assert_eq!(
                 st.store.get_request(&task.mission).unwrap().unwrap().state,
                 "cancelled"
             );
-            assert!(!settle_cancelled_tracked_request247(&mut st, &task).unwrap());
+            assert!(!settle_terminal_tracked_request247(&mut st, &task).unwrap());
         } else {
-            assert!(!settle_cancelled_tracked_request247(&mut st, &task).unwrap());
+            assert!(!settle_terminal_tracked_request247(&mut st, &task).unwrap());
             assert_eq!(
                 st.store.get_request(&task.mission).unwrap().unwrap().state,
                 "open"

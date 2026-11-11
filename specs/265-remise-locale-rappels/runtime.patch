@@ -2,18 +2,18 @@
 +++ b/Cargo.toml
 @@ -10 +10 @@
 -version = "0.8.30"
-+version = "0.8.31"
++version = "0.8.32"
 --- a/Cargo.lock
 +++ b/Cargo.lock
 @@ -195 +195 @@
 -version = "0.8.30"
-+version = "0.8.31"
++version = "0.8.32"
 @@ -204 +204 @@
 -version = "0.8.30"
-+version = "0.8.31"
++version = "0.8.32"
 @@ -232 +232 @@
 -version = "0.8.30"
-+version = "0.8.31"
++version = "0.8.32"
 --- a/crates/bridget-daemon/src/daemon.rs
 +++ b/crates/bridget-daemon/src/daemon.rs
 @@ -6905 +6905 @@
@@ -124,27 +124,81 @@
 @@ -12829 +12843 @@
 -        // `pending()` peut légitimement exclure une tâche distante déjà
 +        // `pending()` peut légitimement exclure une tâche native déjà
-@@ -12842,2 +12856,2 @@
+@@ -12836,3 +12850,6 @@
+-                    if task.state == "cancelled" {
+-                        if let Err(error)=settle_cancelled_tracked_request247(&mut st,&task) {
+-                            warn!("suivi de mission annulée non clôturé : {error}");
++                    if task.state == "cancelled"
++                        || (task.state == "failed"
++                            && task.error.as_deref() == Some("mission_reply_timeout"))
++                    {
++                        if let Err(error) = settle_terminal_tracked_request247(&mut st, &task) {
++                            warn!("suivi de mission terminée non clôturé : {error}");
+@@ -12842,2 +12859,4 @@
 -                    if task.remote_placement.is_none() || task.result.is_none() {continue;}
 -                    if let Err(error) = settle_remote_tracked_request(&mut st, &task) {
-+                    if task.result.is_none() {continue;}
++                    if task.result.is_none() {
++                        continue;
++                    }
 +                    if let Err(error) = settle_result_tracked_request(&mut st, &task) {
-@@ -12845 +12859 @@
+@@ -12845 +12864 @@
 -                            "suivi de mission distante {} non clôturé pendant la reprise des demandes ouvertes: {}",
 +                            "suivi de mission native {} non clôturé pendant la reprise des demandes ouvertes: {}",
-@@ -12867,3 +12881,2 @@
+@@ -12867,3 +12886,2 @@
 -            if task.remote_placement.is_some()
 -                && task.result.is_some()
 -                && let Err(error) = settle_remote_tracked_request(&mut st, &task)
 +            if task.result.is_some()
 +                && let Err(error) = settle_result_tracked_request(&mut st, &task)
-@@ -12872 +12885 @@
+@@ -12872 +12890 @@
 -                    "suivi de mission distante {} illisible ou non clôturé, nouvel essai d'entretien: {}",
 +                    "suivi de mission native {} illisible ou non clôturé, nouvel essai d'entretien: {}",
-@@ -14274 +14287 @@
+@@ -14260 +14278 @@
+-/// Une annulation native confirmée clôt aussi le suivi logique de la mission.
++/// Une annulation ou expiration native confirmée clôt le suivi de la mission.
+@@ -14262,6 +14280,32 @@
+-fn settle_cancelled_tracked_request247(st: &mut DaemonState, task: &Task) -> Result<bool,String> {
+-    if task.state != "cancelled" {return Ok(false);}
+-    let Some(request)=st.store.get_request(&task.mission).map_err(|e|e.to_string())? else {return Ok(false);};
+-    if request.state != "open" || request.sender != task.owner || request.target != task.child {return Ok(false);}
+-    st.store.cancel_request(&task.mission,&task.owner,Some("mission_native_cancelled"))
+-        .map(|closed|closed.is_some_and(|r|r.state=="cancelled")).map_err(|e|e.to_string())
++fn settle_terminal_tracked_request247(st: &mut DaemonState, task: &Task) -> Result<bool, String> {
++    let timed_out =
++        task.state == "failed" && task.error.as_deref() == Some("mission_reply_timeout");
++    if task.state != "cancelled" && !timed_out {
++        return Ok(false);
++    }
++    let Some(request) = st
++        .store
++        .get_request(&task.mission)
++        .map_err(|e| e.to_string())?
++    else {
++        return Ok(false);
++    };
++    if request.state != "open" || request.sender != task.owner || request.target != task.child {
++        return Ok(false);
++    }
++    let closed = if timed_out {
++        st.store
++            .mark_timed_out(&task.mission)
++            .map_err(|e| e.to_string())?
++    } else {
++        st.store
++            .cancel_request(&task.mission, &task.owner, Some("mission_native_cancelled"))
++            .map(|closed| closed.is_some_and(|r| r.state == "cancelled"))
++            .map_err(|e| e.to_string())?
++    };
++    if closed {
++        st.pending_replies
++            .retain(|pending| pending.msg_id != task.mission);
++        st.delegation_store.wait_epoch().bump();
++    }
++    Ok(closed)
+@@ -14274 +14318 @@
 -fn settle_remote_tracked_request(st: &mut DaemonState, task: &Task) -> Result<bool, String> {
 +fn settle_result_tracked_request(st: &mut DaemonState, task: &Task) -> Result<bool, String> {
-@@ -14277,7 +14290,7 @@
+@@ -14277,7 +14321,7 @@
 -    if task.remote_placement.is_none()
 -        || task.result.is_none()
 -        || !task.remote_result_receipts.iter().any(|receipt| {
@@ -159,13 +213,13 @@
 +                    && receipt.identity.mission_id == task.mission
 +                    && receipt.identity.round == task.round_no()
 +            }))
-@@ -14314 +14327 @@
+@@ -14314 +14358 @@
 -/// Garde le collecteur de rappels pendant la fenêtre où le résultat distant
 +/// Garde le collecteur de rappels pendant la fenêtre où le résultat natif
-@@ -14317 +14330 @@
+@@ -14317 +14361 @@
 -pub(super) fn remote_result_suppresses_reminders(st: &DaemonState, mission: &str) -> bool {
 +pub(super) fn result_suppresses_reminders(st: &DaemonState, mission: &str) -> bool {
-@@ -14321,6 +14334,3 @@
+@@ -14321,6 +14365,3 @@
 -    task.remote_placement.is_some()
 -        && task.result.is_some()
 -        && task.remote_result_receipts.iter().any(|receipt| {
@@ -175,7 +229,7 @@
 +    if !st.store.get_request(mission).is_ok_and(|request| {
 +        request.is_some_and(|request| {
 +            request.state == "open" && request.sender == task.owner && request.target == task.child
-@@ -14327,0 +14338,11 @@
+@@ -14327,0 +14369,11 @@
 +    }) {
 +        return false;
 +    }
@@ -195,10 +249,71 @@
 @@ -14527 +14529 @@
 -        assert!(!settle_remote_tracked_request(&mut st, &task).unwrap());
 +        assert!(!settle_result_tracked_request(&mut st, &task).unwrap());
+@@ -18098 +18100 @@
+-                assert!(!settle_cancelled_tracked_request247(&mut st,&foreign).unwrap());
++                assert!(!settle_terminal_tracked_request247(&mut st,&foreign).unwrap());
+@@ -18100 +18102 @@
+-                assert!(settle_cancelled_tracked_request247(&mut st,&task).unwrap());
++                assert!(settle_terminal_tracked_request247(&mut st,&task).unwrap());
+@@ -18102 +18104 @@
+-                assert!(!settle_cancelled_tracked_request247(&mut st,&task).unwrap());
++                assert!(!settle_terminal_tracked_request247(&mut st,&task).unwrap());
+@@ -18104 +18106 @@
+-                assert!(!settle_cancelled_tracked_request247(&mut st,&task).unwrap());
++                assert!(!settle_terminal_tracked_request247(&mut st,&task).unwrap());
 --- /dev/null
 +++ b/crates/bridget-daemon/src/daemon/local_result265_tests.rs
-@@ -0,0 +1,244 @@
+@@ -0,0 +1,293 @@
 +use super::*;
++
++#[test]
++fn spec265_native_timeout_closes_tracking_after_cleanup_without_reopening_the_task() {
++    let (state, config, mut task, _parent, _child) = native160_mission(false);
++    task.state = "failed".into();
++    task.error = Some("mission_reply_timeout".into());
++    task.cleanup_done = true;
++    task.guarded = false;
++    task.guard_released = true;
++    task.failure_sent = true;
++    task.acknowledged_at = Some(unix_timestamp());
++    state.lock().unwrap().delegation_store.save(&task).unwrap();
++    let before = serde_json::to_value(state.lock().unwrap().delegation_store.get(&task.task_id).unwrap().unwrap()).unwrap();
++    for _ in 0..2 {
++        tick(&state);
++    }
++    let st = state.lock().unwrap();
++    assert_eq!(
++        st.store.get_request(&task.mission).unwrap().unwrap().state,
++        "timed_out"
++    );
++    assert!(!st.pending_replies.iter().any(|p| p.msg_id == task.mission));
++    assert_eq!(
++        serde_json::to_value(st.delegation_store.get(&task.task_id).unwrap().unwrap()).unwrap(),
++        before
++    );
++    drop(st);
++    drop(state);
++    cleanup(&config);
++}
++
++#[test]
++fn spec265_other_failure_and_foreign_tracking_are_not_reclassified_as_timeout() {
++    let (state, config, mut task, _parent, _child) = native160_mission(false);
++    let mut st = state.lock().unwrap();
++    task.state = "failed".into();
++    task.error = Some("provider_failed".into());
++    assert!(!settle_terminal_tracked_request247(&mut st, &task).unwrap());
++    task.error = Some("mission_reply_timeout".into());
++    task.owner = "foreign-owner".into();
++    assert!(!settle_terminal_tracked_request247(&mut st, &task).unwrap());
++    assert_eq!(
++        st.store.get_request(&task.mission).unwrap().unwrap().state,
++        "open"
++    );
++    drop(st);
++    drop(state);
++    cleanup(&config);
++}
 +
 +#[test]
 +fn spec265_terminal_without_result_refuses_ack_and_preserves_the_outbox() {

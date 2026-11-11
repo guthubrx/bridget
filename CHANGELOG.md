@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.8.32
+
+- Clore aussi le suivi d’une mission dont l’expiration native est déjà confirmée, même après son nettoyage.
+- Conserver son échec, ses résultats et ses fichiers ; ne pas relancer son enfant ni reclasser une autre cause d’échec.
+
 ## 0.8.31
 
 - Capturer les réponses finales locales sans leur imposer le dépôt d’un worker distant.

@@ -35,3 +35,9 @@ La première admission de revue a été refusée sans tâche à cause d'un SHA m
 Les quarante scénarios native153 réussissent sur main après la vérification de compatibilité : les anciennes enveloppes tardives restent absorbées sans notification ni mutation de la nouvelle ronde. Pour une nouvelle enveloppe reply244 conservée, une ancienne ronde rend un refus explicite, afin de garder la matière dans sa boîte. L’analyse statique stricte finale de main réussit.
 
 Le signalement d'attestation T3 vers 09 h UTC précède toutes les traces serveur encore présentes, dont les plus anciennes commencent à 10 h 48 UTC. Les archives de trace tournantes et le journal enfant ont été examinés. Le rejeu strict a ensuite admis la mission initiale ; aucun doublon n'est créé ici. Ces traces ne permettent pas d'attribuer rétrospectivement le délai à un réseau ou à des droits. unknown_recipient sur l'enfant déjà terminé est cohérent avec l'absence de route active, et ne démontre pas une perte du résultat.
+
+## Clôture des suivis historiques après expiration
+
+Le contrôle réel après chargement de 0.8.31 montre que les quatre tâches historiques restent en échec, mais leurs demandes suivies restent open. Le défaut est distinct de la capture corrigée : le tick clôt les annulations et les résultats, mais omet les échecs canoniques mission_reply_timeout après nettoyage. La révision r2 clôt ces seuls suivis avec mark_timed_out, sous la transaction existante. Elle exige open et le couple propriétaire/enfant exact. Elle ne change aucune tâche, aucun résultat et ne relance rien ; les autres erreurs ne sont pas reclassées.
+
+Deux tests supplémentaires couvrent la tâche expirée déjà nettoyée, son état inchangé après deux ticks, les erreurs différentes et un suivi étranger. Le premier essai comparait la fixture avant la normalisation de save ; la comparaison porte désormais sur la tâche réellement relue après sauvegarde, comme les quatre cas constatés.

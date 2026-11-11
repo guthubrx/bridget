@@ -1,6 +1,55 @@
 use super::*;
 
 #[test]
+fn spec265_native_timeout_closes_tracking_after_cleanup_without_reopening_the_task() {
+    let (state, config, mut task, _parent, _child) = native160_mission(false);
+    task.state = "failed".into();
+    task.error = Some("mission_reply_timeout".into());
+    task.cleanup_done = true;
+    task.guarded = false;
+    task.guard_released = true;
+    task.failure_sent = true;
+    task.acknowledged_at = Some(unix_timestamp());
+    state.lock().unwrap().delegation_store.save(&task).unwrap();
+    let before = serde_json::to_value(state.lock().unwrap().delegation_store.get(&task.task_id).unwrap().unwrap()).unwrap();
+    for _ in 0..2 {
+        tick(&state);
+    }
+    let st = state.lock().unwrap();
+    assert_eq!(
+        st.store.get_request(&task.mission).unwrap().unwrap().state,
+        "timed_out"
+    );
+    assert!(!st.pending_replies.iter().any(|p| p.msg_id == task.mission));
+    assert_eq!(
+        serde_json::to_value(st.delegation_store.get(&task.task_id).unwrap().unwrap()).unwrap(),
+        before
+    );
+    drop(st);
+    drop(state);
+    cleanup(&config);
+}
+
+#[test]
+fn spec265_other_failure_and_foreign_tracking_are_not_reclassified_as_timeout() {
+    let (state, config, mut task, _parent, _child) = native160_mission(false);
+    let mut st = state.lock().unwrap();
+    task.state = "failed".into();
+    task.error = Some("provider_failed".into());
+    assert!(!settle_terminal_tracked_request247(&mut st, &task).unwrap());
+    task.error = Some("mission_reply_timeout".into());
+    task.owner = "foreign-owner".into();
+    assert!(!settle_terminal_tracked_request247(&mut st, &task).unwrap());
+    assert_eq!(
+        st.store.get_request(&task.mission).unwrap().unwrap().state,
+        "open"
+    );
+    drop(st);
+    drop(state);
+    cleanup(&config);
+}
+
+#[test]
 fn spec265_terminal_without_result_refuses_ack_and_preserves_the_outbox() {
     let (state, config, mut task, _parent, _child) = native160_mission(false);
     let root = config.db_path.parent().unwrap().join("late265");
