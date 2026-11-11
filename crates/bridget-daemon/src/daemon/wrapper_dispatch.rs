@@ -1128,3 +1128,51 @@ pub(super) fn on_wait_agent_links(after_cursor: Option<u64>, timeout_ms: u64, co
                 }
             }
         }
+
+pub(super) fn on_t3_thread_binding_fact(version: u16, t3_thread_id: String, conn_id: &str, state: &Arc<Mutex<DaemonState>>) -> Option<DaemonToWrapper> {
+            let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+            let agent = crate::t3code::stable_uuid(&t3_thread_id);
+            let instance = crate::t3code::stable_uuid(&format!("instance:{t3_thread_id}"));
+            // T3 atteste aussi des identifiants opaques (mcp:…, thread:mcp:…).
+            // Borne de SessionProof, filtre de contrôles commun avec lineage.
+            // L'identité et le projet restent vérifiés.
+            let valid = version == bridget_transport::protocol::HUMAN_THREAD_VIEW_VERSION
+                && !t3_thread_id.is_empty()
+                && t3_thread_id.len() <= 2048
+                && !t3_thread_id.chars().any(bridget_core::is_disallowed_control)
+                && !st.auxiliary_connections.contains(conn_id)
+                && st
+                    .router
+                    .get_agent(&agent)
+                    .is_some_and(|route| route.connection_id == conn_id)
+                && live_connection_identity(&st, conn_id) == Some((agent, instance.clone()))
+                && st
+                    .presences
+                    .get(&instance)
+                    .is_some_and(|p| p.transport == "t3code")
+                && st.t3_project_connections.contains(conn_id);
+            let contradictory = st
+                .t3_thread_bindings
+                .get(conn_id)
+                .is_some_and(|prior| prior.as_deref() != Some(&t3_thread_id));
+            let response = if valid && !contradictory {
+                if let Err(code)=agent_tracking230::bind_live(&mut st,&crate::t3code::stable_uuid(&t3_thread_id),&t3_thread_id) {
+                    warn!("liaison de classement non enregistrée ({code}) ; la liaison de communication reste attestée, les autres travaux peuvent continuer");
+                }
+                st.t3_thread_bindings
+                    .insert(conn_id.into(), Some(t3_thread_id));
+                None
+            } else {
+                // Un projet pas encore attesté ne crée pas de fait ; une
+                // contradiction avec un binding existant invalide ce lien.
+                if st.t3_thread_bindings.contains_key(conn_id) {
+                    st.t3_thread_bindings.insert(conn_id.into(), None);
+                }
+                Some(DaemonToWrapper::Nack {
+                    id: "t3-thread-binding".into(),
+                    reason: "binding_unavailable".into(),
+                })
+            };
+            invalidate_human_authority(&mut st);
+            response
+        }
