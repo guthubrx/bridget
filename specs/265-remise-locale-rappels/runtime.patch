@@ -1,3 +1,43 @@
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -7,7 +7,7 @@
+ ]
+ 
+ [workspace.package]
+-version = "0.8.30"
++version = "0.8.31"
+ edition = "2024"
+ license = "MIT"
+ 
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -192,7 +192,7 @@
+ 
+ [[package]]
+ name = "bridget-core"
+-version = "0.8.30"
++version = "0.8.31"
+ dependencies = [
+  "serde",
+  "serde_json",
+@@ -201,7 +201,7 @@
+ 
+ [[package]]
+ name = "bridget-daemon"
+-version = "0.8.30"
++version = "0.8.31"
+ dependencies = [
+  "axum",
+  "base64",
+@@ -229,7 +229,7 @@
+ 
+ [[package]]
+ name = "bridget-transport"
+-version = "0.8.30"
++version = "0.8.31"
+ dependencies = [
+  "bridget-core",
+  "libc",
 --- a/crates/bridget-daemon/src/daemon.rs
 +++ b/crates/bridget-daemon/src/daemon.rs
 @@ -6902,9 +6902,9 @@
