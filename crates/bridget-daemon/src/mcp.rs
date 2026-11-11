@@ -2168,16 +2168,13 @@ fn execute_guichet_mutation(
         Err(ToolError::Technical {
             code: "outcome_unknown",
             message,
-        }) => Ok(json!({
-            "status": "outcome_unknown",
-            "terminal": false,
-            "applied": false,
-            "request_id": request_id,
-            "issued_at": issued_at,
-            "issuer_scope": scope,
-            "reason": message,
-            "next": "guichet_request_status"
-        })),
+        }) => {
+            let mut result = guichet_result_value(
+                &request_id, Some(issued_at), &scope, "outcome_unknown", None,
+            )?;
+            result["transport_error"] = json!(message);
+            Ok(result)
+        }
         Err(error) => Err(error),
     }
 }
@@ -2362,6 +2359,8 @@ fn guichet_result_value(
             } | GuichetReplyPayload::RegistreAdd { .. }
                 | GuichetReplyPayload::ObjectiveClose { .. }
         ) && issue == "accepted";
+        fields.insert("scope".to_string(), json!("guichet_request"));
+        fields.insert("native_admission_checked".to_string(), json!(false));
         fields.insert("status".to_string(), json!(status));
         fields.insert("terminal".to_string(), json!(true));
         fields.insert("applied".to_string(), json!(applied));
@@ -2383,13 +2382,48 @@ fn guichet_result_value(
         });
     }
     let pending = matches!(issue, "queued" | "outcome_unknown");
+    let terminal = match issue {
+        "queued" | "outcome_unknown" => json!(false),
+        "idempotency_expired" | "canonical_bytes_mismatch" | "invalid_issued_at" | "claim_stale" => json!(true),
+        _ => Value::Null,
+    };
+    let (reason, recovery) = match issue {
+        "queued" | "outcome_unknown" => (
+            "Le guichet n’a pas encore rendu de résultat métier durable ; l’application n’est pas attestée.",
+            "Relisez guichet_request_status avec la même request_id. Ne rejouez pas la mutation ni une nouvelle clé pour tester son sort. Cette lecture concerne uniquement le guichet ; les autres travaux autorisés suivent leur propre état. Si le suivi ne revient pas et qu’une nouvelle tentative dépasse votre mandat, demandez au propriétaire de décider la suite après vérification du reçu, sans présumer une non-exécution.",
+        ),
+        "idempotency_expired" => (
+            "Le suivi de rejeu du guichet est clos ou absent, sans preuve d’application métier. Les admissions natives n’ont pas été consultées.",
+            "Identifiez l’outil de l’appel initial avant toute reprise. Si c’était bridget_auto_delegate, cette lecture du guichet ne retrouve pas son admission : utilisez le task_id connu avec bridget_task_status ou faites identifier le reçu natif par le responsable autorisé pour une recherche sans effet. Le rejeu natif strict (même propriétaire, request_id et enveloppe complète) retrouve un admis mais peut admettre un appel jamais reçu : seulement si le mandat et le brief restent valides. Si le brief est périmé ou le mandat incertain, demandez à son propriétaire s’il faut encore lancer cette intention ; en attendant, ne rejouez pas. Pour une demande du guichet expirée, faites vérifier son reçu et ses effets avant toute nouvelle clé. Ce signal terminal concerne le suivi du guichet ; les autres travaux autorisés suivent leur propre état.",
+        ),
+        "canonical_bytes_mismatch" => (
+            "Ce contrôle du guichet est terminal : l’enveloppe reçue diffère de celle conservée sous cette clé. Cela n’atteste pas les effets de l’envoi d’origine.",
+            "Retrouvez la request_id et l’enveloppe du premier envoi, puis faites relire son reçu guichet. Ne modifiez pas ses paramètres et ne créez pas une clé neuve pour contourner ce refus. Si le travail demandé a changé, demandez au propriétaire de confirmer cette nouvelle intention après qualification des effets précédents. Les autres travaux autorisés suivent leur propre état.",
+        ),
+        "invalid_issued_at" => (
+            "Ce contrôle du guichet est terminal : l’horodatage fourni est refusé. Aucun résultat métier du premier envoi n’est attesté ici.",
+            "Vérifiez l’horodatage et le reçu du premier envoi avant toute reprise. Ne rejouez pas automatiquement la même valeur refusée ni une valeur modifiée sous la même clé. Faites vérifier l’horloge et les coordonnées conservées par le responsable du guichet ; si une nouvelle intention est nécessaire, demandez au propriétaire sa décision après contrôle des effets précédents. Les autres travaux autorisés suivent leur propre état.",
+        ),
+        "claim_stale" => (
+            "Ce contrôle du guichet est terminal : la revendication de traitement n’est plus courante. Il n’atteste pas les effets d’un traitement antérieur.",
+            "Faites relire la revendication courante et le reçu par le responsable du guichet. Ne réutilisez pas l’ancien jeton ni une nouvelle clé pour forcer la reprise. Si le responsable de la suite est ambigu, demandez au propriétaire de le désigner ; les autres travaux autorisés suivent leur propre état.",
+        ),
+        _ => (
+            "Le guichet a rendu une issue non reconnue sans résultat métier : ni application ni fin de traitement ne sont attestées.",
+            "Conservez ce code, la request_id et l’enveloppe, puis faites vérifier cette issue par le responsable du guichet. Ne déduisez pas une non-exécution et ne relancez pas automatiquement. Si une nouvelle action dépasse votre mandat, demandez au propriétaire de décider la suite après qualification ; les autres travaux autorisés suivent leur propre état.",
+        ),
+    };
     Ok(json!({
         "status": issue,
-        "terminal": !pending,
-        "applied": false,
+        "terminal": terminal,
+        "scope": "guichet_request",
+        "native_admission_checked": false,
+        "applied": null,
         "request_id": request_id,
         "issued_at": issued_at,
         "issuer_scope": issuer_scope,
+        "reason": reason,
+        "recovery": recovery,
         "next": pending.then_some("guichet_request_status")
     }))
 }
@@ -3162,7 +3196,7 @@ pub(crate) fn tools() -> Vec<Value> {
         }),
         json!({
             "name": "guichet_request_status",
-            "description": "Relire depuis le daemon maître l'issue terminale et ses identifiants durables.",
+            "description": "Relire uniquement une demande du guichet historique. Ne consulte pas les admissions de bridget_auto_delegate. Une clé absente ou expirée ne prouve pas la non-exécution : applied reste null sans résultat métier. Pour une réponse native perdue, conserver le propriétaire, la request_id et l’enveloppe ; un rejeu strict peut admettre la mission si elle n’avait jamais été reçue, donc seulement si le mandat reste valide.",
             "inputSchema": {
                 "type": "object",
                 "properties": {

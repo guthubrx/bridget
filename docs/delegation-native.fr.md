@@ -285,6 +285,19 @@ Le rejeu retrouve la tâche existante. Modifier son enveloppe produit
 `envelope_mismatch`, sans nouvelle mission. Une clé neuve crée une nouvelle mission.
 Ne pas changer de clé après une issue inconnue.
 
+`guichet_request_status` ne consulte pas les admissions natives. Une clé absente
+ou expirée dans ce guichet ne prouve ni l’absence de tâche ni sa non-exécution.
+Sans résultat métier durable, `applied` vaut `null` et `scope` vaut
+`guichet_request`. Le champ `terminal` ne concerne que ce guichet.
+
+Le rejeu strict de `bridget_auto_delegate`, par le même propriétaire et avec
+l’enveloppe complète, retrouve la tâche déjà admise. Si l’appel initial n’avait
+jamais été reçu, il peut aussi admettre la mission. Ce parcours exige donc un
+mandat et un brief encore valides. Pour une recherche sans effet, lorsque seul
+request_id est connu ou que le brief est périmé, faire identifier le reçu natif
+par le responsable autorisé ; ne pas créer une clé neuve pour sonder son sort.
+
+
 Le parent reçoit automatiquement un résultat corrélé à la mission.
 `bridget_task_status` permet aussi de lire l'état durable avec `task_id`.
 Un enfant actif retarde la publication du résultat de son parent.

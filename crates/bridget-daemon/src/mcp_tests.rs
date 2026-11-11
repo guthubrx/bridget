@@ -4872,7 +4872,11 @@ fn mutation_mcp_declare_l_identite_une_fois_et_ne_vend_pas_queued_comme_un_effet
     .unwrap();
     assert_eq!(result["status"], "queued");
     assert_eq!(result["terminal"], false);
-    assert_eq!(result["applied"], false);
+    assert!(result["applied"].is_null());
+    assert_eq!(result["scope"], "guichet_request");
+    assert_eq!(result["native_admission_checked"], false);
+    assert!(result["recovery"].as_str().unwrap().starts_with("Relisez guichet_request_status"));
+    assert!(!result["recovery"].as_str().unwrap().contains("bridget_auto_delegate"));
     assert_eq!(result["next"], "guichet_request_status");
     assert_eq!(result["issuer_scope"], expected_scope);
     server.join().unwrap();
@@ -5017,7 +5021,11 @@ fn coupure_apres_depot_mcp_reste_outcome_unknown_sans_succes_invente() {
     .unwrap();
     assert_eq!(result["status"], "outcome_unknown");
     assert_eq!(result["terminal"], false);
-    assert_eq!(result["applied"], false);
+    assert!(result["applied"].is_null());
+    assert_eq!(result["scope"], "guichet_request");
+    assert_eq!(result["native_admission_checked"], false);
+    assert!(result["recovery"].as_str().unwrap().starts_with("Relisez guichet_request_status"));
+    assert!(!result["recovery"].as_str().unwrap().contains("bridget_auto_delegate"));
     assert_eq!(result["next"], "guichet_request_status");
     server.join().unwrap();
     std::fs::remove_file(socket).unwrap();
@@ -6977,5 +6985,153 @@ print(json.dumps({"same_project":len(local),"global":len(global_agents),
             count, 3,
             "deux projections initiales et une remise Loop ; aucun dépôt au refus ni au rejeu"
         );
+    }
+}
+
+#[test]
+fn spec276_missing_guichet_result_keeps_application_unknown() {
+    for issue in [
+        "queued",
+        "outcome_unknown",
+        "idempotency_expired",
+        "canonical_bytes_mismatch",
+        "invalid_issued_at",
+        "claim_stale",
+        "future_issue",
+    ] {
+        let view = guichet_result_value("same-key", None, "scope276", issue, None).unwrap();
+        assert!(
+            view["applied"].is_null(),
+            "aucune preuve métier pour {issue}"
+        );
+        assert_eq!(view["scope"], "guichet_request");
+        assert_eq!(view["native_admission_checked"], false);
+        assert_eq!(view["request_id"], "same-key");
+        assert_eq!(view["status"], issue);
+        assert!(
+            view.get("task_id").is_none(),
+            "aucun identifiant natif inventé"
+        );
+        assert_eq!(
+            view["terminal"],
+            if issue == "future_issue" { Value::Null } else { json!(!matches!(issue, "queued" | "outcome_unknown")) }
+        );
+        assert_eq!(
+            view["next"].is_string(),
+            matches!(issue, "queued" | "outcome_unknown")
+        );
+        assert_eq!(view["recovery"].as_str().unwrap().contains("bridget_auto_delegate"), issue == "idempotency_expired");
+        if issue == "idempotency_expired" {
+            assert!(view["recovery"].as_str().unwrap().contains("même propriétaire"));
+        }
+    }
+    for issue in [
+        "accepted",
+        "refused",
+        "request_already_terminal",
+        "recipient_unavailable",
+    ] {
+        assert!(matches!(
+            guichet_result_value("same-key", None, "scope276", issue, None),
+            Err(ToolError::Technical {
+                code: "terminal_payload_missing",
+                ..
+            })
+        ));
+    }
+}
+
+#[test]
+fn spec276_status_miss_is_scoped_without_dispatching_an_admission() {
+    use std::io::Read;
+    let socket = test_socket("guichet276");
+    let listener = UnixListener::bind(&socket).unwrap();
+    let expected_scope = issuer_scope("instance276");
+    let server_scope = expected_scope.clone();
+    let server = thread::spawn(move || {
+        reply_caller_scope(&listener, json!({"version":1,"caller_read_only":false}));
+        let (stream, _) = listener.accept().unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(3)))
+            .unwrap();
+        let mut reader = BufReader::new(stream.try_clone().unwrap());
+        let mut writer = BufWriter::new(stream);
+        assert!(matches!(
+            read_command(&mut reader),
+            WrapperToDaemon::RoleHandshake {
+                role: ConnectionRole::Service
+            }
+        ));
+        write_command(
+            &mut writer,
+            DaemonToWrapper::RoleAccepted {
+                role: ConnectionRole::Service,
+            },
+        );
+        assert!(
+            matches!(read_command(&mut reader), WrapperToDaemon::ServiceHello { service, issuer_scope, .. } if service=="guichet" && issuer_scope==server_scope)
+        );
+        write_command(
+            &mut writer,
+            DaemonToWrapper::ServiceWelcome {
+                version: SERVICE_CONTRACT_VERSION,
+                horizon_secs: 60,
+                issued_at_tolerance_secs: 5,
+                capabilities: vec![ServiceCapability::GuichetV1],
+            },
+        );
+        assert!(
+            matches!(read_command(&mut reader), WrapperToDaemon::GuichetLookup { issuer_scope,request_id,.. } if issuer_scope==server_scope && request_id=="native-looking-key")
+        );
+        write_command(
+            &mut writer,
+            DaemonToWrapper::GuichetResult {
+                version: SERVICE_CONTRACT_VERSION,
+                issuer_scope: server_scope,
+                request_id: "native-looking-key".into(),
+                issue: "idempotency_expired".into(),
+                expires_at: 0,
+                payload: None,
+            },
+        );
+        let mut extra = [0u8; 1];
+        assert_eq!(
+            reader.read(&mut extra).unwrap(),
+            0,
+            "la lecture ne lance aucune recherche ou mutation native"
+        );
+    });
+    let view = execute_tool_at_with_scope(
+        "agent276",
+        "instance276",
+        "guichet_request_status",
+        json!({"request_id":"native-looking-key"})
+            .as_object()
+            .unwrap(),
+        &socket,
+    )
+    .unwrap();
+    assert_eq!(view["status"], "idempotency_expired");
+    assert!(view["applied"].is_null());
+    assert_eq!(view["scope"], "guichet_request");
+    assert_eq!(view["issuer_scope"], expected_scope);
+    assert_eq!(view["native_admission_checked"], false);
+    server.join().unwrap();
+    std::fs::remove_file(socket).unwrap();
+}
+
+#[test]
+fn spec276_observed_guichet_results_keep_their_boolean() {
+    use bridget_transport::protocol::*;
+    for (issue, payload, applied) in [
+        ("accepted", GuichetReplyPayload::RegistreAdd { status: GuichetRegistreAddStatus::Appended, constat_id: "record276".into() }, true),
+        ("accepted", GuichetReplyPayload::RegistreAdd { status: GuichetRegistreAddStatus::IdempotentNoop, constat_id: "record276".into() }, true),
+        ("refused", GuichetReplyPayload::Refused { operation: ServiceRequestOperation::Delegate, reason: GuichetRefusalReason::AuthorizationDenied }, false),
+    ] {
+        let view=guichet_result_value("request276",Some(123),"scope276",issue,Some(payload)).unwrap();
+        assert_eq!(view["applied"], applied);
+        assert_eq!(view["scope"], "guichet_request");
+        assert_eq!(view["native_admission_checked"], false);
+        assert_eq!(view["terminal"], true);
     }
 }

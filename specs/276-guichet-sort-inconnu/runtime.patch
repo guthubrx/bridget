@@ -1,0 +1,326 @@
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -192,7 +192,7 @@
+ 
+ [[package]]
+ name = "bridget-core"
+-version = "0.8.40"
++version = "0.8.41"
+ dependencies = [
+  "serde",
+  "serde_json",
+@@ -201,7 +201,7 @@
+ 
+ [[package]]
+ name = "bridget-daemon"
+-version = "0.8.40"
++version = "0.8.41"
+ dependencies = [
+  "axum",
+  "base64",
+@@ -229,7 +229,7 @@
+ 
+ [[package]]
+ name = "bridget-transport"
+-version = "0.8.40"
++version = "0.8.41"
+ dependencies = [
+  "bridget-core",
+  "libc",
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -7,7 +7,7 @@
+ ]
+ 
+ [workspace.package]
+-version = "0.8.40"
++version = "0.8.41"
+ edition = "2024"
+ license = "MIT"
+ 
+--- a/crates/bridget-daemon/src/delegation_mcp.rs
++++ b/crates/bridget-daemon/src/delegation_mcp.rs
+@@ -108,7 +108,7 @@
+         json!({"name":"bridget_refresh_models","description":"Demande une nouvelle observation des modèles annoncés par Codex sur les serveurs. Aucun login, modèle, profil, droit ou mission modifié. La réponse requested n’atteste pas une lecture terminée : relire ensuite bridget_capabilities et fleet.connection_catalogues. Une demande par serveur au plus toutes les 30 secondes. Un ancien worker reste non vérifié.","inputSchema":{"type":"object","properties":{"machine_id":{"type":"string","minLength":1,"maxLength":256}},"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":false,"idempotentHint":false}}),
+         json!({"name":"bridget_capabilities","description":"Catalogue natif : providers contient les verdicts locaux sur la machine d’origine ; ces refus ne décrivent pas les serveurs. fleet.options donne les choix distants déclarés pour auto_delegate (machine_id, engine, model). Ces choix ne prouvent ni éligibilité ni authentification : l’admission vérifie la cible, les droits et le dossier. Fonctionne sans T3.","inputSchema":{"type":"object","properties":{},"additionalProperties":false},"annotations":{"readOnlyHint":true,"destructiveHint":false,"idempotentHint":true}}),
+         json!({"name":"bridget_delegate","description":"Crée un enfant Bridget et remet sa mission en un appel natif. Conserver request_id sur retry identique ; tâche, résultat et annulation appartiennent au parent. keep_alive_secs garde l'enfant après la remise pour une nouvelle ronde. Le brief est déclaré par le parent ; sources_not_verified : aucune source citée n'est vérifiée. Le journal peut être lu plus largement que l'enfant ; aucun secret dans le brief. Corps du dossier ≤ 16 Kio, refusé plutôt que tronqué.","inputSchema":{"type":"object","properties":{"quota_fallback_authorized":{"type":"boolean","description":"true seulement après accord humain explicite pour une bascule de moteur ou de compte en cas de quota dans cette mission. Absent/faux : question humaine. Aucun droit ni budget supplémentaire."},"request_id":{"type":"string","minLength":1,"maxLength":128},"agent_type":{"type":"string"},"model":{"type":"string"},"effort":{"type":["string","null"]},"task":{"type":"string","minLength":1,"maxLength":65536},"machine_id":{"type":"string","minLength":1,"maxLength":256,"description":"Machine de destination de la mission. Vérifier les prérequis propres au projet : données externes, accès SSH et outils ne sont pas garantis par le placement du dépôt. Le champ cwd reste le dossier source sur la machine du parent."},"project_id":{"type":"string","minLength":1,"maxLength":256},"cwd":{"type":"string","minLength":1,"description":"Chemin absolu du dossier source sur la machine du parent appelant. Même avec machine_id distant, ne pas fournir le chemin de destination ; Bridget traduit le chemin via le mapping du projet."},"posture":{"type":"string","enum":["discovery","development"],"description":"Omettre pour hériter des droits attestés du parent. discovery réduit à la lecture seule ; avec Claude/GLM, seuls Read, Glob et Grep sont permis, sans WebSearch, WebFetch ni Bash. Ne convient pas à une recherche web. Changer de machine ne lève pas cette limite. development reste borné par les droits du parent."},"reply_timeout":{"type":"integer","minimum":60,"maximum":86400,"description":"Délai de réponse de la mission en secondes (défaut 3600)."},"workspace":workspace_schema,"child_requests":{"type":"string","enum":["deny","forward"],"description":"Remonter les demandes de l’enfant Codex ; absent : deny, politique inchangée."},"keep_alive_secs":{"type":"integer","minimum":60,"maximum":7200,"description":"Durée de garde après la remise du résultat ; absent : aucune garde. La garde conserve une place de flotte ; un ACK ne la libère pas. reply_timeout ne prolonge pas cette garde. Chaque tâche est bornée à huit rondes, première mission comprise ; consulter round_limit et rounds_remaining."},"resume_on_limit":{"type":"boolean","description":"Attendre puis reprendre après une limite d’usage attestée ; absent ou faux : inactif. Au plus 6 h et 2 rondes, même fournisseur."},"brief":brief_schema,"fallback":{"type":"array","minItems":1,"maxItems":3,"items":{"type":"object","properties":{"agent_type":{"type":"string","minLength":1},"model":{"type":"string","minLength":1},"effort":{"type":"string","minLength":1}},"required":["agent_type","model"],"additionalProperties":false}}},"required":["request_id","agent_type","model","task","cwd"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":true,"idempotentHint":true,"openWorldHint":true}}),
+-        json!({"name":"bridget_auto_delegate","description":"Demande une admission de flotte V2. Les axes machine, moteur, connexion, modèle et effort restent indépendants. Omettre agent_type : utiliser engine pour le moteur et, seulement si nécessaire, connection_id issu du catalogue pour une connexion précise. cwd désigne le dossier source sur la machine du parent ; machine_id désigne la destination. expected_base_commit est obligatoire dans un dépôt Git, en worktree ou pour compilation ; hors Git seulement, general/shared peut l’omettre : dossier local sur la machine source, ou dossier distant déjà présent et mappé ; aucun transfert automatique hors Git. La stratégie commit_view exige explicitement posture=discovery et expected_base_commit ; pour écrire, utiliser shared ou worktree avec posture=development. Il exige un SHA complet (40 caractères hexadécimaux (SHA-1)). Conserver request_id au rejeu strict. Un maître sans auto_delegate_v2 refuse explicitement. Le placement du dépôt ne transmet ni données externes ni clés ou alias SSH : vérifier ces prérequis sur la destination. Une admission devenue périmée s’annule avec bridget_cancel, kind=admission, id=request_id.","inputSchema":{"type":"object","properties":{"quota_fallback_authorized":{"type":"boolean","description":"true seulement si l’utilisateur a déjà autorisé explicitement le changement de moteur ou de compte en cas de quota pour cette mission. Omettre sinon : une question humaine sera ouverte après un refus fournisseur constaté. Aucun accord n’est déduit du choix automatique initial ; aucun droit ni budget supplémentaire."},"request_id":{"type":"string","minLength":1,"maxLength":128},"machine_id":{"type":"string","minLength":1,"maxLength":256,"description":"Machine de destination de la mission. Vérifier les prérequis propres au projet : données externes, accès SSH et outils ne sont pas garantis par le placement du dépôt. Le champ cwd reste le dossier source sur la machine du parent."},"project_id":{"type":"string","minLength":1,"maxLength":256},"engine":{"type":"string","minLength":1,"maxLength":256},"connection_id":{"type":"string","minLength":1,"maxLength":256},"model":{"type":"string","minLength":1,"maxLength":256},"effort":{"type":"string","minLength":1,"maxLength":256},"workload":{"type":"string","enum":["general","compilation"],"default":"general"},"expected_base_commit":{"type":"string","minLength":40,"maxLength":40,"pattern":"^[0-9a-fA-F]{40}$","description":"Obligatoire dans un dépôt Git et pour compilation/worktree. Omission permise seulement hors Git en general/shared. SHA source complet : exactement 40 caractères hexadécimaux (SHA-1), jamais un nom de branche. En shared : HEAD source ; en worktree : commit résolu de workspace.base_ref (HEAD si absent)."},"task":{"type":"string","minLength":1,"maxLength":65536},"cwd":{"type":"string","minLength":1,"description":"Chemin absolu du dossier source sur la machine du parent appelant. Même avec machine_id distant, ne pas fournir le chemin de destination ; Bridget traduit le chemin via le mapping du projet."},"posture":{"type":"string","enum":["discovery","development"],"description":"Omettre pour hériter des droits attestés du parent. discovery réduit à la lecture seule ; avec Claude/GLM, seuls Read, Glob et Grep sont permis, sans WebSearch, WebFetch ni Bash. Ne convient pas à une recherche web. Changer de machine ne lève pas cette limite. development reste borné par les droits du parent."},"reply_timeout":{"type":"integer","minimum":60,"maximum":86400,"default":3600,"description":"Durée maximale de chaque ronde en secondes, à partir de sa remise effective. Une nouvelle ronde admise renouvelle ce budget ; un rejeu strict ne le renouvelle pas. Défaut : 3600 (1 h), y compris development. Pour un travail long, fournir par exemple 14400 (4 h), au plus 86400 et dans la limite du parent. Ce délai est distinct de wait_timeout et keep_alive_secs. Fixer la valeur avant la première admission ; ne pas modifier une enveloppe déjà admise au rejeu."},"workspace":workspace_schema,"child_requests":{"type":"string","enum":["deny","forward"]},"keep_alive_secs":{"type":"integer","minimum":60,"maximum":7200,"description":"Durée de garde après la remise du résultat ; absent : aucune garde. La garde conserve une place de flotte ; un ACK ne la libère pas. reply_timeout ne prolonge pas cette garde. Chaque tâche est bornée à huit rondes, première mission comprise ; consulter round_limit et rounds_remaining."},"brief":brief_schema,"urgent":{"type":"boolean"},"deliverable":{"type":"string","minLength":1,"maxLength":128}},"required":["request_id","task","cwd"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":true,"idempotentHint":true,"openWorldHint":true}}),
++        json!({"name":"bridget_auto_delegate","description":"Demande une admission de flotte V2. Les axes machine, moteur, connexion, modèle et effort restent indépendants. Omettre agent_type : utiliser engine pour le moteur et, seulement si nécessaire, connection_id issu du catalogue pour une connexion précise. cwd désigne le dossier source sur la machine du parent ; machine_id désigne la destination. expected_base_commit est obligatoire dans un dépôt Git, en worktree ou pour compilation ; hors Git seulement, general/shared peut l’omettre : dossier local sur la machine source, ou dossier distant déjà présent et mappé ; aucun transfert automatique hors Git. La stratégie commit_view exige explicitement posture=discovery et expected_base_commit ; pour écrire, utiliser shared ou worktree avec posture=development. Il exige un SHA complet (40 caractères hexadécimaux (SHA-1)). Conserver request_id au rejeu strict. Un maître sans auto_delegate_v2 refuse explicitement. Après une réponse perdue, conserver le propriétaire, la request_id et l’enveloppe complète. Un rejeu strict retrouve une tâche admise mais peut admettre la mission si elle n’avait jamais été reçue : seulement si le mandat reste valide. guichet_request_status ne consulte pas ces admissions natives. Le placement du dépôt ne transmet ni données externes ni clés ou alias SSH : vérifier ces prérequis sur la destination. Une admission devenue périmée s’annule avec bridget_cancel, kind=admission, id=request_id.","inputSchema":{"type":"object","properties":{"quota_fallback_authorized":{"type":"boolean","description":"true seulement si l’utilisateur a déjà autorisé explicitement le changement de moteur ou de compte en cas de quota pour cette mission. Omettre sinon : une question humaine sera ouverte après un refus fournisseur constaté. Aucun accord n’est déduit du choix automatique initial ; aucun droit ni budget supplémentaire."},"request_id":{"type":"string","minLength":1,"maxLength":128},"machine_id":{"type":"string","minLength":1,"maxLength":256,"description":"Machine de destination de la mission. Vérifier les prérequis propres au projet : données externes, accès SSH et outils ne sont pas garantis par le placement du dépôt. Le champ cwd reste le dossier source sur la machine du parent."},"project_id":{"type":"string","minLength":1,"maxLength":256},"engine":{"type":"string","minLength":1,"maxLength":256},"connection_id":{"type":"string","minLength":1,"maxLength":256},"model":{"type":"string","minLength":1,"maxLength":256},"effort":{"type":"string","minLength":1,"maxLength":256},"workload":{"type":"string","enum":["general","compilation"],"default":"general"},"expected_base_commit":{"type":"string","minLength":40,"maxLength":40,"pattern":"^[0-9a-fA-F]{40}$","description":"Obligatoire dans un dépôt Git et pour compilation/worktree. Omission permise seulement hors Git en general/shared. SHA source complet : exactement 40 caractères hexadécimaux (SHA-1), jamais un nom de branche. En shared : HEAD source ; en worktree : commit résolu de workspace.base_ref (HEAD si absent)."},"task":{"type":"string","minLength":1,"maxLength":65536},"cwd":{"type":"string","minLength":1,"description":"Chemin absolu du dossier source sur la machine du parent appelant. Même avec machine_id distant, ne pas fournir le chemin de destination ; Bridget traduit le chemin via le mapping du projet."},"posture":{"type":"string","enum":["discovery","development"],"description":"Omettre pour hériter des droits attestés du parent. discovery réduit à la lecture seule ; avec Claude/GLM, seuls Read, Glob et Grep sont permis, sans WebSearch, WebFetch ni Bash. Ne convient pas à une recherche web. Changer de machine ne lève pas cette limite. development reste borné par les droits du parent."},"reply_timeout":{"type":"integer","minimum":60,"maximum":86400,"default":3600,"description":"Durée maximale de chaque ronde en secondes, à partir de sa remise effective. Une nouvelle ronde admise renouvelle ce budget ; un rejeu strict ne le renouvelle pas. Défaut : 3600 (1 h), y compris development. Pour un travail long, fournir par exemple 14400 (4 h), au plus 86400 et dans la limite du parent. Ce délai est distinct de wait_timeout et keep_alive_secs. Fixer la valeur avant la première admission ; ne pas modifier une enveloppe déjà admise au rejeu."},"workspace":workspace_schema,"child_requests":{"type":"string","enum":["deny","forward"]},"keep_alive_secs":{"type":"integer","minimum":60,"maximum":7200,"description":"Durée de garde après la remise du résultat ; absent : aucune garde. La garde conserve une place de flotte ; un ACK ne la libère pas. reply_timeout ne prolonge pas cette garde. Chaque tâche est bornée à huit rondes, première mission comprise ; consulter round_limit et rounds_remaining."},"brief":brief_schema,"urgent":{"type":"boolean"},"deliverable":{"type":"string","minLength":1,"maxLength":128}},"required":["request_id","task","cwd"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":true,"idempotentHint":true,"openWorldHint":true}}),
+         json!({"name":"bridget_task_repair_workspace","description":"Répare explicitement le dossier déplacé de sa même tâche distante, après résultat remis. Conserver request_id sur rejeu identique. Aucun tour métier créé. Les pairs ou adaptations non qualifiés refusent sans forçage.","inputSchema":{"type":"object","properties":{"task_id":{"type":"string","minLength":1},"request_id":{"type":"string","minLength":1,"maxLength":128},"target_cwd":{"type":"string","minLength":1,"maxLength":4096},"expected_head":{"type":"string","pattern":"^[0-9a-fA-F]{40}$","minLength":40,"maxLength":40}},"required":["task_id","request_id","target_cwd","expected_head"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":true,"idempotentHint":true,"openWorldHint":true}}),
+         json!({"name":"bridget_task_continue","description":"Ouvre une nouvelle ronde sur son enfant encore gardé, après la remise du résultat. Prévoir keep_alive_secs dès l’admission si une suite est nécessaire ; une tâche déjà terminée sans garde ne peut plus continuer. Un SHA cité dans task ou brief n’est ni importé ni synchronisé : rendre les objets et données autorisés disponibles avant la ronde, sans déplacer silencieusement son dossier. Employer une nouvelle request_id à chaque ronde et la conserver sur retry identique. Le brief est déclaré par le parent ; sources_not_verified : aucune source citée n'est vérifiée. Le journal peut être lu plus largement que l'enfant ; aucun secret dans le brief. Corps du dossier ≤ 16 Kio, refusé plutôt que tronqué. Dans brief.references, chaque objet exige kind et label ; kind=file exige aussi host et path absolu.","inputSchema":{"type":"object","properties":{"task_id":{"type":"string","minLength":1},"request_id":{"type":"string","minLength":1,"maxLength":128},"task":{"type":"string","minLength":1,"maxLength":65536},"brief":brief_schema},"required":["task_id","request_id","task"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":false,"idempotentHint":true,"openWorldHint":true}}),
+         json!({"name":"bridget_task_respond","description":"Répond à une question de son enfant avec l'identifiant lu dans le statut ou l'avis. Les approbations appartiennent à l'humain. Aucun secret dans la réponse.","inputSchema":{"type":"object","properties":{"task_id":{"type":"string","minLength":1},"request_id":{"type":"string","minLength":1},"decision":{"type":"string","enum":["accept","decline","cancel"]},"answer":{"type":"object","description":"Pour accept uniquement : chaque identifiant de question porte un tableau de chaînes, 8 Kio au plus."}},"required":["task_id","request_id","decision"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":false,"idempotentHint":true,"openWorldHint":true}}),
+--- a/crates/bridget-daemon/src/mcp.rs
++++ b/crates/bridget-daemon/src/mcp.rs
+@@ -2126,16 +2126,13 @@
+         Err(ToolError::Technical {
+             code: "outcome_unknown",
+             message,
+-        }) => Ok(json!({
+-            "status": "outcome_unknown",
+-            "terminal": false,
+-            "applied": false,
+-            "request_id": request_id,
+-            "issued_at": issued_at,
+-            "issuer_scope": scope,
+-            "reason": message,
+-            "next": "guichet_request_status"
+-        })),
++        }) => {
++            let mut result = guichet_result_value(
++                &request_id, Some(issued_at), &scope, "outcome_unknown", None,
++            )?;
++            result["transport_error"] = json!(message);
++            Ok(result)
++        }
+         Err(error) => Err(error),
+     }
+ }
+@@ -2320,6 +2317,8 @@
+             } | GuichetReplyPayload::RegistreAdd { .. }
+                 | GuichetReplyPayload::ObjectiveClose { .. }
+         ) && issue == "accepted";
++        fields.insert("scope".to_string(), json!("guichet_request"));
++        fields.insert("native_admission_checked".to_string(), json!(false));
+         fields.insert("status".to_string(), json!(status));
+         fields.insert("terminal".to_string(), json!(true));
+         fields.insert("applied".to_string(), json!(applied));
+@@ -2341,13 +2340,48 @@
+         });
+     }
+     let pending = matches!(issue, "queued" | "outcome_unknown");
++    let terminal = match issue {
++        "queued" | "outcome_unknown" => json!(false),
++        "idempotency_expired" | "canonical_bytes_mismatch" | "invalid_issued_at" | "claim_stale" => json!(true),
++        _ => Value::Null,
++    };
++    let (reason, recovery) = match issue {
++        "queued" | "outcome_unknown" => (
++            "Le guichet n’a pas encore rendu de résultat métier durable ; l’application n’est pas attestée.",
++            "Relisez guichet_request_status avec la même request_id. Ne rejouez pas la mutation ni une nouvelle clé pour tester son sort. Cette lecture concerne uniquement le guichet ; les autres travaux autorisés suivent leur propre état. Si le suivi ne revient pas et qu’une nouvelle tentative dépasse votre mandat, demandez au propriétaire de décider la suite après vérification du reçu, sans présumer une non-exécution.",
++        ),
++        "idempotency_expired" => (
++            "Le suivi de rejeu du guichet est clos ou absent, sans preuve d’application métier. Les admissions natives n’ont pas été consultées.",
++            "Identifiez l’outil de l’appel initial avant toute reprise. Si c’était bridget_auto_delegate, cette lecture du guichet ne retrouve pas son admission : utilisez le task_id connu avec bridget_task_status ou faites identifier le reçu natif par le responsable autorisé pour une recherche sans effet. Le rejeu natif strict (même propriétaire, request_id et enveloppe complète) retrouve un admis mais peut admettre un appel jamais reçu : seulement si le mandat et le brief restent valides. Si le brief est périmé ou le mandat incertain, demandez à son propriétaire s’il faut encore lancer cette intention ; en attendant, ne rejouez pas. Pour une demande du guichet expirée, faites vérifier son reçu et ses effets avant toute nouvelle clé. Ce signal terminal concerne le suivi du guichet ; les autres travaux autorisés suivent leur propre état.",
++        ),
++        "canonical_bytes_mismatch" => (
++            "Ce contrôle du guichet est terminal : l’enveloppe reçue diffère de celle conservée sous cette clé. Cela n’atteste pas les effets de l’envoi d’origine.",
++            "Retrouvez la request_id et l’enveloppe du premier envoi, puis faites relire son reçu guichet. Ne modifiez pas ses paramètres et ne créez pas une clé neuve pour contourner ce refus. Si le travail demandé a changé, demandez au propriétaire de confirmer cette nouvelle intention après qualification des effets précédents. Les autres travaux autorisés suivent leur propre état.",
++        ),
++        "invalid_issued_at" => (
++            "Ce contrôle du guichet est terminal : l’horodatage fourni est refusé. Aucun résultat métier du premier envoi n’est attesté ici.",
++            "Vérifiez l’horodatage et le reçu du premier envoi avant toute reprise. Ne rejouez pas automatiquement la même valeur refusée ni une valeur modifiée sous la même clé. Faites vérifier l’horloge et les coordonnées conservées par le responsable du guichet ; si une nouvelle intention est nécessaire, demandez au propriétaire sa décision après contrôle des effets précédents. Les autres travaux autorisés suivent leur propre état.",
++        ),
++        "claim_stale" => (
++            "Ce contrôle du guichet est terminal : la revendication de traitement n’est plus courante. Il n’atteste pas les effets d’un traitement antérieur.",
++            "Faites relire la revendication courante et le reçu par le responsable du guichet. Ne réutilisez pas l’ancien jeton ni une nouvelle clé pour forcer la reprise. Si le responsable de la suite est ambigu, demandez au propriétaire de le désigner ; les autres travaux autorisés suivent leur propre état.",
++        ),
++        _ => (
++            "Le guichet a rendu une issue non reconnue sans résultat métier : ni application ni fin de traitement ne sont attestées.",
++            "Conservez ce code, la request_id et l’enveloppe, puis faites vérifier cette issue par le responsable du guichet. Ne déduisez pas une non-exécution et ne relancez pas automatiquement. Si une nouvelle action dépasse votre mandat, demandez au propriétaire de décider la suite après qualification ; les autres travaux autorisés suivent leur propre état.",
++        ),
++    };
+     Ok(json!({
+         "status": issue,
+-        "terminal": !pending,
+-        "applied": false,
++        "terminal": terminal,
++        "scope": "guichet_request",
++        "native_admission_checked": false,
++        "applied": null,
+         "request_id": request_id,
+         "issued_at": issued_at,
+         "issuer_scope": issuer_scope,
++        "reason": reason,
++        "recovery": recovery,
+         "next": pending.then_some("guichet_request_status")
+     }))
+ }
+@@ -3095,7 +3129,7 @@
+         }),
+         json!({
+             "name": "guichet_request_status",
+-            "description": "Relire depuis le daemon maître l'issue terminale et ses identifiants durables.",
++            "description": "Relire uniquement une demande du guichet historique. Ne consulte pas les admissions de bridget_auto_delegate. Une clé absente ou expirée ne prouve pas la non-exécution : applied reste null sans résultat métier. Pour une réponse native perdue, conserver le propriétaire, la request_id et l’enveloppe ; un rejeu strict peut admettre la mission si elle n’avait jamais été reçue, donc seulement si le mandat reste valide.",
+             "inputSchema": {
+                 "type": "object",
+                 "properties": {
+--- a/crates/bridget-daemon/src/mcp_tests.rs
++++ b/crates/bridget-daemon/src/mcp_tests.rs
+@@ -4684,7 +4684,11 @@
+         .unwrap();
+         assert_eq!(result["status"], "queued");
+         assert_eq!(result["terminal"], false);
+-        assert_eq!(result["applied"], false);
++        assert!(result["applied"].is_null());
++        assert_eq!(result["scope"], "guichet_request");
++        assert_eq!(result["native_admission_checked"], false);
++        assert!(result["recovery"].as_str().unwrap().starts_with("Relisez guichet_request_status"));
++        assert!(!result["recovery"].as_str().unwrap().contains("bridget_auto_delegate"));
+         assert_eq!(result["next"], "guichet_request_status");
+         assert_eq!(result["issuer_scope"], expected_scope);
+         server.join().unwrap();
+@@ -4829,7 +4833,11 @@
+         .unwrap();
+         assert_eq!(result["status"], "outcome_unknown");
+         assert_eq!(result["terminal"], false);
+-        assert_eq!(result["applied"], false);
++        assert!(result["applied"].is_null());
++        assert_eq!(result["scope"], "guichet_request");
++        assert_eq!(result["native_admission_checked"], false);
++        assert!(result["recovery"].as_str().unwrap().starts_with("Relisez guichet_request_status"));
++        assert!(!result["recovery"].as_str().unwrap().contains("bridget_auto_delegate"));
+         assert_eq!(result["next"], "guichet_request_status");
+         server.join().unwrap();
+         std::fs::remove_file(socket).unwrap();
+@@ -6758,3 +6766,151 @@
+     });
+ }
+ 
++
++#[test]
++fn spec276_missing_guichet_result_keeps_application_unknown() {
++    for issue in [
++        "queued",
++        "outcome_unknown",
++        "idempotency_expired",
++        "canonical_bytes_mismatch",
++        "invalid_issued_at",
++        "claim_stale",
++        "future_issue",
++    ] {
++        let view = guichet_result_value("same-key", None, "scope276", issue, None).unwrap();
++        assert!(
++            view["applied"].is_null(),
++            "aucune preuve métier pour {issue}"
++        );
++        assert_eq!(view["scope"], "guichet_request");
++        assert_eq!(view["native_admission_checked"], false);
++        assert_eq!(view["request_id"], "same-key");
++        assert_eq!(view["status"], issue);
++        assert!(
++            view.get("task_id").is_none(),
++            "aucun identifiant natif inventé"
++        );
++        assert_eq!(
++            view["terminal"],
++            if issue == "future_issue" { Value::Null } else { json!(!matches!(issue, "queued" | "outcome_unknown")) }
++        );
++        assert_eq!(
++            view["next"].is_string(),
++            matches!(issue, "queued" | "outcome_unknown")
++        );
++        assert_eq!(view["recovery"].as_str().unwrap().contains("bridget_auto_delegate"), issue == "idempotency_expired");
++        if issue == "idempotency_expired" {
++            assert!(view["recovery"].as_str().unwrap().contains("même propriétaire"));
++        }
++    }
++    for issue in [
++        "accepted",
++        "refused",
++        "request_already_terminal",
++        "recipient_unavailable",
++    ] {
++        assert!(matches!(
++            guichet_result_value("same-key", None, "scope276", issue, None),
++            Err(ToolError::Technical {
++                code: "terminal_payload_missing",
++                ..
++            })
++        ));
++    }
++}
++
++#[test]
++fn spec276_status_miss_is_scoped_without_dispatching_an_admission() {
++    use std::io::Read;
++    let socket = test_socket("guichet276");
++    let listener = UnixListener::bind(&socket).unwrap();
++    let expected_scope = issuer_scope("instance276");
++    let server_scope = expected_scope.clone();
++    let server = thread::spawn(move || {
++        reply_caller_scope(&listener, json!({"version":1,"caller_read_only":false}));
++        let (stream, _) = listener.accept().unwrap();
++        stream
++            .set_read_timeout(Some(Duration::from_secs(3)))
++            .unwrap();
++        let mut reader = BufReader::new(stream.try_clone().unwrap());
++        let mut writer = BufWriter::new(stream);
++        assert!(matches!(
++            read_command(&mut reader),
++            WrapperToDaemon::RoleHandshake {
++                role: ConnectionRole::Service
++            }
++        ));
++        write_command(
++            &mut writer,
++            DaemonToWrapper::RoleAccepted {
++                role: ConnectionRole::Service,
++            },
++        );
++        assert!(
++            matches!(read_command(&mut reader), WrapperToDaemon::ServiceHello { service, issuer_scope, .. } if service=="guichet" && issuer_scope==server_scope)
++        );
++        write_command(
++            &mut writer,
++            DaemonToWrapper::ServiceWelcome {
++                version: SERVICE_CONTRACT_VERSION,
++                horizon_secs: 60,
++                issued_at_tolerance_secs: 5,
++                capabilities: vec![ServiceCapability::GuichetV1],
++            },
++        );
++        assert!(
++            matches!(read_command(&mut reader), WrapperToDaemon::GuichetLookup { issuer_scope,request_id,.. } if issuer_scope==server_scope && request_id=="native-looking-key")
++        );
++        write_command(
++            &mut writer,
++            DaemonToWrapper::GuichetResult {
++                version: SERVICE_CONTRACT_VERSION,
++                issuer_scope: server_scope,
++                request_id: "native-looking-key".into(),
++                issue: "idempotency_expired".into(),
++                expires_at: 0,
++                payload: None,
++            },
++        );
++        let mut extra = [0u8; 1];
++        assert_eq!(
++            reader.read(&mut extra).unwrap(),
++            0,
++            "la lecture ne lance aucune recherche ou mutation native"
++        );
++    });
++    let view = execute_tool_at_with_scope(
++        "agent276",
++        "instance276",
++        "guichet_request_status",
++        json!({"request_id":"native-looking-key"})
++            .as_object()
++            .unwrap(),
++        &socket,
++    )
++    .unwrap();
++    assert_eq!(view["status"], "idempotency_expired");
++    assert!(view["applied"].is_null());
++    assert_eq!(view["scope"], "guichet_request");
++    assert_eq!(view["issuer_scope"], expected_scope);
++    assert_eq!(view["native_admission_checked"], false);
++    server.join().unwrap();
++    std::fs::remove_file(socket).unwrap();
++}
++
++#[test]
++fn spec276_observed_guichet_results_keep_their_boolean() {
++    use bridget_transport::protocol::*;
++    for (issue, payload, applied) in [
++        ("accepted", GuichetReplyPayload::RegistreAdd { status: GuichetRegistreAddStatus::Appended, constat_id: "record276".into() }, true),
++        ("accepted", GuichetReplyPayload::RegistreAdd { status: GuichetRegistreAddStatus::IdempotentNoop, constat_id: "record276".into() }, true),
++        ("refused", GuichetReplyPayload::Refused { operation: ServiceRequestOperation::Delegate, reason: GuichetRefusalReason::AuthorizationDenied }, false),
++    ] {
++        let view=guichet_result_value("request276",Some(123),"scope276",issue,Some(payload)).unwrap();
++        assert_eq!(view["applied"], applied);
++        assert_eq!(view["scope"], "guichet_request");
++        assert_eq!(view["native_admission_checked"], false);
++        assert_eq!(view["terminal"], true);
++    }
++}

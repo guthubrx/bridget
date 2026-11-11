@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.8.41 - 2026-11-12
+
+- Sans résultat métier durable, le guichet indique une application inconnue au lieu de applied:false.
+- Le résultat et le guidage distinguent le guichet des admissions natives ; le rejeu peut admettre une mission jamais reçue et exige un mandat encore valide.
+
 ## 0.8.40 - 2026-11-11
 
 - La reprise d’un démarrage refusé conserve le contrat du worktree ou de la vue de commit effectivement préparé.
