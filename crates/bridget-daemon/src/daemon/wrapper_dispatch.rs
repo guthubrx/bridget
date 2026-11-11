@@ -4102,3 +4102,26 @@ pub(super) fn on_usage(agent: String, input_tokens: u64, execution_id: Option<St
                 &mut st,
             ))
         }
+
+pub(super) fn on_send_idempotent(mut message: bridget_core::BridgetMessage, message_id: String, issued_at: i64, conn_id: &str, state: &Arc<Mutex<DaemonState>>) -> Option<DaemonToWrapper> {
+            let (response, controls) = {
+                let mut st = state.lock().recover_poison();
+                let mut controls = Vec::new();
+                normalize_guidance_origin(&st, conn_id, &mut message, false);
+                let response = handle_idempotent_send(
+                    conn_id,
+                    message,
+                    message_id,
+                    issued_at,
+                    IdempotentSendAdmission {
+                        project: None,
+                        issued_at_tolerance_secs: CLIENT_ISSUED_AT_TOLERANCE_SECS,
+                    },
+                    &mut st,
+                    &mut controls,
+                );
+                (response, controls)
+            };
+            let _ = execute_controls(controls);
+            Some(response)
+        }

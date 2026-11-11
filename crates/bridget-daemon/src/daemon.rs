@@ -17045,28 +17045,7 @@ fn handle_wrapper_message_with_peer(
             mut message,
             message_id,
             issued_at,
-        } => {
-            let (response, controls) = {
-                let mut st = state.lock().recover_poison();
-                let mut controls = Vec::new();
-                normalize_guidance_origin(&st, conn_id, &mut message, false);
-                let response = handle_idempotent_send(
-                    conn_id,
-                    message,
-                    message_id,
-                    issued_at,
-                    IdempotentSendAdmission {
-                        project: None,
-                        issued_at_tolerance_secs: CLIENT_ISSUED_AT_TOLERANCE_SECS,
-                    },
-                    &mut st,
-                    &mut controls,
-                );
-                (response, controls)
-            };
-            let _ = execute_controls(controls);
-            Some(response)
-        }
+        } => wrapper_dispatch::on_send_idempotent(message, message_id, issued_at, conn_id, state),
         WrapperToDaemon::Lookup {
             operation_kind,
             idempotency_key,
