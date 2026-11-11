@@ -17266,17 +17266,7 @@ fn handle_wrapper_message_with_peer(
         WrapperToDaemon::UserInput { request } => {
             Some(user_input::handle(conn_id, &request, state, None))
         }
-        WrapperToDaemon::ChildRequest { request } => {
-            let primary = {
-                let st = state.lock().recover_poison();
-                user_input::primary_request(conn_id, &request, &st)
-            };
-            if primary {
-                Some(user_input::receive_native(conn_id, request, state))
-            } else {
-                native_child_requests::receive(conn_id, request, state)
-            }
-        }
+        WrapperToDaemon::ChildRequest { request } => wrapper_dispatch::on_child_request(request, conn_id, state),
         WrapperToDaemon::ChildRequestAnswered {
             request_id,
             applied,

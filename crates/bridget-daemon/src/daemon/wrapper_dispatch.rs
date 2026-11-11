@@ -4838,3 +4838,15 @@ pub(super) fn on_child_request_closed(request_id: String, closed_state: bridget_
             native_child_requests::closed(conn_id, &request_id, closed_state, &st);
             None
         }
+
+pub(super) fn on_child_request(request: bridget_transport::protocol::ChildProviderRequest, conn_id: &str, state: &Arc<Mutex<DaemonState>>) -> Option<DaemonToWrapper> {
+            let primary = {
+                let st = state.lock().recover_poison();
+                user_input::primary_request(conn_id, &request, &st)
+            };
+            if primary {
+                Some(user_input::receive_native(conn_id, request, state))
+            } else {
+                native_child_requests::receive(conn_id, request, state)
+            }
+        }
