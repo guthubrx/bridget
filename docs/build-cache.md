@@ -92,7 +92,7 @@ budget and must be accounted for separately at delivery.
 
 Run `make lint` before delivery: it runs the Rust static analysis with
 `-D warnings` (any warning refuses delivery), then the format check. The format
-check stays in observation until lot 10 of program 260.
+check is blocking (lot 10 of program 260): run `make fmt` before each commit.
 `make lint-scripts` checks the Python and shell scripts (`ruff` and `bash -n`).
 The remote `Rust` check replays the static analysis, the format check and the
 tests; the expected checks are listed in

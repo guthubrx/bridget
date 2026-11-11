@@ -98,7 +98,7 @@ et les copies de retour restent hors budget et sont à traiter à la livraison.
 
 Avant de livrer, lancer `make lint` : il exécute l'analyse statique de Rust avec
 `-D warnings` (un avertissement refuse la livraison) puis le contrôle de format.
-Le contrôle de format reste en observation jusqu'au lot 10 du programme 260.
+Le contrôle de format est bloquant (lot 10 du programme 260) : lancer `make fmt` avant chaque commit.
 `make lint-scripts` contrôle les scripts Python et shell (`ruff` et `bash -n`).
 Le contrôle distant `Rust` rejoue l'analyse statique, le format et les tests ; la
 liste des contrôles attendus est dans `specs/260-assainissement-code/contracts/controles-ci.md`.
