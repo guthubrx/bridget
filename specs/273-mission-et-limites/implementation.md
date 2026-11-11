@@ -36,3 +36,24 @@ Qualification : 1 test 273, 2 tests 148, 1 test 271, 40 tests 153 et 1 test 187
 réussis sur Mac et Debian 12. Compilation et contrôles finaux consignés après
 activation. Reconstruction cumulative 272 puis delta 273, contrôle inverse à sec
 sans fuzz. Aucune recompilation du chantier 260 réservé.
+
+
+Revue indépendante sur le commit réel 32ca19fc : aucun défaut bloquant prouvé.
+La remise à zéro de deferred_native_context après relance ne concerne pas les
+missions natives : persistent_relaunch exige explicitement l’absence de
+NATIVE_MISSION_BOOTSTRAP_ENV avant d’entrer dans cette branche. Pas de relance
+native ajoutée. La consigne comporte déjà le cas d’accès indispensable manquant,
+qui doit rendre un blocage. current_task_view appelle directement task_view :
+les réponses d’admission reçoivent les champs additionnels.
+
+Le catalogue automatique avait une propriété keep_alive_secs sans description.
+Elle reçoit maintenant le même texte que l’admission directe. Le test 273 vérifie
+les deux catalogues, puis les compteurs et l’absence de mutation. Le test repasse
+sur chaque plateforme et le contrôle final Mac est réussi.
+
+François demande ensuite la clôture Git et la libération de disque. Les caches
+Mac mesurés occupent environ 38 Go (264 et 271). Le serveur documentaire Python
+PID 33346, avec cwd disparu, bloquait l’observation globale. François autorise
+explicitement son arrêt et celui de l’auxiliaire 52798. Après SIGTERM du serveur,
+l’auxiliaire a terminé seul. T3 garde PID 77762, né à 14:10:41. Aucun processus
+Bridget de mission n’est arrêté pour ce ménage.

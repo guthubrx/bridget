@@ -4,6 +4,14 @@ use super::*;
 fn spec273_round_budget_is_visible_before_refusal_without_opening_a_guard() {
     let (state, config, mut task, _parent, _child) = native160_mission(false);
     let before = serde_json::to_value(&task).unwrap();
+    let catalogue = crate::delegation_mcp::tools(&json!({}));
+    for name in ["bridget_delegate", "bridget_auto_delegate"] {
+        let tool = catalogue.iter().find(|tool| tool["name"] == name).unwrap();
+        let description = tool["inputSchema"]["properties"]["keep_alive_secs"]["description"].as_str().unwrap();
+        for required in ["place de flotte", "ACK", "huit rondes", "reply_timeout"] {
+            assert!(description.contains(required), "{name}: {required}");
+        }
+    }
     for (round, remaining) in [(0, 7), (1, 7), (7, 1), (8, 0), (9, 0)] {
         task.round = round;
         let view = task_view(&task, None, true);
