@@ -2108,21 +2108,21 @@ pub(crate) fn connect_and_register_with_domain_at(
     let Some(identity) =
         agent_id.filter(|value| bridget_core::router::validate_agent_id(value).is_ok())
     else {
-        let mut connection = connect_and_register_at(
-            socket,
-            agent_type,
-            agent_id,
-            host,
-            protocol,
-            channel,
-            mode,
-            location,
-            os,
-            instance_id,
-            derived_domain.as_deref(),
-            turn_in_progress,
-            turn_attest,
-        )?;
+        let mut connection = connect_and_register_at(ConnectAndRegisterAtArgs {
+socket,
+agent_type,
+agent_id,
+host,
+protocol,
+channel,
+mode,
+location,
+os,
+instance_id,
+domain: derived_domain.as_deref(),
+turn_in_progress,
+turn_attest,
+})?;
         announce_wrapper_project(&mut connection.1, host)?;
         return Ok(connection);
     };
@@ -2134,21 +2134,21 @@ pub(crate) fn connect_and_register_with_domain_at(
     .map_err(|error| error.to_string())?;
     let domain_override = crate::communication::client::read_domain_override(&domain_lock)
         .map_err(|error| error.to_string())?;
-    let mut connection = connect_and_register_at(
-        socket,
-        agent_type,
-        Some(identity),
-        host,
-        protocol,
-        channel,
-        mode,
-        location,
-        os,
-        instance_id,
-        derived_domain.as_deref(),
-        turn_in_progress,
-        turn_attest,
-    )?;
+    let mut connection = connect_and_register_at(ConnectAndRegisterAtArgs {
+socket,
+agent_type,
+agent_id: Some(identity),
+host,
+protocol,
+channel,
+mode,
+location,
+os,
+instance_id,
+domain: derived_domain.as_deref(),
+turn_in_progress,
+turn_attest,
+})?;
     if connection.2 != identity {
         return Err("enregistrement sous une identité inattendue".to_string());
     }
@@ -2196,21 +2196,24 @@ fn announce_wrapper_project(writer: &mut BufWriter<UnixStream>, host: &str) -> R
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn connect_and_register_at(
-    socket: &std::path::Path,
-    agent_type: &str,
-    agent_id: Option<&str>,
-    host: &str,
-    protocol: &str,
-    channel: Option<&str>,
-    mode: PresenceMode,
-    location: Option<&str>,
-    os: &str,
-    instance_id: &str,
-    domain: Option<&str>,
-    turn_in_progress: bool,
-    turn_attest: bool,
-) -> Result<(BufReader<UnixStream>, BufWriter<UnixStream>, String), String> {
+pub(crate) struct ConnectAndRegisterAtArgs<'a> {
+    pub socket: &'a std::path::Path,
+    pub agent_type: &'a str,
+    pub agent_id: Option<&'a str>,
+    pub host: &'a str,
+    pub protocol: &'a str,
+    pub channel: Option<&'a str>,
+    pub mode: PresenceMode,
+    pub location: Option<&'a str>,
+    pub os: &'a str,
+    pub instance_id: &'a str,
+    pub domain: Option<&'a str>,
+    pub turn_in_progress: bool,
+    pub turn_attest: bool,
+}
+
+pub(crate) fn connect_and_register_at(args: ConnectAndRegisterAtArgs<'_>) -> Result<(BufReader<UnixStream>, BufWriter<UnixStream>, String), String> {
+    let ConnectAndRegisterAtArgs { socket, agent_type, agent_id, host, protocol, channel, mode, location, os, instance_id, domain, turn_in_progress, turn_attest } = args;
     crate::environment::Namespace::from_environment()?;
     let stream = bridget_transport::jsonl::connect_nonblocking(
         socket,

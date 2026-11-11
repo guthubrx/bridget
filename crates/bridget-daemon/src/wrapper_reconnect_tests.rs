@@ -206,21 +206,21 @@ use bridget_transport::poison::RecoverPoison;
             let _ = stalled.recv_timeout(Duration::from_secs(5));
         });
 
-        let (_, writer, name) = connect_and_register_at(
-            &socket,
-            "codex",
-            Some("lab-agent"),
-            "lab-host",
-            INTERACTIVE_AGENT_PROTOCOL,
-            Some("ssh-unix"),
-            PresenceMode::Tmux,
-            Some("bridget:2.1"),
-            "Linux",
-            "instance-lab",
-            Some("bridget"),
-            false,
-            false,
-        )
+        let (_, writer, name) = connect_and_register_at(ConnectAndRegisterAtArgs {
+socket: &socket,
+agent_type: "codex",
+agent_id: Some("lab-agent"),
+host: "lab-host",
+protocol: INTERACTIVE_AGENT_PROTOCOL,
+channel: Some("ssh-unix"),
+mode: PresenceMode::Tmux,
+location: Some("bridget:2.1"),
+os: "Linux",
+instance_id: "instance-lab",
+domain: Some("bridget"),
+turn_in_progress: false,
+turn_attest: false,
+})
         .unwrap();
         assert_eq!(name, "lab-agent");
         assert_eq!(

@@ -33,7 +33,7 @@ use crate::t3code_contract::{
     self as contract, Client, ContractError, ServerRuntime, T3Cli, ThreadDetail, ThreadSummary,
 };
 use crate::wrapper::{
-    AttachRelayControl, AttachRelayWorker, BatchedDelivery, IdempotentDeliveryTracker, connect_and_register_at,
+    AttachRelayControl, AttachRelayWorker, BatchedDelivery, IdempotentDeliveryTracker, connect_and_register_at, ConnectAndRegisterAtArgs,
     deliver_batch_to_interactive, send_wrapper_message,
 };
 
@@ -1606,24 +1606,24 @@ impl Link {
             .map(|n| n.to_string_lossy().to_string());
         // La localisation n'est retenue par le daemon que si tmux l'atteste ;
         // le titre du fil reste visible par `bridget t3 status`.
-        let (reader, writer, name) = connect_and_register_at(
-            &paths.socket,
-            &agent_type,
-            Some(&agent_id),
-            &crate::wrapper::host_name(),
-            PROTOCOL,
-            None,
-            PresenceMode::Cli,
-            None,
-            &crate::wrapper::operating_system(),
-            &instance_id,
-            domain.as_deref(),
-            summary
+        let (reader, writer, name) = connect_and_register_at(ConnectAndRegisterAtArgs {
+socket: &paths.socket,
+agent_type: &agent_type,
+agent_id: Some(&agent_id),
+host: &crate::wrapper::host_name(),
+protocol: PROTOCOL,
+channel: None,
+mode: PresenceMode::Cli,
+location: None,
+os: &crate::wrapper::operating_system(),
+instance_id: &instance_id,
+domain: domain.as_deref(),
+turn_in_progress: summary
                 .session
                 .as_ref()
                 .is_some_and(|session| session.active_turn_id.is_some()),
-            true,
-        )?;
+turn_attest: true,
+})?;
         info!(
             "fil « {} » exposé comme « {name} » ({agent_type}, {agent_id})",
             summary.title
