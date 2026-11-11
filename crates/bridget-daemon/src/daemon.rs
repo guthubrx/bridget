@@ -16998,68 +16998,7 @@ fn handle_wrapper_message_with_peer(
             kind,
             code,
             reference,
-        } => {
-            let (child_instance_id, fleet) = {
-                let st = state.lock().unwrap_or_else(|e| e.into_inner());
-                let Some(child_instance_id) = st.conn_instances.get(conn_id).cloned() else {
-                    return Some(DaemonToWrapper::Nack {
-                        id: "delegated-runtime-event".to_string(),
-                        reason: "wrapper non enregistré".to_string(),
-                    });
-                };
-                (child_instance_id, Arc::clone(&st.fleet))
-            };
-            let event = match fleet.record_delegated_runtime_event(DelegatedRuntimeEventInput {
-                child_instance_id,
-                child_execution_id: execution_id,
-                kind,
-                code,
-                reference,
-                observed_at: unix_now_secs(),
-            }) {
-                Ok(event) => event,
-                Err(error) => {
-                    warn!("fait runtime délégué ignoré: {error}");
-                    return Some(DaemonToWrapper::Nack {
-                        id: "delegated-runtime-event".to_string(),
-                        reason: "fait runtime délégué invalide".to_string(),
-                    });
-                }
-            };
-            let parent_writer = {
-                let st = state.lock().unwrap_or_else(|e| e.into_inner());
-                st.conn_instances
-                    .iter()
-                    .find(|(candidate_conn, candidate_instance)| {
-                        **candidate_instance == event.parent_instance_id
-                            && !st.auxiliary_connections.contains(*candidate_conn)
-                    })
-                    .and_then(|(candidate_conn, _)| st.connections.get(candidate_conn))
-                    .cloned()
-            };
-            if let Some(writer) = parent_writer
-                && !push_control_message(
-                    &writer,
-                    &DaemonToWrapper::DelegatedRuntimeEvent {
-                        event: DelegatedRuntimeEventFrame {
-                            cursor: event.cursor,
-                            event_id: event.event_id,
-                            link_id: event.link_id,
-                            child_instance_id: event.child_instance_id,
-                            child_execution_id: event.child_execution_id,
-                            kind: event.kind,
-                            code: event.code,
-                            reference: event.reference,
-                            observed_at: event.observed_at,
-                            project: event.project,
-                        },
-                    },
-                )
-            {
-                warn!("remise du fait runtime délégué différée: parent inaccessible");
-            }
-            None
-        }
+        } => wrapper_dispatch::on_delegated_runtime_event(execution_id, kind, code, reference, conn_id, state),
         WrapperToDaemon::DelegatedRuntimeEventAcknowledged { event_id } => {
             let (parent_instance_id, fleet) = {
                 let st = state.lock().unwrap_or_else(|e| e.into_inner());
