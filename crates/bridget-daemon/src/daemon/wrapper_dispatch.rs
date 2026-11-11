@@ -2511,3 +2511,83 @@ pub(super) fn on_artifact_publish(contract_version: u8, canonical_publication: V
                 }
             })
         }
+
+pub(super) fn on_guichet_reply(version: u16, issuer_scope: String, request_id: String, claim_generation: u64, claim_token: String, response_message_id: String, in_reply_to: String, outcome: bridget_transport::protocol::GuichetOutcome, payload: bridget_transport::protocol::GuichetReplyPayload, conn_id: &str, state: &Arc<Mutex<DaemonState>>) -> Option<DaemonToWrapper> {
+            if version != SERVICE_CONTRACT_VERSION
+                || !guichet_reply_is_valid(
+                    &request_id,
+                    &response_message_id,
+                    &in_reply_to,
+                    &payload,
+                )
+            {
+                return Some(DaemonToWrapper::ServiceRejected {
+                    reason: ServiceRefusal::InvalidEnvelope,
+                });
+            }
+            let canonical = match encode(&WrapperToDaemon::GuichetReply {
+                version,
+                issuer_scope: issuer_scope.clone(),
+                request_id: request_id.clone(),
+                claim_generation,
+                claim_token: claim_token.clone(),
+                response_message_id: response_message_id.clone(),
+                in_reply_to: in_reply_to.clone(),
+                outcome,
+                payload,
+            }) {
+                Ok(bytes) => bytes.into_bytes(),
+                Err(_) => {
+                    return Some(DaemonToWrapper::ServiceRejected {
+                        reason: ServiceRefusal::InvalidEnvelope,
+                    });
+                }
+            };
+            let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+            match st.store.reply_guichet(
+                conn_id,
+                GuichetReplyInput {
+                    issuer_scope: &issuer_scope,
+                    request_id: &request_id,
+                    generation: claim_generation,
+                    token: &claim_token,
+                    response_message_id: &response_message_id,
+                    reply_bytes: &canonical,
+                    in_reply_to: &in_reply_to,
+                    outcome,
+                },
+                unix_timestamp(),
+            ) {
+                Ok(result) => {
+                    if matches!(&result, GuichetResult::Terminal { issue, newly_finalized: true, .. } if issue == "accepted")
+                    {
+                        st.delegation_store.wait_epoch().bump();
+                        match st.store.guichet_lifecycle_events() {
+                            Ok(events) => {
+                                if let Some(event) = events.into_iter().find(|event| {
+                                    event.issuer_scope == issuer_scope
+                                        && event.request_id == request_id
+                                }) && let Some(writer) = st.connections.get(conn_id).cloned()
+                                {
+                                    st.pending_post_response_controls
+                                        .entry(conn_id.to_string())
+                                        .or_default()
+                                        .push(DeferredControl {
+                                            writer,
+                                            message: guichet_lifecycle_response(event),
+                                        });
+                                }
+                            }
+                            Err(error) => error!("lecture événement guichet: {error}"),
+                        }
+                    }
+                    Some(guichet_result_response(issuer_scope, request_id, result))
+                }
+                Err(error) => {
+                    error!("réponse guichet: {error}");
+                    Some(DaemonToWrapper::ServiceRejected {
+                        reason: ServiceRefusal::TransitionInvalid,
+                    })
+                }
+            }
+        }
