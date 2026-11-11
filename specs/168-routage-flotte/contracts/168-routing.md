@@ -58,7 +58,7 @@ Engine et agent_type interne ne sont pas confondus : une contrainte moteur ne ch
 machine_id, model, engine, effort et connection_id sont des filtres indépendants.
 Un axe absent suit sa politique ; un axe imposé n’est modifiable par aucun niveau.
 Contradiction de filtres = aucun lancement, aucune tentative modèle pour « réparer » le choix.
-Une machine imposée saturée produit resource_saturated sans changement silencieux de machine.
+Une machine imposée reste admissible quand le CPU ou la charge est élevé. Une mémoire disponible fraîche sous le seuil produit resource_saturated, sans changement silencieux de machine (correctif267).
 Les champs historiques reprennent leur sémantique exacte, notamment workspace et request_id.
 
 Sans capability168 : capability_unavailable structuré pour une demande168.
@@ -150,7 +150,7 @@ Ce filtre précède les deux décideurs ; une réponse visant une option retiré
 Le choix déjà durable n’est jamais recalculé. La revalidation opérationnelle porte seulement
 sur cette cible : droits, capacité et base doivent encore permettre son lancement. Une saturation
 survenue après le choix peut donc refuser ce lancement, sans choisir une autre machine ni redécider.
-Si la machine est imposée saturée, refuser explicitement plutôt que basculer.
+Si la machine est imposée et manque de mémoire disponible fraîche, refuser explicitement plutôt que basculer. CPU et charge seuls ne refusent plus la cible imposée.
 
 Sur les candidats restants, score entier proposé :
 - disponibilité CPU connue : arrondi(20×(1−CPUbusy)) ;

@@ -1,0 +1,298 @@
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -10 +10 @@
+-version = "0.8.33"
++version = "0.8.34"
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -195 +195 @@
+-version = "0.8.33"
++version = "0.8.34"
+@@ -204 +204 @@
+-version = "0.8.33"
++version = "0.8.34"
+@@ -232 +232 @@
+-version = "0.8.33"
++version = "0.8.34"
+--- a/crates/bridget-daemon/src/daemon/native_delegation.rs
++++ b/crates/bridget-daemon/src/daemon/native_delegation.rs
+@@ -1722 +1722,6 @@
+-        && let Some(fact) = machine_facts.get(machine).filter(|fact| fact.saturated)
++        && let Some(fact) = machine_facts.get(machine).filter(|fact| fact.resources.fresh)
++        && routing_telemetry(plan, machine).is_some_and(|policy| {
++            fact.resources.available_memory_percent.is_some_and(|available| {
++                available <= policy.memory_available_min_percent
++            })
++        })
+@@ -1800 +1805,5 @@
+-        if machine.saturated && has_available {
++        // La charge oriente le placement automatique ; une cible imposée reste utilisable.
++        if machine.saturated
++            && has_available
++            && imposed_machine != Some(candidate.machine_id.as_str())
++        {
+@@ -4123,0 +4133,7 @@
++    if code == "remote_prepare:ResourceLimit" {
++        return json!({"version":1,"status":"refused","code":code,
++            "message":"La préparation du worker a atteint une borne interne. Ce refus ne mesure ni le CPU, ni la mémoire libre de la machine.",
++            "detail":{"scope":"this_request","stage":"remote_prepare","cause":"unobserved",
++                "recovery":"Conservez la même admission. Consultez detail.admission : une demande pending garde sa request_id et son enveloppe, sans remplacement. Faire lire le journal worker corrélé et les événements bridget_prepare_capacity pour distinguer bootstrap retenu et places de préparation occupées ; une ancienne réponse sans événement ne permet pas de trancher. Sans événement corrélé, vérifier les autres bornes de préparation et la file de commandes entrantes ; ne pas déduire laquelle a été franchie. Après fin confirmée de la préparation concurrente et correction de la cause, reprendre seulement le parcours autorisé par detail.admission.recovery. Les autres travaux autorisés suivent leur propre état.",
++                "human_action":"Demandez au propriétaire une décision seulement si une opération bloquée doit être arrêtée ; ne terminez pas une mission indépendante et ne désactivez pas les protections de fichiers pour contourner ce refus."}});
++    }
+@@ -4272 +4288,8 @@
+-        let message="Le contrôle de capacité a refusé la cible imposée à cet instant.";
++        let message = if capacity["crossed"]
++            .as_array()
++            .is_some_and(|values| values.iter().any(|value| value == "available_memory"))
++        {
++            "La mémoire disponible a franchi son seuil minimal et refusé la cible imposée. CPU et charge sont aussi conservés comme observations ; ils ne bloquent plus les nouvelles demandes."
++        } else {
++            "Le contrôle de capacité a refusé la cible imposée à cet instant."
++        };
+--- a/crates/bridget-daemon/src/daemon/native_delegation_tests.rs
++++ b/crates/bridget-daemon/src/daemon/native_delegation_tests.rs
+@@ -1701,4 +1701,2 @@
+-        assert_eq!(
+-            failure(&score_routing_candidates(&request, &mut plan, "host", 100).unwrap_err())["code"],
+-            "resource_saturated"
+-        );
++        score_routing_candidates(&request, &mut plan, "host", 100).unwrap();
++        assert!(plan.candidates.iter().any(|candidate| candidate.machine_id == "local"));
+@@ -3391,2 +3389,2 @@
+-                        cpu_percent: Some(95),
+-                        available_memory_percent: Some(80),
++                        cpu_percent: Some(if index == 14 { 20 } else { 95 }),
++                        available_memory_percent: Some(if index == 14 { 5 } else { 80 }),
+@@ -3630 +3628 @@
+-        request.request_id = "saturation168-imposed".into();
++        request.request_id = "saturation168-imposed-memory".into();
+@@ -3635,2 +3633,2 @@
+-        assert_eq!(capacity_view["detail"]["capacity"]["measurements"]["cpu_percent"],95);
+-        assert_eq!(capacity_view["detail"]["capacity"]["crossed"],json!(["cpu"]));
++        assert_eq!(capacity_view["detail"]["capacity"]["measurements"]["cpu_percent"],20);
++        assert_eq!(capacity_view["detail"]["capacity"]["crossed"],json!(["available_memory"]));
+@@ -22513,0 +22512,113 @@
++
++// Politique267 : charge indicative, mémoire protégée, choix explicite conservé.
++fn routing267_score_case(
++    cpu: u8,
++    memory: u8,
++    load: u8,
++    selection: &str,
++) -> Result<RoutingAdmissionPlan, String> {
++    let (state, config, _rx, _reader, mut request, _root) = routing168_fixture(2);
++    let mut plan = routing168_plan(&state, &request);
++    plan.candidates[1].machine_id = "cartae".into();
++    plan.candidates[1].connection_id = "remote".into();
++    plan.observations = vec![routing168_observation(); 2];
++    let mut machine = plan.policy.machine_policies["local"].clone();
++    machine.telemetry = Some(crate::registry::RoutingTelemetryPolicy {
++        enabled: true,
++        max_age_secs: 30,
++        cpu_saturation_percent: 90,
++        memory_available_min_percent: 10,
++        normalized_load_saturation_percent: 100,
++        weights: Default::default(),
++    });
++    plan.policy
++        .machine_policies
++        .insert("cartae".into(), machine.clone());
++    if selection == "request" {
++        request.machine_id = Some("local".into());
++    } else if selection == "policy" {
++        machine.automatic_axes.machine = false;
++        machine.fixed_values.machine_id = Some("local".into());
++    }
++    plan.policy.machine_policies.insert("local".into(), machine);
++    for (machine, cpu, memory, load) in [("local", cpu, memory, load), ("cartae", 10, 80, 10)] {
++        plan.machines.insert(
++            machine.into(),
++            RoutingMachineObservation {
++                epoch: "e".into(),
++                resources: bridget_transport::protocol::HostResourceSnapshotV1 {
++                    source_observed_at: 100,
++                    received_at: 100,
++                    cpu_percent: Some(cpu),
++                    available_memory_percent: Some(memory),
++                    normalized_load_percent: Some(load),
++                    compilation_slots: None,
++                },
++            },
++        );
++    }
++    let result = score_routing_candidates(&request, &mut plan, "host", 100);
++    drop(state);
++    cleanup(&config);
++    result.map(|()| plan)
++}
++
++#[test]
++fn spec267_imposed_machine_cpu_and_load_are_advisory_even_with_an_idle_alternative() {
++    for selection in ["request", "policy"] {
++        for (cpu, load) in [(95, 20), (50, 100), (100, 100)] {
++            let plan = routing267_score_case(cpu, 50, load, selection).unwrap();
++            assert!(
++                plan.candidates
++                    .iter()
++                    .any(|candidate| candidate.machine_id == "local"),
++                "{selection} cpu={cpu} load={load}"
++            );
++            let facts = &plan.machine_score_facts["local"];
++            assert_eq!(facts.resources.cpu_percent, Some(cpu));
++            assert_eq!(facts.resources.normalized_load_percent, Some(load));
++            assert!(facts.resources.fresh);
++            assert_eq!(
++                facts.terms.saturation_penalty, -100,
++                "le conseil de placement reste visible"
++            );
++        }
++    }
++}
++
++#[test]
++fn spec267_imposed_machine_still_refuses_fresh_low_memory() {
++    for selection in ["request", "policy"] {
++        let error = routing267_score_case(20, 5, 20, selection).err().expect("mémoire insuffisante refusée");
++        let refusal = failure(&error);
++        assert_eq!(refusal["code"], "resource_saturated");
++        assert!(refusal["message"].as_str().unwrap().contains("mémoire disponible"));
++        assert_eq!(
++            refusal["detail"]["capacity"]["crossed"],
++            json!(["available_memory"])
++        );
++        assert_eq!(
++            refusal["detail"]["capacity"]["measurements"]["available_memory_percent"],
++            5
++        );
++    }
++}
++
++#[test]
++fn spec267_automatic_placement_still_prefers_available_capacity() {
++    let plan = routing267_score_case(100, 50, 100, "automatic").unwrap();
++    assert_eq!(plan.candidates.len(), 1);
++    assert_eq!(plan.candidates[0].machine_id, "cartae");
++}
++
++#[test]
++fn spec267_remote_prepare_capacity_does_not_claim_hardware_saturation() {
++    let refusal = failure("remote_prepare:ResourceLimit");
++    assert_eq!(refusal["version"], 1);
++    assert_eq!(refusal["detail"]["scope"], "this_request");
++    assert_eq!(refusal["code"],"remote_prepare:ResourceLimit");
++    assert_eq!(refusal["detail"]["stage"],"remote_prepare");
++    assert_eq!(refusal["detail"]["cause"],"unobserved");
++    assert!(refusal["message"].as_str().unwrap().contains("borne interne"));
++    assert!(refusal["detail"]["recovery"].as_str().unwrap().contains("bridget_prepare_capacity"));
++}
+--- a/crates/bridget-daemon/src/remote_worker.rs
++++ b/crates/bridget-daemon/src/remote_worker.rs
+@@ -5135 +5135,2 @@
+-        if !self.held.is_empty() {
++        if !inspect_only && !self.held.is_empty() {
++            eprintln!("bridget_prepare_capacity {}", serde_json::json!({"command":command,"cause":"held_bootstrap","prepared":self.prepared.len(),"held":self.held.len(),"prepared_limit":128}));
+@@ -5138 +5139,2 @@
+-        if self.prepared.len() >= 128 && !self.prepared.contains_key(&command.command_id) {
++        if !inspect_only && self.prepared.len() >= 128 && !self.prepared.contains_key(&command.command_id) {
++            eprintln!("bridget_prepare_capacity {}", serde_json::json!({"command":command,"cause":"prepared_slots","prepared":self.prepared.len(),"held":self.held.len(),"prepared_limit":128}));
+--- a/crates/bridget-daemon/src/remote_worker_tests.rs
++++ b/crates/bridget-daemon/src/remote_worker_tests.rs
+@@ -6712,0 +6713,98 @@
++
++#[test]
++fn spec267_read_only_prepare_does_not_consume_or_require_a_preparation_slot() {
++    let fixture = Fixture::new();
++    let (mut runtime, command, request, _intent) = c19_preparation_fixture(&fixture);
++    let mut value: serde_json::Value =
++        serde_json::from_slice(&fs::read(&runtime.config.registry_path).unwrap()).unwrap();
++    value["routing_policy"] = serde_json::json!({
++        "version":2,"revision":1,"enabled":true,
++        "connections":[{"connection_id":"inspect267","machine_id":"cartae","engine":"codex","agent_type":"codex","enabled":true}],
++        "model_catalog":{"inspect267":[{"model":"fixture","supported_efforts":[],"default_effort":null,"provenance":"declared"}]},
++        "machine_policies":{"cartae":{"enabled":true}}
++    });
++    write_json(&runtime.config.registry_path, &value).unwrap();
++    let registry = runtime.registry().unwrap();
++    let (mapping, cwd) = runtime.mapping_for(&request, &registry, None).unwrap();
++    let readiness = runtime
++        .inspect_candidate(
++            &registry,
++            &request,
++            &mapping,
++            &cwd,
++            &mut crate::native_permissions::PermissionReadOperation::default(),
++            None,
++        )
++        .unwrap();
++    let definition = readiness.definition.digest.clone();
++    let permissions = json_digest(&readiness.child_policy).unwrap();
++    let routing = RoutingPreparation {
++        connection_id: "inspect267".into(),
++        engine: "codex".into(),
++        workload: AutoDelegateWorkload::General,
++    };
++    for index in 0..128 {
++        runtime.prepared.insert(
++            format!("occupied-{index}"),
++            PreparedRuntime {
++                routing: None,
++                command: command.clone(),
++                request: request.clone(),
++                expires: Instant::now() + Duration::from_secs(30),
++                prepared: WorkerPrepared {
++                    placement: placement(),
++                    workspace: None,
++                    token: format!("token-{index}"),
++                    definition: readiness.definition.clone(),
++                    child_policy: readiness.child_policy.clone(),
++                    effective_posture: readiness.effective_posture,
++                    prepared_at: worker_now(),
++                },
++            },
++        );
++    }
++    let inspected = runtime
++        .prepare_for(
++            &command,
++            &request,
++            Some((routing.clone(), &definition, &permissions)),
++            true,
++        )
++        .unwrap();
++    assert_eq!(
++        inspected.token,
++        bridget_transport::protocol::WORKER_INSPECTION_TOKEN
++    );
++    assert!(inspected.workspace.is_none());
++    assert_eq!(runtime.prepared.len(), 128);
++    assert!(runtime.store.commands().unwrap().is_empty());
++    assert_eq!(
++        fs::read_dir(runtime.store.root.join("workspaces"))
++            .unwrap()
++            .count(),
++        0
++    );
++    assert_eq!(
++        runtime
++            .prepare_for(
++                &command,
++                &request,
++                Some((routing, &definition, &permissions)),
++                false
++            )
++            .unwrap_err(),
++        WorkerRefusal::CapabilityRequired
++    );
++    // Une vraie préparation Worktree reste protégée par sa borne.
++    let mut creating = request;
++    creating.workspace = Some(bridget_transport::protocol::WorkspaceRequest::Worktree {
++        base_ref: None,
++        branch: None,
++    });
++    assert_eq!(
++        runtime
++            .prepare_for(&command, &creating, None, false)
++            .unwrap_err(),
++        WorkerRefusal::ResourceLimit
++    );
++}

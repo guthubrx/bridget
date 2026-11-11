@@ -112,8 +112,8 @@ Fraîcheur proposée :30s par défaut, configurable1..300s ; le maître utilise 
 pour qu’une horloge distante décalée ne transforme pas une vieille mesure en fait frais.
 
 Avant le score, une saturation franche fraîche exclut la machine si une autre machine admissible
-est attestée non saturée ; aucun décideur ne peut la réintroduire. Une machine imposée saturée
-refuse avec resource_saturated, sans autre compte/machine implicite.
+est attestée non saturée ; aucun décideur ne peut la réintroduire. Une machine imposée reste utilisable avec CPU ou charge élevés ; seule la mémoire fraîche sous seuil
+refuse avec resource_saturated, sans autre compte/machine implicite (correctif267).
 Score entier explicable sur les possibilités restantes : bonus continuité dépôt/cache total≤20 ; pénalité saturation fraîche100.
 CPU≥90%, RAMdisponible≤10% ou charge normalisée≥1 constitue une saturation proposée,
 avec seuils configurables dans le registre. Les inconnus restent neutres avec mention visible.

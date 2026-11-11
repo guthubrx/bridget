@@ -12215,3 +12215,101 @@ fn spec263_view_capacity_keeps_its_closed_cause() {
     ));
     assert!(runtime.held.is_empty() && runtime.running.is_empty());
 }
+
+#[test]
+fn spec267_read_only_prepare_does_not_consume_or_require_a_preparation_slot() {
+    let fixture = Fixture::new();
+    let (mut runtime, command, request, _intent) = c19_preparation_fixture(&fixture);
+    let mut value: serde_json::Value =
+        serde_json::from_slice(&fs::read(&runtime.config.registry_path).unwrap()).unwrap();
+    value["routing_policy"] = serde_json::json!({
+        "version":2,"revision":1,"enabled":true,
+        "connections":[{"connection_id":"inspect267","machine_id":"cartae","engine":"codex","agent_type":"codex","enabled":true}],
+        "model_catalog":{"inspect267":[{"model":"fixture","supported_efforts":[],"default_effort":null,"provenance":"declared"}]},
+        "machine_policies":{"cartae":{"enabled":true}}
+    });
+    write_json(&runtime.config.registry_path, &value).unwrap();
+    let registry = runtime.registry().unwrap();
+    let (mapping, cwd) = runtime.mapping_for(&request, &registry, None).unwrap();
+    let readiness = runtime
+        .inspect_candidate(
+            &registry,
+            &request,
+            &mapping,
+            &cwd,
+            &mut crate::native_permissions::PermissionReadOperation::default(),
+            None,
+        )
+        .unwrap();
+    let definition = readiness.definition.digest.clone();
+    let permissions = json_digest(&readiness.child_policy).unwrap();
+    let routing = RoutingPreparation {
+        connection_id: "inspect267".into(),
+        engine: "codex".into(),
+        workload: AutoDelegateWorkload::General,
+    };
+    for index in 0..128 {
+        runtime.prepared.insert(
+            format!("occupied-{index}"),
+            PreparedRuntime {
+                routing: None,
+                command: command.clone(),
+                request: request.clone(),
+                expires: Instant::now() + Duration::from_secs(30),
+                prepared: WorkerPrepared {
+                    placement: placement(),
+                    workspace: None,
+                    token: format!("token-{index}"),
+                    definition: readiness.definition.clone(),
+                    child_policy: readiness.child_policy.clone(),
+                    effective_posture: readiness.effective_posture,
+                    prepared_at: worker_now(),
+                },
+            },
+        );
+    }
+    let inspected = runtime
+        .prepare_for(
+            &command,
+            &request,
+            Some((routing.clone(), &definition, &permissions)),
+            true,
+        )
+        .unwrap();
+    assert_eq!(
+        inspected.token,
+        bridget_transport::protocol::WORKER_INSPECTION_TOKEN
+    );
+    assert!(inspected.workspace.is_none());
+    assert_eq!(runtime.prepared.len(), 128);
+    assert!(runtime.store.commands().unwrap().is_empty());
+    assert_eq!(
+        fs::read_dir(runtime.store.root.join("workspaces"))
+            .unwrap()
+            .count(),
+        0
+    );
+    assert_eq!(
+        runtime
+            .prepare_for(
+                &command,
+                &request,
+                Some((routing, &definition, &permissions)),
+                false
+            )
+            .unwrap_err(),
+        WorkerRefusal::CapabilityRequired
+    );
+    // Une vraie préparation Worktree reste protégée par sa borne.
+    let mut creating = request;
+    creating.workspace = Some(bridget_transport::protocol::WorkspaceRequest::Worktree {
+        base_ref: None,
+        branch: None,
+    });
+    assert_eq!(
+        runtime
+            .prepare_for(&command, &creating, None, false)
+            .unwrap_err(),
+        WorkerRefusal::ResourceLimit
+    );
+}

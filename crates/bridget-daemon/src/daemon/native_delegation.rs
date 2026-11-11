@@ -2211,7 +2211,14 @@ fn score_routing_candidates(
             .and_then(|p| p.fixed_values.machine_id.as_deref())
     });
     if let Some(machine) = imposed_machine
-        && let Some(fact) = machine_facts.get(machine).filter(|fact| fact.saturated)
+        && let Some(fact) = machine_facts
+            .get(machine)
+            .filter(|fact| fact.resources.fresh)
+        && routing_telemetry(plan, machine).is_some_and(|policy| {
+            fact.resources
+                .available_memory_percent
+                .is_some_and(|available| available <= policy.memory_available_min_percent)
+        })
     {
         let code = routing_telemetry(plan, machine)
             .and_then(|policy| {
@@ -2302,7 +2309,11 @@ fn score_routing_candidates(
         let machine = machine_facts
             .get(&candidate.machine_id)
             .ok_or("auto_admission_invalid")?;
-        if machine.saturated && has_available {
+        // La charge oriente le placement automatique ; une cible imposée reste utilisable.
+        if machine.saturated
+            && has_available
+            && imposed_machine != Some(candidate.machine_id.as_str())
+        {
             continue;
         }
         let connection = connection_facts.get(&candidate.connection_id);
@@ -4873,6 +4884,13 @@ fn failure(code: &str) -> Value {
     if super::origin_proof::rejected_reason(code).is_some() {
         return origin_attestation_refusal(code);
     }
+    if code == "remote_prepare:ResourceLimit" {
+        return json!({"version":1,"status":"refused","code":code,
+            "message":"La préparation du worker a atteint une borne interne. Ce refus ne mesure ni le CPU, ni la mémoire libre de la machine.",
+            "detail":{"scope":"this_request","stage":"remote_prepare","cause":"unobserved",
+                "recovery":"Conservez la même admission. Consultez detail.admission : une demande pending garde sa request_id et son enveloppe, sans remplacement. Faire lire le journal worker corrélé et les événements bridget_prepare_capacity pour distinguer bootstrap retenu et places de préparation occupées ; une ancienne réponse sans événement ne permet pas de trancher. Sans événement corrélé, vérifier les autres bornes de préparation et la file de commandes entrantes ; ne pas déduire laquelle a été franchie. Après fin confirmée de la préparation concurrente et correction de la cause, reprendre seulement le parcours autorisé par detail.admission.recovery. Les autres travaux autorisés suivent leur propre état.",
+                "human_action":"Demandez au propriétaire une décision seulement si une opération bloquée doit être arrêtée ; ne terminez pas une mission indépendante et ne désactivez pas les protections de fichiers pour contourner ce refus."}});
+    }
     if code == "remote_prepare:WorkerUnavailable" {
         return json!({"version":1,"status":"refused","code":code,"scope":"this_request",
             "message":"Conservez cette clé et ses paramètres, puis faites vérifier le canal du worker choisi et la préparation en attente. La préparation n’a pas répondu dans son délai ; ce code ne prouve pas le serveur arrêté. Aucune nouvelle mission de remplacement. Les autres travaux autorisés suivent leur propre état.",
@@ -5093,7 +5111,14 @@ fn failure(code: &str) -> Value {
     if code == "resource_saturated" || code.starts_with("resource_saturated:") {
         let capacity=crate::capacity_refusal::CapacityRefusal::decode(code)
             .map(|proof|proof.projection()).unwrap_or_else(||json!({"evidence_available":false,"scope":"historical_refusal","cause":"measurement_not_recorded_or_invalid"}));
-        let message = "Le contrôle de capacité a refusé la cible imposée à cet instant.";
+        let message = if capacity["crossed"]
+            .as_array()
+            .is_some_and(|values| values.iter().any(|value| value == "available_memory"))
+        {
+            "La mémoire disponible a franchi son seuil minimal et refusé la cible imposée. CPU et charge sont aussi conservés comme observations ; ils ne bloquent plus les nouvelles demandes."
+        } else {
+            "Le contrôle de capacité a refusé la cible imposée à cet instant."
+        };
         let recovery = "Appliquez detail.admission.recovery pour choisir la clé : resource_saturated ne prouve pas à lui seul un refus durable. Consultez detail.capacity pour le seuil constaté à cet instant, puis vérifiez une capacité fraîche sur la même machine sans changer vos contraintes. Sans mesure jointe, la valeur historique reste inconnue. Ne créez aucun remplacement si une tâche ou une admission reste en cours ou inconnue. Les autres travaux autorisés suivent leur propre état.";
         let human = "Si la capacité ne peut pas être libérée dans votre périmètre, demandez à l’utilisateur de décider quels travaux peuvent attendre ou quelle capacité ajouter. Ne terminez pas les tâches d’autrui et ne changez pas de machine sans autorisation.";
         return json!({"status":"refused","code":"resource_saturated","message":message,

@@ -2113,3 +2113,6 @@ de la même clé se lit avec request_status. Un nouveau réemploi demande une
 décision humaine ; il ne change pas la clé d'une mission d'issue inconnue.
 
 Historique d’un souvenir : memory_versions renvoie ses révisions avec curseur numérique. L’oubli vide aussi cette vue. Il ne réécrit pas les anciens journaux ni le contexte figé d’une mission admise. Le catalogue donne les demandes natives récentes et ouvre la conversation existante pour ses contrôles de mission.
+
+
+Une machine imposée par la demande ou par la politique n’est plus refusée pour CPU ou charge moyenne élevés. Ces mesures restent utiles au placement automatique ; une mémoire disponible fraîche sous le seuil reste bloquante. Les inspections worker sans effets ne consomment ni places de préparation ni bootstrap : elles gardent les contrôles d’identité, droits et dépôt, même quand les places de création sont occupées. Le code remote_prepare:ResourceLimit désigne une borne interne de préparation, pas une mesure CPU/RAM.

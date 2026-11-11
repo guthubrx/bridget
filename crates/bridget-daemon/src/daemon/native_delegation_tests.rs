@@ -2998,9 +2998,11 @@ fn spec168_score_saturation_fraiche_inconnus_stabilite_et_compilation() {
     );
     request.machine_id = Some("local".into());
     plan = original.clone();
-    assert_eq!(
-        failure(&score_routing_candidates(&request, &mut plan, "host", 100).unwrap_err())["code"],
-        "resource_saturated"
+    score_routing_candidates(&request, &mut plan, "host", 100).unwrap();
+    assert!(
+        plan.candidates
+            .iter()
+            .any(|candidate| candidate.machine_id == "local")
     );
     request.machine_id = None;
     plan = original.clone();
@@ -4756,8 +4758,8 @@ fn spec168_service_valide_choisit_la_combinaison_complete() {
                 resources: HostResourceSnapshotV1 {
                     source_observed_at: source_at,
                     received_at: now,
-                    cpu_percent: Some(95),
-                    available_memory_percent: Some(80),
+                    cpu_percent: Some(if index == 14 { 20 } else { 95 }),
+                    available_memory_percent: Some(if index == 14 { 5 } else { 80 }),
                     normalized_load_percent: Some(10),
                     compilation_slots: Some(10),
                 },
@@ -4999,7 +5001,7 @@ fn spec168_service_valide_choisit_la_combinaison_complete() {
     assert_eq!(routing168_receipt(&state, &request), receipt);
     assert_eq!(probe_count.load(Ordering::SeqCst), 14);
     assert_eq!(server.requests().len(), 2);
-    request.request_id = "saturation168-imposed".into();
+    request.request_id = "saturation168-imposed-memory".into();
     request.machine_id = Some("zz-saturated".into());
     let capacity_error =
         admit_auto_routing("conn-1", &request, None, None, None, None, &state).unwrap_err();
@@ -5007,11 +5009,11 @@ fn spec168_service_valide_choisit_la_combinaison_complete() {
     assert_eq!(capacity_view["code"], "resource_saturated");
     assert_eq!(
         capacity_view["detail"]["capacity"]["measurements"]["cpu_percent"],
-        95
+        20
     );
     assert_eq!(
         capacity_view["detail"]["capacity"]["crossed"],
-        json!(["cpu"])
+        json!(["available_memory"])
     );
     assert_eq!(probe_count.load(Ordering::SeqCst), 15);
     assert_eq!(
@@ -26936,5 +26938,135 @@ fn spec262_git_version_refusal_identifies_executed_environment() {
             .as_str()
             .unwrap()
             .contains("PATH global")
+    );
+}
+
+// Politique267 : charge indicative, mémoire protégée, choix explicite conservé.
+fn routing267_score_case(
+    cpu: u8,
+    memory: u8,
+    load: u8,
+    selection: &str,
+) -> Result<RoutingAdmissionPlan, String> {
+    let (state, config, _rx, _reader, mut request, _root) = routing168_fixture(2);
+    let mut plan = routing168_plan(&state, &request);
+    plan.candidates[1].machine_id = "cartae".into();
+    plan.candidates[1].connection_id = "remote".into();
+    plan.observations = vec![routing168_observation(); 2];
+    let mut machine = plan.policy.machine_policies["local"].clone();
+    machine.telemetry = Some(crate::registry::RoutingTelemetryPolicy {
+        enabled: true,
+        max_age_secs: 30,
+        cpu_saturation_percent: 90,
+        memory_available_min_percent: 10,
+        normalized_load_saturation_percent: 100,
+        weights: Default::default(),
+    });
+    plan.policy
+        .machine_policies
+        .insert("cartae".into(), machine.clone());
+    if selection == "request" {
+        request.machine_id = Some("local".into());
+    } else if selection == "policy" {
+        machine.automatic_axes.machine = false;
+        machine.fixed_values.machine_id = Some("local".into());
+    }
+    plan.policy.machine_policies.insert("local".into(), machine);
+    for (machine, cpu, memory, load) in [("local", cpu, memory, load), ("cartae", 10, 80, 10)] {
+        plan.machines.insert(
+            machine.into(),
+            RoutingMachineObservation {
+                epoch: "e".into(),
+                resources: bridget_transport::protocol::HostResourceSnapshotV1 {
+                    source_observed_at: 100,
+                    received_at: 100,
+                    cpu_percent: Some(cpu),
+                    available_memory_percent: Some(memory),
+                    normalized_load_percent: Some(load),
+                    compilation_slots: None,
+                },
+            },
+        );
+    }
+    let result = score_routing_candidates(&request, &mut plan, "host", 100);
+    drop(state);
+    cleanup(&config);
+    result.map(|()| plan)
+}
+
+#[test]
+fn spec267_imposed_machine_cpu_and_load_are_advisory_even_with_an_idle_alternative() {
+    for selection in ["request", "policy"] {
+        for (cpu, load) in [(95, 20), (50, 100), (100, 100)] {
+            let plan = routing267_score_case(cpu, 50, load, selection).unwrap();
+            assert!(
+                plan.candidates
+                    .iter()
+                    .any(|candidate| candidate.machine_id == "local"),
+                "{selection} cpu={cpu} load={load}"
+            );
+            let facts = &plan.machine_score_facts["local"];
+            assert_eq!(facts.resources.cpu_percent, Some(cpu));
+            assert_eq!(facts.resources.normalized_load_percent, Some(load));
+            assert!(facts.resources.fresh);
+            assert_eq!(
+                facts.terms.saturation_penalty, -100,
+                "le conseil de placement reste visible"
+            );
+        }
+    }
+}
+
+#[test]
+fn spec267_imposed_machine_still_refuses_fresh_low_memory() {
+    for selection in ["request", "policy"] {
+        let error = routing267_score_case(20, 5, 20, selection)
+            .err()
+            .expect("mémoire insuffisante refusée");
+        let refusal = failure(&error);
+        assert_eq!(refusal["code"], "resource_saturated");
+        assert!(
+            refusal["message"]
+                .as_str()
+                .unwrap()
+                .contains("mémoire disponible")
+        );
+        assert_eq!(
+            refusal["detail"]["capacity"]["crossed"],
+            json!(["available_memory"])
+        );
+        assert_eq!(
+            refusal["detail"]["capacity"]["measurements"]["available_memory_percent"],
+            5
+        );
+    }
+}
+
+#[test]
+fn spec267_automatic_placement_still_prefers_available_capacity() {
+    let plan = routing267_score_case(100, 50, 100, "automatic").unwrap();
+    assert_eq!(plan.candidates.len(), 1);
+    assert_eq!(plan.candidates[0].machine_id, "cartae");
+}
+
+#[test]
+fn spec267_remote_prepare_capacity_does_not_claim_hardware_saturation() {
+    let refusal = failure("remote_prepare:ResourceLimit");
+    assert_eq!(refusal["code"], "remote_prepare:ResourceLimit");
+    assert_eq!(refusal["version"], 1);
+    assert_eq!(refusal["detail"]["scope"], "this_request");
+    assert_eq!(refusal["detail"]["stage"], "remote_prepare");
+    assert_eq!(refusal["detail"]["cause"], "unobserved");
+    assert!(
+        refusal["message"]
+            .as_str()
+            .unwrap()
+            .contains("borne interne")
+    );
+    assert!(
+        refusal["detail"]["recovery"]
+            .as_str()
+            .unwrap()
+            .contains("bridget_prepare_capacity")
     );
 }

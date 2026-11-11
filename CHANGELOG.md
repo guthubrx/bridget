@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.8.34 - 2026-11-11
+
+- CPU et charge élevés orientent le placement automatique sans interdire la machine imposée ; protection mémoire conservée.
+- Une inspection en lecture seule ne demande plus de place de création ni de bootstrap disponible.
+- Les refus de préparation distinguent les bornes internes de la charge matérielle, avec portée et corrélation explicites.
+
 ## 0.8.33 - 2026-11-11
 
 - Aide locale de send accessible avec --help, -h et help, sans connexion ni envoi.

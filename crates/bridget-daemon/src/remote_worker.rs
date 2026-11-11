@@ -7571,10 +7571,21 @@ impl WorkerRuntime {
         {
             return Err(WorkerRefusal::InvalidEnvelope);
         }
-        if !self.held.is_empty() {
+        if !inspect_only && !self.held.is_empty() {
+            eprintln!(
+                "bridget_prepare_capacity {}",
+                serde_json::json!({"command":command,"cause":"held_bootstrap","prepared":self.prepared.len(),"held":self.held.len(),"prepared_limit":128})
+            );
             return Err(WorkerRefusal::ResourceLimit);
         }
-        if self.prepared.len() >= 128 && !self.prepared.contains_key(&command.command_id) {
+        if !inspect_only
+            && self.prepared.len() >= 128
+            && !self.prepared.contains_key(&command.command_id)
+        {
+            eprintln!(
+                "bridget_prepare_capacity {}",
+                serde_json::json!({"command":command,"cause":"prepared_slots","prepared":self.prepared.len(),"held":self.held.len(),"prepared_limit":128})
+            );
             return Err(WorkerRefusal::ResourceLimit);
         }
         // Une extraction de worktree peut durer jusqu'à WORKTREE_ADD_TIMEOUT.
