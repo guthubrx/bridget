@@ -17171,66 +17171,7 @@ fn handle_wrapper_message_with_peer(
             request_id,
             observation_id,
             unavailable_code,
-        } => {
-            let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
-            if st.auxiliary_connections.contains(conn_id)
-                || live_connection_identity(&st, conn_id).is_none()
-            {
-                return None;
-            }
-            let allowed = fact.as_ref().is_some_and(|fact| {
-                live_connection_identity(&st, conn_id).is_some_and(|(_, instance)| {
-                    fact.provider_instance_id == instance
-                        && st.presences.get(&instance).is_some_and(|p| {
-                            matches!(
-                                p.transport.as_str(),
-                                "codex_app_server"
-                                    | "claude_stream_json"
-                                    | "stdio"
-                                    | "claude_pty"
-                                    | "tmux"
-                            ) && st
-                                .registry
-                                .get(&p.agent_type)
-                                .is_ok_and(|definition| definition.protocol == fact.driver)
-                        })
-                }) && request_id.as_ref().is_none_or(|id| {
-                    !id.is_empty() && id.len() <= 128 && !id.chars().any(char::is_control)
-                }) && st
-                    .native_permission_facts
-                    .get(conn_id)
-                    .is_none_or(|(previous, _)| {
-                        fact.provider_session_id != previous.provider_session_id
-                            || fact.revision >= previous.revision
-                    })
-                    && bridget_transport::protocol::validate_permissions(fact, false).is_ok()
-            });
-            let accepted = allowed && unavailable_code.is_none();
-            if accepted {
-                st.native_permission_facts
-                    .insert(conn_id.into(), (fact.unwrap(), request_id));
-                st.native_permission_refusals.remove(conn_id);
-            } else {
-                st.native_permission_facts.remove(conn_id);
-                let code = unavailable_code
-                    .filter(|code| {
-                        matches!(
-                            code.as_str(),
-                            "permission_source_unavailable" | "settings_revision_changed"
-                        )
-                    })
-                    .unwrap_or_else(|| "permission_attestation_unavailable".into());
-                st.native_permission_refusals.insert(conn_id.into(), code);
-            }
-            observation_id
-                .filter(|id| Uuid::parse_str(id).is_ok())
-                .map(
-                    |observation_id| DaemonToWrapper::NativePermissionAcknowledged {
-                        observation_id,
-                        accepted,
-                    },
-                )
-        }
+        } => wrapper_dispatch::on_native_permission_fact(fact, request_id, observation_id, unavailable_code, conn_id, state),
         WrapperToDaemon::SpawnOrder {
             posture,
             agent_type,
