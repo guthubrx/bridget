@@ -39,7 +39,7 @@ curl -fsSL https://cartae.app/bridget/install.sh | sh -s -- --source
 An exact published release:
 
 ```sh
-curl -fsSL https://cartae.app/bridget/install.sh | sh -s -- --version v0.4.1
+curl -fsSL https://cartae.app/bridget/install.sh | sh -s -- --version v0.8.35
 ```
 
 The same script is available directly from GitHub:
@@ -54,8 +54,8 @@ the release's SHA-256 sidecar checks archive integrity, not an independent signa
 
 Run as your normal user, without sudo. Release installation needs curl, tar and
 sha256sum or shasum. A platform without a published archive is refused; it never
-silently falls back to a source build. Current v0.4.1 packages cover Linux x86-64
-and macOS Apple Silicon. Other supported source targets require `--source`.
+silently falls back to a source build. Other supported source targets require
+`--source`.
 
 Source mode needs Git, Python 3.11+, a C compiler and its platform development
 tools (Xcode Command Line Tools on macOS, a C build toolchain on Linux).
@@ -109,6 +109,21 @@ not mean the previous binary is still on disk.
 An interrupted install can leave `.local/state/bridget-install/lock`. Inspect its
 `pid` file and verify that no installer still runs before removing that lock
 directory. Never remove the source checkout or user data to clear a lock.
+
+## Older reader without format validation
+
+An older installation may refuse an update with `storage_validation_unavailable`
+when its binary has no `formats` command. This does not prove that its data is
+incompatible. The installer preserves the program, service and data; it cannot
+automatically qualify that migration.
+
+Ask the maintainer to qualify the transition before replacing the reader:
+take a consistent database and program backup, test the candidate on a private
+copy of the saved state, and verify health and the intended return path. Once
+qualified, load the compatible reader through the authorized native service,
+then rerun the installer to restore its normal validation. Do not erase state
+or remove the check to force an update. Qualification on an empty database
+does not qualify another database with different missions or saved formats.
 
 ## Prerequisites for an existing source checkout
 

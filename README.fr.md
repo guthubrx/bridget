@@ -23,6 +23,8 @@ La même commande met à jour les fichiers et conserve les comptes et les donné
 Sur une installation neuve, elle démarre Bridget, active son démarrage automatique
 et vérifie sa réponse. Elle conserve les services et fédérations déjà actifs.
 Voir le [guide d'installation](docs/communication-installation.fr.md).
+Une ancienne version sans commande `formats` nécessite d'abord une
+[migration qualifiée](docs/communication-installation.fr.md#ancien-lecteur-sans-contrôle-des-formats).
 
 Depuis le dossier de votre projet, lancer un agent :
 

@@ -36,7 +36,7 @@ curl -fsSL https://cartae.app/bridget/install.sh | sh -s -- --source
 Release précise :
 
 ```sh
-curl -fsSL https://cartae.app/bridget/install.sh | sh -s -- --version v0.4.1
+curl -fsSL https://cartae.app/bridget/install.sh | sh -s -- --version v0.8.35
 ```
 
 Le même script est disponible directement sur GitHub :
@@ -50,8 +50,8 @@ son contenu puis lancez `sh` sur ce fichier. HTTPS vérifie le serveur ; le fich
 SHA-256 vérifie l'intégrité de l'archive. Ce n'est pas une signature indépendante.
 
 Lancez la commande avec votre utilisateur habituel, sans sudo. Le mode release
-demande curl, tar et sha256sum ou shasum. La version 0.4.1 fournit Linux x86-64
-et Mac Apple Silicon. Une plateforme sans paquet est refusée ; aucune compilation
+demande curl, tar et sha256sum ou shasum. Une plateforme sans paquet dans la
+release choisie est refusée ; aucune compilation
 n'est déclenchée sans l'option `--source`.
 
 Le mode source demande Git, Python 3.11+, un compilateur C et ses outils de
@@ -106,6 +106,23 @@ ne signifie pas que l'ancien binaire est encore sur disque.
 Une interruption peut laisser `.local/state/bridget-install/lock`. Consultez son
 fichier `pid` et vérifiez qu'aucun installateur ne tourne avant de retirer ce
 seul dossier de verrou. Ne supprimez ni les sources ni les données pour le libérer.
+
+## Ancien lecteur sans contrôle des formats
+
+Une ancienne installation peut refuser la mise à jour avec
+`storage_validation_unavailable` si son binaire ne connaît pas `formats`.
+Ce refus ne prouve pas que les données sont incompatibles. L'installateur
+conserve le programme, le service et les données ; il ne sait pas qualifier
+automatiquement cette migration.
+
+Faire qualifier le passage par le mainteneur avant de remplacer le lecteur :
+sauvegarde cohérente de la base et du programme, essai du candidat sur une
+copie privée de l'état, vérification de sa santé et du retour prévu. Après
+qualification, charger le lecteur compatible par le service natif autorisé,
+puis relancer l'installateur pour retrouver son contrôle normal. Ne pas
+effacer l'état ni retirer le contrôle pour forcer la mise à jour. Une
+qualification sur une base vide ne vaut pas pour une autre base contenant
+des missions ou des formats différents.
 
 ## Essai séparé depuis un checkout existant
 

@@ -46,6 +46,8 @@ On a new installation it starts Bridget, enables automatic startup and verifies
 that the service responds. Existing running services and federations are preserved.
 Read the [installation guide](docs/communication-installation.md) for prerequisites,
 an exact release version, and standalone versus federated setup.
+An older version without the `formats` command first needs a
+[qualified migration](docs/communication-installation.md#older-reader-without-format-validation).
 
 To build an existing checkout:
 
