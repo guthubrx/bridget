@@ -2820,3 +2820,76 @@ pub(super) fn on_subscribe(agent: String, window: bridget_transport::protocol::A
                 })
             }
         }
+
+pub(super) fn on_display_name_set(request: bridget_transport::protocol::DisplayNameRequest, conn_id: &str, state: &Arc<Mutex<DaemonState>>) -> Option<DaemonToWrapper> {
+            use crate::agent_profile::{AgentProfileError, AgentProfileStore};
+            use bridget_transport::protocol::{
+                DisplayNameOutcome as Outcome, DisplayNameRefusal as Refusal,
+            };
+            let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+            let mut renamed = HashSet::new();
+            let result = (|| {
+                if request.version != 1
+                    || request.display_name.is_empty()
+                    || request.display_name.chars().count()
+                        > crate::agent_profile::MAX_DISPLAY_NAME_CHARS
+                    || request.display_name.chars().any(char::is_control)
+                {
+                    return Err(Refusal::InvalidRequest);
+                }
+                let (agent, _) =
+                    live_connection_identity(&st, conn_id).ok_or(Refusal::IdentityUnavailable)?;
+                let mut profiles = AgentProfileStore::open(&st.db_path)
+                    .map_err(|_| Refusal::StorageUnavailable)?;
+                let previous = profiles
+                    .profile_for_agent_id(&agent)
+                    .map_err(|_| Refusal::StorageUnavailable)?
+                    .ok_or(Refusal::IdentityUnavailable)?;
+                let displaced = profiles
+                    .agent_id_for_display_name(&request.display_name)
+                    .map_err(|_| Refusal::StorageUnavailable)?
+                    .filter(|holder| holder != &agent)
+                    .map(|holder| profiles.profile_for_agent_id(&holder))
+                    .transpose()
+                    .map_err(|_| Refusal::StorageUnavailable)?
+                    .flatten();
+                let profile = profiles
+                    // Session 110 : un nom détenu par une identité absente de
+                    // l'annuaire vivant est transféré ; un détenteur vivant
+                    // conserve le sien.
+                    .rename_display_name(&agent, &request.display_name, |holder| {
+                        st.router
+                            .get_agent(holder)
+                            .is_some_and(|route| st.connections.contains_key(&route.connection_id))
+                    })
+                    .map_err(|error| match error {
+                        AgentProfileError::Invalid(_) => Refusal::InvalidRequest,
+                        AgentProfileError::NotFound => Refusal::IdentityUnavailable,
+                        AgentProfileError::DisplayNameConflict => Refusal::NameConflict,
+                        AgentProfileError::RevisionConflict => Refusal::RevisionConflict,
+                        AgentProfileError::Sqlite(_) => Refusal::StorageUnavailable,
+                    })?;
+                if previous.display_name != profile.display_name {
+                    renamed.insert(agent.clone());
+                }
+                if let Some(before) = displaced
+                    && profiles
+                        .profile_for_agent_id(&before.agent_id)
+                        .map_err(|_| Refusal::StorageUnavailable)?
+                        .is_some_and(|after| after.display_name != before.display_name)
+                {
+                    renamed.insert(before.agent_id);
+                }
+                Ok(Outcome::Applied {
+                    agent_id: profile.agent_id,
+                    display_name: profile.display_name,
+                    revision: profile.revision,
+                })
+            })();
+            if !renamed.is_empty() {
+                publish_human_name_change(&mut st, &renamed);
+            }
+            Some(DaemonToWrapper::DisplayNameResult {
+                outcome: result.unwrap_or_else(|reason| Outcome::Rejected { reason }),
+            })
+        }
