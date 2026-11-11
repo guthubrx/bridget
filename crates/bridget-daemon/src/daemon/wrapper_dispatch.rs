@@ -1315,3 +1315,45 @@ pub(super) fn on_turn_state(in_progress: bool, conn_id: &str, state: &Arc<Mutex<
                 }),
             }
         }
+
+pub(super) fn on_unsubscribe(subscription_id: String, conn_id: &str, state: &Arc<Mutex<DaemonState>>) -> Option<DaemonToWrapper> {
+            let (control, view) = {
+                let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+                let Some(subscription) = st.attach_subscriptions.get(&subscription_id).cloned()
+                else {
+                    // Une fin d'ancienne génération n'a pas le droit de toucher
+                    // une souscription plus récente sur la même connexion.
+                    return None;
+                };
+                if subscription.attach_conn != conn_id {
+                    return Some(DaemonToWrapper::AttachRejected {
+                        subscription_id: Some(subscription_id),
+                        reason: AttachRefusal::MessageOutsideAttachRole,
+                        mode: None,
+                        location: None,
+                    });
+                }
+                st.attach_subscriptions.remove(&subscription_id);
+                let control = st
+                    .connections
+                    .get(&subscription.wrapper_conn)
+                    .map(|writer| DeferredControl {
+                        writer: writer.clone(),
+                        message: DaemonToWrapper::Unsubscribe {
+                            subscription_id: subscription_id.clone(),
+                        },
+                    });
+                (control, st.attach_views.remove(&subscription_id))
+            };
+            if let Some(control) = control {
+                let _ = execute_controls(vec![control]);
+            }
+            if let Some(view) = view {
+                let _ = view.enqueue(DaemonToWrapper::End {
+                    subscription_id,
+                    reason: "désabonnement demandé".to_string(),
+                });
+                view.close_and_join();
+            }
+            None
+        }
