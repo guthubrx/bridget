@@ -17108,22 +17108,7 @@ fn handle_wrapper_message_with_peer(
             wrapper_dispatch::on_journal_ready(receipt_probe, conn_id, state)
         }
 
-        WrapperToDaemon::TerminalSessionReady => {
-            let mut st = state.lock().recover_poison();
-            if st.auxiliary_connections.contains(conn_id)
-                || !st
-                    .conn_instances
-                    .get(conn_id)
-                    .is_some_and(|id| st.presences.contains_key(id))
-            {
-                return Some(DaemonToWrapper::Nack {
-                    id: "terminal-session-ready".into(),
-                    reason: "session terminal annoncée sans wrapper enregistré".into(),
-                });
-            }
-            st.terminal_sessions.insert(conn_id.to_string());
-            None
-        }
+        WrapperToDaemon::TerminalSessionReady => wrapper_dispatch::on_terminal_session_ready(conn_id, state),
 
         WrapperToDaemon::Unregister => wrapper_dispatch::on_unregister(conn_id, state),
 

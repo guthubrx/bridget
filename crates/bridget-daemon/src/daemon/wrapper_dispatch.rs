@@ -4515,3 +4515,20 @@ pub(super) fn on_availability(agent: String, until_secs: Option<u64>, conn_id: &
             observer_return_tick(state, unix_now_secs(), return_clock);
             Some(result)
         }
+
+pub(super) fn on_terminal_session_ready(conn_id: &str, state: &Arc<Mutex<DaemonState>>) -> Option<DaemonToWrapper> {
+            let mut st = state.lock().recover_poison();
+            if st.auxiliary_connections.contains(conn_id)
+                || !st
+                    .conn_instances
+                    .get(conn_id)
+                    .is_some_and(|id| st.presences.contains_key(id))
+            {
+                return Some(DaemonToWrapper::Nack {
+                    id: "terminal-session-ready".into(),
+                    reason: "session terminal annoncée sans wrapper enregistré".into(),
+                });
+            }
+            st.terminal_sessions.insert(conn_id.to_string());
+            None
+        }
