@@ -57,3 +57,27 @@ PID 33346, avec cwd disparu, bloquait l’observation globale. François autoris
 explicitement son arrêt et celui de l’auxiliaire 52798. Après SIGTERM du serveur,
 l’auxiliaire a terminé seul. T3 garde PID 77762, né à 14:10:41. Aucun processus
 Bridget de mission n’est arrêté pour ce ménage.
+
+
+Activation : maître, service mobile et cinq workers (Mac, M1, Cartae, SYS, KS)
+chargent 0.8.39 / 273-mission-et-limites-r1. Images et pointeurs de retour 272
+qualifiés. Le MCP existant confirme sur notre revue : round=1, round_limit=8,
+rounds_remaining=7, continuable=false. Aucun catalogue T3 rechargé ni T3 arrêté.
+Publication v0.8.39 : six fichiers vérifiés après téléchargement anonyme.
+45 tests ciblés sur chaque plateforme, contrôle final du catalogue direct/auto,
+Clippy strict workspace/all-targets et builds release réussis. Linux exige glibc
+2.34, sous le plafond 2.36. Le service mobile répond HTTP 200, enveloppe version 1.
+Les sept propriétaires concernés ont leurs faits et la reprise de lecture dans
+un avis conservé sans réveil. Aucun message conservé n’est déclaré lu.
+
+Ménage du Mac : cache 271, 71,22 Gio logiques d’intermédiaires retirés ; cache 264,
+24,53 Gio logiques retirés. Les tailles logiques incluent les clones APFS : la
+mesure utile est l’espace libre passé d’environ 27 à 64 Gio. Six anciennes copies
+exécutables inutilisées sont retirées (223 459 776 octets). Les anciennes images
+266/268/269/271 encore réellement chargées sont conservées, ainsi que l’active 273
+et le retour 272. Les exports temporaires de cette livraison sont retirés après
+vérification publique ; les archives courantes, reçus et le source cumulatif utile
+restent conservés. Le dossier du projet est sur main, un seul checkout, aucune
+branche locale ou distante de travail. Rapport puis application de menage.py :
+aucun autre worktree, branche ou reconstructible éligible. Aucun projet métier
+n’a été nettoyé. Les worktrees Parix explicitement réutilisés restent en place.

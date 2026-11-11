@@ -1,6 +1,6 @@
 # 273 : mission à exécuter et limites visibles
 
-Statut : qualification en cours.
+Statut : actif, version 0.8.39 / 273-mission-et-limites-r1. T3 reste ouvert.
 
 Une mission a reçu son brief complet mais a terminé avec une simple acceptation,
 sans appel d’outil. Le transport n’a pas perdu le brief. L’enveloppe native précise
