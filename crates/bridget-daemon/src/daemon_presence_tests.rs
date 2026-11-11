@@ -1,6 +1,66 @@
 use super::*;
 use bridget_transport::poison::RecoverPoison;
 
+#[test]
+fn spec268_journal_terminal_nettoye_reste_connu_sans_presence_volatile() {
+    let (shared, config, tasks) = control158_state_with_tasks("journal-durable");
+    {
+        let state = shared.lock().unwrap();
+        let mut task = tasks[0].clone();
+        assert!(!state.presences.values().any(|p| p.name == task.child));
+        for phase in ["result_available", "failed", "cancelled"] {
+            task.state = phase.into();
+            task.cleanup_done = true;
+            state.delegation_store.save(&task).unwrap();
+            assert_eq!(
+                attach_refusal_for_subscription(&state, &task.child)
+                    .unwrap_err()
+                    .reason,
+                AttachRefusal::AgentStopped,
+                "la fin durable nettoyée doit survivre à la perte de présence : {phase}"
+            );
+        }
+        for (phase, cleaned) in [("working", true), ("cancelled", false)] {
+            task.state = phase.into();
+            task.cleanup_done = cleaned;
+            state.delegation_store.save(&task).unwrap();
+            assert_eq!(
+                attach_refusal_for_subscription(&state, &task.child)
+                    .unwrap_err()
+                    .reason,
+                AttachRefusal::AgentUnknown,
+                "un état sans arrêt confirmé ne doit pas devenir arrêté"
+            );
+        }
+        assert_eq!(
+            attach_refusal_for_subscription(&state, "inconnu268")
+                .unwrap_err()
+                .reason,
+            AttachRefusal::AgentUnknown
+        );
+        let mut duplicate = tasks[1].clone();
+        duplicate.child = task.child.clone();
+        assert!(
+            state.delegation_store.save(&duplicate).is_err(),
+            "l'index unique existant interdit une ancienne tâche homonyme"
+        );
+        state
+            .store
+            .connection()
+            .execute_batch("DROP TABLE native_delegations")
+            .unwrap();
+        assert_eq!(
+            attach_refusal_for_subscription(&state, &task.child)
+                .unwrap_err()
+                .reason,
+            AttachRefusal::AgentUnknown,
+            "une lecture durable en erreur ne prouve aucun arrêt"
+        );
+    }
+    drop(shared);
+    let _ = std::fs::remove_file(config.db_path);
+}
+
 // T017 : vrais sockets, preuve primaire réemployée et une seule négociation.
 fn edit159_cancel_auxiliary(
     f: &Held159SweepFixture,

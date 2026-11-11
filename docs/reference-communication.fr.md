@@ -868,6 +868,14 @@ un curseur devenu indisponible annonce une lacune (`Gap`). Source inaccessible,
 fin de flux et rattrapage terminé sont distincts. Ni un journal frais ni une
 connexion vivante ne prouvent qu'un agent travaille.
 
+Sans route active, une tâche native terminale dont le nettoyage est confirmé
+reste reconnue après disparition des présences en mémoire : le refus est
+`AgentStopped`. Cela ne prouve pas que son résultat a été lu ou remis.
+`AgentUnknown` signifie que ce suivi ne reconnaît pas de route ou de fin attestée,
+pas que la mission a disparu. Le propriétaire vérifie l'état durable avec
+`bridget_task_status` et le même `task_id`. Un autre responsable lui demande ce
+relevé ; un refus de journal n'autorise ni relance ni mission de remplacement.
+
 **Parler dans attach :** taper un message puis Entrée l'envoie à l'agent ;
 Ctrl-C quitte la vue sans arrêter l'équipier. Ce n'est pas une reprise de la TUI
 fournisseur ni un écran permettant d'accorder des permissions. La ligne de statut

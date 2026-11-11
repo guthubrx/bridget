@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.8.35 - 2026-11-11
+
+- Le refus de journal reconnaît une tâche terminée et nettoyée depuis son état durable, même après disparition de sa présence en mémoire.
+- Les routes actives restent prioritaires ; aucun arrêt n’est déduit d’une tâche encore active ou sans nettoyage confirmé.
+
 ## 0.8.34 - 2026-11-11
 
 - CPU et charge élevés orientent le placement automatique sans interdire la machine imposée ; protection mémoire conservée.

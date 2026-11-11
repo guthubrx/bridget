@@ -3773,7 +3773,15 @@ fn attach_refusal_for_subscription(
         None if state
             .presences
             .values()
-            .any(|presence| presence.name == agent && presence.state == "stopped") =>
+            .any(|presence| presence.name == agent && presence.state == "stopped")
+            // La présence est volatile ; l'index enfant durable conserve la fin.
+            // Un état terminal sans nettoyage confirmé ne prouve pas l'arrêt.
+            || state
+                .delegation_store
+                .for_child(agent)
+                .ok()
+                .flatten()
+                .is_some_and(|task| task.terminal() && task.cleanup_done) =>
         {
             return Err(AttachSubscriptionRefusal::without_presence(
                 AttachRefusal::AgentStopped,

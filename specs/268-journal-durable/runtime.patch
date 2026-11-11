@@ -1,0 +1,129 @@
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -7,7 +7,7 @@
+ ]
+ 
+ [workspace.package]
+-version = "0.8.34"
++version = "0.8.35"
+ edition = "2024"
+ license = "MIT"
+ 
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -192,7 +192,7 @@
+ 
+ [[package]]
+ name = "bridget-core"
+-version = "0.8.34"
++version = "0.8.35"
+ dependencies = [
+  "serde",
+  "serde_json",
+@@ -201,7 +201,7 @@
+ 
+ [[package]]
+ name = "bridget-daemon"
+-version = "0.8.34"
++version = "0.8.35"
+ dependencies = [
+  "axum",
+  "base64",
+@@ -229,7 +229,7 @@
+ 
+ [[package]]
+ name = "bridget-transport"
+-version = "0.8.34"
++version = "0.8.35"
+ dependencies = [
+  "bridget-core",
+  "libc",
+--- a/crates/bridget-daemon/src/daemon.rs
++++ b/crates/bridget-daemon/src/daemon.rs
+@@ -3746,7 +3746,15 @@
+         None if state
+             .presences
+             .values()
+-            .any(|presence| presence.name == agent && presence.state == "stopped") =>
++            .any(|presence| presence.name == agent && presence.state == "stopped")
++            // La présence est volatile ; l'index enfant durable conserve la fin.
++            // Un état terminal sans nettoyage confirmé ne prouve pas l'arrêt.
++            || state
++                .delegation_store
++                .for_child(agent)
++                .ok()
++                .flatten()
++                .is_some_and(|task| task.terminal() && task.cleanup_done) =>
+         {
+             return Err(AttachSubscriptionRefusal::without_presence(
+                 AttachRefusal::AgentStopped,
+--- a/crates/bridget-daemon/src/daemon_presence_tests.rs
++++ b/crates/bridget-daemon/src/daemon_presence_tests.rs
+@@ -4102,6 +4102,67 @@
+ 
+     // T008/T012 : neuf usages. Réemploi état/registre/SQLite et négociation
+     // publics ; aucune présence d'enfant ni aucun fournisseur lancé.
++#[test]
++fn spec268_journal_terminal_nettoye_reste_connu_sans_presence_volatile() {
++    let (shared, config, tasks) = control158_state_with_tasks("journal-durable");
++    {
++        let state = shared.lock().unwrap();
++        let mut task = tasks[0].clone();
++        assert!(!state.presences.values().any(|p| p.name == task.child));
++        for phase in ["result_available", "failed", "cancelled"] {
++            task.state = phase.into();
++            task.cleanup_done = true;
++            state.delegation_store.save(&task).unwrap();
++            assert_eq!(
++                attach_refusal_for_subscription(&state, &task.child)
++                    .unwrap_err()
++                    .reason,
++                AttachRefusal::AgentStopped,
++                "la fin durable nettoyée doit survivre à la perte de présence : {phase}"
++            );
++        }
++        for (phase, cleaned) in [("working", true), ("cancelled", false)] {
++            task.state = phase.into();
++            task.cleanup_done = cleaned;
++            state.delegation_store.save(&task).unwrap();
++            assert_eq!(
++                attach_refusal_for_subscription(&state, &task.child)
++                    .unwrap_err()
++                    .reason,
++                AttachRefusal::AgentUnknown,
++                "un état sans arrêt confirmé ne doit pas devenir arrêté"
++            );
++        }
++        assert_eq!(
++            attach_refusal_for_subscription(&state, "inconnu268")
++                .unwrap_err()
++                .reason,
++            AttachRefusal::AgentUnknown
++        );
++        let mut duplicate = tasks[1].clone();
++        duplicate.child = task.child.clone();
++        assert!(
++            state.delegation_store.save(&duplicate).is_err(),
++            "l'index unique existant interdit une ancienne tâche homonyme"
++        );
++        state
++            .store
++            .connection()
++            .execute_batch("DROP TABLE native_delegations")
++            .unwrap();
++        assert_eq!(
++            attach_refusal_for_subscription(&state, &task.child)
++                .unwrap_err()
++                .reason,
++            AttachRefusal::AgentUnknown,
++            "une lecture durable en erreur ne prouve aucun arrêt"
++        );
++    }
++    drop(shared);
++    let _ = std::fs::remove_file(config.db_path);
++}
++
++
+     fn control158_state_with_tasks(
+         label: &str,
+     ) -> (
