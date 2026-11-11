@@ -17216,27 +17216,7 @@ fn handle_wrapper_message_with_peer(
             state,
         ),
 
-        WrapperToDaemon::DiskSpace { fact } => {
-            let mut st = state.lock().recover_poison();
-            let Some(instance_id) = st.conn_instances.get(conn_id).cloned() else {
-                warn!(
-                    "relevé d'espace disque ignoré avant l'enregistrement: {}",
-                    conn_id
-                );
-                return None;
-            };
-            let Some(presence) = st.presences.get_mut(&instance_id) else {
-                warn!(
-                    "relevé d'espace disque ignoré sans présence: {}",
-                    instance_id
-                );
-                return None;
-            };
-            // Fait d'inventaire seulement : surtout ne pas toucher aux
-            // horloges ou à l'état, qui gouvernent la disponibilité.
-            presence.disk_space = Some(fact);
-            None
-        }
+        WrapperToDaemon::DiskSpace { fact } => wrapper_dispatch::on_disk_space(fact, conn_id, state),
 
         WrapperToDaemon::JournalReady { receipt_probe } => {
             wrapper_dispatch::on_journal_ready(receipt_probe, conn_id, state)

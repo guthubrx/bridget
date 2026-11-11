@@ -4332,3 +4332,25 @@ pub(super) fn on_rate_limit(agent: String, window: String, status: String, reset
                 &mut st,
             ))
         }
+
+pub(super) fn on_disk_space(fact: bridget_transport::protocol::DiskSpaceFact, conn_id: &str, state: &Arc<Mutex<DaemonState>>) -> Option<DaemonToWrapper> {
+            let mut st = state.lock().recover_poison();
+            let Some(instance_id) = st.conn_instances.get(conn_id).cloned() else {
+                warn!(
+                    "relevé d'espace disque ignoré avant l'enregistrement: {}",
+                    conn_id
+                );
+                return None;
+            };
+            let Some(presence) = st.presences.get_mut(&instance_id) else {
+                warn!(
+                    "relevé d'espace disque ignoré sans présence: {}",
+                    instance_id
+                );
+                return None;
+            };
+            // Fait d'inventaire seulement : surtout ne pas toucher aux
+            // horloges ou à l'état, qui gouvernent la disponibilité.
+            presence.disk_space = Some(fact);
+            None
+        }
