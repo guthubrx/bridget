@@ -4532,3 +4532,20 @@ pub(super) fn on_terminal_session_ready(conn_id: &str, state: &Arc<Mutex<DaemonS
             st.terminal_sessions.insert(conn_id.to_string());
             None
         }
+
+pub(super) fn on_artifact_read(request: bridget_transport::protocol::ArtifactReadRequest, conn_id: &str, state: &Arc<Mutex<DaemonState>>) -> Option<DaemonToWrapper> {
+            let result = (|| {
+                let (scope, database_path, artifact_root) = {
+                    let st = state.lock().recover_poison();
+                    let (_, _, scope) = artifact_access_scope(&st, conn_id)?;
+                    (scope, st.db_path.clone(), st.artifact_root.clone())
+                };
+                ArtifactService::open(&database_path, &artifact_root, ArtifactPolicy::default())
+                    .map_err(|_| ArtifactReadRefusal::StorageUnavailable)?
+                    .read(&scope, &request)
+            })();
+            Some(artifact_read_response(
+                Some(&request),
+                result.unwrap_or_else(|reason| ArtifactReadOutcome::Rejected { reason }),
+            ))
+        }

@@ -16706,22 +16706,7 @@ fn handle_wrapper_message_with_peer(
                 reason: RuntimeIngressRefusal::ReservationMissing,
             })
         }
-        WrapperToDaemon::ArtifactRead { request } => {
-            let result = (|| {
-                let (scope, database_path, artifact_root) = {
-                    let st = state.lock().recover_poison();
-                    let (_, _, scope) = artifact_access_scope(&st, conn_id)?;
-                    (scope, st.db_path.clone(), st.artifact_root.clone())
-                };
-                ArtifactService::open(&database_path, &artifact_root, ArtifactPolicy::default())
-                    .map_err(|_| ArtifactReadRefusal::StorageUnavailable)?
-                    .read(&scope, &request)
-            })();
-            Some(artifact_read_response(
-                Some(&request),
-                result.unwrap_or_else(|reason| ArtifactReadOutcome::Rejected { reason }),
-            ))
-        }
+        WrapperToDaemon::ArtifactRead { request } => wrapper_dispatch::on_artifact_read(request, conn_id, state),
         WrapperToDaemon::ArtifactPublish {
             contract_version,
             canonical_publication,
