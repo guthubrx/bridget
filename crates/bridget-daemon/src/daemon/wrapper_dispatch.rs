@@ -4228,3 +4228,27 @@ pub(super) fn on_guichet_lookup(version: u16, issuer_scope: String, request_id: 
                 }
             }
         }
+
+pub(super) fn on_unregister(conn_id: &str, state: &Arc<Mutex<DaemonState>>) -> Option<DaemonToWrapper> {
+            let (controls, views) = {
+                let mut st = state.lock().recover_poison();
+                let (controls, views) = close_attach_subscriptions(&mut st, conn_id);
+                st.router.unregister_by_conn(conn_id);
+                st.mark_stopped(conn_id);
+                st.conn_names.remove(conn_id);
+                st.observation_sequences.remove(conn_id);
+                st.runtime_catalogue_connections.remove(conn_id);
+                st.observations.remove_source(conn_id, Instant::now());
+                st.conn_hosts.remove(conn_id);
+                st.communication_projects.remove(conn_id);
+                st.conn_operating_systems.remove(conn_id);
+                st.service_negotiations.remove(conn_id);
+                st.terminal_sessions.remove(conn_id);
+                (controls, views)
+            };
+            let _ = execute_controls(controls);
+            for view in views {
+                view.close_and_join();
+            }
+            None
+        }

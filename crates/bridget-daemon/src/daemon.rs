@@ -17319,29 +17319,7 @@ fn handle_wrapper_message_with_peer(
             None
         }
 
-        WrapperToDaemon::Unregister => {
-            let (controls, views) = {
-                let mut st = state.lock().recover_poison();
-                let (controls, views) = close_attach_subscriptions(&mut st, conn_id);
-                st.router.unregister_by_conn(conn_id);
-                st.mark_stopped(conn_id);
-                st.conn_names.remove(conn_id);
-                st.observation_sequences.remove(conn_id);
-                st.runtime_catalogue_connections.remove(conn_id);
-                st.observations.remove_source(conn_id, Instant::now());
-                st.conn_hosts.remove(conn_id);
-                st.communication_projects.remove(conn_id);
-                st.conn_operating_systems.remove(conn_id);
-                st.service_negotiations.remove(conn_id);
-                st.terminal_sessions.remove(conn_id);
-                (controls, views)
-            };
-            let _ = execute_controls(controls);
-            for view in views {
-                view.close_and_join();
-            }
-            None
-        }
+        WrapperToDaemon::Unregister => wrapper_dispatch::on_unregister(conn_id, state),
 
         WrapperToDaemon::SelectRuntime { agent, selection } => Some(select_runtime_from_attach(
             state, conn_id, &agent, selection,
