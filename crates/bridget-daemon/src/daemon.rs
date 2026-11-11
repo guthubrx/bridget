@@ -18378,33 +18378,7 @@ fn handle_wrapper_message_with_peer(
             offset,
             final_fragment,
             bytes,
-        } => {
-            let views = {
-                let st = state.lock().unwrap_or_else(|e| e.into_inner());
-                st.attach_subscriptions
-                    .iter()
-                    .filter(|(_, subscription)| {
-                        subscription.wrapper_conn == conn_id && subscription.caught_up
-                    })
-                    .filter_map(|(subscription_id, _)| {
-                        st.attach_views
-                            .get(subscription_id)
-                            .cloned()
-                            .map(|view| (subscription_id.clone(), view))
-                    })
-                    .collect::<Vec<_>>()
-            };
-            for (subscription_id, view) in views {
-                let _ = view.enqueue(DaemonToWrapper::JournalFragment {
-                    subscription_id,
-                    seq,
-                    offset,
-                    final_fragment,
-                    bytes: bytes.clone(),
-                });
-            }
-            None
-        }
+        } => wrapper_dispatch::on_live_journal_fragment(seq, offset, final_fragment, bytes, conn_id, state),
         WrapperToDaemon::SnapshotCaughtUp {
             subscription_id,
             through_seq,

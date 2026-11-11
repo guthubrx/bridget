@@ -1530,3 +1530,31 @@ pub(super) fn on_journal_ready(receipt_probe: bool, conn_id: &str, state: &Arc<M
             }
             None
         }
+
+pub(super) fn on_live_journal_fragment(seq: u64, offset: u64, final_fragment: bool, bytes: Vec<u8>, conn_id: &str, state: &Arc<Mutex<DaemonState>>) -> Option<DaemonToWrapper> {
+            let views = {
+                let st = state.lock().unwrap_or_else(|e| e.into_inner());
+                st.attach_subscriptions
+                    .iter()
+                    .filter(|(_, subscription)| {
+                        subscription.wrapper_conn == conn_id && subscription.caught_up
+                    })
+                    .filter_map(|(subscription_id, _)| {
+                        st.attach_views
+                            .get(subscription_id)
+                            .cloned()
+                            .map(|view| (subscription_id.clone(), view))
+                    })
+                    .collect::<Vec<_>>()
+            };
+            for (subscription_id, view) in views {
+                let _ = view.enqueue(DaemonToWrapper::JournalFragment {
+                    subscription_id,
+                    seq,
+                    offset,
+                    final_fragment,
+                    bytes: bytes.clone(),
+                });
+            }
+            None
+        }
