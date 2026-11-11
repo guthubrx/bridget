@@ -16622,13 +16622,7 @@ fn handle_wrapper_message_with_peer(
             version,
             task_id,
             request_id,
-        } => Some(handle_delegation_cancel(
-            state,
-            conn_id,
-            version,
-            &task_id,
-            &request_id,
-        )),
+        } => wrapper_dispatch::on_delegation_cancel(version, task_id, request_id, conn_id, state),
         WrapperToDaemon::DelegationHaltSet {
             version,
             command_id,

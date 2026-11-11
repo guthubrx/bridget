@@ -4821,3 +4821,11 @@ pub(super) fn on_request_wait(request_id: String, wait_timeout: u64, conn_id: &s
             peer,
             Duration::from_secs(5),
         )) }
+
+pub(super) fn on_delegation_cancel(version: u16, task_id: String, request_id: String, conn_id: &str, state: &Arc<Mutex<DaemonState>>) -> Option<DaemonToWrapper> { Some(handle_delegation_cancel(
+            state,
+            conn_id,
+            version,
+            &task_id,
+            &request_id,
+        )) }
