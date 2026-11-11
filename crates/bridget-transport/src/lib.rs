@@ -10,6 +10,7 @@ pub mod claude_stream_json;
 pub mod codex_app_server;
 mod codex_socket;
 pub mod fsutil;
+pub mod poison;
 pub mod greffe_authorization;
 pub mod greffe_policy_refresh;
 pub mod journal;
