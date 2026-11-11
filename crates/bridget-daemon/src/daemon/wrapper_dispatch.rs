@@ -4766,3 +4766,17 @@ pub(super) fn on_ledger_projection(scope: bridget_transport::protocol::LedgerSco
                 }),
             }
         }
+
+pub(super) fn on_domain(agent: String, domain: Option<String>, conn_id: &str, state: &Arc<Mutex<DaemonState>>) -> Option<DaemonToWrapper> {
+            let mut st = state.lock().recover_poison();
+            let instance_id = match self_mutation_instance(&st, conn_id, &agent, "domain") {
+                Ok(instance_id) => instance_id,
+                Err(response) => return Some(*response),
+            };
+            Some(handle_domain_for_instance(
+                &agent,
+                domain,
+                Some(&instance_id),
+                &mut st,
+            ))
+        }

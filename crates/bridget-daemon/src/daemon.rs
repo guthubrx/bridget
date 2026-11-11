@@ -17274,19 +17274,7 @@ fn handle_wrapper_message_with_peer(
             Some(handle_usage_window(&agent, from_secs, to_secs, &st))
         }
 
-        WrapperToDaemon::Domain { agent, domain } => {
-            let mut st = state.lock().recover_poison();
-            let instance_id = match self_mutation_instance(&st, conn_id, &agent, "domain") {
-                Ok(instance_id) => instance_id,
-                Err(response) => return Some(*response),
-            };
-            Some(handle_domain_for_instance(
-                &agent,
-                domain,
-                Some(&instance_id),
-                &mut st,
-            ))
-        }
+        WrapperToDaemon::Domain { agent, domain } => wrapper_dispatch::on_domain(agent, domain, conn_id, state),
 
         WrapperToDaemon::Availability { agent, until_secs } => {
             wrapper_dispatch::on_availability(agent, until_secs, conn_id, state)
