@@ -2744,3 +2744,79 @@ pub(super) fn on_observation_request(request: bridget_transport::protocol::Obser
             result["evicted_writes"] = serde_json::json!(st.observations.evicted_writes);
             Some(DaemonToWrapper::ObservationResult { result })
         }
+
+pub(super) fn on_subscribe(agent: String, window: bridget_transport::protocol::AttachWindow, conn_id: &str, state: &Arc<Mutex<DaemonState>>) -> Option<DaemonToWrapper> {
+            let (subscription_id, control) = {
+                let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+                if st.connection_roles.get(conn_id) != Some(&ConnectionRole::Attach) {
+                    return Some(DaemonToWrapper::AttachRejected {
+                        subscription_id: None,
+                        reason: AttachRefusal::MessageOutsideAttachRole,
+                        mode: None,
+                        location: None,
+                    });
+                }
+                let wrapper_conn = match attach_refusal_for_subscription(&st, &agent) {
+                    Ok(connection_id) => connection_id,
+                    Err(refusal) => {
+                        return Some(DaemonToWrapper::AttachRejected {
+                            subscription_id: None,
+                            reason: refusal.reason,
+                            mode: refusal.mode,
+                            location: refusal.location,
+                        });
+                    }
+                };
+                let subscription_id = format!("attach-{}", uuid::Uuid::new_v4());
+                let Some(view) = st.connections.get(conn_id).and_then(|writer| {
+                    AttachView::start(subscription_id.clone(), writer, st.view_closed_tx.clone())
+                }) else {
+                    return Some(DaemonToWrapper::AttachRejected {
+                        subscription_id: Some(subscription_id),
+                        reason: AttachRefusal::WrapperUnavailable,
+                        mode: None,
+                        location: None,
+                    });
+                };
+                let writer = st.connections.get(&wrapper_conn).cloned();
+                st.attach_subscriptions.insert(
+                    subscription_id.clone(),
+                    AttachSubscription {
+                        agent: agent.clone(),
+                        attach_conn: conn_id.to_string(),
+                        wrapper_conn,
+                        caught_up: false,
+                    },
+                );
+                st.attach_views.insert(subscription_id.clone(), view);
+                let control = writer.map(|writer| DeferredControl {
+                    writer,
+                    message: DaemonToWrapper::Subscribe {
+                        subscription_id: subscription_id.clone(),
+                        agent,
+                        window,
+                    },
+                });
+                (subscription_id, control)
+            };
+            let accepted =
+                control.is_some_and(|control| execute_controls(vec![control]).is_empty());
+            if accepted {
+                None
+            } else {
+                let view = {
+                    let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+                    st.attach_subscriptions.remove(&subscription_id);
+                    st.attach_views.remove(&subscription_id)
+                };
+                if let Some(view) = view {
+                    view.close_and_join();
+                }
+                Some(DaemonToWrapper::AttachRejected {
+                    subscription_id: Some(subscription_id),
+                    reason: AttachRefusal::WrapperUnavailable,
+                    mode: None,
+                    location: None,
+                })
+            }
+        }
