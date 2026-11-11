@@ -1,4 +1,5 @@
 use super::*;
+
 pub(super) fn refusal(code: &str) -> Option<Value> {
     if let Some(detail) = code.strip_prefix("origin_request_invalid:") {
         let (field, cause) = detail.split_once(':').unwrap_or((detail, "unobserved"));
@@ -50,6 +51,21 @@ pub(super) fn refusal(code: &str) -> Option<Value> {
         return Some(view);
     }
     let (message, recovery, field) = match code {
+        "project_preparation_process_failed" => (
+            "Faites lire le refus de préparation à la même heure dans la sortie d’erreur du worker source.",
+            "La commande ssh de préparation a rendu un code de sortie non nul. Le responsable Bridget doit lire l’événement bridget_project_preparation à l’heure de ce refus dans la sortie d’erreur du service worker de la machine source du parent : journal de l’unité sous systemd, ou StandardErrorPath du plist chargé sous launchd. Rapprocher heure, opération inspect/prepare et exit_code ; correlation_id identifie le contrôle dans ce journal, mais ne figure pas dans ce reçu et ne suffit pas seul à retrouver la demande. Ces faits ne prouvent ni panne de réseau ni défaut de compte ou de droits ; la cause amont reste à vérifier avant une reprise. Conserver la clé, l’enveloppe et tout dépôt préparé ; lire detail.admission pour suivre une tâche existante ou une admission encore incertaine. Ne pas recréer une mission pour tester la liaison. Les autres travaux autorisés suivent leur propre état.",
+            None,
+        ),
+        "project_preparation_transport_failed" => (
+            "Faites vérifier le résultat du relais de préparation et le canal SSH configuré pour cette demande.",
+            "Cet ancien code ne distingue pas un processus en échec d’une réponse hors borne et n’a pas conservé son opération ni son code de sortie. La cause reste inconnue. Conserver la clé, l’enveloppe et tout dépôt déjà préparé ; le responsable Bridget doit qualifier les faits disponibles sur le worker source et la cible, puis lire detail.admission avant une reprise. Ne déduire ni panne de réseau ni défaut de compte ou de droits. Ne pas recréer une mission d’issue inconnue. Les autres travaux autorisés suivent leur propre état.",
+            None,
+        ),
+        "project_preparation_output_limit" => (
+            "Faites vérifier la taille de la réponse de préparation, sans rejouer la mission.",
+            "La réponse a dépassé la borne de lecture du relais de préparation. Ce refus ne prouve pas une panne SSH. Le responsable Bridget doit qualifier le format et la borne de réponse pour cette demande. Conserver la clé, l’enveloppe et tout dépôt déjà préparé ; lire detail.admission avant une reprise. Les autres travaux autorisés suivent leur propre état.",
+            None,
+        ),
         "project_preparation_git_required" => (
             "Utilisez le dossier existant sur sa machine source, ou faites vérifier une correspondance vers un dossier distant déjà présent.",
             "Le dossier source est hors Git et la destination inspectée n’existe pas. general/shared permet d’omettre expected_base_commit, mais ne copie pas automatiquement les fichiers hors Git vers une nouvelle machine. Pour rester sur la source, employer son machine_id déjà autorisé ; pour une autre machine, faire vérifier son dossier existant et sa correspondance native. Ne pas créer un dépôt Git ni transférer des documents pour contourner ce refus. Lire detail.admission avant de reprendre : une issue inconnue garde sa clé et son enveloppe ; un changement de machine nécessite une nouvelle demande identifiée après vérification qu’aucune tâche n’a été admise. Ce refus ne prouve pas un placement final ni une panne globale. Si le dossier distant requis n’est pas autorisé, demander cette seule décision à l’utilisateur.",
@@ -331,6 +347,27 @@ pub(super) fn contextual_refusal(encoded: &str) -> Value {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn spec271_preparation_guidance_distinguishes_new_facts_from_legacy_unknown() {
+        let view = refusal("project_preparation_process_failed").unwrap();
+        assert_eq!(view["code"], "project_preparation_process_failed");
+        assert!(
+            view["detail"]["recovery"]
+                .as_str()
+                .unwrap()
+                .contains("bridget_project_preparation")
+        );
+        assert!(view["detail"].get("transport").is_none());
+        let legacy = refusal("project_preparation_transport_failed").unwrap();
+        assert!(
+            legacy["detail"]["recovery"]
+                .as_str()
+                .unwrap()
+                .contains("inconnue")
+        );
+        assert!(refusal("project_preparation_output_limit").is_some());
+    }
+
     use super::*;
     #[test]
     fn spec252_non_git_refusal_keeps_machine_and_useful_action() {

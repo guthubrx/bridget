@@ -142,6 +142,31 @@ fn prepare_script(
         if code.len() > 128 || !code.bytes().all(|b| b.is_ascii_lowercase() || b == b'_') {
             return Err("project_preparation_failed".into());
         }
+        if code == "project_preparation_process_failed"
+            && let Some(detail) = answer.get("detail").and_then(Value::as_object)
+            && detail.len() == 2
+            && matches!(
+                detail.get("operation").and_then(Value::as_str),
+                Some("inspect" | "prepare")
+            )
+            && detail
+                .get("exit_code")
+                .and_then(Value::as_i64)
+                .is_some_and(|n| n != 0 && (-255..=255).contains(&n))
+        {
+            let correlation = request
+                .get("correlation_id")
+                .and_then(Value::as_str)
+                .filter(|value| uuid::Uuid::parse_str(value).is_ok());
+            eprintln!(
+                "bridget_project_preparation {}",
+                serde_json::json!({
+                    "version":1,"scope":"this_request","code":code,
+                    "correlation_id":correlation,"operation":detail["operation"],
+                    "exit_code":detail["exit_code"],"cause":"unobserved"
+                })
+            );
+        }
         Err(code.to_owned())
     })();
     // Un enfant survivant garde sa fixture privée ; aucun dépôt n'est supprimé.
@@ -161,6 +186,46 @@ fn prepare_script(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn spec271_transport_diagnostic_preserves_legacy_wire_shape() {
+        use bridget_transport::protocol::{OriginProofResponse, OriginProofResult, WorkerIdentity};
+        let script = "print('{\"ok\":false,\"error\":\"project_preparation_process_failed\",\"detail\":{\"operation\":\"inspect\",\"exit_code\":255}}')";
+        let request = serde_json::json!({"correlation_id":"27100000-0000-4000-8000-000000000001"});
+        let error =
+            prepare_script(&request, script, Instant::now() + Duration::from_secs(5)).unwrap_err();
+        assert_eq!(error, "project_preparation_process_failed");
+        let response = OriginProofResponse {
+            version: 1,
+            correlation_id: "correlation271".into(),
+            connection_epoch: "epoch271".into(),
+            worker: WorkerIdentity {
+                machine_id: "fixture271".into(),
+                worker_id: "worker271".into(),
+                provisioning_revision: 1,
+            },
+            response: OriginProofResult::ProjectPrepared {
+                permission_digest: "a".repeat(64),
+                preparation_error: Some(error),
+                project: None,
+            },
+        };
+        assert_eq!(response.validate_shape(), Ok(()));
+        let mut incompatible = response;
+        if let OriginProofResult::ProjectPrepared {
+            preparation_error, ..
+        } = &mut incompatible.response
+        {
+            *preparation_error = Some(
+                "project_preparation_transport_failed:{\"operation\":\"inspect\",\"exit_code\":255}"
+                    .into(),
+            );
+        }
+        assert!(
+            incompatible.validate_shape().is_err(),
+            "ne pas élargir le protocole pour faire passer le diagnostic"
+        );
+    }
+
     #[test]
     fn spec229_preparation_context_crosses_wire_and_reaches_coordinator_registry() {
         use bridget_transport::protocol::*;

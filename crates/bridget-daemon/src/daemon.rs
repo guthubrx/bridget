@@ -12018,7 +12018,9 @@ fn prepare_dispatch(
 
     // Une ronde achevée ne reçoit plus de guidage. Nommer ce fait avant le
     // contrôle des dossiers physiques, sans admettre ni remplacer une mission.
-    if message.intent == Some(bridget_core::MessageIntent::SteerCurrent)
+    if !native_task_exchange
+        && !valid_tracked_reply
+        && message.intent != Some(bridget_core::MessageIntent::StoreOnly)
         && let Some((owner, instance)) = live_connection_identity(st, conn_id)
         && let Ok(Some(task)) = st.delegation_store.for_child(&routing_to)
         && task.owner == owner
@@ -12028,7 +12030,7 @@ fn prepare_dispatch(
         return Err((
             "intent_not_permitted",
             format!(
-                "Lire bridget_task_status pour la tâche {} : cette ronde a déjà rendu son résultat et ne reçoit plus de steer. Si l'enfant reste gardé et qu'un complément est autorisé, ouvrir une nouvelle ronde avec bridget_task_continue, le même task_id et une nouvelle request_id. Conserver le résultat ; ne pas recréer la mission ni ajouter un motif hors projet pour forcer ce guidage. Ce refus concerne cet envoi ; les autres travaux autorisés suivent leur propre état.",
+                "Lire bridget_task_status pour la tâche {} : cette ronde a déjà rendu son résultat et ne reçoit plus de nouveau travail par message. Si l'enfant reste gardé et qu'un complément est autorisé, ouvrir une nouvelle ronde avec bridget_task_continue, le même task_id et une nouvelle request_id. Conserver le résultat ; ne pas recréer la mission ni ajouter un motif hors projet pour forcer cet envoi. Ce refus concerne cet envoi ; les autres travaux autorisés suivent leur propre état.",
                 task.task_id
             ),
         ));

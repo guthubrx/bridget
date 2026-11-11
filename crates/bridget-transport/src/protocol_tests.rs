@@ -58,7 +58,8 @@ fn remote172_source_proof_shape_bornee_et_parent_historique_intact() {
         },
     };
     assert_eq!(request.validate(), Ok(()));
-    for invalid in ["/remote/project/../other"] {
+    {
+        let invalid = "/remote/project/../other";
         if let WorkerRequestOperation::ParentSourceProof { source, .. } = &mut request.request {
             source.cwd = invalid.into();
         }

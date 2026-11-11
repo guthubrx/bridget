@@ -879,123 +879,114 @@ fn guidance156_e2e_codex_actif_parent_steer_meme_tour() {
 }
 
 #[test]
-fn guidance156_e2e_claude_refuse_steer_interrupt_et_fifo() {
-    let (f, _parent, mut sender, saved, instance) = setup_child156(false, false);
+fn guidance156_e2e_completed_round_requires_continue_before_new_work() {
+    let (mut f, mut parent, mut sender, saved, instance) = setup_child156(false, false);
     let child = saved["child"].as_str().unwrap();
-    // La mission native est réellement terminée. Le tour suivant est un DM
-    // ordinaire : le parent peut l’interrompre sans contourner mission_active.
-    send_guidance156(
-        &mut sender,
-        child,
-        "g156-claude-ordinary-active",
-        None,
-        "WAIT_CANCEL_148 GUIDANCE156_ACTIVE",
+    let task_id = saved["task_id"].as_str().unwrap();
+    for (id, intent) in [
+        ("g156-after-result-queue", None),
+        ("g156-after-result-steer", Some(MessageIntent::SteerCurrent)),
+        (
+            "g156-after-result-interrupt",
+            Some(MessageIntent::InterruptAndStart),
+        ),
+    ] {
+        let mut message = BridgetMessage::new(PARENT, child, "work rejected after result");
+        message.id = id.into();
+        message.intent = intent;
+        sender.send(WrapperToDaemon::SendIdempotent {
+            message,
+            message_id: id.into(),
+            issued_at: SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_secs() as i64,
+        });
+        let reply = sender.receive();
+        assert!(
+            matches!(reply, DaemonToWrapper::IdempotencyResult {
+            issue:IdempotencyIssue::Rejected {ref category,ref reason,..},..
+        } if category=="intent_not_permitted" && reason.contains("bridget_task_continue") && reason.contains(task_id)),
+            "{reply:?}"
+        );
+    }
+    let status = f.request(
+        &mut parent,
+        NativeDelegationRequest::Status {
+            task_id: task_id.into(),
+        },
     );
-    let ready = Instant::now() + Duration::from_secs(5);
+    assert_eq!(status["status"], "result_available");
+    let continued = f.request(
+        &mut parent,
+        NativeDelegationRequest::Continue {
+            task_id: task_id.into(),
+            request_id: "g156-round2".into(),
+            task: "WAIT_CANCEL_148 GUIDANCE156_ACTIVE".into(),
+            brief: None,
+        },
+    );
+    assert_eq!(continued["task_id"], task_id, "{continued}");
+    assert_eq!(continued["child_agent_id"], child, "{continued}");
+    let mission = continued["message_id"].as_str().unwrap();
+    let until = Instant::now() + Duration::from_secs(10);
     loop {
-        let observations = evidence152(&f);
-        if observations.iter().any(|entry| {
-            entry["event"] == "prompt"
-                && entry["instance_id"] == instance
-                && entry["blocked"] == true
-                && entry["content"]
+        if evidence152(&f).iter().any(|e| {
+            e["event"] == "prompt"
+                && e["instance_id"] == instance
+                && e["blocked"] == true
+                && e["content"]
                     .as_str()
-                    .is_some_and(|text| text.contains("g156-claude-ordinary-active"))
+                    .is_some_and(|text| text.contains(mission))
         }) {
             break;
         }
         assert!(
-            Instant::now() < ready,
-            "tour Claude ordinaire actif absent : {observations:?}"
+            Instant::now() < until,
+            "la nouvelle ronde native doit être remise"
         );
         thread::sleep(Duration::from_millis(10));
     }
-    send_guidance156(
-        &mut sender,
-        child,
-        "g156-claude-steer",
-        Some(MessageIntent::SteerCurrent),
-        "GUIDANCE156_STEER",
-    );
-    let ready = Instant::now() + Duration::from_secs(5);
-    loop {
-        let phase = phase156(&f, "g156-claude-steer");
-        if phase.as_deref() == Some("indeterminate") {
-            break;
-        }
-        assert!(
-            Instant::now() < ready,
-            "refus transport Claude non persisté : {phase:?}"
-        );
-        thread::sleep(Duration::from_millis(10));
-    }
-    let observations = evidence152(&f);
+    let mut steer = BridgetMessage::new(PARENT, child, "steer not supported");
+    steer.id = "g156-stream-steer".into();
+    steer.intent = Some(MessageIntent::SteerCurrent);
+    sender.send(WrapperToDaemon::SendIdempotent {
+        message: steer,
+        message_id: "g156-stream-steer".into(),
+        issued_at: SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64,
+    });
+    let reply = sender.receive();
     assert!(
-        !observations
-            .iter()
-            .any(|entry| entry["event"] == "interrupt156"),
-        "steer a interrompu : {observations:?}"
-    );
-    assert!(
-        !journal156(&f, child)
-            .iter()
-            .any(|entry| entry["event"] == "turn_end"
-                && entry["message_id"] == "g156-claude-ordinary-active")
+        matches!(reply,DaemonToWrapper::IdempotencyResult {issue:IdempotencyIssue::Rejected {ref category,..},..} if category=="steer_unavailable"),
+        "{reply:?}"
     );
     send_guidance156(
         &mut sender,
         child,
-        "g156-fifo-ancien",
+        "g156-queue-round2",
         None,
-        "GUIDANCE156_FIFO_OLDER",
+        "queued during active native round",
     );
-    send_guidance156(
-        &mut sender,
-        child,
-        "g156-claude-interrupt",
-        Some(MessageIntent::InterruptAndStart),
-        "GUIDANCE156_INTERRUPT",
+    assert_eq!(
+        phase156(&f, "g156-queue-round2").as_deref(),
+        Some("dispatching")
     );
-    wait_evidence152(&f, "interrupt156", &instance);
-    let ready = Instant::now() + Duration::from_secs(10);
-    let prompts = loop {
-        let prompts: Vec<Value> = evidence152(&f)
-            .into_iter()
-            .filter(|entry| entry["event"] == "prompt")
-            .collect();
-        if prompts.iter().any(|entry| {
-            entry["content"]
+    assert!(!evidence152(&f).iter().any(|e| {
+        e["event"] == "prompt"
+            && e["content"]
                 .as_str()
-                .is_some_and(|text| text.contains("g156-claude-interrupt"))
-        }) {
-            break prompts;
-        }
-        assert!(
-            Instant::now() < ready,
-            "nouveau tour interrupt absent : {prompts:?}"
-        );
-        thread::sleep(Duration::from_millis(10));
-    };
-    let older = prompts
-        .iter()
-        .position(|entry| {
-            entry["content"]
-                .as_str()
-                .is_some_and(|text| text.contains("g156-fifo-ancien"))
-        })
-        .unwrap();
-    let interrupt = prompts
-        .iter()
-        .position(|entry| {
-            entry["content"]
-                .as_str()
-                .is_some_and(|text| text.contains("g156-claude-interrupt"))
-        })
-        .unwrap();
-    assert!(
-        older < interrupt,
-        "FIFO réelle du fournisseur : {prompts:?}"
+                .is_some_and(|s| s.contains("g156-queue-round2"))
+    }));
+    let cancelled = f.request(
+        &mut parent,
+        NativeDelegationRequest::Cancel {
+            task_id: task_id.into(),
+        },
     );
+    assert_eq!(cancelled["task_id"], task_id);
 }
 
 #[test]

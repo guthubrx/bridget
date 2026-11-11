@@ -23,7 +23,9 @@ MAX_JSON = 16 * 1024 * 1024
 SOURCE_LOCK_WAIT_SECS = 30.0
 
 class Refused(Exception):
-    pass
+    def __init__(self, code, detail=None):
+        super().__init__(code)
+        self.detail = detail
 
 def require(condition, code):
     if not condition:
@@ -546,8 +548,10 @@ def ssh(link, request, operation, bundle=None):
             code = {"inspect": "project_preparation_ssh_inspect_timeout",
                     "prepare": "project_preparation_ssh_prepare_timeout"}[operation]
             raise Refused(code) from None
-    require(answer.returncode == 0 and len(answer.stdout) <= MAX_JSON,
-            "project_preparation_transport_failed")
+    if answer.returncode != 0:
+        raise Refused("project_preparation_process_failed",
+                      dict(operation=operation, exit_code=answer.returncode))
+    require(len(answer.stdout) <= MAX_JSON, "project_preparation_output_limit")
     result = json.loads(answer.stdout)
     require(result.get("ok") is True, result.get("error", "project_preparation_remote_failed"))
     return result["result"]
@@ -798,7 +802,10 @@ def main():
             result = publish_prepared(request) if request.get("operation") == "publish_prepared" else prepare(request)
         print(json.dumps(dict(ok=True, result=result)))
     except Refused as error:
-        print(json.dumps(dict(ok=False, error=str(error))))
+        answer = dict(ok=False, error=str(error))
+        if error.detail is not None:
+            answer["detail"] = error.detail
+        print(json.dumps(answer))
     except subprocess.TimeoutExpired:
         print(json.dumps(dict(ok=False, error="project_preparation_timeout")))
     except OSError as error:

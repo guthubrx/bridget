@@ -27241,8 +27241,7 @@ fn spec267_imposed_machine_cpu_and_load_are_advisory_even_with_an_idle_alternati
 fn spec267_imposed_machine_still_refuses_fresh_low_memory() {
     for selection in ["request", "policy"] {
         let error = routing267_score_case(20, 5, 20, selection)
-            .err()
-            .expect("mémoire insuffisante refusée");
+            .expect_err("mémoire insuffisante refusée");
         let refusal = failure(&error);
         assert_eq!(refusal["code"], "resource_saturated");
         assert!(

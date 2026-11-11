@@ -190,6 +190,9 @@ sys.stdin.readline()
     ];
     configured.notify_timeout_secs = 10;
     let mut transport = ClaudeStreamJsonTransport::spawn(configured).unwrap();
+    transport
+        .activate_journal(&root, "background271", None)
+        .unwrap();
     transport.deliver(&message("background-mission")).unwrap();
     let mut events = Vec::new();
     for stage in 1..=3 {
@@ -255,6 +258,32 @@ sys.stdin.readline()
         )]
     );
     transport.stop();
+    let path = fs::read_dir(root.join("background271"))
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap()
+        .path();
+    let records = crate::journal::valid_events(&path);
+    let results: Vec<_> = records
+        .iter()
+        .filter(|r| r["event"] == "provider_result")
+        .collect();
+    assert_eq!(results.len(), 3);
+    assert_eq!(
+        results[0]["payload"]["finalization"],
+        "waiting_background_tasks"
+    );
+    assert_eq!(
+        results[1]["payload"]["finalization"],
+        "waiting_background_tasks"
+    );
+    assert_eq!(results[2]["payload"]["finalization"], "terminal_result");
+    assert!(
+        results
+            .iter()
+            .all(|r| r["message_id"] == "background-mission")
+    );
     fs::remove_dir_all(root).unwrap();
 }
 

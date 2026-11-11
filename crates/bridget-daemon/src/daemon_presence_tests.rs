@@ -2,6 +2,133 @@ use super::*;
 use bridget_transport::poison::RecoverPoison;
 
 #[test]
+fn spec271_completed_native_round_names_continue_before_physical_project_check() {
+    let (template, template_config, tasks) = control158_state_with_tasks("q271t");
+    let mut task = tasks[1].clone();
+    drop(template);
+    let _ = std::fs::remove_file(template_config.db_path);
+    let (st, config) = state_with_registered_agent("queue271");
+    let shared = Arc::new(Mutex::new(st));
+    negotiate_idempotent_client(
+        &shared,
+        "guidance-client",
+        &crate::communication::issuer_scope("queue271"),
+        "89000000-0000-4000-8000-000000000200",
+    );
+    let (pending_writer, _pending_reader) = control_socket("queue271-pending");
+    {
+        let mut state = shared.lock().unwrap();
+        task.owner = state.conn_names["guidance-client"].clone();
+        task.owner_instance = state.conn_instances["guidance-client"].clone();
+        task.child = "89000000-0000-4000-8000-000000000102".into();
+        task.child_instance = Some(state.conn_instances["conn-1"].clone());
+        task.state = "result_available".into();
+        state
+            .delegation_store
+            .insert(
+                &task,
+                "queue271",
+                &serde_json::to_vec(&task.request).unwrap(),
+            )
+            .unwrap();
+        for intent in [
+            None,
+            Some(bridget_core::MessageIntent::QueueOnly),
+            Some(bridget_core::MessageIntent::SteerCurrent),
+            Some(bridget_core::MessageIntent::InterruptAndStart),
+        ] {
+            let mut message = idempotent_message("complément après résultat");
+            message.intent = intent;
+            let result = prepare_dispatch(
+                &mut state,
+                &mut message,
+                "guidance-client",
+                task.owner.clone(),
+                "fixture".into(),
+                "fixture".into(),
+                false,
+            );
+            let Err((code, reason)) = result else {
+                panic!("nouvelle ronde native requise")
+            };
+            assert_eq!(code, "intent_not_permitted");
+            assert!(reason.contains("bridget_task_continue") && reason.contains(&task.task_id));
+            assert!(!reason.contains("cross_project_reason_required"));
+        }
+        assert_eq!(
+            state
+                .delegation_store
+                .get(&task.task_id)
+                .unwrap()
+                .unwrap()
+                .state,
+            "result_available"
+        );
+        state
+            .store
+            .create_request("tracked271", &task.child, &task.owner, 600)
+            .unwrap();
+        for (intent, native, reply) in [
+            (Some(bridget_core::MessageIntent::StoreOnly), false, false),
+            (None, true, false),
+            (None, false, true),
+        ] {
+            let mut message = idempotent_message("réponse ou avis existant");
+            message.intent = intent;
+            message.in_reply_to = reply.then(|| "tracked271".into());
+            let result = prepare_dispatch(
+                &mut state,
+                &mut message,
+                "guidance-client",
+                task.owner.clone(),
+                "fixture".into(),
+                "fixture".into(),
+                native,
+            );
+            assert!(match result {
+                Ok(_) => true,
+                Err((code, _)) => code != "intent_not_permitted",
+            }, "l’exemption doit franchir la garde de fin de ronde");
+        }
+        task.state = "working".into();
+        state.delegation_store.save(&task).unwrap();
+        state.connections.insert("conn-1".into(), pending_writer);
+    }
+    let mut queued = idempotent_message("déjà admis avant la fin");
+    queued.intent = Some(bridget_core::MessageIntent::QueueOnly);
+    let issued_at = unix_now_secs();
+    let send = || WrapperToDaemon::SendIdempotent {
+        message: queued.clone(),
+        message_id: "pending271".into(),
+        issued_at,
+    };
+    assert!(matches!(
+        handle_wrapper_message("guidance-client", send(), &shared),
+        Some(DaemonToWrapper::IdempotencyResult {
+            issue: IdempotencyIssue::OutcomeUnknown { .. },
+            ..
+        })
+    ));
+    {
+        let state = shared.lock().unwrap();
+        task.state = "result_available".into();
+        state.delegation_store.save(&task).unwrap();
+    }
+    assert!(
+        matches!(
+            handle_wrapper_message("guidance-client", send(), &shared),
+            Some(DaemonToWrapper::IdempotencyResult {
+                issue: IdempotencyIssue::OutcomeUnknown { .. },
+                ..
+            })
+        ),
+        "un rejeu en file ne devient pas une nouvelle consigne refusée"
+    );
+    drop(shared);
+    let _ = std::fs::remove_file(config.db_path);
+}
+
+#[test]
 fn spec268_journal_terminal_nettoye_reste_connu_sans_presence_volatile() {
     let (shared, config, tasks) = control158_state_with_tasks("journal-durable");
     {
@@ -8247,7 +8374,7 @@ fn spec269_steer_claude_stream_refuse_durablement_avant_remise() {
     }
     reader.get_ref().set_nonblocking(true).unwrap();
     let mut byte = [0];
-    assert!(matches!(std::io::Read::read(&mut &*reader.get_ref(), &mut byte), Err(e) if e.kind() == std::io::ErrorKind::WouldBlock));
+    assert!(matches!(std::io::Read::read(&mut reader.get_ref(), &mut byte), Err(e) if e.kind() == std::io::ErrorKind::WouldBlock));
     drop(shared);
     let _ = std::fs::remove_file(config.db_path);
 }

@@ -217,6 +217,7 @@ fn execute_with_context(
                     .map_err(|_| "project_preparation_registry_changed".to_owned())?;
                     let expected = before.machine(target_machine)?;
                     let payload = serde_json::json!({"registry":registry,"machine_id":target_machine,
+                        "correlation_id":request.correlation_id,
                         "origin_host":request.worker.machine_id,"source_root":selected,
                         "cwd":source.cwd,"commit":source.expected_base_commit,"project_id":project_id,
                         "origin_worker_registry":local_worker_registry,

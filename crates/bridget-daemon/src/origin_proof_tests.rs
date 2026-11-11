@@ -408,11 +408,12 @@ fn mobile177_origin_sources_read_real_git_and_reject_escape_without_launching() 
         source.workspace = Some(WorkspaceRequest::CommitView {});
         source.expected_base_commit = Some(head.clone());
     }
+    // Une vue locale ne requiert pas de liaison SSH ; ce registre vide refuse la machine.
     assert!(envelope.validate_shape().is_ok());
     assert!(
         matches!(execute_with_context(&envelope,||10_000,|_|panic!("no provider"),
             Some(&root.join("agents.json"))),OriginProofResult::ProjectPrepared {preparation_error:Some(code),..}
-            if code=="project_preparation_link_missing")
+            if code=="machine_unknown")
     );
     let valid = envelope.clone();
     for (field, case) in [

@@ -5,7 +5,15 @@ use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::Path;
 
 pub(crate) fn private_connection(path: &Path) -> Result<Connection, String> {
-    crate::environment::ensure_private_directory(path.parent().ok_or("spool_parent_missing")?)?;
+    let parent = path.parent().ok_or("spool_parent_missing")?;
+    crate::environment::ensure_private_directory(parent)?;
+    // Le contrat permet les alias système /tmp et /var sur macOS. SQLite
+    // NOFOLLOW les refuse aussi : résoudre le parent déjà validé, puis
+    // revalider ses deux formes, sans suivre le dernier composant du fichier.
+    let parent = parent.canonicalize().map_err(|e| e.to_string())?;
+    crate::environment::ensure_private_directory(&parent)?;
+    crate::environment::validate_path(path)?;
+    let path = parent.join(path.file_name().ok_or("spool_name_missing")?);
     let file = std::fs::OpenOptions::new()
         .read(true)
         .write(true)
@@ -13,7 +21,7 @@ pub(crate) fn private_connection(path: &Path) -> Result<Connection, String> {
         .truncate(false)
         .mode(0o600)
         .custom_flags(libc::O_NOFOLLOW)
-        .open(path)
+        .open(&path)
         .map_err(|e| e.to_string())?;
     let m = file.metadata().map_err(|e| e.to_string())?;
     if !m.is_file()
@@ -24,7 +32,7 @@ pub(crate) fn private_connection(path: &Path) -> Result<Connection, String> {
         return Err("spool_private_file_required".into());
     }
     let conn = Connection::open_with_flags(
-        path,
+        &path,
         rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE
             | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX
             | rusqlite::OpenFlags::from_bits_retain(rusqlite::ffi::SQLITE_OPEN_NOFOLLOW),
@@ -213,6 +221,25 @@ impl DeliverySpool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn spec271_spool_system_temp_alias_keeps_user_symlink_refusal() {
+        let root = Path::new("/tmp").join(format!("p271-{}", uuid::Uuid::new_v4().simple()));
+        crate::environment::ensure_private_directory(&root).unwrap();
+        let path = root.join("inbox.sqlite");
+        let conn = private_connection(&path).expect("alias système autorisé par le namespace");
+        assert_eq!(std::fs::metadata(&path).unwrap().mode() & 0o777, 0o600);
+        drop(conn);
+        let real = root.join("private");
+        crate::environment::ensure_private_directory(&real).unwrap();
+        let link = root.join("redirect");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        assert!(private_connection(&link.join("forbidden.sqlite")).is_err());
+        assert!(!real.join("forbidden.sqlite").exists());
+        let linked_file = root.join("linked.sqlite");
+        std::os::unix::fs::symlink(&path, &linked_file).unwrap();
+        assert!(private_connection(&linked_file).is_err());
+        std::fs::remove_dir_all(root).unwrap();
+    }
     fn frame(id: &str) -> DaemonToWrapper {
         let mut message = bridget_core::BridgetMessage::new("a", "b", id);
         message.id = id.into();

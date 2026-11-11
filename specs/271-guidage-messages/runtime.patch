@@ -1,0 +1,1146 @@
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -192,7 +192,7 @@
+ 
+ [[package]]
+ name = "bridget-core"
+-version = "0.8.36"
++version = "0.8.37"
+ dependencies = [
+  "serde",
+  "serde_json",
+@@ -201,7 +201,7 @@
+ 
+ [[package]]
+ name = "bridget-daemon"
+-version = "0.8.36"
++version = "0.8.37"
+ dependencies = [
+  "axum",
+  "base64",
+@@ -229,7 +229,7 @@
+ 
+ [[package]]
+ name = "bridget-transport"
+-version = "0.8.36"
++version = "0.8.37"
+ dependencies = [
+  "bridget-core",
+  "libc",
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -7,7 +7,7 @@
+ ]
+ 
+ [workspace.package]
+-version = "0.8.36"
++version = "0.8.37"
+ edition = "2024"
+ license = "MIT"
+ 
+--- a/crates/bridget-daemon/src/daemon/native_admission_guidance211.rs
++++ b/crates/bridget-daemon/src/daemon/native_admission_guidance211.rs
+@@ -1,4 +1,7 @@
+ use super::*;
++
++
++
+ pub(super) fn refusal(code:&str)->Option<Value>{
+     if let Some(detail)=code.strip_prefix("origin_request_invalid:") {
+         let (field,cause)=detail.split_once(':').unwrap_or((detail,"unobserved"));
+@@ -23,6 +26,21 @@
+         return Some(view);
+     }
+     let (message,recovery,field)=match code {
++        "project_preparation_process_failed" => (
++            "Faites lire le refus de préparation à la même heure dans la sortie d’erreur du worker source.",
++            "La commande ssh de préparation a rendu un code de sortie non nul. Le responsable Bridget doit lire l’événement bridget_project_preparation à l’heure de ce refus dans la sortie d’erreur du service worker de la machine source du parent : journal de l’unité sous systemd, ou StandardErrorPath du plist chargé sous launchd. Rapprocher heure, opération inspect/prepare et exit_code ; correlation_id identifie le contrôle dans ce journal, mais ne figure pas dans ce reçu et ne suffit pas seul à retrouver la demande. Ces faits ne prouvent ni panne de réseau ni défaut de compte ou de droits ; la cause amont reste à vérifier avant une reprise. Conserver la clé, l’enveloppe et tout dépôt préparé ; lire detail.admission pour suivre une tâche existante ou une admission encore incertaine. Ne pas recréer une mission pour tester la liaison. Les autres travaux autorisés suivent leur propre état.",
++            None,
++        ),
++        "project_preparation_transport_failed" => (
++            "Faites vérifier le résultat du relais de préparation et le canal SSH configuré pour cette demande.",
++            "Cet ancien code ne distingue pas un processus en échec d’une réponse hors borne et n’a pas conservé son opération ni son code de sortie. La cause reste inconnue. Conserver la clé, l’enveloppe et tout dépôt déjà préparé ; le responsable Bridget doit qualifier les faits disponibles sur le worker source et la cible, puis lire detail.admission avant une reprise. Ne déduire ni panne de réseau ni défaut de compte ou de droits. Ne pas recréer une mission d’issue inconnue. Les autres travaux autorisés suivent leur propre état.",
++            None,
++        ),
++        "project_preparation_output_limit" => (
++            "Faites vérifier la taille de la réponse de préparation, sans rejouer la mission.",
++            "La réponse a dépassé la borne de lecture du relais de préparation. Ce refus ne prouve pas une panne SSH. Le responsable Bridget doit qualifier le format et la borne de réponse pour cette demande. Conserver la clé, l’enveloppe et tout dépôt déjà préparé ; lire detail.admission avant une reprise. Les autres travaux autorisés suivent leur propre état.",
++            None,
++        ),
+         "project_preparation_git_required"=>(
+             "Utilisez le dossier existant sur sa machine source, ou faites vérifier une correspondance vers un dossier distant déjà présent.",
+             "Le dossier source est hors Git et la destination inspectée n’existe pas. general/shared permet d’omettre expected_base_commit, mais ne copie pas automatiquement les fichiers hors Git vers une nouvelle machine. Pour rester sur la source, employer son machine_id déjà autorisé ; pour une autre machine, faire vérifier son dossier existant et sa correspondance native. Ne pas créer un dépôt Git ni transférer des documents pour contourner ce refus. Lire detail.admission avant de reprendre : une issue inconnue garde sa clé et son enveloppe ; un changement de machine nécessite une nouvelle demande identifiée après vérification qu’aucune tâche n’a été admise. Ce refus ne prouve pas un placement final ni une panne globale. Si le dossier distant requis n’est pas autorisé, demander cette seule décision à l’utilisateur.",
+@@ -187,6 +205,27 @@
+ 
+ #[cfg(test)]
+ mod tests {
++#[test]
++fn spec271_preparation_guidance_distinguishes_new_facts_from_legacy_unknown() {
++    let view = refusal("project_preparation_process_failed").unwrap();
++    assert_eq!(view["code"], "project_preparation_process_failed");
++    assert!(
++        view["detail"]["recovery"]
++            .as_str()
++            .unwrap()
++            .contains("bridget_project_preparation")
++    );
++    assert!(view["detail"].get("transport").is_none());
++    let legacy = refusal("project_preparation_transport_failed").unwrap();
++    assert!(
++        legacy["detail"]["recovery"]
++            .as_str()
++            .unwrap()
++            .contains("inconnue")
++    );
++    assert!(refusal("project_preparation_output_limit").is_some());
++}
++
+     use super::*;
+     #[test]
+     fn spec252_non_git_refusal_keeps_machine_and_useful_action() {
+--- a/crates/bridget-daemon/src/daemon/native_delegation_tests.rs
++++ b/crates/bridget-daemon/src/daemon/native_delegation_tests.rs
+@@ -22589,7 +22589,7 @@
+ #[test]
+ fn spec267_imposed_machine_still_refuses_fresh_low_memory() {
+     for selection in ["request", "policy"] {
+-        let error = routing267_score_case(20, 5, 20, selection).err().expect("mémoire insuffisante refusée");
++        let error = routing267_score_case(20, 5, 20, selection).expect_err("mémoire insuffisante refusée");
+         let refusal = failure(&error);
+         assert_eq!(refusal["code"], "resource_saturated");
+         assert!(refusal["message"].as_str().unwrap().contains("mémoire disponible"));
+--- a/crates/bridget-daemon/src/daemon.rs
++++ b/crates/bridget-daemon/src/daemon.rs
+@@ -11855,7 +11855,9 @@
+ 
+     // Une ronde achevée ne reçoit plus de guidage. Nommer ce fait avant le
+     // contrôle des dossiers physiques, sans admettre ni remplacer une mission.
+-    if message.intent == Some(bridget_core::MessageIntent::SteerCurrent)
++    if !native_task_exchange
++        && !valid_tracked_reply
++        && message.intent != Some(bridget_core::MessageIntent::StoreOnly)
+         && let Some((owner, instance)) = live_connection_identity(st, conn_id)
+         && let Ok(Some(task)) = st.delegation_store.for_child(&routing_to)
+         && task.owner == owner
+@@ -11865,7 +11867,7 @@
+         return Err((
+             "intent_not_permitted",
+             format!(
+-                "Lire bridget_task_status pour la tâche {} : cette ronde a déjà rendu son résultat et ne reçoit plus de steer. Si l'enfant reste gardé et qu'un complément est autorisé, ouvrir une nouvelle ronde avec bridget_task_continue, le même task_id et une nouvelle request_id. Conserver le résultat ; ne pas recréer la mission ni ajouter un motif hors projet pour forcer ce guidage. Ce refus concerne cet envoi ; les autres travaux autorisés suivent leur propre état.",
++                "Lire bridget_task_status pour la tâche {} : cette ronde a déjà rendu son résultat et ne reçoit plus de nouveau travail par message. Si l'enfant reste gardé et qu'un complément est autorisé, ouvrir une nouvelle ronde avec bridget_task_continue, le même task_id et une nouvelle request_id. Conserver le résultat ; ne pas recréer la mission ni ajouter un motif hors projet pour forcer cet envoi. Ce refus concerne cet envoi ; les autres travaux autorisés suivent leur propre état.",
+                 task.task_id
+             ),
+         ));
+--- a/crates/bridget-daemon/src/daemon_presence_tests.rs
++++ b/crates/bridget-daemon/src/daemon_presence_tests.rs
+@@ -1,4 +1,130 @@
+     use super::*;
++#[test]
++fn spec271_completed_native_round_names_continue_before_physical_project_check() {
++    let (template, template_config, tasks) = control158_state_with_tasks("q271t");
++    let mut task = tasks[1].clone();
++    drop(template);
++    let _ = std::fs::remove_file(template_config.db_path);
++    let (st, config) = state_with_registered_agent("queue271");
++    let shared = Arc::new(Mutex::new(st));
++    negotiate_idempotent_client(
++        &shared,
++        "guidance-client",
++        &crate::communication::issuer_scope("queue271"),
++        "89000000-0000-4000-8000-000000000200",
++    );
++    let (pending_writer, _pending_reader) = control_socket("queue271-pending");
++    {
++        let mut state = shared.lock().unwrap();
++        task.owner = state.conn_names["guidance-client"].clone();
++        task.owner_instance = state.conn_instances["guidance-client"].clone();
++        task.child = "89000000-0000-4000-8000-000000000102".into();
++        task.child_instance = Some(state.conn_instances["conn-1"].clone());
++        task.state = "result_available".into();
++        state
++            .delegation_store
++            .insert(
++                &task,
++                "queue271",
++                &serde_json::to_vec(&task.request).unwrap(),
++            )
++            .unwrap();
++        for intent in [
++            None,
++            Some(bridget_core::MessageIntent::QueueOnly),
++            Some(bridget_core::MessageIntent::SteerCurrent),
++            Some(bridget_core::MessageIntent::InterruptAndStart),
++        ] {
++            let mut message = idempotent_message("complément après résultat");
++            message.intent = intent;
++            let result = prepare_dispatch(
++                &mut state,
++                &mut message,
++                "guidance-client",
++                task.owner.clone(),
++                "fixture".into(),
++                "fixture".into(),
++                false,
++            );
++            let Err((code, reason)) = result else {
++                panic!("nouvelle ronde native requise")
++            };
++            assert_eq!(code, "intent_not_permitted");
++            assert!(reason.contains("bridget_task_continue") && reason.contains(&task.task_id));
++            assert!(!reason.contains("cross_project_reason_required"));
++        }
++        assert_eq!(
++            state
++                .delegation_store
++                .get(&task.task_id)
++                .unwrap()
++                .unwrap()
++                .state,
++            "result_available"
++        );
++        state
++            .store
++            .create_request("tracked271", &task.child, &task.owner, 600)
++            .unwrap();
++        for (intent, native, reply) in [
++            (Some(bridget_core::MessageIntent::StoreOnly), false, false),
++            (None, true, false),
++            (None, false, true),
++        ] {
++            let mut message = idempotent_message("réponse ou avis existant");
++            message.intent = intent;
++            message.in_reply_to = reply.then(|| "tracked271".into());
++            let result = prepare_dispatch(
++                &mut state,
++                &mut message,
++                "guidance-client",
++                task.owner.clone(),
++                "fixture".into(),
++                "fixture".into(),
++                native,
++            );
++            assert!(match result {
++                Ok(_) => true,
++                Err((code, _)) => code != "intent_not_permitted",
++            }, "l’exemption doit franchir la garde de fin de ronde");
++        }
++        task.state = "working".into();
++        state.delegation_store.save(&task).unwrap();
++        state.connections.insert("conn-1".into(), pending_writer);
++    }
++    let mut queued = idempotent_message("déjà admis avant la fin");
++    queued.intent = Some(bridget_core::MessageIntent::QueueOnly);
++    let issued_at = unix_now_secs();
++    let send = || WrapperToDaemon::SendIdempotent {
++        message: queued.clone(),
++        message_id: "pending271".into(),
++        issued_at,
++    };
++    assert!(matches!(
++        handle_wrapper_message("guidance-client", send(), &shared),
++        Some(DaemonToWrapper::IdempotencyResult {
++            issue: IdempotencyIssue::OutcomeUnknown { .. },
++            ..
++        })
++    ));
++    {
++        let state = shared.lock().unwrap();
++        task.state = "result_available".into();
++        state.delegation_store.save(&task).unwrap();
++    }
++    assert!(
++        matches!(
++            handle_wrapper_message("guidance-client", send(), &shared),
++            Some(DaemonToWrapper::IdempotencyResult {
++                issue: IdempotencyIssue::OutcomeUnknown { .. },
++                ..
++            })
++        ),
++        "un rejeu en file ne devient pas une nouvelle consigne refusée"
++    );
++    drop(shared);
++    let _ = std::fs::remove_file(config.db_path);
++}
+ 
+     // T017 : vrais sockets, preuve primaire réemployée et une seule négociation.
+     fn edit159_cancel_auxiliary(
+@@ -24478,7 +24604,7 @@
+     }
+     reader.get_ref().set_nonblocking(true).unwrap();
+     let mut byte = [0];
+-    assert!(matches!(std::io::Read::read(&mut &*reader.get_ref(), &mut byte), Err(e) if e.kind() == std::io::ErrorKind::WouldBlock));
++    assert!(matches!(std::io::Read::read(&mut reader.get_ref(), &mut byte), Err(e) if e.kind() == std::io::ErrorKind::WouldBlock));
+     drop(shared);
+     let _ = std::fs::remove_file(config.db_path);
+ }
+--- a/crates/bridget-daemon/src/delivery_spool244.rs
++++ b/crates/bridget-daemon/src/delivery_spool244.rs
+@@ -5,7 +5,15 @@
+ use std::path::Path;
+ 
+ pub(crate) fn private_connection(path: &Path) -> Result<Connection, String> {
+-    crate::environment::ensure_private_directory(path.parent().ok_or("spool_parent_missing")?)?;
++    let parent = path.parent().ok_or("spool_parent_missing")?;
++    crate::environment::ensure_private_directory(parent)?;
++    // Le contrat permet les alias système /tmp et /var sur macOS. SQLite
++    // NOFOLLOW les refuse aussi : résoudre le parent déjà validé, puis
++    // revalider ses deux formes, sans suivre le dernier composant du fichier.
++    let parent = parent.canonicalize().map_err(|e| e.to_string())?;
++    crate::environment::ensure_private_directory(&parent)?;
++    crate::environment::validate_path(path)?;
++    let path = parent.join(path.file_name().ok_or("spool_name_missing")?);
+     let file = std::fs::OpenOptions::new()
+         .read(true)
+         .write(true)
+@@ -13,7 +21,7 @@
+         .truncate(false)
+         .mode(0o600)
+         .custom_flags(libc::O_NOFOLLOW)
+-        .open(path)
++        .open(&path)
+         .map_err(|e| e.to_string())?;
+     let m = file.metadata().map_err(|e| e.to_string())?;
+     if !m.is_file()
+@@ -24,7 +32,7 @@
+         return Err("spool_private_file_required".into());
+     }
+     let conn = Connection::open_with_flags(
+-        path,
++        &path,
+         rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE
+             | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX
+             | rusqlite::OpenFlags::from_bits_retain(rusqlite::ffi::SQLITE_OPEN_NOFOLLOW),
+@@ -186,6 +194,26 @@
+ #[cfg(test)]
+ mod tests {
+     use super::*;
++    #[test]
++    fn spec271_spool_system_temp_alias_keeps_user_symlink_refusal() {
++        let root = Path::new("/tmp").join(format!("p271-{}", uuid::Uuid::new_v4().simple()));
++        crate::environment::ensure_private_directory(&root).unwrap();
++        let path = root.join("inbox.sqlite");
++        let conn = private_connection(&path).expect("alias système autorisé par le namespace");
++        assert_eq!(std::fs::metadata(&path).unwrap().mode() & 0o777, 0o600);
++        drop(conn);
++        let real = root.join("private");
++        crate::environment::ensure_private_directory(&real).unwrap();
++        let link = root.join("redirect");
++        std::os::unix::fs::symlink(&real, &link).unwrap();
++        assert!(private_connection(&link.join("forbidden.sqlite")).is_err());
++        assert!(!real.join("forbidden.sqlite").exists());
++        let linked_file = root.join("linked.sqlite");
++        std::os::unix::fs::symlink(&path, &linked_file).unwrap();
++        assert!(private_connection(&linked_file).is_err());
++        std::fs::remove_dir_all(root).unwrap();
++    }
++
+     fn frame(id: &str) -> DaemonToWrapper {
+         let mut message = bridget_core::BridgetMessage::new("a", "b", id);
+         message.id = id.into();
+--- a/crates/bridget-daemon/src/fleet.rs
++++ b/crates/bridget-daemon/src/fleet.rs
+@@ -54,8 +54,8 @@
+ /// Variable d'environnement qui fixe le quota de flotte gérée au démarrage.
+ pub const FLEET_QUOTA_ENV: &str = "BRIDGET_FLEET_QUOTA";
+ 
+-/// Défaut relevé : la flotte légitime tourne autour de 10–12 équipiers.
+-pub const DEFAULT_FLEET_QUOTA: usize = 16;
++/// Plafond global par défaut, relevé à 128 sur décision utilisateur.
++pub const DEFAULT_FLEET_QUOTA: usize = 128;
+ 
+ #[derive(Debug, Clone, Copy)]
+ pub struct FleetConfig {
+--- a/crates/bridget-daemon/src/mcp.rs
++++ b/crates/bridget-daemon/src/mcp.rs
+@@ -2913,7 +2913,7 @@
+         }),
+         json!({
+             "name": "bridget_ledger",
+-            "description": "Lire les messages et demandes Bridget récents (action absente ou recent), chercher dans ses propres échanges ou dans un fil dont on est membre (action=search : page bornée, reprise par cursor), ou relire un message exact par id+target (action=read : fragments de 16 Kio, empreinte SHA-256). La recherche est partielle et reprenable : arrêter sur has_more=false ou annoncer une recherche partielle ; ne pas parcourir automatiquement toute l'archive.",
++            "description": "Lire les messages et demandes Bridget récents (action absente ou recent), chercher dans ses propres échanges ou dans un fil dont on est membre (action=search : page bornée, reprise par cursor), ou relire un message exact par id+target (action=read : fragments de 16 Kio, empreinte SHA-256). answered atteste une réponse conservée, pas son injection dans un tour actif : un message ordinaire reste en file. Lire cette réponse par search/read si le travail en dépend ; tout guidage exige son contrôle explicite et ses droits habituels. La recherche est partielle et reprenable : arrêter sur has_more=false ou annoncer une recherche partielle ; ne pas parcourir automatiquement toute l'archive.",
+             "inputSchema": {
+                 "type": "object",
+                 "properties": {
+--- a/crates/bridget-daemon/src/origin_proof.rs
++++ b/crates/bridget-daemon/src/origin_proof.rs
+@@ -125,7 +125,7 @@
+                     let before=crate::registry::AgentRegistry::load_from_path_quiet(registry.to_path_buf())
+                         .map_err(|_|"project_preparation_registry_changed".to_owned())?;
+                     let expected=before.machine(target_machine)?;
+-                    let payload=serde_json::json!({"registry":registry,"machine_id":target_machine,
++                    let payload=serde_json::json!({"registry":registry,"machine_id":target_machine,"correlation_id":request.correlation_id,
+                         "origin_host":request.worker.machine_id,"source_root":selected,
+                         "cwd":source.cwd,"commit":source.expected_base_commit,"project_id":project_id,
+                         "origin_worker_registry":local_worker_registry,
+@@ -436,9 +436,10 @@
+         assert!(legacy.get("return_context").is_none(),"un ancien pair garde sa trame exacte");
+         let decoded:OriginProofOperation=serde_json::from_value(legacy).unwrap();
+         assert!(matches!(decoded,OriginProofOperation::PrepareProject {return_context:false,..}));
+-        assert!(matches!(execute_with_context(&envelope,||10_000,|_|panic!("no provider"),
+-            Some(&root.join("agents.json"))),OriginProofResult::ProjectPrepared {preparation_error:Some(code),..}
+-            if code=="project_preparation_link_missing"));
++        let observed = execute_with_context(&envelope,||10_000,|_|panic!("no provider"),
++            Some(&root.join("agents.json")));
++        assert!(matches!(&observed,OriginProofResult::ProjectPrepared {preparation_error:Some(code),..}
++            if code=="project_preparation_link_missing"), "{observed:?}");
+         assert!(matches!(prove(&envelope),OriginProofResult::Rejected {reason:WorkerRefusal::Unauthorized}));
+         if let OriginProofOperation::PrepareProject {source,..}=&mut envelope.request {
+             source.expected_base_commit=Some("b".repeat(40));
+@@ -455,10 +456,12 @@
+             source.workspace=Some(WorkspaceRequest::CommitView {});
+             source.expected_base_commit=Some(head.clone());
+         }
++        // Une vue locale ne requiert pas de liaison SSH ; ce registre vide refuse la machine.
+         assert!(envelope.validate_shape().is_ok());
+-        assert!(matches!(execute_with_context(&envelope,||10_000,|_|panic!("no provider"),
+-            Some(&root.join("agents.json"))),OriginProofResult::ProjectPrepared {preparation_error:Some(code),..}
+-            if code=="project_preparation_link_missing"));
++        let observed = execute_with_context(&envelope,||10_000,|_|panic!("no provider"),
++            Some(&root.join("agents.json")));
++        assert!(matches!(&observed,OriginProofResult::ProjectPrepared {preparation_error:Some(code),..}
++            if code=="machine_unknown"), "{observed:?}");
+         let valid=envelope.clone();
+         for (field,case) in [("cwd",0),("expected_base_commit",1),("target_machine",2),("parent",3),("worker",4)] {
+             let mut wrong=valid.clone();
+--- a/crates/bridget-daemon/src/project_preparation.rs
++++ b/crates/bridget-daemon/src/project_preparation.rs
+@@ -37,14 +37,18 @@
+ }
+ 
+ pub(crate) fn prepare_until(request: &Value, deadline: Instant) -> Result<(), String> {
+-    prepare_receipt_until(request,deadline).map(|_|())
+-}
+-
+-pub(crate) fn prepare_receipt_until(request: &Value, deadline: Instant) -> Result<Value,String> {
+-    prepare_script(request,SCRIPT,deadline)
+-}
+-
+-fn prepare_script(request: &Value, script_content: &str, deadline: Instant) -> Result<Value, String> {
++    prepare_receipt_until(request, deadline).map(|_| ())
++}
++
++pub(crate) fn prepare_receipt_until(request: &Value, deadline: Instant) -> Result<Value, String> {
++    prepare_script(request, SCRIPT, deadline)
++}
++
++fn prepare_script(
++    request: &Value,
++    script_content: &str,
++    deadline: Instant,
++) -> Result<Value, String> {
+     if Instant::now() >= deadline {
+         return Err("project_preparation_timeout".into());
+     }
+@@ -138,6 +142,20 @@
+         if code.len() > 128 || !code.bytes().all(|b| b.is_ascii_lowercase() || b == b'_') {
+             return Err("project_preparation_failed".into());
+         }
++        if code == "project_preparation_process_failed"
++            && let Some(detail) = answer.get("detail").and_then(Value::as_object)
++            && detail.len() == 2
++            && matches!(detail.get("operation").and_then(Value::as_str), Some("inspect" | "prepare"))
++            && detail.get("exit_code").and_then(Value::as_i64).is_some_and(|n| n != 0 && (-255..=255).contains(&n))
++        {
++            let correlation = request.get("correlation_id").and_then(Value::as_str)
++                .filter(|value| uuid::Uuid::parse_str(value).is_ok());
++            eprintln!("bridget_project_preparation {}", serde_json::json!({
++                "version":1,"scope":"this_request","code":code,
++                "correlation_id":correlation,"operation":detail["operation"],
++                "exit_code":detail["exit_code"],"cause":"unobserved"
++            }));
++        }
+         Err(code.to_owned())
+     })();
+     // Un enfant survivant garde sa fixture privée ; aucun dépôt n'est supprimé.
+@@ -158,39 +176,129 @@
+ mod tests {
+     use super::*;
+     #[test]
++    fn spec271_transport_diagnostic_preserves_legacy_wire_shape() {
++        use bridget_transport::protocol::{OriginProofResponse, OriginProofResult, WorkerIdentity};
++        let script = "print('{\"ok\":false,\"error\":\"project_preparation_process_failed\",\"detail\":{\"operation\":\"inspect\",\"exit_code\":255}}')";
++        let request = serde_json::json!({"correlation_id":"27100000-0000-4000-8000-000000000001"});
++        let error =
++            prepare_script(&request, script, Instant::now() + Duration::from_secs(5)).unwrap_err();
++        assert_eq!(error, "project_preparation_process_failed");
++        let response = OriginProofResponse {
++            version: 1,
++            correlation_id: "correlation271".into(),
++            connection_epoch: "epoch271".into(),
++            worker: WorkerIdentity {
++                machine_id: "fixture271".into(),
++                worker_id: "worker271".into(),
++                provisioning_revision: 1,
++            },
++            response: OriginProofResult::ProjectPrepared {
++                permission_digest: "a".repeat(64),
++                preparation_error: Some(error),
++                project: None,
++            },
++        };
++        assert_eq!(response.validate_shape(), Ok(()));
++        let mut incompatible = response;
++        if let OriginProofResult::ProjectPrepared {
++            preparation_error, ..
++        } = &mut incompatible.response
++        {
++            *preparation_error = Some(
++                "project_preparation_transport_failed:{\"operation\":\"inspect\",\"exit_code\":255}"
++                    .into(),
++            );
++        }
++        assert!(
++            incompatible.validate_shape().is_err(),
++            "ne pas élargir le protocole pour faire passer le diagnostic"
++        );
++    }
++
++    #[test]
+     fn spec229_preparation_context_crosses_wire_and_reaches_coordinator_registry() {
+         use bridget_transport::protocol::*;
+         use serde_json::json;
+-        let root=std::env::temp_dir().canonicalize().unwrap().join(format!("bridget229-{}",uuid::Uuid::new_v4()));
++        let root = std::env::temp_dir()
++            .canonicalize()
++            .unwrap()
++            .join(format!("bridget229-{}", uuid::Uuid::new_v4()));
+         fs::DirBuilder::new().mode(0o700).create(&root).unwrap();
+-        let path=root.join("agents.json");
+-        let origin=root.join("source");
+-        let target=WorkerIdentity {machine_id:"target229".into(),worker_id:"worker229".into(),provisioning_revision:1};
+-        let authority=json!({"worker_id":target.worker_id,"provisioning_revision":1,"credential_fingerprint":"a".repeat(64)});
+-        let mut machine=authority.clone();machine["enabled"]=json!(true);machine["mappings"]=json!({});
+-        let config=json!({"machines":{"target229":machine}});
+-        bridget_transport::fsutil::write_private_file_atomic(&path,&serde_json::to_vec(&config).unwrap()).unwrap();
+-        assert!(crate::registry::AgentRegistry::load_from_path_quiet(path.clone()).unwrap()
+-            .select_project_mapping("target229",None,"origin229",&origin).is_err());
+-        let mapping=json!({"source_host":"origin229","source_root":origin,
++        let path = root.join("agents.json");
++        let origin = root.join("source");
++        let target = WorkerIdentity {
++            machine_id: "target229".into(),
++            worker_id: "worker229".into(),
++            provisioning_revision: 1,
++        };
++        let authority = json!({"worker_id":target.worker_id,"provisioning_revision":1,"credential_fingerprint":"a".repeat(64)});
++        let mut machine = authority.clone();
++        machine["enabled"] = json!(true);
++        machine["mappings"] = json!({});
++        let config = json!({"machines":{"target229":machine}});
++        bridget_transport::fsutil::write_private_file_atomic(
++            &path,
++            &serde_json::to_vec(&config).unwrap(),
++        )
++        .unwrap();
++        assert!(
++            crate::registry::AgentRegistry::load_from_path_quiet(path.clone())
++                .unwrap()
++                .select_project_mapping("target229", None, "origin229", &origin)
++                .is_err()
++        );
++        let mapping = json!({"source_host":"origin229","source_root":origin,
+             "remote_root":"/tmp/target229/repository","expected_git_identity":"/tmp/target229/mirror.git","mapping_revision":1});
+-        let reply=OriginProofResponse {version:1,correlation_id:"proof229".into(),connection_epoch:"epoch229".into(),
+-            worker:WorkerIdentity {machine_id:"origin229".into(),worker_id:"origin-worker229".into(),provisioning_revision:1},
+-            response:OriginProofResult::ProjectPrepared {permission_digest:"b".repeat(64),preparation_error:None,
+-                project:Some(PreparedOriginProject {target,credential_fingerprint:"a".repeat(64),project_id:"project229".into(),mapping})}};
+-        let wire=serde_json::to_vec(&reply).unwrap();
+-        let decoded:OriginProofResponse=serde_json::from_slice(&wire).unwrap();decoded.validate_shape().unwrap();
+-        let OriginProofResult::ProjectPrepared {project:Some(project),..}=decoded.response else {panic!("context lost")};
++        let reply = OriginProofResponse {
++            version: 1,
++            correlation_id: "proof229".into(),
++            connection_epoch: "epoch229".into(),
++            worker: WorkerIdentity {
++                machine_id: "origin229".into(),
++                worker_id: "origin-worker229".into(),
++                provisioning_revision: 1,
++            },
++            response: OriginProofResult::ProjectPrepared {
++                permission_digest: "b".repeat(64),
++                preparation_error: None,
++                project: Some(PreparedOriginProject {
++                    target,
++                    credential_fingerprint: "a".repeat(64),
++                    project_id: "project229".into(),
++                    mapping,
++                }),
++            },
++        };
++        let wire = serde_json::to_vec(&reply).unwrap();
++        let decoded: OriginProofResponse = serde_json::from_slice(&wire).unwrap();
++        decoded.validate_shape().unwrap();
++        let OriginProofResult::ProjectPrepared {
++            project: Some(project),
++            ..
++        } = decoded.response
++        else {
++            panic!("context lost")
++        };
+         let returned=prepare_receipt_until(&json!({"operation":"publish_prepared","registry":path,
+             "machine_id":project.target.machine_id,"authority":authority,"origin_host":"origin229",
+             "source_root":origin,"cwd":origin,"project_id":project.project_id,"mapping":project.mapping}),
+             Instant::now()+Duration::from_secs(3)).unwrap();
+-        assert_eq!(returned["project_id"],"project229");
+-        let registry=crate::registry::AgentRegistry::load_from_path_quiet(path.clone()).unwrap();
+-        assert_eq!(registry.select_project_mapping("target229",None,"origin229",&origin).unwrap().0,"project229");
+-        let old:OriginProofResult=serde_json::from_value(json!({"operation":"project_prepared",
+-            "permission_digest":"b".repeat(64),"preparation_error":null})).unwrap();
+-        assert!(matches!(old,OriginProofResult::ProjectPrepared {project:None,..}));
++        assert_eq!(returned["project_id"], "project229");
++        let registry = crate::registry::AgentRegistry::load_from_path_quiet(path.clone()).unwrap();
++        assert_eq!(
++            registry
++                .select_project_mapping("target229", None, "origin229", &origin)
++                .unwrap()
++                .0,
++            "project229"
++        );
++        let old: OriginProofResult = serde_json::from_value(json!({"operation":"project_prepared",
++            "permission_digest":"b".repeat(64),"preparation_error":null}))
++        .unwrap();
++        assert!(matches!(
++            old,
++            OriginProofResult::ProjectPrepared { project: None, .. }
++        ));
+         fs::remove_dir_all(root).unwrap();
+     }
+     #[test]
+--- a/crates/bridget-daemon/tests/guidance156_e2e.rs
++++ b/crates/bridget-daemon/tests/guidance156_e2e.rs
+@@ -80,6 +80,7 @@
+             command.contains(env!("CARGO_BIN_EXE_bridget"))
+                 && !command.to_lowercase().contains("firefox")
+         );
++        // SAFETY: kill ne déréférence aucun pointeur ; ses arguments sont des entiers.
+         assert_eq!(unsafe { libc::kill(self.0.id() as i32, libc::SIGTERM) }, 0);
+         self.wait(Duration::from_secs(10));
+     }
+@@ -242,6 +243,7 @@
+     fn human_grant(&self) {
+         let (mut master, mut slave) = (-1, -1);
+         assert_eq!(
++            // SAFETY: les pointeurs passés à openpty désignent des variables locales valides pendant l'appel.
+             unsafe {
+                 libc::openpty(
+                     &mut master,
+@@ -253,7 +255,9 @@
+             },
+             0
+         );
++        // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
+         let _master = unsafe { fs::File::from_raw_fd(master) };
++        // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
+         let slave = unsafe { fs::File::from_raw_fd(slave) };
+         let log = self.root.join("grant.log");
+         support::private_write(&log, []).unwrap();
+@@ -875,123 +879,114 @@
+ }
+ 
+ #[test]
+-fn guidance156_e2e_claude_refuse_steer_interrupt_et_fifo() {
+-    let (f, _parent, mut sender, saved, instance) = setup_child156(false, false);
++fn guidance156_e2e_completed_round_requires_continue_before_new_work() {
++    let (mut f, mut parent, mut sender, saved, instance) = setup_child156(false, false);
+     let child = saved["child"].as_str().unwrap();
+-    // La mission native est réellement terminée. Le tour suivant est un DM
+-    // ordinaire : le parent peut l’interrompre sans contourner mission_active.
++    let task_id = saved["task_id"].as_str().unwrap();
++    for (id, intent) in [
++        ("g156-after-result-queue", None),
++        ("g156-after-result-steer", Some(MessageIntent::SteerCurrent)),
++        (
++            "g156-after-result-interrupt",
++            Some(MessageIntent::InterruptAndStart),
++        ),
++    ] {
++        let mut message = BridgetMessage::new(PARENT, child, "work rejected after result");
++        message.id = id.into();
++        message.intent = intent;
++        sender.send(WrapperToDaemon::SendIdempotent {
++            message,
++            message_id: id.into(),
++            issued_at: SystemTime::now()
++                .duration_since(UNIX_EPOCH)
++                .unwrap()
++                .as_secs() as i64,
++        });
++        let reply = sender.receive();
++        assert!(
++            matches!(reply, DaemonToWrapper::IdempotencyResult {
++            issue:IdempotencyIssue::Rejected {ref category,ref reason,..},..
++        } if category=="intent_not_permitted" && reason.contains("bridget_task_continue") && reason.contains(task_id)),
++            "{reply:?}"
++        );
++    }
++    let status = f.request(
++        &mut parent,
++        NativeDelegationRequest::Status {
++            task_id: task_id.into(),
++        },
++    );
++    assert_eq!(status["status"], "result_available");
++    let continued = f.request(
++        &mut parent,
++        NativeDelegationRequest::Continue {
++            task_id: task_id.into(),
++            request_id: "g156-round2".into(),
++            task: "WAIT_CANCEL_148 GUIDANCE156_ACTIVE".into(),
++            brief: None,
++        },
++    );
++    assert_eq!(continued["task_id"], task_id, "{continued}");
++    assert_eq!(continued["child_agent_id"], child, "{continued}");
++    let mission = continued["message_id"].as_str().unwrap();
++    let until = Instant::now() + Duration::from_secs(10);
++    loop {
++        if evidence152(&f).iter().any(|e| {
++            e["event"] == "prompt"
++                && e["instance_id"] == instance
++                && e["blocked"] == true
++                && e["content"]
++                    .as_str()
++                    .is_some_and(|text| text.contains(mission))
++        }) {
++            break;
++        }
++        assert!(
++            Instant::now() < until,
++            "la nouvelle ronde native doit être remise"
++        );
++        thread::sleep(Duration::from_millis(10));
++    }
++    let mut steer = BridgetMessage::new(PARENT, child, "steer not supported");
++    steer.id = "g156-stream-steer".into();
++    steer.intent = Some(MessageIntent::SteerCurrent);
++    sender.send(WrapperToDaemon::SendIdempotent {
++        message: steer,
++        message_id: "g156-stream-steer".into(),
++        issued_at: SystemTime::now()
++            .duration_since(UNIX_EPOCH)
++            .unwrap()
++            .as_secs() as i64,
++    });
++    let reply = sender.receive();
++    assert!(
++        matches!(reply,DaemonToWrapper::IdempotencyResult {issue:IdempotencyIssue::Rejected {ref category,..},..} if category=="steer_unavailable"),
++        "{reply:?}"
++    );
+     send_guidance156(
+         &mut sender,
+         child,
+-        "g156-claude-ordinary-active",
++        "g156-queue-round2",
+         None,
+-        "WAIT_CANCEL_148 GUIDANCE156_ACTIVE",
+-    );
+-    let ready = Instant::now() + Duration::from_secs(5);
+-    loop {
+-        let observations = evidence152(&f);
+-        if observations.iter().any(|entry| {
+-            entry["event"] == "prompt"
+-                && entry["instance_id"] == instance
+-                && entry["blocked"] == true
+-                && entry["content"]
+-                    .as_str()
+-                    .is_some_and(|text| text.contains("g156-claude-ordinary-active"))
+-        }) {
+-            break;
+-        }
+-        assert!(
+-            Instant::now() < ready,
+-            "tour Claude ordinaire actif absent : {observations:?}"
+-        );
+-        thread::sleep(Duration::from_millis(10));
+-    }
+-    send_guidance156(
+-        &mut sender,
+-        child,
+-        "g156-claude-steer",
+-        Some(MessageIntent::SteerCurrent),
+-        "GUIDANCE156_STEER",
+-    );
+-    let ready = Instant::now() + Duration::from_secs(5);
+-    loop {
+-        let phase = phase156(&f, "g156-claude-steer");
+-        if phase.as_deref() == Some("indeterminate") {
+-            break;
+-        }
+-        assert!(
+-            Instant::now() < ready,
+-            "refus transport Claude non persisté : {phase:?}"
+-        );
+-        thread::sleep(Duration::from_millis(10));
+-    }
+-    let observations = evidence152(&f);
+-    assert!(
+-        !observations
+-            .iter()
+-            .any(|entry| entry["event"] == "interrupt156"),
+-        "steer a interrompu : {observations:?}"
+-    );
+-    assert!(
+-        !journal156(&f, child)
+-            .iter()
+-            .any(|entry| entry["event"] == "turn_end"
+-                && entry["message_id"] == "g156-claude-ordinary-active")
+-    );
+-    send_guidance156(
+-        &mut sender,
+-        child,
+-        "g156-fifo-ancien",
+-        None,
+-        "GUIDANCE156_FIFO_OLDER",
+-    );
+-    send_guidance156(
+-        &mut sender,
+-        child,
+-        "g156-claude-interrupt",
+-        Some(MessageIntent::InterruptAndStart),
+-        "GUIDANCE156_INTERRUPT",
+-    );
+-    wait_evidence152(&f, "interrupt156", &instance);
+-    let ready = Instant::now() + Duration::from_secs(10);
+-    let prompts = loop {
+-        let prompts: Vec<Value> = evidence152(&f)
+-            .into_iter()
+-            .filter(|entry| entry["event"] == "prompt")
+-            .collect();
+-        if prompts.iter().any(|entry| {
+-            entry["content"]
++        "queued during active native round",
++    );
++    assert_eq!(
++        phase156(&f, "g156-queue-round2").as_deref(),
++        Some("dispatching")
++    );
++    assert!(!evidence152(&f).iter().any(|e| {
++        e["event"] == "prompt"
++            && e["content"]
+                 .as_str()
+-                .is_some_and(|text| text.contains("g156-claude-interrupt"))
+-        }) {
+-            break prompts;
+-        }
+-        assert!(
+-            Instant::now() < ready,
+-            "nouveau tour interrupt absent : {prompts:?}"
+-        );
+-        thread::sleep(Duration::from_millis(10));
+-    };
+-    let older = prompts
+-        .iter()
+-        .position(|entry| {
+-            entry["content"]
+-                .as_str()
+-                .is_some_and(|text| text.contains("g156-fifo-ancien"))
+-        })
+-        .unwrap();
+-    let interrupt = prompts
+-        .iter()
+-        .position(|entry| {
+-            entry["content"]
+-                .as_str()
+-                .is_some_and(|text| text.contains("g156-claude-interrupt"))
+-        })
+-        .unwrap();
+-    assert!(
+-        older < interrupt,
+-        "FIFO réelle du fournisseur : {prompts:?}"
+-    );
++                .is_some_and(|s| s.contains("g156-queue-round2"))
++    }));
++    let cancelled = f.request(
++        &mut parent,
++        NativeDelegationRequest::Cancel {
++            task_id: task_id.into(),
++        },
++    );
++    assert_eq!(cancelled["task_id"], task_id);
+ }
+ 
+ #[test]
+--- a/crates/bridget-daemon/tests/worker_diagnostic188_test.rs
++++ b/crates/bridget-daemon/tests/worker_diagnostic188_test.rs
+@@ -195,11 +195,11 @@
+             };
+             std::thread::sleep(std::time::Duration::from_secs(3));
+         }
+-        if self.child.try_wait().ok().flatten().is_none() {
+-            if let Some(f) = self.fixture.take() {
+-                eprintln!("fixture conservée : {}", f.0.display());
+-                std::mem::forget(f);
+-            }
++        if self.child.try_wait().ok().flatten().is_none()
++            && let Some(f) = self.fixture.take()
++        {
++            eprintln!("fixture conservée : {}", f.0.display());
++            std::mem::forget(f);
+         }
+     }
+ }
+--- a/crates/bridget-transport/src/claude_stream_json.rs
++++ b/crates/bridget-transport/src/claude_stream_json.rs
+@@ -1960,20 +1960,21 @@
+                     .get("permission_denials")
+                     .and_then(Value::as_array)
+                     .map_or(0, Vec::len);
+-                let (interrupted_for_permission, terminal) = {
++                let (interrupted_for_permission, terminal, background_pending) = {
+                     let state=queue.0.lock().unwrap_or_else(|e|e.into_inner());
+                     let active=state.active.as_ref();
+                     let interrupted=active.is_some_and(|active|active.permission_denied);
+                     let terminal=classify_claude_result(&value,interrupted,
+                         active.is_some_and(|active|active.latest_assistant_rate_limited),
+                         active.filter(|active|active.latest_assistant_api_error).map(|active|active.response.as_str()));
+-                    (interrupted,terminal)
++                    (interrupted,terminal,active.is_some_and(|active| active.background_tasks.pending()))
+                 };
+                 let active_id = queue.0.lock().unwrap_or_else(|e| e.into_inner())
+                     .active.as_ref().map(|active| active.message_id.clone());
+                 if let Some(message_id) = active_id {
+-                    record_or_terminal(&journal, &events, "provider_result", Some(&message_id),
+-                        claude_result_metadata(&value, &terminal, interrupted_for_permission));
++                    let mut metadata=claude_result_metadata(&value,&terminal,interrupted_for_permission);
++                    metadata["finalization"]=json!(if matches!(terminal,ManagedTerminal::Completed)&&background_pending {"waiting_background_tasks"}else{"terminal_result"});
++                    record_or_terminal(&journal, &events, "provider_result", Some(&message_id),metadata);
+                 }
+                 if tool_denials > 0 {
+                     let mut state = queue.0.lock().unwrap_or_else(|e| e.into_inner());
+--- a/crates/bridget-transport/src/claude_stream_json_tests.rs
++++ b/crates/bridget-transport/src/claude_stream_json_tests.rs
+@@ -144,15 +144,15 @@
+         }
+     }
+ 
+-    #[test]
+-    fn spec174_claude_attend_le_rapport_apres_le_travail_de_fond() {
+-        let root = std::env::temp_dir().join(format!(
+-            "bridget-background-{}-{}",
+-            std::process::id(),
+-            FIXTURE_SEQ.fetch_add(1, AtomicOrdering::Relaxed)
+-        ));
+-        fs::create_dir_all(&root).unwrap();
+-        let script = r#"
++#[test]
++fn spec174_claude_attend_le_rapport_apres_le_travail_de_fond() {
++    let root = std::env::temp_dir().join(format!(
++        "bridget-background-{}-{}",
++        std::process::id(),
++        FIXTURE_SEQ.fetch_add(1, AtomicOrdering::Relaxed)
++    ));
++    fs::create_dir_all(&root).unwrap();
++    let script = r#"
+ import json, pathlib, sys, time
+ root = pathlib.Path(sys.argv[1])
+ def emit(value):
+@@ -175,81 +175,92 @@
+ result('rapport final, commit termine')
+ sys.stdin.readline()
+ "#;
+-        let mut configured = options();
+-        configured.command = "python3".into();
+-        configured.args = vec![
+-            "-u".into(),
+-            "-c".into(),
+-            script.into(),
+-            root.to_string_lossy().into_owned(),
+-        ];
+-        configured.notify_timeout_secs = 10;
+-        let mut transport = ClaudeStreamJsonTransport::spawn(configured).unwrap();
+-        transport.deliver(&message("background-mission")).unwrap();
+-        let mut events = Vec::new();
+-        for stage in 1..=3 {
+-            let deadline = Instant::now() + Duration::from_secs(3);
+-            loop {
+-                events.extend(transport.drain_events());
+-                if events.iter().any(|e| {
+-                    serde_json::from_slice::<Value>(&e.raw)
+-                        .ok()
+-                        .is_some_and(|v| v["barrier"] == stage)
+-                }) {
+-                    break;
+-                }
+-                assert!(
+-                    Instant::now() < deadline,
+-                    "barrière fournisseur {stage} absente"
+-                );
+-                thread::sleep(Duration::from_millis(10));
+-            }
+-            thread::sleep(Duration::from_millis(50));
+-            events.extend(transport.drain_events());
+-            assert!(
+-                transport.is_busy(),
+-                "mission publiée avant le rapport final, étape {stage}"
+-            );
+-            assert!(
+-                !events.iter().any(|e| matches!(
+-                    e.kind,
+-                    ManagedEventKind::TurnFinished { .. }
+-                        | ManagedEventKind::DeliveryRejected { .. }
+-                )),
+-                "résultat prématuré, étape {stage}"
+-            );
+-            fs::write(root.join(stage.to_string()), b"continue").unwrap();
+-        }
++    let mut configured = options();
++    configured.command = "python3".into();
++    configured.args = vec![
++        "-u".into(),
++        "-c".into(),
++        script.into(),
++        root.to_string_lossy().into_owned(),
++    ];
++    configured.notify_timeout_secs = 10;
++    let mut transport = ClaudeStreamJsonTransport::spawn(configured).unwrap();
++    transport.activate_journal(&root, "background271", None).unwrap();
++    transport.deliver(&message("background-mission")).unwrap();
++    let mut events = Vec::new();
++    for stage in 1..=3 {
+         let deadline = Instant::now() + Duration::from_secs(3);
+         loop {
+             events.extend(transport.drain_events());
+-            if events
+-                .iter()
+-                .any(|e| matches!(e.kind, ManagedEventKind::TurnFinished { .. }))
+-            {
++            if events.iter().any(|e| {
++                serde_json::from_slice::<Value>(&e.raw)
++                    .ok()
++                    .is_some_and(|v| v["barrier"] == stage)
++            }) {
+                 break;
+             }
+-            assert!(Instant::now() < deadline, "rapport final absent");
++            assert!(
++                Instant::now() < deadline,
++                "barrière fournisseur {stage} absente"
++            );
+             thread::sleep(Duration::from_millis(10));
+         }
+-        let results: Vec<_> = events
++        thread::sleep(Duration::from_millis(50));
++        events.extend(transport.drain_events());
++        assert!(
++            transport.is_busy(),
++            "mission publiée avant le rapport final, étape {stage}"
++        );
++        assert!(
++            !events.iter().any(|e| matches!(
++                e.kind,
++                ManagedEventKind::TurnFinished { .. } | ManagedEventKind::DeliveryRejected { .. }
++            )),
++            "résultat prématuré, étape {stage}"
++        );
++        fs::write(root.join(stage.to_string()), b"continue").unwrap();
++    }
++    let deadline = Instant::now() + Duration::from_secs(3);
++    loop {
++        events.extend(transport.drain_events());
++        if events
+             .iter()
+-            .filter_map(|e| match &e.kind {
+-                ManagedEventKind::TurnFinished {
+-                    message,
+-                    response,
+-                    terminal: ManagedTerminal::Completed,
+-                } => Some((message.id.as_str(), response.as_str())),
+-                _ => None,
+-            })
+-            .collect();
+-        assert_eq!(
+-            results,
+-            vec![("background-mission", "calcul en cours, rapport a venir\n\ntoujours en cours\n\nrapport final, commit termine")]
+-        );
+-        transport.stop();
+-        fs::remove_dir_all(root).unwrap();
+-    }
++            .any(|e| matches!(e.kind, ManagedEventKind::TurnFinished { .. }))
++        {
++            break;
++        }
++        assert!(Instant::now() < deadline, "rapport final absent");
++        thread::sleep(Duration::from_millis(10));
++    }
++    let results: Vec<_> = events
++        .iter()
++        .filter_map(|e| match &e.kind {
++            ManagedEventKind::TurnFinished {
++                message,
++                response,
++                terminal: ManagedTerminal::Completed,
++            } => Some((message.id.as_str(), response.as_str())),
++            _ => None,
++        })
++        .collect();
++    assert_eq!(
++        results,
++        vec![(
++            "background-mission",
++            "calcul en cours, rapport a venir\n\ntoujours en cours\n\nrapport final, commit termine"
++        )]
++    );
++    transport.stop();
++    let path = fs::read_dir(root.join("background271")).unwrap().next().unwrap().unwrap().path();
++    let records = crate::journal::valid_events(&path);
++    let results: Vec<_> = records.iter().filter(|r| r["event"] == "provider_result").collect();
++    assert_eq!(results.len(), 3);
++    assert_eq!(results[0]["payload"]["finalization"], "waiting_background_tasks");
++    assert_eq!(results[1]["payload"]["finalization"], "waiting_background_tasks");
++    assert_eq!(results[2]["payload"]["finalization"], "terminal_result");
++    assert!(results.iter().all(|r| r["message_id"] == "background-mission"));
++    fs::remove_dir_all(root).unwrap();
++}
+ 
+     fn options() -> ClaudeStreamJsonOptions {
+         ClaudeStreamJsonOptions {
+--- a/crates/bridget-transport/src/protocol_tests.rs
++++ b/crates/bridget-transport/src/protocol_tests.rs
+@@ -40,7 +40,8 @@
+             connection_epoch: "epoch".into(), worker: worker162_identity(), command: worker162_command(),
+             request: WorkerRequestOperation::ParentSourceProof { parent: parent.clone(), source: source.clone() } };
+         assert_eq!(request.validate(), Ok(()));
+-        for invalid in ["/remote/project/../other"] {
++        {
++            let invalid = "/remote/project/../other";
+             if let WorkerRequestOperation::ParentSourceProof { source, .. } = &mut request.request { source.cwd = invalid.into(); }
+             assert_eq!(request.validate(), Err(WorkerRefusal::InvalidEnvelope));
+         }
+--- a/scripts/prepare-project.py
++++ b/scripts/prepare-project.py
+@@ -23,7 +23,9 @@
+ SOURCE_LOCK_WAIT_SECS = 30.0
+ 
+ class Refused(Exception):
+-    pass
++    def __init__(self, code, detail=None):
++        super().__init__(code)
++        self.detail = detail
+ 
+ def require(condition, code):
+     if not condition:
+@@ -546,8 +548,10 @@
+             code = {"inspect": "project_preparation_ssh_inspect_timeout",
+                     "prepare": "project_preparation_ssh_prepare_timeout"}[operation]
+             raise Refused(code) from None
+-    require(answer.returncode == 0 and len(answer.stdout) <= MAX_JSON,
+-            "project_preparation_transport_failed")
++    if answer.returncode != 0:
++        raise Refused("project_preparation_process_failed",
++                      dict(operation=operation, exit_code=answer.returncode))
++    require(len(answer.stdout) <= MAX_JSON, "project_preparation_output_limit")
+     result = json.loads(answer.stdout)
+     require(result.get("ok") is True, result.get("error", "project_preparation_remote_failed"))
+     return result["result"]
+@@ -798,7 +802,10 @@
+             result = publish_prepared(request) if request.get("operation") == "publish_prepared" else prepare(request)
+         print(json.dumps(dict(ok=True, result=result)))
+     except Refused as error:
+-        print(json.dumps(dict(ok=False, error=str(error))))
++        answer = dict(ok=False, error=str(error))
++        if error.detail is not None:
++            answer["detail"] = error.detail
++        print(json.dumps(answer))
+     except subprocess.TimeoutExpired:
+         print(json.dumps(dict(ok=False, error="project_preparation_timeout")))
+     except OSError as error:

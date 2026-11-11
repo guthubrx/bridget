@@ -1988,7 +1988,7 @@ fn spawn_reader(
                     .get("permission_denials")
                     .and_then(Value::as_array)
                     .map_or(0, Vec::len);
-                let (interrupted_for_permission, terminal) = {
+                let (interrupted_for_permission, terminal, background_pending) = {
                     let state = queue.0.lock().recover_poison();
                     let active = state.active.as_ref();
                     let interrupted = active.is_some_and(|active| active.permission_denied);
@@ -2000,7 +2000,11 @@ fn spawn_reader(
                             .filter(|active| active.latest_assistant_api_error)
                             .map(|active| active.response.as_str()),
                     );
-                    (interrupted, terminal)
+                    (
+                        interrupted,
+                        terminal,
+                        active.is_some_and(|active| active.background_tasks.pending()),
+                    )
                 };
                 let active_id = queue
                     .0
@@ -2010,12 +2014,22 @@ fn spawn_reader(
                     .as_ref()
                     .map(|active| active.message_id.clone());
                 if let Some(message_id) = active_id {
+                    let mut metadata =
+                        claude_result_metadata(&value, &terminal, interrupted_for_permission);
+                    metadata["finalization"] =
+                        json!(if matches!(terminal, ManagedTerminal::Completed)
+                            && background_pending
+                        {
+                            "waiting_background_tasks"
+                        } else {
+                            "terminal_result"
+                        });
                     record_or_terminal(
                         &journal,
                         &events,
                         "provider_result",
                         Some(&message_id),
-                        claude_result_metadata(&value, &terminal, interrupted_for_permission),
+                        metadata,
                     );
                 }
                 if tool_denials > 0 {

@@ -2980,7 +2980,7 @@ pub(crate) fn tools() -> Vec<Value> {
         }),
         json!({
             "name": "bridget_ledger",
-            "description": "Lire les messages et demandes Bridget récents (action absente ou recent), chercher dans ses propres échanges ou dans un fil dont on est membre (action=search : page bornée, reprise par cursor), ou relire un message exact par id+target (action=read : fragments de 16 Kio, empreinte SHA-256). La recherche est partielle et reprenable : arrêter sur has_more=false ou annoncer une recherche partielle ; ne pas parcourir automatiquement toute l'archive.",
+            "description": "Lire les messages et demandes Bridget récents (action absente ou recent), chercher dans ses propres échanges ou dans un fil dont on est membre (action=search : page bornée, reprise par cursor), ou relire un message exact par id+target (action=read : fragments de 16 Kio, empreinte SHA-256). answered atteste une réponse conservée, pas son injection dans un tour actif : un message ordinaire reste en file. Lire cette réponse par search/read si le travail en dépend ; tout guidage exige son contrôle explicite et ses droits habituels. La recherche est partielle et reprenable : arrêter sur has_more=false ou annoncer une recherche partielle ; ne pas parcourir automatiquement toute l'archive.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
