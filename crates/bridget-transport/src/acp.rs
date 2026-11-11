@@ -958,37 +958,37 @@ fn spawn_worker(worker: TurnWorker) -> thread::JoinHandle<()> {
                 .lock()
                 .recover_poison()
                 .clone();
-            let result = prompt_request(
-                &worker.writer,
-                &worker.waiters,
-                &worker.completions,
-                &worker.next_id,
-                "session/prompt",
-                json!({
+            let result = prompt_request(PromptRequestArgs {
+writer: &worker.writer,
+waiters: &worker.waiters,
+completions: &worker.completions,
+next_id: &worker.next_id,
+method: "session/prompt",
+params: json!({
                     "sessionId": &worker.session_id,
                     "prompt": [{ "type": "text", "text": prompt_for_with_private_instructions(&message, instructions.as_deref()) }]
                 }),
-                // L'échéance absolue vient du daemon (relue à chaque livraison).
+timeout: // L'échéance absolue vient du daemon (relue à chaque livraison).
                 // Sans elle, repli sur la valeur figée au spawn — qui ne suit
                 // PAS un changement de agents.json tant que l'agent vit.
                 message
                     .deadline_at
                     .is_none()
                     .then_some(worker.notify_timeout),
-                message.deadline_at,
-                &worker.clock,
-                &cancellation,
-                &cancelled,
-                &worker.session_id,
-                &worker.child,
-                &worker.queue,
-                &worker.events,
-                &worker.test_observer,
-                &message.id,
-                &worker.alive,
-                worker.cancel_grace,
-                worker.poll_interval,
-            );
+deadline_at: message.deadline_at,
+clock: &worker.clock,
+cancellation: &cancellation,
+cancelled: &cancelled,
+session_id: &worker.session_id,
+child: &worker.child,
+queue: &worker.queue,
+events: &worker.events,
+test_observer: &worker.test_observer,
+prompt_message_id: &message.id,
+alive: &worker.alive,
+cancel_grace: worker.cancel_grace,
+poll_interval: worker.poll_interval,
+});
             let collected = worker
                 .response
                 .lock()
@@ -1476,28 +1476,31 @@ fn drain_queue(queue: &mut QueueState, events: &Arc<Mutex<AcpEventQueue>>, reaso
 // Les ressources du tour sont distinctes par conception (lecteur unique,
 // writer sérialisé, worker et arrêt forcé) ; les regrouper brouillerait D-204.
 #[allow(clippy::too_many_arguments)]
-fn prompt_request(
-    writer: &Writer,
-    waiters: &Waiters,
-    completions: &Completions,
-    next_id: &AtomicU64,
-    method: &str,
-    params: Value,
-    timeout: Option<Duration>,
-    deadline_at: Option<u64>,
-    clock: &Clock,
-    cancellation: &mpsc::Receiver<String>,
-    cancelled: &AtomicBool,
-    session_id: &str,
-    child: &Arc<Mutex<Child>>,
-    queue: &Arc<(Mutex<QueueState>, Condvar)>,
-    events: &Arc<Mutex<AcpEventQueue>>,
-    test_observer: &Option<mpsc::Sender<AcpEvent>>,
-    prompt_message_id: &str,
-    alive: &AtomicBool,
-    cancel_grace: Duration,
-    poll_interval: Duration,
-) -> Result<Value, TransportError> {
+struct PromptRequestArgs<'a> {
+    pub writer: &'a Writer,
+    pub waiters: &'a Waiters,
+    pub completions: &'a Completions,
+    pub next_id: &'a AtomicU64,
+    pub method: &'a str,
+    pub params: Value,
+    pub timeout: Option<Duration>,
+    pub deadline_at: Option<u64>,
+    pub clock: &'a Clock,
+    pub cancellation: &'a mpsc::Receiver<String>,
+    pub cancelled: &'a AtomicBool,
+    pub session_id: &'a str,
+    pub child: &'a Arc<Mutex<Child>>,
+    pub queue: &'a Arc<(Mutex<QueueState>, Condvar)>,
+    pub events: &'a Arc<Mutex<AcpEventQueue>>,
+    pub test_observer: &'a Option<mpsc::Sender<AcpEvent>>,
+    pub prompt_message_id: &'a str,
+    pub alive: &'a AtomicBool,
+    pub cancel_grace: Duration,
+    pub poll_interval: Duration,
+}
+
+fn prompt_request(args: PromptRequestArgs<'_>) -> Result<Value, TransportError> {
+    let PromptRequestArgs { writer, waiters, completions, next_id, method, params, timeout, deadline_at, clock, cancellation, cancelled, session_id, child, queue, events, test_observer, prompt_message_id, alive, cancel_grace, poll_interval } = args;
     let id = next_id.fetch_add(1, Ordering::SeqCst);
     let (sender, receiver) = mpsc::channel();
     let (completion_sender, completion_receiver) = mpsc::channel();
