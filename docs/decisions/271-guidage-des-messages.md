@@ -1,6 +1,6 @@
 # 271 : messages après ronde et faits de préparation
 
-Statut : retenu, tests et activation suivis dans la session 271.
+Statut : appliqué dans les services 0.8.37/271, vérifications et conservations des instances antérieures suivies dans la session271.
 
 Un enfant peut garder un processus après le résultat d’une ronde. Un nouveau
 message de travail du parent ne doit pas être présenté comme un échange entre

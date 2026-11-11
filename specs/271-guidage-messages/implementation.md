@@ -76,3 +76,42 @@ prétendre que correlation_id est présent dans le reçu du demandeur.
 La lecture ciblée du journal KS de 15:50 à 16:00Z ne contient aucune corrélation
 avec e2d6d3bf. Le refus historique ne permet donc pas de nommer sa cause amont.
 Aucune tâche annulée n’a été rejouée pour compléter ce diagnostic.
+
+Activation vérifiée : version 0.8.37, build 271-guidage-messages-r1, sources
+84e5e009 poussées. Maître Cartae PID180658, mobile181165 et worker184406 ;
+worker SYS3809462, KS1483911, Mac79418, connecteur79682, outil de mise à jour
+Mac80006 ; worker M177570. Les images chargées ont les empreintes attendues.
+Le maître confirme BRIDGET_FLEET_QUOTA=128 dans son environnement effectif.
+Le MCP natif répond avec build271 ; les observations des cinq workers sont
+revenues après raccordement. Retour 269 qualifié et pointeur privé contrôlé
+sur les quatre installations gérées. M1 conserve son image268 comme retour
+qualifié ; aucun état d’outil de mise à jour absent n’a été inventé.
+
+Le passage du quota avait arrêté le relais mobile, dépendant du service maître.
+Le contrôle préalable l’a trouvé inactif. Il a été remis en service avec271 ;
+GET /v1/status répond200/protocole1 via son hôte configuré. T3 demeure PID77762,
+créé le11novembre à14:10:41. Aucun T3 arrêté ou remplacé.
+
+Dix-neuf superviseurs existants ont été conservés avec les mêmes PID et dates
+de naissance lors du passage. Ils chargent encore leurs anciennes images
+265/266/268/269 selon leur instance. Les services et nouvelles instances sont
+en271 ; ne pas prétendre avoir remplacé les anciens superviseurs en cours.
+Le plafond128 et le guidage du maître s’appliquent déjà à leurs appels. Leur
+travail, leurs résultats et leurs reçus restent prioritaires sur le retrait
+d’une image utilisée. Les quatre revues ont un résultat conservé, garde fermée
+et cleanup_done=true ; leurs vues restent des preuves, sans retrait forcé.
+
+Publication v0.8.37 : six fichiers publics téléchargés sans authentification et
+vérifiés par empreinte. Linux exige glibc2.34, sous le plafond2.36. Android
+8037/0.8.37 porte le certificat existant. Neuf avis silencieux de résultat ont
+été conservés auprès des propriétaires et auteurs concernés, sans réveil.
+
+Ménage gardé : 1034698061octets logiques retirés (intermédiaires SYS, exports
+privés Mac/SYS et une ancienne copie exécutable SYS). Les images utilisées,
+les versions actives et leurs retours restent conservés. Les caches Mac et
+leur source de reconstruction sont conservés parce que l’observation native
+ne peut pas qualifier le cwd du processus Python33346 (créé le10novembre,
+parent1). Aucun arrêt autorisé de ce processus n’a été déduit. Le retrait des
+anciennes images Cartae est différé après observation incomplète d’un descripteur
+du maître180658. SurKS, l’image268 est réellement utilisée. Ces conservations
+sont consignées dans les reçus privés ; ne pas forcer le nettoyage.

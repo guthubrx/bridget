@@ -4,6 +4,6 @@
 - [x] Corriger le guidage après fin de ronde et le diagnostic de préparation.
 - [x] Distinguer résultat fournisseur et attente des tâches de fond dans le journal.
 - [x] Vérifier les régressions et traiter la revue indépendante.
-- [ ] Publier, activer les composants concernés et informer les propriétaires.
+- [x] Publier, activer les services concernés et informer les propriétaires ; conserver explicitement les superviseurs métier déjà lancés.
 - [x] Relever le plafond de flotte à 128 et vérifier la valeur réellement chargée.
-- [ ] Terminer le ménage gardé et les reçus.
+- [x] Effectuer le ménage gardé et consigner les conservations imposées par les usages et l’observation native.
