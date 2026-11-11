@@ -17919,41 +17919,7 @@ fn handle_wrapper_message_with_peer(
         WrapperToDaemon::DeliveryIndeterminate {
             delivery_id,
             delivery_generation,
-        } => {
-            let Some(instance_id) = state
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .conn_instances
-                .get(conn_id)
-                .cloned()
-            else {
-                return Some(DaemonToWrapper::Nack {
-                    id: delivery_id,
-                    reason: "accusé indéterminé émis par une instance inconnue".to_string(),
-                });
-            };
-            let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
-            match st.idempotency.mark_delivery_indeterminate(
-                &delivery_id,
-                &instance_id,
-                delivery_generation,
-            ) {
-                Ok(()) => {
-                    settle_thread_wake_by_delivery(
-                        &mut st,
-                        &delivery_id,
-                        crate::store::threads::WakeOutcome::OutcomeUnknown,
-                    );
-                    #[cfg(feature = "test-support")]
-                    crate::test_sync::checkpoint("after_delivery_indeterminate");
-                    None
-                }
-                Err(error) => Some(DaemonToWrapper::Nack {
-                    id: delivery_id,
-                    reason: error.to_string(),
-                }),
-            }
-        }
+        } => wrapper_dispatch::on_delivery_indeterminate(delivery_id, delivery_generation, conn_id, state),
         WrapperToDaemon::RequestWait {
             request_id,
             wait_timeout,

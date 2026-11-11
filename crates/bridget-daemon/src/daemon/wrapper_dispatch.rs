@@ -1357,3 +1357,39 @@ pub(super) fn on_unsubscribe(subscription_id: String, conn_id: &str, state: &Arc
             }
             None
         }
+
+pub(super) fn on_delivery_indeterminate(delivery_id: String, delivery_generation: u64, conn_id: &str, state: &Arc<Mutex<DaemonState>>) -> Option<DaemonToWrapper> {
+            let Some(instance_id) = state
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .conn_instances
+                .get(conn_id)
+                .cloned()
+            else {
+                return Some(DaemonToWrapper::Nack {
+                    id: delivery_id,
+                    reason: "accusé indéterminé émis par une instance inconnue".to_string(),
+                });
+            };
+            let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+            match st.idempotency.mark_delivery_indeterminate(
+                &delivery_id,
+                &instance_id,
+                delivery_generation,
+            ) {
+                Ok(()) => {
+                    settle_thread_wake_by_delivery(
+                        &mut st,
+                        &delivery_id,
+                        crate::store::threads::WakeOutcome::OutcomeUnknown,
+                    );
+                    #[cfg(feature = "test-support")]
+                    crate::test_sync::checkpoint("after_delivery_indeterminate");
+                    None
+                }
+                Err(error) => Some(DaemonToWrapper::Nack {
+                    id: delivery_id,
+                    reason: error.to_string(),
+                }),
+            }
+        }
