@@ -16967,17 +16967,7 @@ fn handle_wrapper_message_with_peer(
         WrapperToDaemon::StopOrder {
             agent_id: name,
             command_id,
-        } => {
-            info!("cycle_vie action=stop phase=request name={name} command_id={command_id}");
-            let outcome = await_managed_stop(prepare_managed_stop(state, &name), &name);
-            info!(
-                "cycle_vie action=stop phase=result name={name} command_id={command_id} outcome={outcome:?}"
-            );
-            Some(DaemonToWrapper::StopResult {
-                command_id,
-                outcome,
-            })
-        }
+        } => wrapper_dispatch::on_stop_order(name, command_id, state),
         WrapperToDaemon::RelaunchOrder {
             agent_id: name,
             command_id,

@@ -4559,3 +4559,15 @@ pub(super) fn on_delegation_halt_set(version: u16, command_id: String, halted: b
             reason.as_deref(),
             cancel_active,
         )) }
+
+pub(super) fn on_stop_order(name: String, command_id: String, state: &Arc<Mutex<DaemonState>>) -> Option<DaemonToWrapper> {
+            info!("cycle_vie action=stop phase=request name={name} command_id={command_id}");
+            let outcome = await_managed_stop(prepare_managed_stop(state, &name), &name);
+            info!(
+                "cycle_vie action=stop phase=result name={name} command_id={command_id} outcome={outcome:?}"
+            );
+            Some(DaemonToWrapper::StopResult {
+                command_id,
+                outcome,
+            })
+        }
