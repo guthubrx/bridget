@@ -36,7 +36,10 @@ un chemin externe avec espaces et nettoyage local après perte du volume.
 L’installateur couvre aussi le repli des anciens paquets sans configuration et
 le refus avant Cargo quand une configuration existe mais n’est pas résolue.
 Les deux revues sont lues, ACK et gardes propriétaires closes. Une revue ciblée
-032ad58b examine le raccord final ; aucune nouvelle mission métier créée.
+032ad58b ne trouve aucun défaut nouveau dans le raccord final. Revue statique,
+sans tests exécutés par le relecteur ; résultat lu, ACK et garde propriétaire
+close. Aucun nouvel agent métier créé. L’avertissement Make hors compilation
+reste volontaire et non bloquant, couvert par le test clean-builds.
 
 Le déplacement termine 291 éléments : 243 archives fermées, les deux dossiers
 Rust et 46 fichiers de familles SQLite temporaires mortes. 7 630 166 455 octets
@@ -49,5 +52,40 @@ Le disque système passe de 31 772 737 536 à 40 673 009 664 octets disponibles,
 soit environ 8,3 Gio gagnés lors du rangement (variations des autres travaux
 possibles). Les données actives et l’outil de mise à jour ne sont pas déplacés.
 
-Activation du réglage et compilation réelle à compléter après publication des
-scripts. Les exécutables Bridget et T3 ne nécessitent aucun redémarrage.
+Les scripts sont poussés en 6639b901b102d645c7f28814c67a856449b46c62 et chargés
+depuis les checkouts propres et alignés des quatre machines. Le réglage privé SYS
+est créé avec une racine sur storage, modes 0700/0600 et ancre concordante.
+Une compilation Rust réelle d’un petit programme autonome passe par le vrai
+Makefile release et le vrai script, sans dépendance ni réseau. Seul le manifeste
+du programme de recette est fourni à Cargo par BRIDGET_CARGO, crochet existant.
+Le binaire de recette porte un nom distinct de bridget et ne peut pas remplacer
+son résultat de compilation. Il s’exécute avec le marqueur attendu. L’ABI exige
+glibc 2.34, sous le plafond 2.36. La cible et le disque système ont des identités
+de systèmes de fichiers distinctes (2065 et 2052). Le target local reste inchangé.
+Cette preuve qualifie le stockage, pas une nouvelle compilation du produit.
+
+Le rangement final retire aussi 17 anciens fichiers de compilation, soit
+1 111 188 019 octets logiques, dans les trois staging enregistrés 227/264/269.
+Les verrous de profils sont acquis sans attente, les lecteurs observés par le
+lecteur natif administrateur, les fichiers vérifiés et leurs empreintes gardées.
+Les petits marqueurs, verrous et dossiers vides restent en place ; aucun verrou
+Cargo n’est supprimé. La copie de sources de test SYS est retirée après contrôle
+d’usage. Le cache externe récent de recette et ses sources sont conservés comme
+preuve, moins de 1 Mio, hors disque système.
+
+Mesure finale : 41 830 858 752 octets disponibles sur `/`, environ 39 Gio, soit
+9,4 Gio de plus qu’au début de ce passage. Les variations des autres travaux
+peuvent modifier cette valeur après mesure. Aucun processus métier n’est arrêté.
+Les exécutables Bridget restent en 269 ; T3 conserve son PID et son heure de
+lancement. Aucun redémarrage nécessaire pour les scripts Python et Make.
+
+Preuves privées : inventaires, journal des 291 copies et comparaisons, empreintes
+des fichiers retirés, trois revues, journaux de tests et compilation. Le dossier
+de preuves local occupe moins de 1 Mio. La présente correction est technique,
+sans changement d’interface : aucun diaporama requis.
+
+Information propriétaire tentée une seule fois en intent=information. Reçu
+mcp-86189-6af4b210-2f : unknown_recipient, aucune route active pour le responsable
+du rangement à cet instant. La liste des fils partagés est vide. Bilan et reçu
+conservés, sans repli vers queue ni déduction de lecture. Les vues des revues
+restent des preuves conservées ; leurs gardes sont closes, sans retrait forcé.

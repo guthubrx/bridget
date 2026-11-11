@@ -1,6 +1,6 @@
 # 270 : stockage configuré des compilations
 
-Statut : retenu, qualification et rangement suivis dans la session 270.
+Statut : livré et qualifié sur le volume externe de SYS, session 270.
 
 Le nettoyage n’enregistrait que les caches directs du compte sous `.cache`.
 Une compilation volumineuse pouvait donc remplir le système de fichiers système.
