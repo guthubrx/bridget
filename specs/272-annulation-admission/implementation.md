@@ -52,3 +52,51 @@ nombre et l’indicateur unconfirmed ; aucun succès fournisseur isolé ne clôt
 artificiellement une mission. Un pilote qui refuse steer reste explicite : queue
 attend un tour, task_continue exige une garde, le propriétaire utilise task_cancel
 si le travail est devenu périmé. Aucun contournement ni copie d’accès SSH.
+
+
+Activation : 0.8.38 / 272-annulation-admission-r1 chargée sur le maître,
+le service mobile et les workers Cartae, SYS, KS, Mac et M1. Contrôle des images
+réellement chargées et des pointeurs de retour 271. Publication v0.8.38 : six
+fichiers retéléchargés sans authentification et contrôlés par empreinte.
+Le quota 128 est chargé et persistant sur le maître.
+
+Le raccord MCP existant répond avec le nouveau guidage natif après réattestation.
+Sa façade ouverte depuis 14:10 utilise encore 266 et n’expose pas kind. Une façade
+neuve lancée depuis un shell n’a pas la preuve de session injectée par le client ;
+elle refuse identity_not_found sans effet. Aucune preuve copiée ou fabriquée.
+Le contrôle SQL/Unix du nouveau parcours est exécuté, mais son essai authentifié
+dans cette session attend le remontage natif du catalogue. T3 reste PID 77762,
+né le 11 novembre 2026 à 14:10:41. Aucun arrêt ou remplacement autorisé dans ce lot.
+
+
+Clôture : les tâches 681bb87c et 6afe051a ont été annulées par leur parcours
+propriétaire, cleanup_done=true, sans instance enfant. Les sept propriétaires
+réellement concernés ont reçu un avis conservé sans réveil, puis le retour au
+service et les faits propres à leurs incidents. stored ne signifie pas lu.
+
+Les trois tests 272, les 3 tests 156, les 25 tests 174 et le contrat historique
+168 passent sur chaque plateforme. Clippy workspace/all-targets avec refus des
+avertissements et builds release passent sur les deux. Linux exige glibc 2.34,
+sous le plafond 2.36. Empreintes exécutables :
+- Mac/M1 : cdb63de8a0a19e748c65d6194123d6ab1fadbf56e8a175740ae145281673794a.
+- Linux : 1229715a0ad3f50ae72a643dc919f7c71d849381dcdb3fb40276e0fceca8525f.
+Le mobile répond HTTP 200, enveloppe version 1. La version de retour est 271,
+qualifiée dans les deux sens et inscrite par l’écrivain atomique sous verrou.
+M1 n’avait pas d’état d’outil de mise à jour : aucun état inventé.
+
+Ménage : 88 704 007 octets d’exports propres retirés après installation et
+vérification publique. Les caches Cargo restent conservés : sur Mac, PID 33346
+avec cwd introuvable ; sur SYS, descripteur du worker non vérifiable dans la
+photographie lsof. Une seconde observation après disparition du premier FD reste
+incomplète sur un autre FD ; aucun troisième essai ni contournement. Cartae reste
+aussi conservateur sur le worker. Les deux anciennes images KS restent réellement
+utilisées. Les images encore chargées par les missions et anciens MCP sont gardées.
+Le cache SYS est sur volume externe, dans le budget commun ; / a environ 39 Gio
+libres. Aucun processus indépendant arrêté pour nettoyer. Aucun worktree ni branche
+auxiliaire créé dans ce lot.
+
+Décision de François : garder T3 ouvert. L’essai authentifié du nouveau champ dans
+son MCP déjà monté est donc différé, sans empêcher les 128 places ni les services
+272 de fonctionner. Le refus legacy dans cette même session rend bien le guidage
+272 et n’annule rien. Le nouveau parcours complet est vérifié sur le store et le
+transport Unix isolés ; aucune preuve de session n’a été copiée depuis un processus.

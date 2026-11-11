@@ -1,6 +1,6 @@
 # 272 : annuler avant la création d’une tâche
 
-Statut : mise en œuvre et qualification en cours.
+Statut : actif dans les services 0.8.38 / 272. Le catalogue des sessions déjà ouvertes attend leur remontage natif ; François a choisi de garder T3 ouvert.
 
 Une admission en cours doit pouvoir être annulée quand son brief est périmé.
 Le champ kind=admission de bridget_cancel est explicite ; l’absence de kind
