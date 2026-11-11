@@ -119,6 +119,7 @@ pub struct Metrics {
     pub messages_received: AtomicU64,
     pub errors: AtomicU64,
     pub active_connections: AtomicUsize,
+    pub max_connections: AtomicUsize,
     pub execution_admitted: AtomicU64,
     pub execution_started: AtomicU64,
     pub execution_transition_rejected: AtomicU64,
@@ -141,6 +142,7 @@ impl Metrics {
             messages_received: AtomicU64::new(0),
             errors: AtomicU64::new(0),
             active_connections: AtomicUsize::new(0),
+            max_connections: AtomicUsize::new(0),
             execution_admitted: AtomicU64::new(0),
             execution_started: AtomicU64::new(0),
             execution_transition_rejected: AtomicU64::new(0),
@@ -164,7 +166,10 @@ impl Metrics {
     }
 
     pub fn increment_connections(&self) {
-        self.active_connections.fetch_add(1, Ordering::Relaxed);
+        let n = self.active_connections.fetch_add(1, Ordering::Relaxed) + 1;
+        if self.max_connections.fetch_max(n, Ordering::Relaxed) < n && n.is_power_of_two() {
+            info!("connexions actives : {n} (nouveau maximum)");
+        }
     }
 
     pub fn decrement_connections(&self) {
@@ -354,6 +359,8 @@ fn wait_request(
 }
 
 const PRESENCE_RETENTION: Duration = Duration::from_secs(300);
+/// Seuil provisoire : un quart de la période du tour (1 s). À ajuster après mesure réelle (programme 260, D7).
+const NATIVE_TICK_SLOW: Duration = Duration::from_millis(250);
 
 #[cfg(test)]
 mod native151_sql_trace_tests {
@@ -6845,7 +6852,12 @@ pub fn run(config: DaemonConfig) -> Result<(), Box<dyn std::error::Error>> {
             };
             user_input::tick(&st_reminder);
             remote_worker_contact_tick(&st_reminder);
+            let tick_start = Instant::now();
             native_delegation::tick(&st_reminder);
+            let tick_elapsed = tick_start.elapsed();
+            if tick_elapsed > NATIVE_TICK_SLOW {
+                warn!("tour de délégation lent : {} ms", tick_elapsed.as_millis());
+            }
             let wake_clock = Instant::now();
             let wake_now = unix_now_secs();
             scheduled_wakes_tick(&st_reminder, wake_now, wake_clock);
@@ -7131,12 +7143,14 @@ pub fn run(config: DaemonConfig) -> Result<(), Box<dyn std::error::Error>> {
                     continue;
                 }
                 let st = state.clone();
+                get_metrics().increment_connections();
                 thread::spawn(move || {
                     if let Err(e) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                         handle_connection(stream, st)
                     })) {
                         error!("PANIC dans thread connexion: {:?}", e);
                     }
+                    get_metrics().decrement_connections();
                 });
             }
             Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {

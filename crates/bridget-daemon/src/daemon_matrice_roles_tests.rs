@@ -466,3 +466,13 @@ use bridget_transport::poison::RecoverPoison;
         // pour les processus, et il a deja coute une soiree a ce chantier.
         let _ = std::fs::remove_file(&config.db_path);
     }
+
+    #[test]
+    fn metrics_connexions_comptent_les_actives_et_gardent_le_maximum() {
+        let metrics = Metrics::new();
+        metrics.increment_connections();
+        metrics.increment_connections();
+        metrics.decrement_connections();
+        assert_eq!(metrics.active_connections.load(Ordering::Relaxed), 1);
+        assert_eq!(metrics.max_connections.load(Ordering::Relaxed), 2);
+    }

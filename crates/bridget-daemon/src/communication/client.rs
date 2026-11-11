@@ -1,6 +1,7 @@
 //! Client Unix partagé : inscription auxiliaire commune et budget borné par opération.
 //! Aucune logique de présentation ni accès client au stockage du daemon.
 
+#[cfg(test)]
 use bridget_transport::poison::RecoverPoison;
 use bridget_transport::protocol::{
     CLIENT_CONTRACT_VERSION, CONTROL_STATE_CONTRACT_VERSION, ClientCapability, ConnectionRole,

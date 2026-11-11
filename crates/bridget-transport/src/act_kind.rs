@@ -8,6 +8,7 @@
 //! recopier Effect Schema : en Rust, un enum fermé + une garde à l'écriture
 //! partagée par tous les pilotes via [`crate::journal::JournalWriter`].
 
+#[cfg(test)]
 use crate::poison::RecoverPoison;
 use serde_json::Value;
 
