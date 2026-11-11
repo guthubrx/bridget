@@ -1,6 +1,6 @@
 # Tâches 260 - Assainissement du code et du dépôt
 
-Statut : In Progress. 123 tâches cochées sur 157 (voir `implementation.md` pour le détail et les lots bloqués). La mise en oeuvre est en cours : lots 0, 1 (sauf T024), 2, 3, 4, 5, 6, 7, 8 (partiel), 9 (partiel), 12, 14, 13 (T137 partiel), 15, 17 traités.
+Statut : In Progress. 128 tâches cochées sur 157 (voir `implementation.md` pour le détail et les lots bloqués). La mise en oeuvre est en cours : lots 0, 1 (sauf T024), 2, 3, 4, 5, 6, 7, 8 (partiel), 9 (partiel), 10, 12, 14, 13 (T137 partiel), 15, 17 traités.
 Spécification : `spec.md`. Plan : `plan.md`. Règles : `contracts/regles-implementeur.md`. Portes : `decisions.md`. Démarrage et clôture : `quickstart.md`.
 
 ## Comment lire ce fichier
@@ -157,11 +157,11 @@ Spécification : `spec.md`. Plan : `plan.md`. Règles : `contracts/regles-implem
 
 ## Lot 10 - Format uniforme (guide : `guides/lot-10-format.md`)
 
-- [ ] T114 [L10] [D9] Porte D9, dépôt calme, lots 4, 5, 9 intégrés ; sinon « différé ».
-- [ ] T115 [L10] `cargo fmt --all` en un commit isolé ; `C-CHECK`.
-- [ ] T116 [L10] `.git-blame-ignore-revs` avec le SHA du commit de formatage.
-- [ ] T117 [L10] Rendre le contrôle de format bloquant (CI et `make lint`).
-- [ ] T118 [L10] Porte : contrôle de format à 0 fichier ; `C-TESTS`, `C-ECHECS`, `C-NOMS` ; bilan ; fin de lot.
+- [x] T114 [L10] [D9] Porte D9, dépôt calme, lots 4, 5, 9 intégrés ; sinon « différé ».
+- [x] T115 [L10] `cargo fmt --all` en un commit isolé ; `C-CHECK`.
+- [x] T116 [L10] `.git-blame-ignore-revs` avec le SHA du commit de formatage.
+- [x] T117 [L10] Rendre le contrôle de format bloquant (CI et `make lint`).
+- [x] T118 [L10] Porte : contrôle de format à 0 fichier ; `C-TESTS`, `C-ECHECS`, `C-NOMS` ; bilan ; fin de lot.
 
 ## Lot 11 - Modules nommés par rôle (guide : `guides/lot-11-modules.md`)
 

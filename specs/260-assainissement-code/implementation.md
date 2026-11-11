@@ -16,6 +16,7 @@ Statut du programme : In Progress. Règles : `contracts/regles-implementeur.md`.
 | 7 | intégré | T081 à T091 faits (T090 différée D7) |
 | 8 | partiel | T092 à T095, T097, T098 faits ; T096 non faite |
 | 9 | partiel | T099, T100, T102, T103, T112, T113 faits ; T101, T104 arrêtées ; T105 à T111 non faites |
+| 10 | intégré | T114 à T118 faits |
 | 12 | intégré | T125 à T127 faits |
 | 13 | intégré | T128 à T136 faits ; T137 partiel (job CI différé) |
 | 14 | intégré | T138 à T140 faits |
@@ -293,3 +294,16 @@ Code exécutable modifié (traces et compteurs) : **activation en attente**.
 
 ### Bilan lots 8 et 9
 Code exécutable modifié (constantes, signatures internes) : **activation en attente**.
+
+### Lot 10 - Format uniforme (T114 à T118)
+- Statut : fait
+- Commits : `b85f8f2a style: Appliquer rustfmt sur tout le depot` (commit unique de formatage), `chore(depot): Ignorer le commit de formatage dans blame` (`.git-blame-ignore-revs`, format bloquant en CI, documentation).
+- Fichiers : 223 fichiers Rust (formatage seulement), `.git-blame-ignore-revs`, `.github/workflows/rust.yml`, `docs/build-cache*.md`, `validation/lot10-calme.txt`.
+- Vérifications : D9 tranchée par François (« formater maintenant, après les lots 4, 5 et 9 »). Calme : `git worktree list` = dépôt principal seul, arbre propre, aucune branche distante, les 58 commits des deux dernières heures sont ceux du programme 260 (aucune autre session). `cargo fmt --all -- --check` : code 0 (SC10, 0 fichier signalé) ; `C-CHECK` code 0 ; porte sur cliché isolé de `HEAD` : `C-ECHECS` identique à la base (24), `C-NOMS` identique (0 ligne de différence).
+- Écarts :
+  - `rustfmt` n'a convergé qu'au second passage (les fichiers de tests déplacés ont perdu leur première ligne vide au second) : les deux passages sont regroupés dans le commit unique (`git commit --amend` avant tout push).
+  - Prérequis « lots 4, 5 et 9 intégrés » : le lot 9 est partiel (T105 à T111 non faites) ; formater avant ces découpages éventuels les ferait entrer en conflit avec le formatage : ils se feront sur la base déjà formatée.
+- Non vérifié : rien de plus.
+
+### Bilan lot 10
+Forme seulement. « Activation en attente » : binaire équivalent.

@@ -1,0 +1,6 @@
+branches distantes d'autres sessions:
+  github/HEAD -> github/main
+  github/main
+commits des 2 dernières heures sur origin/main:       58 (tous du programme 260)
+/Users/moi/Nextcloud/10.Scripts/64.bridget ba8334ec [main]
+       1
