@@ -4407,3 +4407,22 @@ pub(super) fn on_observation_gap(dropped: u64, conn_id: &str, state: &Arc<Mutex<
             queue_observation_notifications(&mut st, notices);
             None
         }
+
+pub(super) fn on_ledger_search(request: bridget_transport::protocol::LedgerSearchRequest, conn_id: &str, state: &Arc<Mutex<DaemonState>>) -> Option<DaemonToWrapper> {
+            let outcome = match ledger_read_context(state, conn_id) {
+                Err(outcome) => crate::ledger::search::search_error(outcome.0, outcome.1),
+                Ok((actor, db_path, permit)) => {
+                    let outcome = crate::ledger::search::search(&db_path, &actor, &request);
+                    drop(permit);
+                    if ledger_identity_still_live(state, conn_id, &actor) {
+                        outcome
+                    } else {
+                        crate::ledger::search::search_error(
+                            "identity_unavailable",
+                            "identité révoquée pendant la recherche : aucun résultat publié",
+                        )
+                    }
+                }
+            };
+            Some(DaemonToWrapper::LedgerSearchResult { outcome })
+        }

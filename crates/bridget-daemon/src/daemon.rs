@@ -16599,24 +16599,7 @@ fn handle_wrapper_message_with_peer(
         // Session 104 : lecture seule hors verrou. Identité et permis sous
         // verrou bref ; SQL et repli sur le thread de connexion ; identité
         // revérifiée avant publication ; permis relâché par RAII.
-        WrapperToDaemon::LedgerSearch { request } => {
-            let outcome = match ledger_read_context(state, conn_id) {
-                Err(outcome) => crate::ledger::search::search_error(outcome.0, outcome.1),
-                Ok((actor, db_path, permit)) => {
-                    let outcome = crate::ledger::search::search(&db_path, &actor, &request);
-                    drop(permit);
-                    if ledger_identity_still_live(state, conn_id, &actor) {
-                        outcome
-                    } else {
-                        crate::ledger::search::search_error(
-                            "identity_unavailable",
-                            "identité révoquée pendant la recherche : aucun résultat publié",
-                        )
-                    }
-                }
-            };
-            Some(DaemonToWrapper::LedgerSearchResult { outcome })
-        }
+        WrapperToDaemon::LedgerSearch { request } => wrapper_dispatch::on_ledger_search(request, conn_id, state),
         WrapperToDaemon::LedgerRead { request } => {
             let outcome = match ledger_read_context(state, conn_id) {
                 Err(outcome) => crate::ledger::search::read_error(outcome.0, outcome.1),
