@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.8.33 - 2026-11-11
+
+- Aide locale de send accessible avec --help, -h et help, sans connexion ni envoi.
+- Refus de capacité MCP : plafond local, appel non transmis et reprise précise ; limites inchangées.
+- Délai de lecture JSONL explicitement nommé, distinct de la limite de taille.
+
 ## 0.8.32
 
 - Clore aussi le suivi d’une mission dont l’expiration native est déjà confirmée, même après son nettoyage.

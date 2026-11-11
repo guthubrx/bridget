@@ -200,7 +200,9 @@ pub fn read_unix_line(
                 value
                     .checked_duration_since(Instant::now())
                     .filter(|d| !d.is_zero())
-                    .ok_or_else(|| io::Error::new(io::ErrorKind::TimedOut, "budget JSONL dépassé"))
+                    .ok_or_else(|| {
+                        io::Error::new(io::ErrorKind::TimedOut, "délai de lecture JSONL dépassé")
+                    })
             })
             .transpose()?;
         // Un SEUL lecteur possède la socket. poll avant chaque remplissage
@@ -220,7 +222,7 @@ pub fn read_unix_line(
             if ready == 0 {
                 return Err(io::Error::new(
                     io::ErrorKind::TimedOut,
-                    "budget JSONL dépassé",
+                    "délai de lecture JSONL dépassé",
                 ));
             }
             if ready < 0 {
@@ -273,7 +275,7 @@ pub fn read_unix_line(
         if deadline.is_some_and(|value| Instant::now() >= value) {
             return Err(io::Error::new(
                 io::ErrorKind::TimedOut,
-                "budget JSONL dépassé",
+                "délai de lecture JSONL dépassé",
             ));
         }
         if end.is_some() {

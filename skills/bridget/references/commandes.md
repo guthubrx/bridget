@@ -57,6 +57,7 @@ de couverture.
 | `relaunch` | CLI humain | Aucun outil MCP de supervision | Relance un équipier arrêté avec sa définition figée ; ne change pas sa posture ni ses droits. |
 | `decommission` | CLI humain | Aucun outil MCP de supervision | Retire un équipier de la flotte visible en conservant l'historique ; décision propriétaire. |
 | `adopt-stopped` | CLI humain | Aucun outil MCP de supervision | Importe explicitement des agents arrêtés dont l'historique géré est prouvé ; décision de flotte. |
+| `loop-control` | CLI humain | Aucun outil MCP de délivrance de mandat | Autorise ou révoque un mandat Loop borné pour steer ou interrupt ; conserve les contrôles natifs de cible, projet, durée et intention. |
 | `send` | MCP exposé | `bridget_send` | Envoi ou réponse corrélée ; viser l'UUID attesté et conserver exactement la clé de rejeu et l'enveloppe. |
 | `reply` | Équivalence MCP | `bridget_send` avec `in_reply_to` | Commodité CLI vers le dernier expéditeur ; l'outil structuré évite l'ambiguïté quand plusieurs demandes coexistent. |
 | `cancel` | MCP exposé | `bridget_cancel` | Annule sa demande suivie et retire sa remise en attente ; interruption active seulement sous garde156, aucune preuve de fin de mission. |

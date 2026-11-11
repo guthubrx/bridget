@@ -773,7 +773,7 @@ fn spec259_ack_scope_timeout_is_pre_dispatch_without_ack() {
     assert!(start.elapsed() >= crate::communication::client::DAEMON_BUDGET);
     assert!(
         matches!(error, ToolError::Technical { code:"daemon_unreachable", message }
-            if message.contains("budget JSONL dépassé")
+            if message.contains("délai de lecture JSONL dépassé")
                 && message.contains("lecture préalable du plafond MCP")
                 && message.contains("task259")
                 && message.contains("n'a pas été transmise")
@@ -6141,6 +6141,121 @@ fn daemon_coupe_est_un_is_error_technique_immediat() {
             ..
         }
     ));
+}
+
+#[test]
+fn spec266_facade_ninth_call_is_local_and_can_resume_without_replacing_tasks() {
+    use std::sync::Condvar;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let (input, mut writer) = UnixStream::pair().unwrap();
+    let (output, reader) = UnixStream::pair().unwrap();
+    reader
+        .set_read_timeout(Some(Duration::from_secs(10)))
+        .unwrap();
+    let mut reader = BufReader::new(reader);
+    let gate = (Mutex::new(false), Condvar::new());
+    let resolutions = AtomicUsize::new(0);
+    let (started_tx, started_rx) = mpsc::channel();
+    thread::scope(|scope| {
+        let server = scope.spawn(|| {
+            let resolver = || {
+                resolutions.fetch_add(1, Ordering::SeqCst);
+                Ok(crate::mcp_identity::ResolvedIdentity {
+                    name: "owner".into(),
+                    instance_id: "instance".into(),
+                    delegated_origin: None,
+                })
+            };
+            let execute = |_: &crate::mcp_identity::ResolvedIdentity, _: &str, _: &Value| {
+                started_tx.send(()).unwrap();
+                let (released, _) = gate
+                    .1
+                    .wait_timeout_while(gate.0.lock().unwrap(), Duration::from_secs(10), |open| {
+                        !*open
+                    })
+                    .unwrap();
+                assert!(*released, "la recette doit libérer les huit appels");
+                Ok(json!({"status":"ok"}))
+            };
+            serve_with(BufReader::new(input), output, &resolver, &execute).unwrap();
+        });
+        write_response(
+            &mut writer,
+            &json!({"jsonrpc":"2.0","id":0,"method":"initialize"}),
+        )
+        .unwrap();
+        write_response(
+            &mut writer,
+            &json!({"jsonrpc":"2.0","method":"notifications/initialized"}),
+        )
+        .unwrap();
+        let request = |id| {
+            let (name, arguments) = if id <= 4 {
+                (
+                    "bridget_task_wait",
+                    json!({"task_ids":["existing-task"],"wait_timeout":3600}),
+                )
+            } else {
+                ("bridget_task_status", json!({"task_id":"existing-task"}))
+            };
+            json!({"jsonrpc":"2.0","id":id,"method":"tools/call","params":{"name":name,"arguments":arguments}})
+        };
+        let read_response = |reader: &mut BufReader<UnixStream>| {
+            let mut line = String::new();
+            assert!(reader.read_line(&mut line).unwrap() > 0);
+            serde_json::from_str::<Value>(&line).unwrap()
+        };
+        assert_eq!(read_response(&mut reader)["id"], 0);
+        for id in 1..=8 {
+            write_response(&mut writer, &request(id)).unwrap();
+            started_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        }
+        write_response(&mut writer, &request(1)).unwrap();
+        let duplicate = read_response(&mut reader);
+        assert_eq!(duplicate["result"]["code"], "wait_capacity");
+        assert!(
+            duplicate["result"]["content"][0]["text"]
+                .as_str()
+                .unwrap()
+                .contains("seconde copie")
+        );
+        assert_eq!(resolutions.load(Ordering::SeqCst), 8);
+        write_response(&mut writer, &request(9)).unwrap();
+        let refused = read_response(&mut reader);
+        assert_eq!(refused["id"], 9);
+        assert_eq!(refused["result"]["code"], "busy");
+        let message = refused["result"]["content"][0]["text"].as_str().unwrap();
+        for required in [
+            "8 appels",
+            "pas été transmis",
+            "task_id",
+            "request_id",
+            "local",
+        ] {
+            assert!(message.contains(required), "{message}");
+        }
+        assert_eq!(
+            resolutions.load(Ordering::SeqCst),
+            8,
+            "le refus précède toute connexion au démon"
+        );
+        *gate.0.lock().unwrap() = true;
+        gate.1.notify_all();
+        let mut completed = BTreeSet::new();
+        for _ in 0..8 {
+            let response = read_response(&mut reader);
+            assert_eq!(response["result"]["structuredContent"]["status"], "ok");
+            completed.insert(response["id"].as_u64().unwrap());
+        }
+        assert_eq!(completed, (1..=8).collect());
+        write_response(&mut writer, &request(9)).unwrap();
+        let resumed = read_response(&mut reader);
+        assert_eq!(resumed["id"], 9);
+        assert_eq!(resumed["result"]["structuredContent"]["status"], "ok");
+        assert_eq!(resolutions.load(Ordering::SeqCst), 9);
+        drop(writer);
+        server.join().unwrap();
+    });
 }
 
 #[test]

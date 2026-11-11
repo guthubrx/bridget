@@ -342,23 +342,35 @@ where
                         None | Some("create" | "wait")
                     )
                     && request["params"]["arguments"]["wait_timeout"].as_u64() != Some(0));
-                let reservation = registry
-                    .lock()
-                    .recover_poison()
-                    .reserve(call_id.clone(), waiting);
+                let (reservation, duplicate, closing) = {
+                    let mut registry = registry.lock().recover_poison();
+                    let duplicate = registry.calls.contains_key(&call_id);
+                    let closing = registry.closed;
+                    (
+                        registry.reserve(call_id.clone(), waiting),
+                        duplicate,
+                        closing,
+                    )
+                };
                 if let Err(code) = reservation {
+                    let message = if closing {
+                        "Rétablissez la connexion à cette façade MCP avant de reprendre cet appel. Ce processus est en cours de fermeture ; cet appel n'a pas été transmis au démon. Conservez les clés, tâches et reçus existants ; ne recréez aucune mission d'issue inconnue.".into()
+                    } else if duplicate {
+                        "Attendez le retour de l'appel MCP qui porte déjà cet identifiant. Cette seconde copie n'a pas été transmise au démon ; la première peut être en cours. Conservez la demande et ses reçus, sans créer de remplacement.".into()
+                    } else if code == "wait_capacity" {
+                        format!(
+                            "Attendez la fin d'une attente dans ce processus MCP, puis reprenez uniquement l'appel refusé. Le plafond local est de {MAX_WAITING_TOOL_CALLS} attentes simultanées. Cet appel n'a pas été transmis au démon ; aucune tâche n'est annulée. Conservez les identifiants et reçus des demandes déjà admises. Les autres travaux autorisés suivent leur propre état."
+                        )
+                    } else {
+                        format!(
+                            "Réduisez le parallélisme de ce groupe et attendez la fin d'un appel, puis reprenez uniquement l'appel refusé. Le plafond de ce processus MCP est de {MAX_IN_FLIGHT_TOOL_CALLS} appels simultanés, dont au plus {MAX_WAITING_TOOL_CALLS} attentes. Cet appel n'a pas été transmis au démon ; aucune des missions déjà admises n'est interrompue. Conservez les mêmes task_id, request_id et reçus pour la reprise. Ce refus est local à cet appel et cette façade ; les autres travaux autorisés suivent leur propre état."
+                        )
+                    };
                     write_shared_response(
                         &output,
                         &result(
                             request.get("id").cloned().unwrap_or(Value::Null),
-                            technical_result(
-                                code,
-                                if code == "wait_capacity" {
-                                    "quatre attentes déjà ouvertes dans ce processus MCP"
-                                } else {
-                                    "serveur MCP saturé : réessaie plus tard"
-                                },
-                            ),
+                            technical_result(code, &message),
                         ),
                     )?;
                     continue;

@@ -330,6 +330,11 @@ fn run_with_args(args: Vec<String>) {
         );
     }
 
+    if cmd == "send" && args.len() == 3 && matches!(args[2].as_str(), "--help" | "-h" | "help") {
+        print_send_help();
+        return;
+    }
+
     if command_initializes_namespace(cmd)
         && let Err(error) = crate::environment::initialize_process()
     {
@@ -4368,6 +4373,14 @@ fn cmd_daemon(args: &[String]) {
     }
 }
 
+const SEND_USAGE: &str = "bridget send --to <UUID> [--intent queue|steer|interrupt|information] [--reply] [--timeout SECONDES] [--in-reply-to ID] [--id CLÉ --issued-at UNIX [--issuer-scope PORTÉE]] [--project-root RACINE] [--cross-project-reason MOTIF] [--] MESSAGE";
+
+fn print_send_help() {
+    println!(
+        "Usage : {SEND_USAGE}\n\nqueue : remettre un message ordinaire.\nsteer : guider le tour en cours, si les droits le permettent.\ninterrupt : interrompre puis lancer un tour, si les droits le permettent.\ninformation : conserver un avis sans réveil, sans --reply ni --in-reply-to.\n\n--reply attend une réponse ; --in-reply-to répond à une demande existante.\nPour un rejeu, conserver ensemble --id, --issued-at et toute l'enveloppe d'origine.\nUne ronde native terminée se reprend depuis son parent avec task continue, le même task_id et une nouvelle request_id autorisée.\n\nCette aide n'envoie aucun message et ne se connecte pas au démon."
+    );
+}
+
 fn cmd_send(args: &[String]) {
     let mut to: Option<String> = None;
     let mut from: Option<String> = None;
@@ -5065,9 +5078,7 @@ fn resolved_idempotent_options(
 
 fn send_usage_error(error: &str) -> ! {
     eprintln!("erreur: {error}");
-    eprintln!(
-        "usage: bridget send --to <nom> [--in-reply-to ID] [--id <clé> --issued-at <unix> [--issuer-scope <portée>]] [--project-root RACINE] [--cross-project-reason MOTIF] [--] <message>"
-    );
+    eprintln!("usage: {SEND_USAGE}");
     crate::cli_table::exit(2);
 }
 

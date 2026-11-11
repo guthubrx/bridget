@@ -21,6 +21,46 @@ fn run_cli(home: &Path, args: &[&str]) -> Output {
 }
 
 #[test]
+fn spec266_send_help_is_local_and_does_not_send() {
+    let root = fixture_root("send-help");
+    bridget_daemon::environment::ensure_private_directory(&root.join("state")).unwrap();
+    let listener = UnixListener::bind(root.join("state/bridget.sock")).unwrap();
+    listener.set_nonblocking(true).unwrap();
+    for flag in ["--help", "-h", "help"] {
+        let output = run_cli(&root, &["send", flag]);
+        assert!(output.status.success(), "{:?}", output);
+        assert!(output.stderr.is_empty());
+        let help = String::from_utf8(output.stdout).unwrap();
+        for required in [
+            "--intent",
+            "information",
+            "--in-reply-to",
+            "--issued-at",
+            "task continue",
+            "ne se connecte pas au démon",
+        ] {
+            assert!(help.contains(required), "{flag}: {required}");
+        }
+        assert!(
+            matches!(listener.accept(), Err(error) if error.kind() == std::io::ErrorKind::WouldBlock)
+        );
+    }
+    drop(listener);
+    let absent = root.join("absent");
+    let output = Command::new(env!("CARGO_BIN_EXE_bridget"))
+        .args(["send", "--help"])
+        .env_clear()
+        .env("HOME", &absent)
+        .env("BRIDGET_HOME", absent.join("state"))
+        .env("BRIDGET_SOCKET", absent.join("state/bridget.sock"))
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    assert!(!absent.exists(), "l'aide ne crée aucun état privé");
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn spec_091_development_requires_real_human_terminal_even_on_retry() {
     let root = fixture_root("scoped-posture");
     let first = run_cli(

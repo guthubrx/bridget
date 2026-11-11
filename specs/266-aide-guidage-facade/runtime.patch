@@ -1,0 +1,213 @@
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -10 +10 @@
+-version = "0.8.32"
++version = "0.8.33"
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -195 +195 @@
+-version = "0.8.32"
++version = "0.8.33"
+@@ -204 +204 @@
+-version = "0.8.32"
++version = "0.8.33"
+@@ -232 +232 @@
+-version = "0.8.32"
++version = "0.8.33"
+--- a/crates/bridget-daemon/src/cli.rs
++++ b/crates/bridget-daemon/src/cli.rs
+@@ -290,0 +291,5 @@
++    }
++
++    if cmd == "send" && args.len() == 3 && matches!(args[2].as_str(), "--help" | "-h" | "help") {
++        print_send_help();
++        return;
+@@ -4250,0 +4256,6 @@
++const SEND_USAGE: &str = "bridget send --to <UUID> [--intent queue|steer|interrupt|information] [--reply] [--timeout SECONDES] [--in-reply-to ID] [--id CLÉ --issued-at UNIX [--issuer-scope PORTÉE]] [--project-root RACINE] [--cross-project-reason MOTIF] [--] MESSAGE";
++
++fn print_send_help() {
++    println!("Usage : {SEND_USAGE}\n\nqueue : remettre un message ordinaire.\nsteer : guider le tour en cours, si les droits le permettent.\ninterrupt : interrompre puis lancer un tour, si les droits le permettent.\ninformation : conserver un avis sans réveil, sans --reply ni --in-reply-to.\n\n--reply attend une réponse ; --in-reply-to répond à une demande existante.\nPour un rejeu, conserver ensemble --id, --issued-at et toute l'enveloppe d'origine.\nUne ronde native terminée se reprend depuis son parent avec task continue, le même task_id et une nouvelle request_id autorisée.\n\nCette aide n'envoie aucun message et ne se connecte pas au démon.");
++}
++
+@@ -4943,3 +4954 @@
+-    eprintln!(
+-        "usage: bridget send --to <nom> [--in-reply-to ID] [--id <clé> --issued-at <unix> [--issuer-scope <portée>]] [--project-root RACINE] [--cross-project-reason MOTIF] [--] <message>"
+-    );
++    eprintln!("usage: {SEND_USAGE}");
+--- a/crates/bridget-daemon/src/mcp.rs
++++ b/crates/bridget-daemon/src/mcp.rs
+@@ -342,4 +342,6 @@
+-                let reservation = registry
+-                    .lock()
+-                    .unwrap_or_else(|error| error.into_inner())
+-                    .reserve(call_id.clone(), waiting);
++                let (reservation, duplicate, closing) = {
++                    let mut registry = registry.lock().unwrap_or_else(|error| error.into_inner());
++                    let duplicate = registry.calls.contains_key(&call_id);
++                    let closing = registry.closed;
++                    (registry.reserve(call_id.clone(), waiting), duplicate, closing)
++                };
+@@ -346,0 +349,9 @@
++                    let message = if closing {
++                        "Rétablissez la connexion à cette façade MCP avant de reprendre cet appel. Ce processus est en cours de fermeture ; cet appel n'a pas été transmis au démon. Conservez les clés, tâches et reçus existants ; ne recréez aucune mission d'issue inconnue.".into()
++                    } else if duplicate {
++                        "Attendez le retour de l'appel MCP qui porte déjà cet identifiant. Cette seconde copie n'a pas été transmise au démon ; la première peut être en cours. Conservez la demande et ses reçus, sans créer de remplacement.".into()
++                    } else if code == "wait_capacity" {
++                        format!("Attendez la fin d'une attente dans ce processus MCP, puis reprenez uniquement l'appel refusé. Le plafond local est de {MAX_WAITING_TOOL_CALLS} attentes simultanées. Cet appel n'a pas été transmis au démon ; aucune tâche n'est annulée. Conservez les identifiants et reçus des demandes déjà admises. Les autres travaux autorisés suivent leur propre état.")
++                    } else {
++                        format!("Réduisez le parallélisme de ce groupe et attendez la fin d'un appel, puis reprenez uniquement l'appel refusé. Le plafond de ce processus MCP est de {MAX_IN_FLIGHT_TOOL_CALLS} appels simultanés, dont au plus {MAX_WAITING_TOOL_CALLS} attentes. Cet appel n'a pas été transmis au démon ; aucune des missions déjà admises n'est interrompue. Conservez les mêmes task_id, request_id et reçus pour la reprise. Ce refus est local à cet appel et cette façade ; les autres travaux autorisés suivent leur propre état.")
++                    };
+@@ -351,8 +362 @@
+-                            technical_result(
+-                                code,
+-                                if code == "wait_capacity" {
+-                                    "quatre attentes déjà ouvertes dans ce processus MCP"
+-                                } else {
+-                                    "serveur MCP saturé : réessaie plus tard"
+-                                },
+-                            ),
++                            technical_result(code, &message),
+--- a/crates/bridget-daemon/src/mcp_tests.rs
++++ b/crates/bridget-daemon/src/mcp_tests.rs
+@@ -658 +658 @@
+-            if message.contains("budget JSONL dépassé")
++            if message.contains("délai de lecture JSONL dépassé")
+@@ -6569,0 +6570,81 @@
++
++#[test]
++fn spec266_facade_ninth_call_is_local_and_can_resume_without_replacing_tasks() {
++    use std::sync::Condvar;
++    use std::sync::atomic::{AtomicUsize, Ordering};
++    let (input, mut writer) = UnixStream::pair().unwrap();
++    let (output, reader) = UnixStream::pair().unwrap();
++    reader.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
++    let mut reader = BufReader::new(reader);
++    let gate = (Mutex::new(false), Condvar::new());
++    let resolutions = AtomicUsize::new(0);
++    let (started_tx, started_rx) = mpsc::channel();
++    thread::scope(|scope| {
++        let server = scope.spawn(|| {
++            let resolver = || {
++                resolutions.fetch_add(1, Ordering::SeqCst);
++                Ok(crate::mcp_identity::ResolvedIdentity {
++                    name: "owner".into(), instance_id: "instance".into(), delegated_origin: None,
++                })
++            };
++            let execute = |_: &crate::mcp_identity::ResolvedIdentity, _: &str, _: &Value| {
++                started_tx.send(()).unwrap();
++                let (released, _) = gate.1.wait_timeout_while(gate.0.lock().unwrap(), Duration::from_secs(10), |open| !*open).unwrap();
++                assert!(*released, "la recette doit libérer les huit appels");
++                Ok(json!({"status":"ok"}))
++            };
++            serve_with(BufReader::new(input), output, &resolver, &execute).unwrap();
++        });
++        write_response(&mut writer, &json!({"jsonrpc":"2.0","id":0,"method":"initialize"})).unwrap();
++        write_response(&mut writer, &json!({"jsonrpc":"2.0","method":"notifications/initialized"})).unwrap();
++        let request = |id| {
++            let (name, arguments) = if id <= 4 {
++                ("bridget_task_wait", json!({"task_ids":["existing-task"],"wait_timeout":3600}))
++            } else {
++                ("bridget_task_status", json!({"task_id":"existing-task"}))
++            };
++            json!({"jsonrpc":"2.0","id":id,"method":"tools/call","params":{"name":name,"arguments":arguments}})
++        };
++        let read_response = |reader: &mut BufReader<UnixStream>| {
++            let mut line = String::new();
++            assert!(reader.read_line(&mut line).unwrap() > 0);
++            serde_json::from_str::<Value>(&line).unwrap()
++        };
++        assert_eq!(read_response(&mut reader)["id"], 0);
++        for id in 1..=8 {
++            write_response(&mut writer, &request(id)).unwrap();
++            started_rx.recv_timeout(Duration::from_secs(5)).unwrap();
++        }
++        write_response(&mut writer, &request(1)).unwrap();
++        let duplicate = read_response(&mut reader);
++        assert_eq!(duplicate["result"]["code"], "wait_capacity");
++        assert!(duplicate["result"]["content"][0]["text"].as_str().unwrap().contains("seconde copie"));
++        assert_eq!(resolutions.load(Ordering::SeqCst), 8);
++        write_response(&mut writer, &request(9)).unwrap();
++        let refused = read_response(&mut reader);
++        assert_eq!(refused["id"], 9);
++        assert_eq!(refused["result"]["code"], "busy");
++        let message = refused["result"]["content"][0]["text"].as_str().unwrap();
++        for required in ["8 appels", "pas été transmis", "task_id", "request_id", "local"] {
++            assert!(message.contains(required), "{message}");
++        }
++        assert_eq!(resolutions.load(Ordering::SeqCst), 8, "le refus précède toute connexion au démon");
++        *gate.0.lock().unwrap() = true;
++        gate.1.notify_all();
++        let mut completed = BTreeSet::new();
++        for _ in 0..8 {
++            let response = read_response(&mut reader);
++            assert_eq!(response["result"]["structuredContent"]["status"], "ok");
++            completed.insert(response["id"].as_u64().unwrap());
++        }
++        assert_eq!(completed, (1..=8).collect());
++        write_response(&mut writer, &request(9)).unwrap();
++        let resumed = read_response(&mut reader);
++        assert_eq!(resumed["id"], 9);
++        assert_eq!(resumed["result"]["structuredContent"]["status"], "ok");
++        assert_eq!(resolutions.load(Ordering::SeqCst), 9);
++        drop(writer);
++        server.join().unwrap();
++    });
++}
++
+--- a/crates/bridget-daemon/tests/cli_arguments_integration_test.rs
++++ b/crates/bridget-daemon/tests/cli_arguments_integration_test.rs
+@@ -20,0 +21,39 @@
++}
++
++#[test]
++fn spec266_send_help_is_local_and_does_not_send() {
++    let root = fixture_root("send-help");
++    bridget_daemon::environment::ensure_private_directory(&root.join("state")).unwrap();
++    let listener = UnixListener::bind(root.join("state/bridget.sock")).unwrap();
++    listener.set_nonblocking(true).unwrap();
++    for flag in ["--help", "-h", "help"] {
++        let output = run_cli(&root, &["send", flag]);
++        assert!(output.status.success(), "{:?}", output);
++        assert!(output.stderr.is_empty());
++        let help = String::from_utf8(output.stdout).unwrap();
++        for required in [
++            "--intent",
++            "information",
++            "--in-reply-to",
++            "--issued-at",
++            "task continue",
++            "ne se connecte pas au démon",
++        ] {
++            assert!(help.contains(required), "{flag}: {required}");
++        }
++        assert!(
++            matches!(listener.accept(), Err(error) if error.kind() == std::io::ErrorKind::WouldBlock)
++        );
++    }
++    drop(listener);
++    let absent = root.join("absent");
++    let output = Command::new(env!("CARGO_BIN_EXE_bridget"))
++        .args(["send", "--help"])
++        .env_clear()
++        .env("HOME", &absent)
++        .env("BRIDGET_HOME", absent.join("state"))
++        .env("BRIDGET_SOCKET", absent.join("state/bridget.sock"))
++        .output().unwrap();
++    assert!(output.status.success(), "{output:?}");
++    assert!(!absent.exists(), "l'aide ne crée aucun état privé");
++    fs::remove_dir_all(root).unwrap();
+--- a/crates/bridget-transport/src/jsonl.rs
++++ b/crates/bridget-transport/src/jsonl.rs
+@@ -192 +192 @@
+-                    .ok_or_else(|| io::Error::new(io::ErrorKind::TimedOut, "budget JSONL dépassé"))
++                    .ok_or_else(|| io::Error::new(io::ErrorKind::TimedOut, "délai de lecture JSONL dépassé"))
+@@ -211 +211 @@
+-                    "budget JSONL dépassé",
++                    "délai de lecture JSONL dépassé",
+@@ -264 +264 @@
+-                "budget JSONL dépassé",
++                "délai de lecture JSONL dépassé",
+--- a/skills/bridget/references/commandes.md
++++ b/skills/bridget/references/commandes.md
+@@ -59,0 +60 @@
++| `loop-control` | CLI humain | Aucun outil MCP de délivrance de mandat | Autorise ou révoque un mandat Loop borné pour steer ou interrupt ; conserve les contrôles natifs de cible, projet, durée et intention. |
