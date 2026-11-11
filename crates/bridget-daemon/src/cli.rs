@@ -2890,7 +2890,21 @@ fn parse_delegate_args(
             .and_then(serde_json::Value::as_str)
             .ok_or_else(|| "delegate : cwd invalide".to_string())?,
     );
-    if let Some(base_commit) = source_base_commit(source)? {
+    let base = source_base_commit(source).map_err(|code| {
+        if let Some(result) = crate::lifecycle::source_base_failure_guidance(&code) {
+            format!(
+                "{}: {}\n{}\nrequest_id: {request_id}",
+                result["code"]
+                    .as_str()
+                    .unwrap_or("workspace_base_preflight_failed"),
+                result["message"].as_str().unwrap_or(""),
+                result["detail"]["recovery"].as_str().unwrap_or("")
+            )
+        } else {
+            code
+        }
+    })?;
+    if let Some(base_commit) = base {
         payload_object.insert(
             "expected_base_commit".into(),
             serde_json::Value::String(base_commit),

@@ -24410,6 +24410,7 @@ fn spec221_probe_refusal_guidance_covers_closed_candidates_and_replay() {
         MappingUnavailable,
         DefinitionUnavailable,
         PermissionsChanged,
+        PermissionPathProtected,
         WorkspaceUnavailable,
         WorkspaceLimit,
         WorkspaceDirty,
@@ -24437,7 +24438,14 @@ fn spec221_probe_refusal_guidance_covers_closed_candidates_and_replay() {
         assert_eq!(initial["code"], "routing_candidate_unavailable");
         assert_eq!(check["code"], code);
         assert_eq!(check["scope"], "candidate_subset");
-        assert_eq!(check["underlying_cause"], "unobserved");
+        assert_eq!(
+            check["underlying_cause"],
+            if reason == PermissionPathProtected {
+                code.clone()
+            } else {
+                json!("unobserved")
+            }
+        );
         assert!(check["next_action"].as_str().is_some_and(|s| s.len() > 40));
         assert!(
             check["human_action"]
@@ -26762,4 +26770,136 @@ fn spec208_interrupted_remote_preparation_is_read_only_and_epoch_scoped() {
     drop(remote);
     cleanup(&config);
     cleanup(&remote_config);
+}
+
+#[test]
+fn spec262_nested_folder_reports_detected_git_root_and_unresolved_head() {
+    let root = std::env::temp_dir().join(format!("bridget-262-git-{}", uuid::Uuid::new_v4()));
+    let nested = root.join("documents/nested");
+    std::fs::create_dir_all(&nested).unwrap();
+    assert_eq!(crate::lifecycle::source_base_commit(&nested).unwrap(), None);
+    assert!(
+        std::process::Command::new("git")
+            .args(["init", "--quiet"])
+            .arg(&root)
+            .status()
+            .unwrap()
+            .success()
+    );
+    // Existing history can coexist with a HEAD pointing at a missing branch.
+    let git = |args: &[&str]| {
+        let output = std::process::Command::new("git")
+            .arg("-C")
+            .arg(&root)
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        String::from_utf8(output.stdout).unwrap()
+    };
+    git(&[
+        "-c",
+        "user.name=Fixture",
+        "-c",
+        "user.email=fixture@example.invalid",
+        "commit",
+        "--quiet",
+        "--allow-empty",
+        "-m",
+        "fixture",
+    ]);
+    let commit = git(&["rev-parse", "HEAD"]).trim().to_owned();
+    git(&["symbolic-ref", "HEAD", "refs/heads/missing-reference"]);
+    let error = crate::lifecycle::source_base_commit(&nested).unwrap_err();
+    let result = failure(&error);
+    assert_eq!(result["code"], "workspace_base_unavailable");
+    assert_eq!(result["detail"]["cause"], "source_head_unresolved");
+    assert_eq!(
+        result["detail"]["git_root"],
+        std::fs::canonicalize(&root).unwrap().to_str().unwrap()
+    );
+    assert_eq!(result["detail"]["scope"], "this_request");
+    assert!(
+        result["detail"]["recovery"]
+            .as_str()
+            .unwrap()
+            .contains("ancêtre")
+    );
+    git(&["cat-file", "-e", &commit]);
+    assert!(
+        !failure("workspace_base_unavailable:source_head:{invalid}")
+            .to_string()
+            .contains("{invalid}")
+    );
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn spec262_protected_path_guidance_identifies_the_guard_without_weakening_it() {
+    let reasons = json!([{"kind":"candidate","code":"permission_path_protected","candidates":18}]);
+    let result = failure(&format!("routing_candidate_unavailable:{reasons}"));
+    assert_eq!(result["detail"]["reasons"], reasons);
+    assert_eq!(
+        result["detail"]["permission_projection"]["cause"],
+        "machine_path_protected"
+    );
+    assert_eq!(
+        result["detail"]["probe_checks"][0]["underlying_cause"],
+        "permission_path_protected"
+    );
+    assert!(result["message"].as_str().unwrap().contains("espace privé"));
+    assert!(
+        result["message"]
+            .as_str()
+            .unwrap()
+            .contains("autres travaux")
+    );
+    assert!(
+        result["detail"]["permission_projection"]["recovery"]
+            .as_str()
+            .unwrap()
+            .contains("issue inconnue")
+    );
+}
+
+#[test]
+fn spec262_reply_timeout_preserves_full_reference_and_does_not_authorize_replacement() {
+    let reference = "mcp-12345-long-unique-reference";
+    let text = reply_timeout_guidance("recipient", 600, reference);
+    assert!(text.contains(reference));
+    assert!(text.contains("600 s"));
+    assert!(text.contains("n'annule aucune tâche"));
+    assert!(text.contains("ne renvoyez pas la mission"));
+    assert!(text.contains("autres travaux"));
+    assert!(!text.contains("Tu peux reessayer"));
+}
+
+#[test]
+fn spec262_mixed_permission_causes_remain_distinct() {
+    let reasons = json!([{"kind":"candidate","code":"permissions_changed","candidates":1},
+        {"kind":"candidate","code":"permission_path_protected","candidates":2}]);
+    let result = failure(&format!("routing_candidate_unavailable:{reasons}"));
+    let projection = &result["detail"]["permission_projection"];
+    assert_eq!(projection["cause"], "multiple");
+    assert_eq!(projection["checks"][0]["cause"], "unobserved");
+    assert_eq!(projection["checks"][1]["cause"], "machine_path_protected");
+    assert_eq!(
+        result["detail"]["probe_checks"].as_array().unwrap().len(),
+        2
+    );
+}
+
+#[test]
+fn spec262_git_version_refusal_identifies_executed_environment() {
+    let result = failure(
+        "workspace_base_preflight_failed: workspace_git_unsupported: Git 2.44 ou plus est requis",
+    );
+    assert_eq!(result["code"], "workspace_base_preflight_failed");
+    assert_eq!(result["detail"]["cause"], "git_version_unsupported");
+    assert!(
+        result["detail"]["recovery"]
+            .as_str()
+            .unwrap()
+            .contains("PATH global")
+    );
 }

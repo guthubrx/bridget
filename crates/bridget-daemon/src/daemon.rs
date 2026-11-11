@@ -228,6 +228,12 @@ impl Drop for WaitPermit {
     }
 }
 
+fn reply_timeout_guidance(to: &str, timeout_secs: u64, msg_id: &str) -> String {
+    format!(
+        "Consultez l'état et le journal de la demande #{msg_id} avant de décider d'une suite. {to} n'a pas répondu dans le délai de {timeout_secs} s. Cette expiration concerne l'attente de cette réponse seulement : elle n'annule aucune tâche et ne prouve ni arrêt ni absence d'exécution. Conservez la référence complète et toute clé de requête associée. Si une tâche est connue, consultez son statut et son résultat. Tant que l'issue reste inconnue, ne renvoyez pas la mission et ne créez pas de remplacement auprès d'un autre destinataire. Les autres travaux autorisés suivent leur propre état."
+    )
+}
+
 /// Sonde sans consommation et sans changer O_NONBLOCK sur la connexion partagée.
 fn wait_client_gone(peer: Option<&UnixStream>) -> bool {
     let Some(peer) = peer else { return false };
@@ -7052,10 +7058,8 @@ pub fn run(config: DaemonConfig) -> Result<(), Box<dyn std::error::Error>> {
                         if from == UI_HUMAN_SENDER || from == UI_HUMAN_AGENT_ID {
                             let now = unix_now_secs();
                             let context = serde_json::json!({
-                                "summary": format!(
-                                    "{to} n’a pas répondu en {timeout_secs} s à ta demande #{}.",
-                                    &msg_id[..msg_id.len().min(8)]
-                                ),
+                                "summary": reply_timeout_guidance(&to, timeout_secs, &msg_id),
+                                "message_id": msg_id,
                                 "to": to,
                                 "timeout_secs": timeout_secs,
                             })
@@ -7077,12 +7081,7 @@ pub fn run(config: DaemonConfig) -> Result<(), Box<dyn std::error::Error>> {
                         drop(st);
                         // Aucun verrou global pendant la notification réseau.
                         if let Some(sender_writer) = sender_writer {
-                            let body = format!(
-                                "{} n'a pas repondu en {}s au message #{}.\nTu peux reessayer, changer de destinataire ou abandonner.",
-                                to,
-                                timeout_secs,
-                                &msg_id[..msg_id.len().min(8)]
-                            );
+                            let body = reply_timeout_guidance(&to, timeout_secs, &msg_id);
                             match deliver_to_agent(&sender_writer, &from, &body) {
                                 Ok(_) => info!(
                                     "palier 3 (timeout notifié à {} : {} n'a pas répondu)",
@@ -15191,6 +15190,8 @@ fn handle_worker_message(
             let capabilities = hello.capabilities.clone();
             (!capabilities.is_empty()
                 && capabilities.len() <= 32
+                && (!capabilities.contains(&WorkerCapability::CandidateProbePermissionReasonsV1)
+                    || capabilities.contains(&WorkerCapability::CandidateProbeV2))
                 && (!capabilities.contains(&WorkerCapability::OriginProjectContextV1)
                     || capabilities.contains(&WorkerCapability::OriginProofV1))
                 && (!capabilities.contains(&WorkerCapability::ModelOptionsV1)
@@ -15202,6 +15203,7 @@ fn handle_worker_message(
                         capability,
                         WorkerCapability::CandidateProbeV1
                             | WorkerCapability::CandidateProbeV2
+                            | WorkerCapability::CandidateProbePermissionReasonsV1
                             | WorkerCapability::WorkloadToolsV1
                             | WorkerCapability::ReleaseLeaseV2
                             | WorkerCapability::ParentSourceProofV1
@@ -15698,6 +15700,9 @@ fn handle_worker_message(
                 || result.connection_epoch != worker.epoch
                 || result.worker != worker.identity
                 || result.validate_shape().is_err()
+                || (!worker.capabilities.contains(&WorkerCapability::CandidateProbePermissionReasonsV1)
+                    && result.verdicts.iter().any(|verdict| matches!(verdict,
+                        CandidateProbeV2Verdict::Ineligible { reason: bridget_transport::protocol::CandidateProbeRefusal::PermissionPathProtected, .. })))
             {
                 return refused(WorkerRefusal::StaleConnection);
             }

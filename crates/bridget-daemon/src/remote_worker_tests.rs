@@ -12089,3 +12089,78 @@ fn spec234_recovery_refuses_live_orphan_marker_and_invalid_record() {
     assert_eq!(fs::read(&enrolled).unwrap(), before);
     assert_eq!(fs::read(invalid).unwrap(), b"{");
 }
+
+#[test]
+fn spec262_protected_path_reason_is_closed_scoped_and_negotiated() {
+    let diagnostics = ProbePermissionDiagnostics::new(
+        "26200000-0000-4000-8000-000000000001",
+        "a-26200000000000000000000000000001",
+    );
+    let note = diagnostics
+        .note(
+            "c001",
+            ProbePermissionSite::Projection,
+            "machine_path_protected",
+        )
+        .unwrap();
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&note).unwrap()["code"],
+        "machine_path_protected"
+    );
+    let old = CandidateProbeRefusal::PermissionsChanged;
+    assert_eq!(diagnostics.refusal("c001", old, false), old);
+    assert_eq!(diagnostics.refusal("c002", old, true), old);
+    assert_eq!(
+        diagnostics.refusal("c001", old, true),
+        CandidateProbeRefusal::PermissionPathProtected
+    );
+    assert_eq!(
+        diagnostics.refusal("c001", CandidateProbeRefusal::ResourceLimit, true),
+        CandidateProbeRefusal::ResourceLimit
+    );
+    assert_eq!(
+        permission_diagnostic_code("machine_path_protected:private-token"),
+        "unknown"
+    );
+    diagnostics.note(
+        "c002",
+        ProbePermissionSite::Projection,
+        "machine_path_protected",
+    );
+    assert_eq!(
+        diagnostics.refusal("c001", old, true),
+        CandidateProbeRefusal::PermissionPathProtected
+    );
+    assert_eq!(
+        diagnostics.refusal("c002", old, true),
+        CandidateProbeRefusal::PermissionPathProtected
+    );
+    diagnostics.emitted.set(MAX_PROBE_PERMISSION_NOTES);
+    assert!(
+        diagnostics
+            .note(
+                "c003",
+                ProbePermissionSite::Projection,
+                "machine_path_protected"
+            )
+            .is_none()
+    );
+    assert_eq!(
+        diagnostics.refusal("c003", old, true),
+        CandidateProbeRefusal::PermissionPathProtected
+    );
+    let old_master = MasterWorkerFeatures {
+        probe_v2: true,
+        ..Default::default()
+    };
+    let current = MasterWorkerFeatures {
+        probe_v2: true,
+        permission_reasons: true,
+        ..Default::default()
+    };
+    let capability = WorkerCapability::CandidateProbePermissionReasonsV1;
+    assert!(!old_master.capabilities().contains(&capability));
+    assert!(!old_master.admits(&[WorkerCapability::CandidateProbeV2, capability]));
+    assert!(!current.admits(&[capability]));
+    assert!(current.admits(&[WorkerCapability::CandidateProbeV2, capability]));
+}

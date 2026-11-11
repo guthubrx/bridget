@@ -1305,6 +1305,7 @@ pub(super) fn on_daemon_identity_request(
                 "auto_delegate_v1".to_string(),
                 "auto_delegate_v2".to_string(),
                 "worker_candidate_probe_v2".to_string(),
+                "worker_candidate_probe_permission_reasons_v1".to_string(),
                 "worker_workload_tools_v1".to_string(),
                 "worker_release_lease_v2".to_string(),
                 "worker_parent_source_proof_v1".to_string(),

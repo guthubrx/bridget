@@ -702,6 +702,9 @@ fn project_probe_constraints(result: &mut Value, reasons: &[Value]) {
             Some(CandidateProbeRefusal::DefinitionUnavailable) => (
                 "Comparez le profil, le moteur, le modèle et l'effort demandés avec leur déclaration actuelle sur la même machine. Faites aussi vérifier la version et l'empreinte du programme face à l'observation enregistrée ; le contrôle précis refusé n'a pas été conservé. Ce motif seul ne prouve pas un défaut de compte ou d'abonnement.",
                 "Si le programme a changé, demandez au responsable de qualifier cette version avant de mettre à jour son observation, ou à l'utilisateur de décider un retour vers une version déjà qualifiée. Ne remplacez pas une empreinte pour contourner la garde et ne changez ni compte, ni droits, ni modèle sur ce seul code."),
+            Some(CandidateProbeRefusal::PermissionPathProtected) => (
+                "Faites vérifier cwd, le placement du projet et les répertoires hérités du parent : un chemin hérité ou projeté recouvre un espace privé protégé du worker, ou se trouve dedans. Vérifiez notamment additional_directories et les racines accessibles. Ce refus maintient cette protection ; réattester le même contexte ne suffit pas.",
+                "Si le contexte du parent est trop large, demandez à l'utilisateur une session dans un dossier de projet autorisé avec les seuls répertoires nécessaires, puis réattestez ce contexte. Ne déplacez pas l'espace privé, ne retirez pas sa protection et ne supprimez pas une restriction pour forcer l'admission."),
             Some(CandidateProbeRefusal::PermissionsChanged) => (
                 "Réattestez le parent, puis vérifiez si ses restrictions peuvent être conservées par le moteur demandé. Ce motif seul ne prouve pas qu'un droit a changé. Consultez detail.permission_projection.",
                 "Si une restriction n'est pas traduisible, demandez à l'utilisateur la décision sur cette restriction ou sur le moteur ; ne retirez aucune protection pour essayer."),
@@ -716,7 +719,7 @@ fn project_probe_constraints(result: &mut Value, reasons: &[Value]) {
                 "Si les modifications ne vous appartiennent pas, demandez à leur propriétaire ou à l'utilisateur quelle conservation et quelle préparation autoriser."),
             Some(CandidateProbeRefusal::WorkspaceBusy) => (
                 "Conservez les tâches actives. Shared doit parfois changer le HEAD de la racine ; une exécution dans un worktree descendant protège aussi cette opération. Pour une contre-revue limitée à un commit, une vue commit_view isolée évite ce changement si ce choix est autorisé. Vérifiez d’abord detail.admission : aucune nouvelle clé pendant une admission en attente ou inconnue. Après refus confirmé sans tâche, un changement autorisé de workspace exige une nouvelle demande et sa propre clé. detail.workspace_tasks donne des pistes du maître, pas le détenteur attesté de la garde worker. Demandez sa corrélation ciblée au mainteneur si nécessaire, sans libérer de garde ni arrêter autrui.",
-                "Demandez une décision seulement si le même dossier partagé est indispensable et reste occupé : attendre son propriétaire ou autoriser une vue isolée compatible. Ne demandez pas l’arrêt d’un travail indépendant pour une simple contre-revue."),
+                "Demandez une décision à l'utilisateur seulement si le même dossier partagé est indispensable et reste occupé : attendre son propriétaire ou autoriser une vue isolée compatible. Ne demandez pas l’arrêt d’un travail indépendant pour une simple contre-revue."),
             Some(CandidateProbeRefusal::WorkspaceDiverged) => (
                 "Comparez la base attendue avec le HEAD du dossier cible, pas seulement le HEAD source. Shared refuse lorsque ce HEAD cible n'est pas un ancêtre de la base demandée ; ne reculez ni ne remplacez son histoire. Pour revoir un commit publié sans déplacer ce dossier, le parcours natif commit_view en discovery peut convenir si ses outils sont chargés. Il ne contient pas les modifications non commitées : publier le travail à revoir avant une revue distante. Toute autre enveloppe exige une nouvelle demande autorisée après clarification de l'ancienne issue et fin de ses appels.",
                 "Si la divergence exige de modifier un dossier partagé, demandez à son propriétaire ou à l'utilisateur quelle préparation autoriser après conservation du travail."),
@@ -793,7 +796,7 @@ fn project_probe_constraints(result: &mut Value, reasons: &[Value]) {
             },
         };
         let underlying=if reason["kind"].as_str().is_some_and(|kind|kind.starts_with("tool_")) {reason["kind"].clone()}
-        else if reason["kind"]=="candidate" && matches!(reason["code"].as_str(),Some("program_upgrade_check_pending"|"program_protocol_incompatible"|"program_check_unavailable")) {reason["code"].clone()} else {json!("unobserved")};
+        else if reason["kind"]=="candidate" && matches!(reason["code"].as_str(),Some("program_upgrade_check_pending"|"program_protocol_incompatible"|"program_check_unavailable"|"permission_path_protected")) {reason["code"].clone()} else {json!("unobserved")};
         json!({"kind":reason["kind"],"code":reason["code"],
             "scope":"candidate_subset","underlying_cause":underlying,
             "next_action":next_action,"human_action":human_action})
@@ -818,6 +821,23 @@ fn project_probe_constraints(result: &mut Value, reasons: &[Value]) {
             "recovery":"Ce motif concerne au moins un candidat de cette admission, pas un arrêt global. Conserver la machine, le moteur, la clé et l’enveloppe. Faire lire au responsable Bridget le diagnostic worker corrélé pour distinguer règle non traduisible, contexte manquant et divergence constatée. Ne pas réinstaller le programme, changer de compte ou retirer une restriction pour essayer. Les autres travaux autorisés suivent leur propre état. Après correction, un rejeu strict de la même clé et enveloppe exige state=not_recorded et la fin confirmée de tout appel concurrent. Si une tâche est connue, la suivre ; si l’admission est pending ou d’issue inconnue, préserver sa clé sans remplacement. Un refus durable suit son propre conseil de clôture avant une nouvelle clé.",
             "human_action":"Si la règle ne peut pas être conservée par le moteur demandé, demander à l’utilisateur la décision sur cette restriction ou sur le moteur ; aucun élargissement ni remplacement automatique."
         });
+    }
+    if reasons
+        .iter()
+        .any(|r| r["kind"] == "candidate" && r["code"] == "permission_path_protected")
+    {
+        let protected = json!({
+            "cause":"machine_path_protected",
+            "scope":"candidate_subset",
+            "message":"Un répertoire hérité ou projeté recouvre un espace privé protégé du worker, ou se trouve dedans. Le contrôle de protection a refusé cette projection.",
+            "recovery":"Vérifiez les répertoires hérités du parent et leurs recouvrements avec les espaces privés sur la cible. Demandez à l'utilisateur un contexte de projet plus précis si nécessaire, puis réattestez-le. Ne changez ni compte ni protection pour contourner ce refus. Ce motif ne concerne que les candidats cités ; les autres travaux autorisés suivent leur propre état. Consultez detail.admission avant toute suite. Un rejeu strict conserve sa clé et son enveloppe ; une enveloppe corrigée exige la clôture confirmée de l'ancienne demande sans tâche ni appel concurrent avant une nouvelle clé. Une issue inconnue ne permet aucun remplacement."
+        });
+        if !result["detail"]["permission_projection"].is_null() {
+            let unresolved = result["detail"]["permission_projection"].take();
+            result["detail"]["permission_projection"] = json!({"cause":"multiple","scope":"candidate_subset","checks":[unresolved,protected]});
+        } else {
+            result["detail"]["permission_projection"] = protected;
+        }
     }
     if reasons
         .iter()
@@ -855,7 +875,7 @@ fn project_probe_constraints(result: &mut Value, reasons: &[Value]) {
         result["message"] = json!(message);
         result["detail"]["message"] = json!(message);
         result["detail"]["verification"] = json!(
-            "Les motifs reçus sont conservés dans detail.reasons. Leur sous-cause non conservée reste inconnue ; les vérifications à faire figurent dans detail.probe_checks."
+            "Les motifs reçus sont conservés dans detail.reasons. Les causes attestées et les vérifications utiles figurent dans detail.probe_checks. Une cause marquée unobserved exige le diagnostic corrélé ; elle ne prouve aucune panne de compte, de réseau ou de droits."
         );
         if !mixed && !queue_only {
             result["detail"]["human_action"] = human;
@@ -5430,6 +5450,9 @@ fn failure(code: &str) -> Value {
             ),
         };
         return json!({"status":"refused","code":"workspace_preflight_technical","message":message,"detail":{"message":message,"recovery":recovery}});
+    }
+    if let Some(result) = crate::lifecycle::source_base_failure_guidance(code) {
+        return result;
     }
     if code == "workspace_base_preflight_failed"
         || code.starts_with("workspace_base_preflight_failed:")

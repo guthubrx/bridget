@@ -644,6 +644,18 @@ pub(crate) fn source_base_commit(cwd: &Path) -> Result<Option<String>, String> {
         crate::workspace_git::READ_TIMEOUT,
     )
     .map_err(|error| format!("workspace_base_preflight_failed: {error}"))?;
+    if !head.success() && !head.truncated {
+        let git_root = root.stdout.trim();
+        if Path::new(git_root).is_absolute()
+            && git_root.len() <= 4096
+            && !git_root.chars().any(bridget_core::is_disallowed_control)
+        {
+            return Err(format!(
+                "workspace_base_unavailable:source_head:{}",
+                serde_json::json!({"git_root":git_root})
+            ));
+        }
+    }
     let commit = head.stdout.trim();
     if !head.success()
         || head.truncated
@@ -1050,4 +1062,40 @@ pub(crate) fn submit_specialist_relaunch(
     submit_spawn_with_policy(
         supervisor, registry, source, order, now, false, hosts, true, false,
     )
+}
+
+/// Contexte fermé du contrôle source ; aucun stderr Git n'est rendu.
+pub(crate) fn source_base_failure_guidance(code: &str) -> Option<serde_json::Value> {
+    if code
+        == "workspace_base_preflight_failed: workspace_git_unsupported: Git 2.44 ou plus est requis"
+    {
+        let message = "Vérifiez la version de Git choisie par le PATH de cet appel. Le contrôle source exige Git 2.44 ou plus et a refusé la version exécutée.";
+        let recovery = "Exécutez git --version dans le même environnement que l'appelant. Une autre installation présente sur la machine ne suffit pas si le PATH ne la choisit pas. Réutilisez une version déjà qualifiée si son emploi est autorisé ; sinon demandez l'installation ou la qualification au responsable. Ne changez pas le PATH global ni le dépôt pour contourner ce refus. Cette demande seule est refusée ; les autres travaux autorisés suivent leur propre état. Conservez toute tâche et request_id connues et vérifiez leur issue avant toute suite.";
+        return Some(
+            serde_json::json!({"status":"refused","code":"workspace_base_preflight_failed","message":message,
+            "detail":{"message":message,"recovery":recovery,"cause":"git_version_unsupported","scope":"this_request","minimum_git":"2.44"}}),
+        );
+    }
+
+    if let Some(encoded) = code.strip_prefix("workspace_base_unavailable:source_head:")
+        && encoded.len() <= 8192
+        && let Ok(value) = serde_json::from_str::<serde_json::Value>(encoded)
+        && let Some(object) = value.as_object()
+        && object.len() == 1
+        && let Some(root) = object.get("git_root").and_then(serde_json::Value::as_str)
+        && Path::new(root).is_absolute()
+        && root.len() <= 4096
+        && !root.chars().any(bridget_core::is_disallowed_control)
+    {
+        let message = format!(
+            "Vérifiez le HEAD du dépôt source détecté par Git : {root}. Dans ce dépôt, HEAD ne désigne pas un commit accessible."
+        );
+        let recovery = "Exécutez git rev-parse --show-toplevel puis git rev-parse --verify 'HEAD^{commit}' dans cwd, sur la machine du parent. Un dossier sans .git peut hériter du dépôt d'un ancêtre : il n'est alors pas hors Git. Un HEAD introuvable ne prouve pas l'absence d'histoire. Vérifiez sa référence et les commits conservés avant toute réparation avec le propriétaire du dépôt. Si ce dépôt ancêtre est involontaire, demandez un dossier source autorisé réellement hors de ce dépôt ; ne supprimez pas .git et ne créez pas de dépôt factice. Ne faites ni reset ni fetch sans avoir établi le dépôt et la référence voulus. Ce refus concerne cette demande ; les autres travaux autorisés suivent leur propre état. Conservez request_id et toute tâche connue. Avant une enveloppe corrigée et une nouvelle clé, confirmez le refus sans tâche ni admission concurrente ; une issue inconnue ne permet aucun remplacement.";
+        return Some(
+            serde_json::json!({"status":"refused","code":"workspace_base_unavailable","message":message,
+            "detail":{"message":message,"recovery":recovery,"scope":"this_request",
+            "cause":"source_head_unresolved","git_root":root,"reference":"HEAD"}}),
+        );
+    }
+    None
 }

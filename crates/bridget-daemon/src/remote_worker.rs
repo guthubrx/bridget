@@ -72,6 +72,7 @@ impl ProbePermissionSite {
 fn permission_diagnostic_code(error: &str) -> &str {
     match error {
         "effort_unavailable"
+        | "machine_path_protected"
         | "machine_path_unverifiable"
         | "model_unavailable"
         | "permission_attestation_unavailable"
@@ -141,6 +142,7 @@ struct ProbePermissionDiagnostics<'a> {
     correlation_id: &'a str,
     admission_id: &'a str,
     emitted: std::cell::Cell<usize>,
+    protected_candidates: std::cell::RefCell<BTreeSet<String>>,
 }
 impl<'a> ProbePermissionDiagnostics<'a> {
     fn new(correlation_id: &'a str, admission_id: &'a str) -> Self {
@@ -148,6 +150,22 @@ impl<'a> ProbePermissionDiagnostics<'a> {
             correlation_id,
             admission_id,
             emitted: std::cell::Cell::new(0),
+            protected_candidates: std::cell::RefCell::new(BTreeSet::new()),
+        }
+    }
+    fn refusal(
+        &self,
+        candidate_id: &str,
+        reason: CandidateProbeRefusal,
+        negotiated: bool,
+    ) -> CandidateProbeRefusal {
+        if negotiated
+            && reason == CandidateProbeRefusal::PermissionsChanged
+            && self.protected_candidates.borrow().contains(candidate_id)
+        {
+            CandidateProbeRefusal::PermissionPathProtected
+        } else {
+            reason
         }
     }
     fn note(&self, candidate_id: &str, site: ProbePermissionSite, error: &str) -> Option<String> {
@@ -163,8 +181,7 @@ impl<'a> ProbePermissionDiagnostics<'a> {
             &crate::native_permissions::ProjectionWitnessSummary171,
         )>,
     ) -> Option<String> {
-        if self.emitted.get() >= MAX_PROBE_PERMISSION_NOTES
-            || self.correlation_id.len() != 36
+        if self.correlation_id.len() != 36
             || uuid::Uuid::parse_str(self.correlation_id).is_err()
             || self.admission_id.len() != 34
             || !self.admission_id.starts_with("a-")
@@ -177,6 +194,14 @@ impl<'a> ProbePermissionDiagnostics<'a> {
         }
         // Exact closed codes only, never an error message or a prefix match.
         let code = permission_diagnostic_code(error);
+        if code == "machine_path_protected" {
+            self.protected_candidates
+                .borrow_mut()
+                .insert(candidate_id.to_owned());
+        }
+        if self.emitted.get() >= MAX_PROBE_PERMISSION_NOTES {
+            return None;
+        }
         let mut value = serde_json::json!({"event":"worker_probe_permission_refused",
             "correlation_id":self.correlation_id,"admission_id":self.admission_id,
             "candidate_id":candidate_id,"site":site.as_str(),"code":code});
@@ -4904,6 +4929,7 @@ struct WorkerRuntime {
     last_resource_refresh: Instant,
     provider_accounts_negotiated: bool,
     program_compatibility_negotiated: bool,
+    permission_reasons_negotiated: bool,
 }
 
 impl WorkerRuntime {
@@ -7239,6 +7265,7 @@ impl WorkerRuntime {
             last_resource_refresh: Instant::now(),
             provider_accounts_negotiated: false,
             program_compatibility_negotiated: false,
+            permission_reasons_negotiated: false,
         };
         runtime
             .reconcile_all()
@@ -7395,6 +7422,7 @@ impl WorkerRuntime {
             prepared,
             command_roots: std::cell::RefCell::new(None),
             provider_accounts_negotiated: self.provider_accounts_negotiated,
+            permission_reasons_negotiated: self.permission_reasons_negotiated,
             host_resources: self.host_resources.clone(),
         }
     }
@@ -9579,6 +9607,7 @@ fn dispatch_origin_proof(
 struct MasterWorkerFeatures {
     candidate_probe: bool,
     probe_v2: bool,
+    permission_reasons: bool,
     workload_tools: bool,
     release_lease: bool,
     source_proof: bool,
@@ -9602,6 +9631,9 @@ impl MasterWorkerFeatures {
         match capability {
             WorkerCapability::CandidateProbeV1 => self.candidate_probe,
             WorkerCapability::CandidateProbeV2 => self.probe_v2,
+            WorkerCapability::CandidateProbePermissionReasonsV1 => {
+                self.probe_v2 && self.permission_reasons
+            }
             WorkerCapability::WorkloadToolsV1 => self.workload_tools && self.probe_v2,
             WorkerCapability::ReleaseLeaseV2 => self.release_lease,
             WorkerCapability::ParentSourceProofV1 => self.source_proof,
@@ -9626,6 +9658,7 @@ impl MasterWorkerFeatures {
         [
             WorkerCapability::CandidateProbeV1,
             WorkerCapability::CandidateProbeV2,
+            WorkerCapability::CandidateProbePermissionReasonsV1,
             WorkerCapability::WorkloadToolsV1,
             WorkerCapability::ReleaseLeaseV2,
             WorkerCapability::ParentSourceProofV1,
@@ -9654,6 +9687,8 @@ impl MasterWorkerFeatures {
     }
     fn admits(&self, accepted: &[WorkerCapability]) -> bool {
         accepted.len() <= 32
+            && (!accepted.contains(&WorkerCapability::CandidateProbePermissionReasonsV1)
+                || accepted.contains(&WorkerCapability::CandidateProbeV2))
             && (!accepted.contains(&WorkerCapability::WorkloadToolsV1)
                 || accepted.contains(&WorkerCapability::CandidateProbeV2))
             && (!accepted.contains(&WorkerCapability::OriginProjectContextV1)
@@ -9731,6 +9766,7 @@ fn probe_worker_capability(
             Ok(MasterWorkerFeatures {
                 candidate_probe: has("worker_candidate_probe_v1"),
                 probe_v2: has("worker_candidate_probe_v2"),
+                permission_reasons: has("worker_candidate_probe_permission_reasons_v1"),
                 workload_tools: has("worker_workload_tools_v1"),
                 release_lease: has("worker_release_lease_v2"),
                 source_proof: has("worker_parent_source_proof_v1"),
@@ -9937,6 +9973,8 @@ pub fn run_worker(config: WorkerRuntimeConfig) -> Result<(), String> {
         };
         runtime.provider_accounts_negotiated =
             negotiated.contains(&WorkerCapability::ProviderAccountsV1);
+        runtime.permission_reasons_negotiated =
+            negotiated.contains(&WorkerCapability::CandidateProbePermissionReasonsV1);
         runtime.program_compatibility_negotiated =
             negotiated.contains(&WorkerCapability::ProgramCompatibilityV1);
         if negotiated.contains(&WorkerCapability::ProviderCatalogueV1) {

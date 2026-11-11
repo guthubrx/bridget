@@ -2434,3 +2434,24 @@ fn spec241_command_execution_follows_effective_profile_without_widening_rights()
         false
     ));
 }
+
+#[test]
+fn spec262_inherited_ancestor_of_worker_private_space_is_refused_without_changing_policy() {
+    let (root, _env, mut mapping, protected) = remote162_fixture("262-protected-ancestor");
+    mapping.source_root = mapping.remote_root.clone();
+    let mut policy = json!({"additional_directories":[root]});
+    let before = policy.clone();
+    assert_eq!(
+        project_policy_directories171(&mut policy, &mapping, &protected, None, true),
+        Err("machine_path_protected".into())
+    );
+    assert_eq!(
+        policy, before,
+        "aucun retrait silencieux d'un répertoire hérité"
+    );
+    let safe = root.join("authorised-documents");
+    fs::create_dir(&safe).unwrap();
+    let mut precise = json!({"additional_directories":[safe]});
+    assert!(project_policy_directories171(&mut precise, &mapping, &protected, None, true).is_ok());
+    fs::remove_dir_all(root).unwrap();
+}

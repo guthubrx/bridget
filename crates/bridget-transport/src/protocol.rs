@@ -2958,6 +2958,7 @@ pub struct WorkerAccepted {
 pub enum WorkerCapability {
     CandidateProbeV1,
     CandidateProbeV2,
+    CandidateProbePermissionReasonsV1,
     WorkloadToolsV1,
     ReleaseLeaseV2,
     WorkspaceRepairV1,
@@ -3476,6 +3477,7 @@ pub enum CandidateProbeRefusal {
     MappingUnavailable,
     DefinitionUnavailable,
     PermissionsChanged,
+    PermissionPathProtected,
     WorkspaceUnavailable,
     WorkspaceLimit,
     WorkspaceDirty,

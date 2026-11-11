@@ -1579,6 +1579,7 @@ pub(super) struct ProbeReadContext {
     pub(super) prepared: Vec<PathBuf>,
     pub(super) command_roots: RefCell<Option<Result<Vec<PathBuf>, CandidateProbeRefusal>>>,
     pub(super) provider_accounts_negotiated: bool,
+    pub(super) permission_reasons_negotiated: bool,
     pub(super) host_resources: crate::host_resources::HostResourceCollector,
 }
 impl ProbeReadContext {
@@ -2041,7 +2042,11 @@ impl ProbeReadContext {
                     CandidateProbeVerdict::Ineligible { reason, .. } => {
                         CandidateProbeV2Verdict::Ineligible {
                             candidate_id: candidate.candidate_id.clone(),
-                            reason,
+                            reason: diagnostics.refusal(
+                                &candidate.candidate_id,
+                                reason,
+                                self.permission_reasons_negotiated,
+                            ),
                         }
                     }
                 };
@@ -2062,7 +2067,11 @@ impl ProbeReadContext {
                     );
                     *verdict = CandidateProbeV2Verdict::Ineligible {
                         candidate_id: candidate_id.clone(),
-                        reason: CandidateProbeRefusal::PermissionsChanged,
+                        reason: diagnostics.refusal(
+                            candidate_id,
+                            CandidateProbeRefusal::PermissionsChanged,
+                            self.permission_reasons_negotiated,
+                        ),
                     };
                 }
             }

@@ -1830,3 +1830,30 @@ fn ask_agent_list(socket: &Path) -> DaemonToWrapper {
     reader.read_line(&mut line).unwrap();
     decode(line.trim()).unwrap()
 }
+
+#[test]
+fn spec262_delegate_cli_reports_ancestor_head_with_guidance_and_request_id() {
+    let root = std::env::temp_dir().join(format!("bridget-cli262-{}", uuid::Uuid::new_v4()));
+    let nested = root.join("documents");
+    std::fs::create_dir_all(&nested).unwrap();
+    assert!(
+        std::process::Command::new("git")
+            .args(["init", "--quiet"])
+            .arg(&root)
+            .status()
+            .unwrap()
+            .success()
+    );
+    let error = parse_delegate_args(
+        &argv(&["revue", "--request-id", "cli262-refused"]),
+        &nested,
+        || panic!(),
+    )
+    .unwrap_err();
+    assert!(error.contains("workspace_base_unavailable"));
+    assert!(error.contains("ancêtre"));
+    assert!(error.contains("HEAD"));
+    assert!(error.contains("cli262-refused"));
+    assert!(!error.contains("source_head:{"));
+    std::fs::remove_dir_all(root).unwrap();
+}

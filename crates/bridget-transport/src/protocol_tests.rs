@@ -58,12 +58,20 @@ fn remote172_source_proof_shape_bornee_et_parent_historique_intact() {
         },
     };
     assert_eq!(request.validate(), Ok(()));
-    for invalid in ["/other", "/remote/project/../other"] {
+    for invalid in ["/remote/project/../other"] {
         if let WorkerRequestOperation::ParentSourceProof { source, .. } = &mut request.request {
             source.cwd = invalid.into();
         }
         assert_eq!(request.validate(), Err(WorkerRefusal::InvalidEnvelope));
     }
+    if let WorkerRequestOperation::ParentSourceProof { source, .. } = &mut request.request {
+        source.cwd = "/another-authorised-project".into();
+    }
+    assert_eq!(
+        request.validate(),
+        Ok(()),
+        "le parent global n'est pas limité à son cwd ; le worker contrôle le mandat réel"
+    );
     request.request = WorkerRequestOperation::ParentSourceProof {
         parent: parent.clone(),
         source: WorkerSourceBase {

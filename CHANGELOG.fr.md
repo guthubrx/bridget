@@ -1,5 +1,12 @@
 # Journal des changements
 
+## 0.8.28
+
+- Transmettre le refus d’un chemin protégé dans l’admission, avec sa cause constatée et une capacité négociée compatible avec les anciens pairs. Conserver les causes distinctes d’un même lot.
+- Expliquer le dépôt Git ancêtre détecté et son HEAD introuvable, dans la CLI comme dans l’admission. Identifier aussi une version Git refusée dans l’environnement exécuté.
+- Conserver la référence complète d’une réponse expirée, pour les agents et la boîte humaine. Préciser l’issue à vérifier avant toute suite.
+
+
 ## 0.8.23 — 2026-11-09
 
 - Exposer les six formes de références du brief avec leurs champs requis et rappeler kind/label/host/path dans le guidage de continuation. Validateur natif inchangé.
