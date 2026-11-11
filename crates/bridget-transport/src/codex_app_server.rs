@@ -3595,6 +3595,155 @@ fn write_value(writer: &Writer, value: Value) -> Result<(), TransportError> {
     result
 }
 
+/// Branche `item/completed` de la lecture Codex, extraite de `spawn_reader` (programme 260, lot 9).
+/// Le corps reprend la branche d'origine sans autre changement.
+fn on_item_completed(
+    journal: &Journal,
+    observations: &Arc<(Mutex<Observations>, Condvar)>,
+    active_detail: &ActiveTurnDetail,
+    value: &Value,
+    raw: Vec<u8>,
+    cwd: &str,
+    interactive: bool,
+    queue: &Arc<(Mutex<QueueState>, Condvar)>,
+    sandbox_posture: &str,
+    completed_file_items: &mut (String, HashSet<String>),
+    sandbox_lines_by_item: &mut HashMap<String, String>,
+    refusals_recorded: &mut HashSet<(String, String)>,
+) {
+    record_context_compaction(&journal, &observations, &active_detail, &value);
+    let item = value.pointer("/params/item");
+    if item.and_then(|i| i.get("type")).and_then(Value::as_str) == Some("fileChange")
+        && item.and_then(|i| i.get("status")).and_then(Value::as_str) == Some("completed")
+    {
+        let message_id = active_detail
+            .lock()
+            .recover_poison()
+            .as_ref()
+            .filter(|active| source_matches_active_turn(active, &value))
+            .map(|active| active.message_id.clone());
+        if let Some(message_id) = message_id
+            && let Some(changes) = item
+                .and_then(|i| i.get("changes"))
+                .and_then(Value::as_array)
+        {
+            let turn = value
+                .pointer("/params/turnId")
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            if completed_file_items.0 != turn {
+                *completed_file_items = (turn.into(), HashSet::new());
+            }
+            let item_id = item
+                .and_then(|i| i.get("id"))
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            let accepted = !item_id.is_empty()
+                && item_id.len() <= 256
+                && completed_file_items.1.len() < 4096
+                && completed_file_items.1.insert(item_id.into());
+            if !accepted && completed_file_items.1.len() >= 4096 {
+                log::warn!("observation_gap: déduplication Codex saturée pour ce tour");
+            }
+            for change in changes.iter().take(if accepted { 256 } else { 0 }) {
+                if let Some(path) = change.get("path").and_then(Value::as_str)
+                    && let Some(payload) =
+                        crate::journal::confirmed_write_payload(path, Path::new(&cwd))
+                {
+                    record_or_terminal(
+                        &journal,
+                        &observations,
+                        "update",
+                        Some(&message_id),
+                        payload,
+                    );
+                }
+            }
+            if changes.len() > 256 {
+                log::warn!("observation_gap: changements Codex au-delà de 256 fichiers");
+            }
+        }
+    }
+    if interactive
+        && item.and_then(|i| i.get("type")).and_then(Value::as_str) == Some("userMessage")
+        && let Some(client_id) = item.and_then(|i| i.get("clientId")).and_then(Value::as_str)
+    {
+        let active = queue.0.lock().recover_poison();
+        let mut detail = active_detail.lock().recover_poison();
+        if let Some(detail) = detail.as_mut().filter(|d| {
+            source_matches_active_turn(d, &value)
+                && d.message_id == client_id
+                && !d.prompt_dispatched
+        }) && active
+            .active
+            .as_ref()
+            .is_some_and(|a| a.message_id == client_id)
+        {
+            detail.prompt_dispatched = true;
+            push_source(
+                &observations,
+                raw.clone(),
+                ManagedEventKind::PromptDispatched {
+                    message_id: client_id.into(),
+                },
+            );
+            record_or_terminal(
+                &journal,
+                &observations,
+                "prompt_dispatched",
+                Some(client_id),
+                json!({"provider_turn_id": value.pointer("/params/turnId")}),
+            );
+        }
+    }
+    // SPEC-088 : fin d'une commande. Journalisée avec son état
+    // réel ; un signalement de sandbox n'existe qu'ici, et
+    // seulement si la commande a échoué.
+    if item
+        .and_then(|item| item.get("type"))
+        .and_then(Value::as_str)
+        == Some("commandExecution")
+    {
+        record_command_completion(
+            &journal,
+            &observations,
+            &active_detail,
+            &value,
+            sandbox_posture,
+            sandbox_lines_by_item,
+            refusals_recorded,
+        );
+    }
+    let is_agent = item
+        .and_then(|item| item.get("type"))
+        .and_then(Value::as_str)
+        == Some("agentMessage");
+    if is_agent
+        && let Some(text) = item
+            .and_then(|item| item.get("text"))
+            .and_then(Value::as_str)
+    {
+        if let Some(turn_id) = value.pointer("/params/turnId").and_then(Value::as_str) {
+            let mut observed = observations.0.lock().recover_poison();
+            let entry = observed
+                .response_by_turn
+                .entry(turn_id.to_string())
+                .or_default();
+            if entry.is_empty() {
+                entry.push_str(text);
+            }
+        }
+        maybe_record_final_agent_message(&journal, &observations, &active_detail, &value, text);
+    }
+    push_source(
+        &observations,
+        raw,
+        ManagedEventKind::Update {
+            detail: "item/completed Codex".to_string(),
+        },
+    );
+}
+
 fn spawn_reader(lines: SourceLines, context: ReaderContext) -> thread::JoinHandle<()> {
     let ReaderContext {
         permission_observation,
@@ -4045,157 +4194,20 @@ fn spawn_reader(lines: SourceLines, context: ReaderContext) -> thread::JoinHandl
                 }
                 // (B) Repli : message agent complet sans aucun delta (stdout
                 // sans flux partiel). `item/completed` type agentMessage.
-                Some("item/completed") => {
-                    record_context_compaction(&journal, &observations, &active_detail, &value);
-                    let item = value.pointer("/params/item");
-                    if item.and_then(|i| i.get("type")).and_then(Value::as_str)
-                        == Some("fileChange")
-                        && item.and_then(|i| i.get("status")).and_then(Value::as_str)
-                            == Some("completed")
-                    {
-                        let message_id = active_detail
-                            .lock()
-                            .recover_poison()
-                            .as_ref()
-                            .filter(|active| source_matches_active_turn(active, &value))
-                            .map(|active| active.message_id.clone());
-                        if let Some(message_id) = message_id
-                            && let Some(changes) = item
-                                .and_then(|i| i.get("changes"))
-                                .and_then(Value::as_array)
-                        {
-                            let turn = value
-                                .pointer("/params/turnId")
-                                .and_then(Value::as_str)
-                                .unwrap_or("");
-                            if completed_file_items.0 != turn {
-                                completed_file_items = (turn.into(), HashSet::new());
-                            }
-                            let item_id = item
-                                .and_then(|i| i.get("id"))
-                                .and_then(Value::as_str)
-                                .unwrap_or("");
-                            let accepted = !item_id.is_empty()
-                                && item_id.len() <= 256
-                                && completed_file_items.1.len() < 4096
-                                && completed_file_items.1.insert(item_id.into());
-                            if !accepted && completed_file_items.1.len() >= 4096 {
-                                log::warn!(
-                                    "observation_gap: déduplication Codex saturée pour ce tour"
-                                );
-                            }
-                            for change in changes.iter().take(if accepted { 256 } else { 0 }) {
-                                if let Some(path) = change.get("path").and_then(Value::as_str)
-                                    && let Some(payload) = crate::journal::confirmed_write_payload(
-                                        path,
-                                        Path::new(&cwd),
-                                    )
-                                {
-                                    record_or_terminal(
-                                        &journal,
-                                        &observations,
-                                        "update",
-                                        Some(&message_id),
-                                        payload,
-                                    );
-                                }
-                            }
-                            if changes.len() > 256 {
-                                log::warn!(
-                                    "observation_gap: changements Codex au-delà de 256 fichiers"
-                                );
-                            }
-                        }
-                    }
-                    if interactive
-                        && item.and_then(|i| i.get("type")).and_then(Value::as_str)
-                            == Some("userMessage")
-                        && let Some(client_id) =
-                            item.and_then(|i| i.get("clientId")).and_then(Value::as_str)
-                    {
-                        let active = queue.0.lock().recover_poison();
-                        let mut detail = active_detail.lock().recover_poison();
-                        if let Some(detail) = detail.as_mut().filter(|d| {
-                            source_matches_active_turn(d, &value)
-                                && d.message_id == client_id
-                                && !d.prompt_dispatched
-                        }) && active
-                            .active
-                            .as_ref()
-                            .is_some_and(|a| a.message_id == client_id)
-                        {
-                            detail.prompt_dispatched = true;
-                            push_source(
-                                &observations,
-                                raw.clone(),
-                                ManagedEventKind::PromptDispatched {
-                                    message_id: client_id.into(),
-                                },
-                            );
-                            record_or_terminal(
-                                &journal,
-                                &observations,
-                                "prompt_dispatched",
-                                Some(client_id),
-                                json!({"provider_turn_id": value.pointer("/params/turnId")}),
-                            );
-                        }
-                    }
-                    // SPEC-088 : fin d'une commande. Journalisée avec son état
-                    // réel ; un signalement de sandbox n'existe qu'ici, et
-                    // seulement si la commande a échoué.
-                    if item
-                        .and_then(|item| item.get("type"))
-                        .and_then(Value::as_str)
-                        == Some("commandExecution")
-                    {
-                        record_command_completion(
-                            &journal,
-                            &observations,
-                            &active_detail,
-                            &value,
-                            sandbox_posture,
-                            &mut sandbox_lines_by_item,
-                            &mut refusals_recorded,
-                        );
-                    }
-                    let is_agent = item
-                        .and_then(|item| item.get("type"))
-                        .and_then(Value::as_str)
-                        == Some("agentMessage");
-                    if is_agent
-                        && let Some(text) = item
-                            .and_then(|item| item.get("text"))
-                            .and_then(Value::as_str)
-                    {
-                        if let Some(turn_id) =
-                            value.pointer("/params/turnId").and_then(Value::as_str)
-                        {
-                            let mut observed = observations.0.lock().recover_poison();
-                            let entry = observed
-                                .response_by_turn
-                                .entry(turn_id.to_string())
-                                .or_default();
-                            if entry.is_empty() {
-                                entry.push_str(text);
-                            }
-                        }
-                        maybe_record_final_agent_message(
-                            &journal,
-                            &observations,
-                            &active_detail,
-                            &value,
-                            text,
-                        );
-                    }
-                    push_source(
-                        &observations,
-                        raw,
-                        ManagedEventKind::Update {
-                            detail: "item/completed Codex".to_string(),
-                        },
-                    );
-                }
+                Some("item/completed") => on_item_completed(
+                    &journal,
+                    &observations,
+                    &active_detail,
+                    &value,
+                    raw,
+                    &cwd,
+                    interactive,
+                    &queue,
+                    sandbox_posture,
+                    &mut completed_file_items,
+                    &mut sandbox_lines_by_item,
+                    &mut refusals_recorded,
+                ),
                 // Mesure 2026-08-27 (codex app-server 0.149) : la COMMANDE réelle
                 // est dans item/started type=commandExecution.params.item.command.
                 // Les outputDelta ne portent que la sortie — ce n'est pas le nom.
