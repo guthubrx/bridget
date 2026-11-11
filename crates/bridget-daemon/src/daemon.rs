@@ -17228,25 +17228,7 @@ fn handle_wrapper_message_with_peer(
             line,
             offset,
             reason,
-        } => {
-            let view = {
-                let st = state.lock().recover_poison();
-                let subscription = st.attach_subscriptions.get(&subscription_id).cloned()?;
-                if subscription.wrapper_conn != conn_id {
-                    return None;
-                }
-                st.attach_views.get(&subscription_id).cloned()
-            };
-            if let Some(view) = view {
-                let _ = view.enqueue(DaemonToWrapper::JournalReadError {
-                    subscription_id,
-                    line,
-                    offset,
-                    reason,
-                });
-            }
-            None
-        }
+        } => wrapper_dispatch::on_journal_read_error(subscription_id, line, offset, reason, conn_id, state),
         WrapperToDaemon::JournalFragment {
             subscription_id,
             seq,

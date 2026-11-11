@@ -4187,3 +4187,23 @@ pub(super) fn on_runtime(agent: String, model: String, effort: Option<String>, s
                 Some(handle_runtime(&agent, model, effort, source, &mut st))
             }
         }
+
+pub(super) fn on_journal_read_error(subscription_id: String, line: u64, offset: u64, reason: String, conn_id: &str, state: &Arc<Mutex<DaemonState>>) -> Option<DaemonToWrapper> {
+            let view = {
+                let st = state.lock().recover_poison();
+                let subscription = st.attach_subscriptions.get(&subscription_id).cloned()?;
+                if subscription.wrapper_conn != conn_id {
+                    return None;
+                }
+                st.attach_views.get(&subscription_id).cloned()
+            };
+            if let Some(view) = view {
+                let _ = view.enqueue(DaemonToWrapper::JournalReadError {
+                    subscription_id,
+                    line,
+                    offset,
+                    reason,
+                });
+            }
+            None
+        }
