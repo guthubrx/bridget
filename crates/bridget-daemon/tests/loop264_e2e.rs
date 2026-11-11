@@ -81,7 +81,14 @@ fn command(
     if let Some(path) = grant {
         command.env("BRIDGET_LOOP_CONTROL_FILE", path);
     }
-    command.args(["--", "Action de qualification264"]);
+    command.args([
+        "--",
+        if id == "loop264-message" {
+            "Action initiale de qualification264"
+        } else {
+            "Action refusée pendant DND, reprise après sa levée"
+        },
+    ]);
     command
 }
 
@@ -164,6 +171,89 @@ fn spec264_e2e_cli_modes_and_replay_after_revocation() {
             "send: {}",
             String::from_utf8_lossy(&output.stderr)
         );
+        if mode == "steer" {
+            target.send(WrapperToDaemon::Availability {
+                agent: RECIPIENT.into(),
+                until_secs: Some(at + 60),
+            });
+            assert!(matches!(target.receive(), DaemonToWrapper::Ack { .. }));
+            let refused = command(
+                &root,
+                &project,
+                "loop264-rejected",
+                at,
+                mode,
+                authorization.as_deref(),
+            )
+            .output()
+            .unwrap();
+            assert!(!refused.status.success());
+            let text = String::from_utf8_lossy(&refused.stderr);
+            assert!(
+                text.contains("loop_target_do_not_disturb")
+                    && text.contains("rejected")
+                    && text.contains("nouveaux id et issued_at"),
+                "{text}"
+            );
+            target.send(WrapperToDaemon::Availability {
+                agent: RECIPIENT.into(),
+                until_secs: None,
+            });
+            assert!(matches!(target.receive(), DaemonToWrapper::Ack { .. }));
+            let old = command(
+                &root,
+                &project,
+                "loop264-rejected",
+                at,
+                mode,
+                authorization.as_deref(),
+            )
+            .output()
+            .unwrap();
+            assert!(
+                !old.status.success(),
+                "la clé refusée reste finale après levée DND"
+            );
+            assert_no_delivery(&mut target);
+            target
+                .reader
+                .get_ref()
+                .set_read_timeout(Some(CLIENT_READ_TIMEOUT))
+                .unwrap();
+            let mut fresh = command(
+                &root,
+                &project,
+                "loop264-after-dnd",
+                at + 1,
+                mode,
+                authorization.as_deref(),
+            );
+            let sender = thread::spawn(move || {
+                let output = fresh.output().unwrap();
+                if !output.status.success() {
+                    eprintln!(
+                        "nouvel envoi après DND : {}",
+                        String::from_utf8_lossy(&output.stderr)
+                    );
+                }
+                output
+            });
+            let DaemonToWrapper::DeliverIdempotent {
+                message,
+                delivery_id,
+                delivery_generation,
+                ..
+            } = receive_delivery(&mut target)
+            else {
+                unreachable!()
+            };
+            assert_eq!(message.intent, intent);
+            target.send(WrapperToDaemon::DeliverAcked {
+                delivery_id,
+                delivery_generation,
+            });
+            assert!(sender.join().unwrap().status.success());
+        }
         if let Some(path) = authorization.as_ref() {
             let output = isolated_command(&root)
                 .args(["loop-control", "revoke", "--file"])

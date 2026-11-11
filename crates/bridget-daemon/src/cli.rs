@@ -5204,7 +5204,11 @@ fn send_idempotent_if_requested(
             crate::cli_table::exit(1);
         }
         Err(error) => {
-            eprintln!("daemon inaccessible: {error}");
+            if std::env::var_os("BRIDGET_LOOP_CONTROL_FILE").is_some() {
+                eprintln!("bridget envoi de boucle non confirmé: {error}");
+            } else {
+                eprintln!("daemon inaccessible: {error}");
+            }
             crate::cli_table::exit(1);
         }
     }

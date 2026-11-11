@@ -268,10 +268,20 @@ impl std::fmt::Debug for LoopControlRequest {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "status", rename_all = "snake_case", deny_unknown_fields)]
 pub enum LoopControlOutcome {
-    Authorized { grant_id: String },
-    Bound { grant_id: String },
-    Revoked { grant_id: String },
-    Refused { code: String, recovery: String },
+    Authorized {
+        grant_id: String,
+    },
+    /// Preuve liée pour consulter un reçu ; ne prouve pas un droit d'émission actif.
+    Bound {
+        grant_id: String,
+    },
+    Revoked {
+        grant_id: String,
+    },
+    Refused {
+        code: String,
+        recovery: String,
+    },
 }
 
 /// Édition finale de file159B ; aucune phase intermédiaire n'est publique.

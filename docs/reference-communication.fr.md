@@ -188,6 +188,19 @@ et protection des missions natives actives restent applicables. Une nouvelle
 cible ou un mode nouveau exige une nouvelle autorisation humaine. Aucun refus
 ne provoque un changement automatique de mode.
 
+L'autorisation, la liaison et la révocation écrivent un événement silencieux
+dans le journal existant, avec le seul hash du mandat et l'action. Création et
+révocation partagent la transaction de cet événement : sans journal durable,
+le changement de mandat n'est pas validé. Le jeton privé n'est jamais journalisé.
+
+Un refus `rejected` reste définitif pour sa clé, même après levée de la pause
+ou de la tranquillité. Après vérification que la cause est levée, une nouvelle
+demande prend de nouveaux `id` et `issued_at` avec le même mode et la même
+cible. Loop conserve le reçu du rappel refusé et attend une reprise explicite
+`retry-refused --delivery-id ID --reason PREUVE`, ou une preuve métier nouvelle.
+Une issue inconnue ou un délai dépassé conserve au contraire la clé exacte ;
+aucune nouvelle demande n'est déduite d'un simple délai.
+
 Administration locale explicite : `bridget loop-control authorize --file
 FICHIER_PRIVE --approve` ou `bridget loop-control revoke --file FICHIER_PRIVE`.
 Loop prépare le fichier ; ne jamais mettre son contenu dans les arguments ou

@@ -1,3 +1,14 @@
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -7,7 +7,7 @@
+ ]
+ 
+ [workspace.package]
+-version = "0.8.29"
++version = "0.8.30"
+ edition = "2024"
+ license = "MIT"
+ 
 --- a/Cargo.lock
 +++ b/Cargo.lock
 @@ -192,7 +192,7 @@
@@ -27,17 +38,6 @@
  dependencies = [
   "bridget-core",
   "libc",
---- a/Cargo.toml
-+++ b/Cargo.toml
-@@ -7,7 +7,7 @@
- ]
- 
- [workspace.package]
--version = "0.8.29"
-+version = "0.8.30"
- edition = "2024"
- license = "MIT"
- 
 --- a/crates/bridget-daemon/src/cli.rs
 +++ b/crates/bridget-daemon/src/cli.rs
 @@ -1,4 +1,6 @@
@@ -55,7 +55,20 @@
          "guichet" => cmd_guichet(&args[2..]),
          "queue" => cmd_queue(&args[2..]),
          "cancel" => cmd_cancel(&args[2..]),
-@@ -5133,6 +5136,10 @@
+@@ -5072,7 +5075,11 @@
+             crate::cli_table::exit(1);
+         }
+         Err(error) => {
+-            eprintln!("daemon inaccessible: {error}");
++            if std::env::var_os("BRIDGET_LOOP_CONTROL_FILE").is_some() {
++                eprintln!("bridget envoi de boucle non confirmé: {error}");
++            } else {
++                eprintln!("daemon inaccessible: {error}");
++            }
+             crate::cli_table::exit(1);
+         }
+     }
+@@ -5133,6 +5140,10 @@
      identity: Option<&crate::mcp_identity::ResolvedIdentity>,
      project_root: Option<&std::path::Path>,
  ) -> Result<DaemonToWrapper, String> {
@@ -66,7 +79,7 @@
      let mut connection = DaemonConnection::connect(path).map_err(|error| error.to_string())?;
      match connection
          .exchange(&WrapperToDaemon::RoleHandshake {
-@@ -5160,6 +5167,7 @@
+@@ -5160,6 +5171,7 @@
      }
  
      let mut requested_capabilities = vec![ClientCapability::SendIdempotent];
@@ -74,7 +87,7 @@
      if message.cross_project_reason.is_some() || project_root.is_some() { requested_capabilities.push(ClientCapability::CommunicationProjectsV1); }
      if message.intent == Some(bridget_core::MessageIntent::StoreOnly) { requested_capabilities.push(ClientCapability::SendInformationV1); }
      match connection
-@@ -5172,6 +5180,7 @@
+@@ -5172,6 +5184,7 @@
      {
          DaemonToWrapper::ClientWelcome { capabilities, build_id, .. }
              if capabilities.contains(&ClientCapability::SendIdempotent) => {
@@ -82,7 +95,7 @@
              if message.intent == Some(bridget_core::MessageIntent::StoreOnly) && !capabilities.contains(&ClientCapability::SendInformationV1) {
                  return Err("information_unsupported : aucun envoi effectué, aucun remplacement par un message normal ; chargez un daemon compatible pour cet avis".into());
              }
-@@ -5196,6 +5205,10 @@
+@@ -5196,6 +5209,10 @@
      {
          crate::communication::client::announce_client_project(&mut connection, root)
              .map_err(|error| error.to_string())?;
@@ -93,6 +106,274 @@
      }
  
      connection
+--- a/crates/bridget-daemon/src/daemon.rs
++++ b/crates/bridget-daemon/src/daemon.rs
+@@ -18,6 +18,8 @@
+ mod mobile_artifacts;
+ mod mobile_tasks;
+ mod mobile_questions;
++
++pub(crate) mod loop_control;
+ 
+ use bridget_core::{CircuitBreaker, Deduplicator, EnvelopeGuard, Router, RouterAction};
+ use bridget_transport::greffe_authorization::{
+@@ -1148,6 +1150,7 @@
+     /// Une négociation appartient à la connexion, tandis que le scope peut
+     /// volontairement être partagé par plusieurs retries coopératifs.
+     client_negotiations: HashMap<String, NegotiatedClient>,
++    loop_control_connections: HashMap<String, String>,
+     /// La capacité du guichet ne dépend jamais d'un nom déclaré : elle est
+     /// attachée à cette négociation de service et disparaît avec la connexion.
+     service_negotiations: HashMap<String, NegotiatedService>,
+@@ -4887,6 +4890,7 @@
+             pending_candidate_probes_v2: HashMap::new(),
+             terminal_sessions: HashSet::new(),
+             client_negotiations: HashMap::new(),
++            loop_control_connections: HashMap::new(),
+             service_negotiations: HashMap::new(),
+             peer_uids: HashMap::new(),
+             coordination_subscriptions: HashMap::new(),
+@@ -7449,6 +7453,7 @@
+         st.worker_probe_connections.remove(&conn_id);
+         st.terminal_sessions.remove(&conn_id);
+         st.client_negotiations.remove(&conn_id);
++        st.loop_control_connections.remove(&conn_id);
+         st.human_thread_watches.remove(&conn_id);
+         st.lineage_watches.remove(&conn_id);
+         if let Some(journal) = st.lineage_journals.remove(&conn_id)
+@@ -11064,6 +11069,8 @@
+         && !st.conn_names.contains_key(conn)
+     {
+         GuidanceActor::AttachedHuman
++    } else if let Some(actor) = loop_control::actor(st, conn) {
++        actor
+     } else if ui {
+         GuidanceActor::BareClient
+     } else if let Some((agent, _)) = &identity {
+@@ -11166,7 +11173,7 @@
+         crate::referent_control::Admission::Deferred { .. }
+     );
+     let (pair_count, last_pair, target_count, third_target) = if action == GuidanceAction::Interrupt
+-        && let GuidanceActor::Agent { id } = &actor
++        && let GuidanceActor::Agent { id } | GuidanceActor::Loop { id } = &actor
+     {
+         let (pair, last) = st
+             .idempotency
+@@ -11183,7 +11190,8 @@
+     Ok(GuidanceFacts {
+         action,
+         path,
+-        identity_attested: identity.is_some() || actor == GuidanceActor::AttachedHuman,
++        identity_attested: identity.is_some() || actor == GuidanceActor::AttachedHuman
++            || matches!(actor, GuidanceActor::Loop { .. }),
+         actor_is_target: identity.as_ref().is_some_and(|(agent, _)| agent == target),
+         actor_is_parent: parent,
+         actor_is_child: child,
+@@ -11222,7 +11230,7 @@
+ ) -> (&str, &'static str, &'static str) {
+     use crate::guidance::{GuidanceAction, GuidanceActor, GuidancePath};
+     let actor = match actor {
+-        GuidanceActor::Agent { id } => id.as_str(),
++        GuidanceActor::Agent { id } | GuidanceActor::Loop { id } => id.as_str(),
+         GuidanceActor::AttachedHuman => "human",
+         GuidanceActor::BareClient => "unattested",
+         GuidanceActor::InternalPause => "internal_pause",
+@@ -11320,6 +11328,10 @@
+     child_proof: bool,
+     id: &str,
+ ) -> Result<crate::guidance::GuidanceFacts, (String, String)> {
++    if let Some(conn) = conn {
++        loop_control::check(st, conn, routing_agent_id(target), action, path)
++            .map_err(|reason| { record_guidance_refusal(st, Some(conn), target, id, Some(action), path, reason); ("intent_not_permitted".into(), loop_control::guidance_recovery(reason)) })?;
++    }
+     let facts = guidance_facts(
+         st,
+         conn,
+@@ -11350,6 +11362,14 @@
+         {
+             warn!("refus de guidage non journalisé : {error}");
+         }
++        let reason = if matches!(facts.actor, crate::guidance::GuidanceActor::Loop { .. }) {
++            format!(
++                "{} Détail natif : {reason}",
++                loop_control::guidance_recovery(code)
++            )
++        } else {
++            reason
++        };
+         return Err((code.into(), reason));
+     }
+     Ok(facts)
+@@ -11794,6 +11814,8 @@
+ ) -> Result<PreparedDispatch, (&'static str, String)> {
+     let routing_from = routing_agent_id(&message.from).to_string();
+     let routing_to = routing_agent_id(&message.to).to_string();
++    loop_control::check_message(st, conn_id, message)
++        .map_err(|code| ("intent_not_permitted", loop_control::guidance_recovery(code)))?;
+     match crate::agent_tracking::dormant(st.store.connection(),&routing_to) {
+         Ok(true) if !native_task_exchange && message.intent != Some(bridget_core::MessageIntent::StoreOnly)=>return Err(("agent_dormant",crate::agent_tracking::DORMANT_MESSAGE.into())),
+         Ok(true)=>{},
+@@ -15964,6 +15986,7 @@
+                             )
+                         })
+                 }
++                WrapperToDaemon::LoopControl { request: bridget_transport::protocol::LoopControlRequest::Authorize { .. } } => true,
+                 WrapperToDaemon::QueueList { .. } | WrapperToDaemon::QueueEditRequest { .. } => {
+                     true
+                 }
+@@ -16171,6 +16194,7 @@
+                 | WrapperToDaemon::ObservationCapabilities { .. }
+                 | WrapperToDaemon::ObservationGap { .. }
+                 | WrapperToDaemon::ClientHello { .. }
++                | WrapperToDaemon::LoopControl { .. }
+                 | WrapperToDaemon::ArtifactPublish { .. }
+                 | WrapperToDaemon::ArtifactRead { .. }
+                 | WrapperToDaemon::ProjectRoundRequest { .. }
+@@ -16308,6 +16332,7 @@
+                 WrapperToDaemon::QueueEditRequest { .. } => None,
+                 WrapperToDaemon::WakeRequest { .. } if !st.client_negotiations.contains_key(conn_id) => Some(ClientRefusal::NegotiationRequired),
+                 WrapperToDaemon::WakeRequest { .. } => None,
++                WrapperToDaemon::LoopControl { .. } => None,
+                 WrapperToDaemon::QueueList { .. } if !st.client_negotiations.contains_key(conn_id) => Some(ClientRefusal::NegotiationRequired),
+                 WrapperToDaemon::QueueList { .. } if !st.client_negotiations.get(conn_id).is_some_and(|n| n.capabilities.contains(&ClientCapability::QueueListV1)) => Some(ClientRefusal::CapabilityNotNegotiated),
+                 WrapperToDaemon::QueueList { .. } => None,
+@@ -16581,6 +16606,12 @@
+     }
+ 
+     match msg {
++        WrapperToDaemon::LoopControl { request } => {
++            let mut st = state.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
++            Some(DaemonToWrapper::LoopControlResult {
++                result: loop_control::handle(conn_id, request, &mut st),
++            })
++        }
+         // Le contrat est disponible ; T008 ajoute son admission authentifiée.
+         // Aucune trame distante ne rejoint entre-temps la voie locale.
+         WrapperToDaemon::WorkerHello { .. }
+@@ -18179,7 +18210,7 @@
+                     }
+                     matches!(
+                         capability,
+-                        ClientCapability::MobileAdministrationV1 | ClientCapability::MobileOperationsV1
++                        ClientCapability::MobileAdministrationV1 | ClientCapability::LoopControlV1 | ClientCapability::MobileOperationsV1
+                             | ClientCapability::UserInputV1
+                             | ClientCapability::SendIdempotent
+                             | ClientCapability::SendInformationV1
+--- a/crates/bridget-daemon/src/daemon_spec099_classic_delivery_tests.rs
++++ b/crates/bridget-daemon/src/daemon_spec099_classic_delivery_tests.rs
+@@ -1,4 +1,6 @@
+     use super::*;
++    #[path="daemon/loop_control_tests.rs"]
++    mod loop_control_tests;
+     use bridget_core::BridgetMessage;
+     use std::os::unix::fs::DirBuilderExt;
+ 
+--- a/crates/bridget-daemon/src/guidance.rs
++++ b/crates/bridget-daemon/src/guidance.rs
+@@ -25,6 +25,7 @@
+     AttachedHuman,
+     BareClient,
+     Agent { id: String },
++    Loop { id: String },
+     InternalPause,
+ }
+ 
+@@ -145,7 +146,10 @@
+             })
+         };
+     }
+-    if !(facts.actor_is_parent || facts.action == MidTurnDelivery && facts.actor_is_child) {
++    if !(facts.actor_is_parent || facts.action == MidTurnDelivery && facts.actor_is_child
++        || matches!(facts.actor, GuidanceActor::Loop { .. })
++            && facts.path == GuidancePath::SendIdempotent
++            && matches!(facts.action, GuidanceAction::Steer | Interrupt)) {
+         return Err(IntentNotPermitted {
+             reason: "not_parent",
+         });
+--- a/crates/bridget-daemon/src/store.rs
++++ b/crates/bridget-daemon/src/store.rs
+@@ -145,6 +145,7 @@
+     fn init_schema(conn: &Connection) -> Result<(), StoreError> {
+         crate::agent_tracking::ensure_schema(conn).map_err(StoreError::Sqlite)?;
+         wake_schedules::ensure_schema(conn)?;
++        crate::daemon::loop_control::ensure_schema(conn).map_err(StoreError::Sqlite)?;
+         observation_missed::ensure_schema(conn)?;
+         crate::referent_control::ensure_schema(conn).map_err(StoreError::Sqlite)?;
+         crate::human_inbox::ensure_schema(conn).map_err(StoreError::Sqlite)?;
+--- a/crates/bridget-transport/src/protocol.rs
++++ b/crates/bridget-transport/src/protocol.rs
+@@ -196,6 +196,8 @@
+ #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+ #[serde(rename_all = "snake_case")]
+ pub enum ClientCapability {
++    /// Contrôle limité d'une boucle264 ; ne confère aucune identité d'agent.
++    LoopControlV1,
+     UserInputV1,
+     MobileAdministrationV1,
+     MobileOperationsV1,
+@@ -236,6 +238,46 @@
+     AgentTrackingV1,
+     /// Admission de flotte168 : reste distincte de la forme163.
+     AutoDelegateV2,
++}
++
++/// Mandat explicite d'une boucle ; le secret n'est jamais un champ du message.
++#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
++#[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
++pub enum LoopControlRequest {
++    Authorize {
++        token: String,
++        issuer_scope: String,
++        project: CommunicationProject,
++        targets: Vec<String>,
++        intent: bridget_core::MessageIntent,
++    },
++    Use { token: String },
++    Revoke { token: String },
++}
++
++impl std::fmt::Debug for LoopControlRequest {
++    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
++        formatter.write_str("LoopControlRequest(<secret omis>)")
++    }
++}
++
++#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
++#[serde(tag = "status", rename_all = "snake_case", deny_unknown_fields)]
++pub enum LoopControlOutcome {
++    Authorized {
++        grant_id: String,
++    },
++    /// Preuve liée pour consulter un reçu ; ne prouve pas un droit d'émission actif.
++    Bound {
++        grant_id: String,
++    },
++    Revoked {
++        grant_id: String,
++    },
++    Refused {
++        code: String,
++        recovery: String,
++    },
+ }
+ 
+ /// Édition finale de file159B ; aucune phase intermédiaire n'est publique.
+@@ -5316,6 +5358,7 @@
+ #[serde(tag = "type")]
+ #[allow(clippy::large_enum_variant)]
+ pub enum WrapperToDaemon {
++    LoopControl { request: LoopControlRequest },
+     AgentTracking { request: crate::agent_tracking::AgentTrackingRequest },
+     WorkspaceRepairResult {
+         task_id: String,
+@@ -6373,6 +6416,7 @@
+ #[derive(Debug, Clone, Serialize, Deserialize)]
+ #[serde(tag = "type")]
+ pub enum DaemonToWrapper {
++    LoopControlResult { result: LoopControlOutcome },
+     AgentTrackingResult { result: serde_json::Value },
+     ProviderCatalogueRefresh { worker: WorkerIdentity, connection_epoch: String, refresh_id: String },
+     WorkspaceRepairControl {
 --- /dev/null
 +++ b/crates/bridget-daemon/src/cli/loop_control.rs
 @@ -0,0 +1,173 @@
@@ -269,147 +550,9 @@
 +        std::fs::remove_dir(root).unwrap();
 +    }
 +}
---- a/crates/bridget-daemon/src/daemon.rs
-+++ b/crates/bridget-daemon/src/daemon.rs
-@@ -18,6 +18,8 @@
- mod mobile_artifacts;
- mod mobile_tasks;
- mod mobile_questions;
-+
-+pub(crate) mod loop_control;
- 
- use bridget_core::{CircuitBreaker, Deduplicator, EnvelopeGuard, Router, RouterAction};
- use bridget_transport::greffe_authorization::{
-@@ -1148,6 +1150,7 @@
-     /// Une négociation appartient à la connexion, tandis que le scope peut
-     /// volontairement être partagé par plusieurs retries coopératifs.
-     client_negotiations: HashMap<String, NegotiatedClient>,
-+    loop_control_connections: HashMap<String, String>,
-     /// La capacité du guichet ne dépend jamais d'un nom déclaré : elle est
-     /// attachée à cette négociation de service et disparaît avec la connexion.
-     service_negotiations: HashMap<String, NegotiatedService>,
-@@ -4887,6 +4890,7 @@
-             pending_candidate_probes_v2: HashMap::new(),
-             terminal_sessions: HashSet::new(),
-             client_negotiations: HashMap::new(),
-+            loop_control_connections: HashMap::new(),
-             service_negotiations: HashMap::new(),
-             peer_uids: HashMap::new(),
-             coordination_subscriptions: HashMap::new(),
-@@ -7449,6 +7453,7 @@
-         st.worker_probe_connections.remove(&conn_id);
-         st.terminal_sessions.remove(&conn_id);
-         st.client_negotiations.remove(&conn_id);
-+        st.loop_control_connections.remove(&conn_id);
-         st.human_thread_watches.remove(&conn_id);
-         st.lineage_watches.remove(&conn_id);
-         if let Some(journal) = st.lineage_journals.remove(&conn_id)
-@@ -11064,6 +11069,8 @@
-         && !st.conn_names.contains_key(conn)
-     {
-         GuidanceActor::AttachedHuman
-+    } else if let Some(actor) = loop_control::actor(st, conn) {
-+        actor
-     } else if ui {
-         GuidanceActor::BareClient
-     } else if let Some((agent, _)) = &identity {
-@@ -11166,7 +11173,7 @@
-         crate::referent_control::Admission::Deferred { .. }
-     );
-     let (pair_count, last_pair, target_count, third_target) = if action == GuidanceAction::Interrupt
--        && let GuidanceActor::Agent { id } = &actor
-+        && let GuidanceActor::Agent { id } | GuidanceActor::Loop { id } = &actor
-     {
-         let (pair, last) = st
-             .idempotency
-@@ -11183,7 +11190,8 @@
-     Ok(GuidanceFacts {
-         action,
-         path,
--        identity_attested: identity.is_some() || actor == GuidanceActor::AttachedHuman,
-+        identity_attested: identity.is_some() || actor == GuidanceActor::AttachedHuman
-+            || matches!(actor, GuidanceActor::Loop { .. }),
-         actor_is_target: identity.as_ref().is_some_and(|(agent, _)| agent == target),
-         actor_is_parent: parent,
-         actor_is_child: child,
-@@ -11222,7 +11230,7 @@
- ) -> (&str, &'static str, &'static str) {
-     use crate::guidance::{GuidanceAction, GuidanceActor, GuidancePath};
-     let actor = match actor {
--        GuidanceActor::Agent { id } => id.as_str(),
-+        GuidanceActor::Agent { id } | GuidanceActor::Loop { id } => id.as_str(),
-         GuidanceActor::AttachedHuman => "human",
-         GuidanceActor::BareClient => "unattested",
-         GuidanceActor::InternalPause => "internal_pause",
-@@ -11320,6 +11328,10 @@
-     child_proof: bool,
-     id: &str,
- ) -> Result<crate::guidance::GuidanceFacts, (String, String)> {
-+    if let Some(conn) = conn {
-+        loop_control::check(st, conn, routing_agent_id(target), action, path)
-+            .map_err(|reason| { record_guidance_refusal(st, Some(conn), target, id, Some(action), path, reason); ("intent_not_permitted".into(), loop_control::guidance_recovery(reason)) })?;
-+    }
-     let facts = guidance_facts(
-         st,
-         conn,
-@@ -11794,6 +11806,8 @@
- ) -> Result<PreparedDispatch, (&'static str, String)> {
-     let routing_from = routing_agent_id(&message.from).to_string();
-     let routing_to = routing_agent_id(&message.to).to_string();
-+    loop_control::check_message(st, conn_id, message)
-+        .map_err(|code| ("intent_not_permitted", loop_control::guidance_recovery(code)))?;
-     match crate::agent_tracking::dormant(st.store.connection(),&routing_to) {
-         Ok(true) if !native_task_exchange && message.intent != Some(bridget_core::MessageIntent::StoreOnly)=>return Err(("agent_dormant",crate::agent_tracking::DORMANT_MESSAGE.into())),
-         Ok(true)=>{},
-@@ -15964,6 +15978,7 @@
-                             )
-                         })
-                 }
-+                WrapperToDaemon::LoopControl { request: bridget_transport::protocol::LoopControlRequest::Authorize { .. } } => true,
-                 WrapperToDaemon::QueueList { .. } | WrapperToDaemon::QueueEditRequest { .. } => {
-                     true
-                 }
-@@ -16171,6 +16186,7 @@
-                 | WrapperToDaemon::ObservationCapabilities { .. }
-                 | WrapperToDaemon::ObservationGap { .. }
-                 | WrapperToDaemon::ClientHello { .. }
-+                | WrapperToDaemon::LoopControl { .. }
-                 | WrapperToDaemon::ArtifactPublish { .. }
-                 | WrapperToDaemon::ArtifactRead { .. }
-                 | WrapperToDaemon::ProjectRoundRequest { .. }
-@@ -16308,6 +16324,7 @@
-                 WrapperToDaemon::QueueEditRequest { .. } => None,
-                 WrapperToDaemon::WakeRequest { .. } if !st.client_negotiations.contains_key(conn_id) => Some(ClientRefusal::NegotiationRequired),
-                 WrapperToDaemon::WakeRequest { .. } => None,
-+                WrapperToDaemon::LoopControl { .. } => None,
-                 WrapperToDaemon::QueueList { .. } if !st.client_negotiations.contains_key(conn_id) => Some(ClientRefusal::NegotiationRequired),
-                 WrapperToDaemon::QueueList { .. } if !st.client_negotiations.get(conn_id).is_some_and(|n| n.capabilities.contains(&ClientCapability::QueueListV1)) => Some(ClientRefusal::CapabilityNotNegotiated),
-                 WrapperToDaemon::QueueList { .. } => None,
-@@ -16581,6 +16598,12 @@
-     }
- 
-     match msg {
-+        WrapperToDaemon::LoopControl { request } => {
-+            let mut st = state.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-+            Some(DaemonToWrapper::LoopControlResult {
-+                result: loop_control::handle(conn_id, request, &mut st),
-+            })
-+        }
-         // Le contrat est disponible ; T008 ajoute son admission authentifiée.
-         // Aucune trame distante ne rejoint entre-temps la voie locale.
-         WrapperToDaemon::WorkerHello { .. }
-@@ -18179,7 +18202,7 @@
-                     }
-                     matches!(
-                         capability,
--                        ClientCapability::MobileAdministrationV1 | ClientCapability::MobileOperationsV1
-+                        ClientCapability::MobileAdministrationV1 | ClientCapability::LoopControlV1 | ClientCapability::MobileOperationsV1
-                             | ClientCapability::UserInputV1
-                             | ClientCapability::SendIdempotent
-                             | ClientCapability::SendInformationV1
 --- /dev/null
 +++ b/crates/bridget-daemon/src/daemon/loop_control.rs
-@@ -0,0 +1,286 @@
+@@ -0,0 +1,353 @@
 +//! Mandat264 : contrôle d'une boucle sans identité humaine ni filiation empruntée.
 +use super::*;
 +use bridget_core::MessageIntent;
@@ -469,6 +612,12 @@
 +}
 +
 +fn refusal(code: &str) -> LoopControlOutcome {
++    if matches!(
++        code,
++        "loop_control_audit_unavailable" | "loop_control_storage_unavailable"
++    ) {
++        return LoopControlOutcome::Refused { code: code.into(), recovery: "Vérifier le stockage du mandat et du journal durable avant de reprendre cette même opération. Aucun changement n'est confirmé ; conserver le fichier privé et ne pas créer de mandat de remplacement. Ce refus concerne cette opération ; les autres travaux autorisés suivent leur propre état.".into() };
++    }
 +    LoopControlOutcome::Refused {
 +        code: code.into(),
 +        recovery: format!(
@@ -488,19 +637,51 @@
 +        "loop_control_mode_mismatch" => {
 +            "Reprendre le mode inscrit dans l'enveloppe et le mandat d'origine. Pour changer de mode, demander le choix à l'utilisateur avant de créer une nouvelle boucle ; ne pas modifier une remise déjà réservée."
 +        }
-+        "loop_control_scope_mismatch" | "loop_control_project_changed" => {
++        "loop_control_scope_mismatch"
++        | "loop_control_project_changed"
++        | "loop_control_project_unavailable"
++        | "loop_target_project_unavailable" => {
 +            "Comparer la portée de remise et le projet attesté de la cible au mandat de cette boucle. Reprendre le contexte d'origine ; un déplacement ou un changement de projet exige une nouvelle autorisation ciblée."
 +        }
 +        "loop_target_do_not_disturb" => {
-+            "Attendre la fin du mode ne pas déranger de cette cible, ou demander à son propriétaire de le lever si cette action est autorisée. Conserver la remise sans choisir un autre mode."
++            "Attendre la fin du mode ne pas déranger de cette cible, ou demander à son propriétaire de le lever si cette action est autorisée. Conserver le mode choisi."
++        }
++        "loop_target_unavailable" => {
++            "Vérifier la connexion et l'identité de cette cible avant de reprendre. Cette route n'est plus attestée ; aucune relance d'agent ni autre destinataire n'est autorisé par ce refus."
++        }
++        "referent_paused" => {
++            "Attendre la levée de la pause par le référent. Cette boucle ne peut pas lever la pause ni choisir un autre mode pour la contourner."
++        }
++        "mission_active" => {
++            "Conserver la mission native active. Si son arrêt est nécessaire, demander une décision ciblée à son propriétaire ; ce mandat de boucle ne permet pas de l'interrompre."
++        }
++        "interrupt_rate_limited" => {
++            "Attendre l'échéance retry_after_secs du refus natif avant toute nouvelle demande d'interruption. Une autre clé ou un autre mode ne permet pas de contourner cette limite."
 +        }
 +        _ => {
 +            "Vérifier la lecture du mandat privé et la réponse native. Conserver la même clé, le même fichier et la même enveloppe tant que l'issue n'est pas établie."
 +        }
 +    };
 +    format!(
-+        "{action} Cause constatée : {code}. Ce refus concerne cet envoi de boucle ; les autres travaux autorisés suivent leur propre état."
++        "{action} Cause constatée : {code}. Lire le reçu de cette clé : un état rejected est définitif pour cette clé. Après résolution vérifiée de la cause, une nouvelle demande exige de nouveaux id et issued_at ; conserver la cible, le corps et le mode autorisés. Une issue non confirmée exige au contraire la relecture exacte de la même clé et de la même enveloppe. Ce refus concerne cet envoi de boucle ; les autres travaux autorisés suivent leur propre état."
 +    )
++}
++
++fn audit(
++    tx: &rusqlite::Transaction<'_>,
++    id: &str,
++    action: &str,
++    actor: &str,
++) -> Result<(), &'static str> {
++    let target = format!("loop:{id}");
++    let body =
++        serde_json::json!({"event":"loop_control", "action":action, "grant_id":id}).to_string();
++    let mut message = bridget_core::BridgetMessage::new(actor, &target, &body);
++    message.origin = Some(bridget_core::MessageOrigin::System);
++    message.intent = Some(MessageIntent::StoreOnly);
++    // Journal existant, aucune remise ni notification. Même transaction que le mandat.
++    crate::store::record_message_in_transaction(tx, &message, &format!("loop-control:{id}"))
++        .map_err(|_| "loop_control_audit_unavailable")
 +}
 +
 +pub(super) fn handle(
@@ -563,14 +744,20 @@
 +                let payload =
 +                    serde_json::to_string(&grant).map_err(|_| "invalid_loop_authorization")?;
 +                let db = st.store.connection();
-+                db.execute(
++                let tx = db
++                    .unchecked_transaction()
++                    .map_err(|_| "loop_control_storage_unavailable")?;
++                tx.execute(
 +                    "INSERT OR IGNORE INTO loop_control_grants(grant_id,payload) VALUES(?1,?2)",
 +                    params![id, payload],
 +                )
 +                .map_err(|_| "loop_control_storage_unavailable")?;
-+                if load(db, &id)? != grant {
++                if load(&tx, &id)? != grant {
 +                    return Err("loop_authorization_mismatch");
 +                }
++                audit(&tx, &id, "authorize", "human")?;
++                tx.commit()
++                    .map_err(|_| "loop_control_storage_unavailable")?;
 +                Ok(LoopControlOutcome::Authorized { grant_id: id })
 +            }
 +            LoopControlRequest::Use { .. } => {
@@ -593,14 +780,25 @@
 +                {
 +                    return Err("loop_control_scope_mismatch");
 +                }
++                let tx = st
++                    .store
++                    .connection()
++                    .unchecked_transaction()
++                    .map_err(|_| "loop_control_storage_unavailable")?;
++                audit(&tx, &id, "bind", &format!("loop:{id}"))?;
++                tx.commit()
++                    .map_err(|_| "loop_control_storage_unavailable")?;
 +                st.loop_control_connections.insert(conn.into(), id.clone());
 +                Ok(LoopControlOutcome::Bound { grant_id: id })
 +            }
 +            LoopControlRequest::Revoke { .. } => {
 +                // Le secret de la boucle ne donne que le retrait de ce mandat.
-+                let changed = st
++                let tx = st
 +                    .store
 +                    .connection()
++                    .unchecked_transaction()
++                    .map_err(|_| "loop_control_storage_unavailable")?;
++                let changed = tx
 +                    .execute(
 +                        "UPDATE loop_control_grants SET revoked=1 WHERE grant_id=?1",
 +                        [&id],
@@ -609,6 +807,9 @@
 +                if changed == 0 {
 +                    return Err("loop_control_unknown");
 +                }
++                audit(&tx, &id, "revoke", &format!("loop:{id}"))?;
++                tx.commit()
++                    .map_err(|_| "loop_control_storage_unavailable")?;
 +                Ok(LoopControlOutcome::Revoked { grant_id: id })
 +            }
 +        }
@@ -656,9 +857,18 @@
 +    {
 +        return Err("loop_target_not_authorized");
 +    }
-+    if connection_communication_project(st, conn).as_ref() != Some(&grant.project)
-+        || agent_communication_project(st, target).as_ref() != Some(&grant.project)
-+    {
++    let route = st
++        .router
++        .get_agent(target)
++        .ok_or("loop_target_unavailable")?;
++    if live_connection_identity(st, &route.connection_id).is_none() {
++        return Err("loop_target_unavailable");
++    }
++    let source_project =
++        connection_communication_project(st, conn).ok_or("loop_control_project_unavailable")?;
++    let target_project =
++        agent_communication_project(st, target).ok_or("loop_target_project_unavailable")?;
++    if source_project != grant.project || target_project != grant.project {
 +        return Err("loop_control_project_changed");
 +    }
 +    if let Some(instance) = st
@@ -698,7 +908,7 @@
 +}
 --- /dev/null
 +++ b/crates/bridget-daemon/src/daemon/loop_control_tests.rs
-@@ -0,0 +1,340 @@
+@@ -0,0 +1,447 @@
 +use super::*;
 +use crate::guidance::{GuidanceAction, GuidancePath};
 +use bridget_core::MessageIntent;
@@ -952,7 +1162,7 @@
 +        )
 +        .unwrap_err()
 +        .1
-+        .contains("loop_control_project_changed")
++        .contains("loop_target_project_unavailable")
 +    );
 +}
 +
@@ -1039,50 +1249,116 @@
 +        "referent_paused"
 +    );
 +}
---- a/crates/bridget-daemon/src/daemon_spec099_classic_delivery_tests.rs
-+++ b/crates/bridget-daemon/src/daemon_spec099_classic_delivery_tests.rs
-@@ -1,4 +1,6 @@
-     use super::*;
-+    #[path="daemon/loop_control_tests.rs"]
-+    mod loop_control_tests;
-     use bridget_core::BridgetMessage;
-     use std::os::unix::fs::DirBuilderExt;
- 
---- a/crates/bridget-daemon/src/guidance.rs
-+++ b/crates/bridget-daemon/src/guidance.rs
-@@ -25,6 +25,7 @@
-     AttachedHuman,
-     BareClient,
-     Agent { id: String },
-+    Loop { id: String },
-     InternalPause,
- }
- 
-@@ -145,7 +146,10 @@
-             })
-         };
-     }
--    if !(facts.actor_is_parent || facts.action == MidTurnDelivery && facts.actor_is_child) {
-+    if !(facts.actor_is_parent || facts.action == MidTurnDelivery && facts.actor_is_child
-+        || matches!(facts.actor, GuidanceActor::Loop { .. })
-+            && facts.path == GuidancePath::SendIdempotent
-+            && matches!(facts.action, GuidanceAction::Steer | Interrupt)) {
-         return Err(IntentNotPermitted {
-             reason: "not_parent",
-         });
---- a/crates/bridget-daemon/src/store.rs
-+++ b/crates/bridget-daemon/src/store.rs
-@@ -145,6 +145,7 @@
-     fn init_schema(conn: &Connection) -> Result<(), StoreError> {
-         crate::agent_tracking::ensure_schema(conn).map_err(StoreError::Sqlite)?;
-         wake_schedules::ensure_schema(conn)?;
-+        crate::daemon::loop_control::ensure_schema(conn).map_err(StoreError::Sqlite)?;
-         observation_missed::ensure_schema(conn)?;
-         crate::referent_control::ensure_schema(conn).map_err(StoreError::Sqlite)?;
-         crate::human_inbox::ensure_schema(conn).map_err(StoreError::Sqlite)?;
++
++#[test]
++fn spec264_loop_audit_is_atomic_with_the_grant_and_never_contains_the_token() {
++    let (state, _root, _peers) = loop_fixture(MessageIntent::SteerCurrent);
++    let mut st = state.lock().unwrap();
++    let bodies: Vec<String> = st
++        .store
++        .connection()
++        .prepare(
++            "SELECT body FROM ledger WHERE conversation_key GLOB 'loop-control:*' ORDER BY ts,id",
++        )
++        .unwrap()
++        .query_map([], |row| row.get(0))
++        .unwrap()
++        .map(Result::unwrap)
++        .collect();
++    assert_eq!(bodies.len(), 2);
++    assert!(bodies.iter().all(|body| !body.contains(TOKEN)));
++    assert!(bodies.iter().any(|body| body.contains("authorize")));
++    assert!(bodies.iter().any(|body| body.contains("bind")));
++    st.store.connection().execute_batch("CREATE TRIGGER fail_loop264_audit BEFORE INSERT ON ledger BEGIN SELECT RAISE(ABORT,'fixture audit failure'); END;").unwrap();
++    let result = super::super::loop_control::handle(
++        "loop",
++        LoopControlRequest::Revoke {
++            token: TOKEN.into(),
++        },
++        &mut st,
++    );
++    assert!(
++        matches!(result, LoopControlOutcome::Refused {code,..} if code=="loop_control_audit_unavailable")
++    );
++    assert!(
++        check_guidance(
++            &st,
++            Some("loop"),
++            TARGET,
++            GuidanceAction::Steer,
++            GuidancePath::SendIdempotent,
++            None,
++            false,
++            "audit264"
++        )
++        .is_ok()
++    );
++    let new_token = "b".repeat(64);
++    let result = super::super::loop_control::handle(
++        "human-loop",
++        LoopControlRequest::Authorize {
++            token: new_token.clone(),
++            issuer_scope: "abcdefghijklmnop-loop264".into(),
++            project: bridget_transport::protocol::CommunicationProject {
++                host: "audit".into(),
++                root: "/fixture/.git".into(),
++            },
++            targets: vec![TARGET.into()],
++            intent: MessageIntent::SteerCurrent,
++        },
++        &mut st,
++    );
++    assert!(
++        matches!(result, LoopControlOutcome::Refused {code,..} if code=="loop_control_audit_unavailable")
++    );
++    assert_eq!(
++        st.store
++            .connection()
++            .query_row("SELECT count(*) FROM loop_control_grants", [], |r| r
++                .get::<_, i64>(0))
++            .unwrap(),
++        1
++    );
++    st.store
++        .connection()
++        .execute_batch("DROP TRIGGER fail_loop264_audit")
++        .unwrap();
++    assert!(matches!(
++        super::super::loop_control::handle(
++            "loop",
++            LoopControlRequest::Revoke {
++                token: TOKEN.into()
++            },
++            &mut st
++        ),
++        LoopControlOutcome::Revoked { .. }
++    ));
++    let body:String=st.store.connection().query_row("SELECT body FROM ledger WHERE body LIKE '%revoke%' AND conversation_key GLOB 'loop-control:*'", [], |r|r.get(0)).unwrap();
++    assert!(!body.contains(TOKEN));
++}
++
++#[test]
++fn spec264_loop_missing_route_never_becomes_an_agent_launch() {
++    let (state, _root, _peers) = loop_fixture(MessageIntent::SteerCurrent);
++    let mut st = state.lock().unwrap();
++    st.connections.remove("target");
++    let failure = check_guidance(
++        &st,
++        Some("loop"),
++        TARGET,
++        GuidanceAction::Steer,
++        GuidancePath::SendIdempotent,
++        None,
++        false,
++        "offline264",
++    )
++    .unwrap_err();
++    assert!(failure.1.contains("loop_target_unavailable"));
++    assert!(!st.connections.contains_key("target"));
++}
 --- /dev/null
 +++ b/crates/bridget-daemon/tests/loop264_e2e.rs
-@@ -0,0 +1,199 @@
+@@ -0,0 +1,289 @@
 +//! CLI264 → socket réelle → daemon → remise au wrapper, sans modèle ni réseau.
 +#![allow(dead_code)]
 +#[path = "support/idempotent.rs"]
@@ -1166,7 +1442,14 @@
 +    if let Some(path) = grant {
 +        command.env("BRIDGET_LOOP_CONTROL_FILE", path);
 +    }
-+    command.args(["--", "Action de qualification264"]);
++    command.args([
++        "--",
++        if id == "loop264-message" {
++            "Action initiale de qualification264"
++        } else {
++            "Action refusée pendant DND, reprise après sa levée"
++        },
++    ]);
 +    command
 +}
 +
@@ -1249,6 +1532,89 @@
 +            "send: {}",
 +            String::from_utf8_lossy(&output.stderr)
 +        );
++        if mode == "steer" {
++            target.send(WrapperToDaemon::Availability {
++                agent: RECIPIENT.into(),
++                until_secs: Some(at + 60),
++            });
++            assert!(matches!(target.receive(), DaemonToWrapper::Ack { .. }));
++            let refused = command(
++                &root,
++                &project,
++                "loop264-rejected",
++                at,
++                mode,
++                authorization.as_deref(),
++            )
++            .output()
++            .unwrap();
++            assert!(!refused.status.success());
++            let text = String::from_utf8_lossy(&refused.stderr);
++            assert!(
++                text.contains("loop_target_do_not_disturb")
++                    && text.contains("rejected")
++                    && text.contains("nouveaux id et issued_at"),
++                "{text}"
++            );
++            target.send(WrapperToDaemon::Availability {
++                agent: RECIPIENT.into(),
++                until_secs: None,
++            });
++            assert!(matches!(target.receive(), DaemonToWrapper::Ack { .. }));
++            let old = command(
++                &root,
++                &project,
++                "loop264-rejected",
++                at,
++                mode,
++                authorization.as_deref(),
++            )
++            .output()
++            .unwrap();
++            assert!(
++                !old.status.success(),
++                "la clé refusée reste finale après levée DND"
++            );
++            assert_no_delivery(&mut target);
++            target
++                .reader
++                .get_ref()
++                .set_read_timeout(Some(CLIENT_READ_TIMEOUT))
++                .unwrap();
++            let mut fresh = command(
++                &root,
++                &project,
++                "loop264-after-dnd",
++                at + 1,
++                mode,
++                authorization.as_deref(),
++            );
++            let sender = thread::spawn(move || {
++                let output = fresh.output().unwrap();
++                if !output.status.success() {
++                    eprintln!(
++                        "nouvel envoi après DND : {}",
++                        String::from_utf8_lossy(&output.stderr)
++                    );
++                }
++                output
++            });
++            let DaemonToWrapper::DeliverIdempotent {
++                message,
++                delivery_id,
++                delivery_generation,
++                ..
++            } = receive_delivery(&mut target)
++            else {
++                unreachable!()
++            };
++            assert_eq!(message.intent, intent);
++            target.send(WrapperToDaemon::DeliverAcked {
++                delivery_id,
++                delivery_generation,
++            });
++            assert!(sender.join().unwrap().status.success());
++        }
 +        if let Some(path) = authorization.as_ref() {
 +            let output = isolated_command(&root)
 +                .args(["loop-control", "revoke", "--file"])
@@ -1282,67 +1648,3 @@
 +        fs::remove_dir_all(root).unwrap();
 +    }
 +}
---- a/crates/bridget-transport/src/protocol.rs
-+++ b/crates/bridget-transport/src/protocol.rs
-@@ -196,6 +196,8 @@
- #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
- #[serde(rename_all = "snake_case")]
- pub enum ClientCapability {
-+    /// Contrôle limité d'une boucle264 ; ne confère aucune identité d'agent.
-+    LoopControlV1,
-     UserInputV1,
-     MobileAdministrationV1,
-     MobileOperationsV1,
-@@ -236,6 +238,36 @@
-     AgentTrackingV1,
-     /// Admission de flotte168 : reste distincte de la forme163.
-     AutoDelegateV2,
-+}
-+
-+/// Mandat explicite d'une boucle ; le secret n'est jamais un champ du message.
-+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
-+#[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
-+pub enum LoopControlRequest {
-+    Authorize {
-+        token: String,
-+        issuer_scope: String,
-+        project: CommunicationProject,
-+        targets: Vec<String>,
-+        intent: bridget_core::MessageIntent,
-+    },
-+    Use { token: String },
-+    Revoke { token: String },
-+}
-+
-+impl std::fmt::Debug for LoopControlRequest {
-+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-+        formatter.write_str("LoopControlRequest(<secret omis>)")
-+    }
-+}
-+
-+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-+#[serde(tag = "status", rename_all = "snake_case", deny_unknown_fields)]
-+pub enum LoopControlOutcome {
-+    Authorized { grant_id: String },
-+    Bound { grant_id: String },
-+    Revoked { grant_id: String },
-+    Refused { code: String, recovery: String },
- }
- 
- /// Édition finale de file159B ; aucune phase intermédiaire n'est publique.
-@@ -5316,6 +5348,7 @@
- #[serde(tag = "type")]
- #[allow(clippy::large_enum_variant)]
- pub enum WrapperToDaemon {
-+    LoopControl { request: LoopControlRequest },
-     AgentTracking { request: crate::agent_tracking::AgentTrackingRequest },
-     WorkspaceRepairResult {
-         task_id: String,
-@@ -6373,6 +6406,7 @@
- #[derive(Debug, Clone, Serialize, Deserialize)]
- #[serde(tag = "type")]
- pub enum DaemonToWrapper {
-+    LoopControlResult { result: LoopControlOutcome },
-     AgentTrackingResult { result: serde_json::Value },
-     ProviderCatalogueRefresh { worker: WorkerIdentity, connection_epoch: String, refresh_id: String },
-     WorkspaceRepairControl {

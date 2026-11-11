@@ -251,7 +251,7 @@ fn spec264_loop_scope_project_and_unattested_authorization_are_refused() {
         )
         .unwrap_err()
         .1
-        .contains("loop_control_project_changed")
+        .contains("loop_target_project_unavailable")
     );
 }
 
@@ -337,4 +337,111 @@ fn spec264_loop_respects_pause_and_do_not_disturb() {
         .0,
         "referent_paused"
     );
+}
+
+#[test]
+fn spec264_loop_audit_is_atomic_with_the_grant_and_never_contains_the_token() {
+    let (state, _root, _peers) = loop_fixture(MessageIntent::SteerCurrent);
+    let mut st = state.lock().unwrap();
+    let bodies: Vec<String> = st
+        .store
+        .connection()
+        .prepare(
+            "SELECT body FROM ledger WHERE conversation_key GLOB 'loop-control:*' ORDER BY ts,id",
+        )
+        .unwrap()
+        .query_map([], |row| row.get(0))
+        .unwrap()
+        .map(Result::unwrap)
+        .collect();
+    assert_eq!(bodies.len(), 2);
+    assert!(bodies.iter().all(|body| !body.contains(TOKEN)));
+    assert!(bodies.iter().any(|body| body.contains("authorize")));
+    assert!(bodies.iter().any(|body| body.contains("bind")));
+    st.store.connection().execute_batch("CREATE TRIGGER fail_loop264_audit BEFORE INSERT ON ledger BEGIN SELECT RAISE(ABORT,'fixture audit failure'); END;").unwrap();
+    let result = super::super::loop_control::handle(
+        "loop",
+        LoopControlRequest::Revoke {
+            token: TOKEN.into(),
+        },
+        &mut st,
+    );
+    assert!(
+        matches!(result, LoopControlOutcome::Refused {code,..} if code=="loop_control_audit_unavailable")
+    );
+    assert!(
+        check_guidance(
+            &st,
+            Some("loop"),
+            TARGET,
+            GuidanceAction::Steer,
+            GuidancePath::SendIdempotent,
+            None,
+            false,
+            "audit264"
+        )
+        .is_ok()
+    );
+    let new_token = "b".repeat(64);
+    let result = super::super::loop_control::handle(
+        "human-loop",
+        LoopControlRequest::Authorize {
+            token: new_token.clone(),
+            issuer_scope: "abcdefghijklmnop-loop264".into(),
+            project: bridget_transport::protocol::CommunicationProject {
+                host: "audit".into(),
+                root: "/fixture/.git".into(),
+            },
+            targets: vec![TARGET.into()],
+            intent: MessageIntent::SteerCurrent,
+        },
+        &mut st,
+    );
+    assert!(
+        matches!(result, LoopControlOutcome::Refused {code,..} if code=="loop_control_audit_unavailable")
+    );
+    assert_eq!(
+        st.store
+            .connection()
+            .query_row("SELECT count(*) FROM loop_control_grants", [], |r| r
+                .get::<_, i64>(0))
+            .unwrap(),
+        1
+    );
+    st.store
+        .connection()
+        .execute_batch("DROP TRIGGER fail_loop264_audit")
+        .unwrap();
+    assert!(matches!(
+        super::super::loop_control::handle(
+            "loop",
+            LoopControlRequest::Revoke {
+                token: TOKEN.into()
+            },
+            &mut st
+        ),
+        LoopControlOutcome::Revoked { .. }
+    ));
+    let body:String=st.store.connection().query_row("SELECT body FROM ledger WHERE body LIKE '%revoke%' AND conversation_key GLOB 'loop-control:*'", [], |r|r.get(0)).unwrap();
+    assert!(!body.contains(TOKEN));
+}
+
+#[test]
+fn spec264_loop_missing_route_never_becomes_an_agent_launch() {
+    let (state, _root, _peers) = loop_fixture(MessageIntent::SteerCurrent);
+    let mut st = state.lock().unwrap();
+    st.connections.remove("target");
+    let failure = check_guidance(
+        &st,
+        Some("loop"),
+        TARGET,
+        GuidanceAction::Steer,
+        GuidancePath::SendIdempotent,
+        None,
+        false,
+        "offline264",
+    )
+    .unwrap_err();
+    assert!(failure.1.contains("loop_target_unavailable"));
+    assert!(!st.connections.contains_key("target"));
 }

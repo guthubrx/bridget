@@ -57,6 +57,12 @@ fn load_for_binding(
 }
 
 fn refusal(code: &str) -> LoopControlOutcome {
+    if matches!(
+        code,
+        "loop_control_audit_unavailable" | "loop_control_storage_unavailable"
+    ) {
+        return LoopControlOutcome::Refused { code: code.into(), recovery: "Vérifier le stockage du mandat et du journal durable avant de reprendre cette même opération. Aucun changement n'est confirmé ; conserver le fichier privé et ne pas créer de mandat de remplacement. Ce refus concerne cette opération ; les autres travaux autorisés suivent leur propre état.".into() };
+    }
     LoopControlOutcome::Refused {
         code: code.into(),
         recovery: format!(
@@ -76,19 +82,51 @@ pub(super) fn guidance_recovery(code: &str) -> String {
         "loop_control_mode_mismatch" => {
             "Reprendre le mode inscrit dans l'enveloppe et le mandat d'origine. Pour changer de mode, demander le choix à l'utilisateur avant de créer une nouvelle boucle ; ne pas modifier une remise déjà réservée."
         }
-        "loop_control_scope_mismatch" | "loop_control_project_changed" => {
+        "loop_control_scope_mismatch"
+        | "loop_control_project_changed"
+        | "loop_control_project_unavailable"
+        | "loop_target_project_unavailable" => {
             "Comparer la portée de remise et le projet attesté de la cible au mandat de cette boucle. Reprendre le contexte d'origine ; un déplacement ou un changement de projet exige une nouvelle autorisation ciblée."
         }
         "loop_target_do_not_disturb" => {
-            "Attendre la fin du mode ne pas déranger de cette cible, ou demander à son propriétaire de le lever si cette action est autorisée. Conserver la remise sans choisir un autre mode."
+            "Attendre la fin du mode ne pas déranger de cette cible, ou demander à son propriétaire de le lever si cette action est autorisée. Conserver le mode choisi."
+        }
+        "loop_target_unavailable" => {
+            "Vérifier la connexion et l'identité de cette cible avant de reprendre. Cette route n'est plus attestée ; aucune relance d'agent ni autre destinataire n'est autorisé par ce refus."
+        }
+        "referent_paused" => {
+            "Attendre la levée de la pause par le référent. Cette boucle ne peut pas lever la pause ni choisir un autre mode pour la contourner."
+        }
+        "mission_active" => {
+            "Conserver la mission native active. Si son arrêt est nécessaire, demander une décision ciblée à son propriétaire ; ce mandat de boucle ne permet pas de l'interrompre."
+        }
+        "interrupt_rate_limited" => {
+            "Attendre l'échéance retry_after_secs du refus natif avant toute nouvelle demande d'interruption. Une autre clé ou un autre mode ne permet pas de contourner cette limite."
         }
         _ => {
             "Vérifier la lecture du mandat privé et la réponse native. Conserver la même clé, le même fichier et la même enveloppe tant que l'issue n'est pas établie."
         }
     };
     format!(
-        "{action} Cause constatée : {code}. Ce refus concerne cet envoi de boucle ; les autres travaux autorisés suivent leur propre état."
+        "{action} Cause constatée : {code}. Lire le reçu de cette clé : un état rejected est définitif pour cette clé. Après résolution vérifiée de la cause, une nouvelle demande exige de nouveaux id et issued_at ; conserver la cible, le corps et le mode autorisés. Une issue non confirmée exige au contraire la relecture exacte de la même clé et de la même enveloppe. Ce refus concerne cet envoi de boucle ; les autres travaux autorisés suivent leur propre état."
     )
+}
+
+fn audit(
+    tx: &rusqlite::Transaction<'_>,
+    id: &str,
+    action: &str,
+    actor: &str,
+) -> Result<(), &'static str> {
+    let target = format!("loop:{id}");
+    let body =
+        serde_json::json!({"event":"loop_control", "action":action, "grant_id":id}).to_string();
+    let mut message = bridget_core::BridgetMessage::new(actor, &target, &body);
+    message.origin = Some(bridget_core::MessageOrigin::System);
+    message.intent = Some(MessageIntent::StoreOnly);
+    // Journal existant, aucune remise ni notification. Même transaction que le mandat.
+    crate::store::record_message_in_transaction(tx, &message, &format!("loop-control:{id}"))
+        .map_err(|_| "loop_control_audit_unavailable")
 }
 
 pub(super) fn handle(
@@ -151,14 +189,20 @@ pub(super) fn handle(
                 let payload =
                     serde_json::to_string(&grant).map_err(|_| "invalid_loop_authorization")?;
                 let db = st.store.connection();
-                db.execute(
+                let tx = db
+                    .unchecked_transaction()
+                    .map_err(|_| "loop_control_storage_unavailable")?;
+                tx.execute(
                     "INSERT OR IGNORE INTO loop_control_grants(grant_id,payload) VALUES(?1,?2)",
                     params![id, payload],
                 )
                 .map_err(|_| "loop_control_storage_unavailable")?;
-                if load(db, &id)? != grant {
+                if load(&tx, &id)? != grant {
                     return Err("loop_authorization_mismatch");
                 }
+                audit(&tx, &id, "authorize", "human")?;
+                tx.commit()
+                    .map_err(|_| "loop_control_storage_unavailable")?;
                 Ok(LoopControlOutcome::Authorized { grant_id: id })
             }
             LoopControlRequest::Use { .. } => {
@@ -181,14 +225,25 @@ pub(super) fn handle(
                 {
                     return Err("loop_control_scope_mismatch");
                 }
+                let tx = st
+                    .store
+                    .connection()
+                    .unchecked_transaction()
+                    .map_err(|_| "loop_control_storage_unavailable")?;
+                audit(&tx, &id, "bind", &format!("loop:{id}"))?;
+                tx.commit()
+                    .map_err(|_| "loop_control_storage_unavailable")?;
                 st.loop_control_connections.insert(conn.into(), id.clone());
                 Ok(LoopControlOutcome::Bound { grant_id: id })
             }
             LoopControlRequest::Revoke { .. } => {
                 // Le secret de la boucle ne donne que le retrait de ce mandat.
-                let changed = st
+                let tx = st
                     .store
                     .connection()
+                    .unchecked_transaction()
+                    .map_err(|_| "loop_control_storage_unavailable")?;
+                let changed = tx
                     .execute(
                         "UPDATE loop_control_grants SET revoked=1 WHERE grant_id=?1",
                         [&id],
@@ -197,6 +252,9 @@ pub(super) fn handle(
                 if changed == 0 {
                     return Err("loop_control_unknown");
                 }
+                audit(&tx, &id, "revoke", &format!("loop:{id}"))?;
+                tx.commit()
+                    .map_err(|_| "loop_control_storage_unavailable")?;
                 Ok(LoopControlOutcome::Revoked { grant_id: id })
             }
         }
@@ -244,9 +302,18 @@ pub(super) fn check(
     {
         return Err("loop_target_not_authorized");
     }
-    if connection_communication_project(st, conn).as_ref() != Some(&grant.project)
-        || agent_communication_project(st, target).as_ref() != Some(&grant.project)
-    {
+    let route = st
+        .router
+        .get_agent(target)
+        .ok_or("loop_target_unavailable")?;
+    if live_connection_identity(st, &route.connection_id).is_none() {
+        return Err("loop_target_unavailable");
+    }
+    let source_project =
+        connection_communication_project(st, conn).ok_or("loop_control_project_unavailable")?;
+    let target_project =
+        agent_communication_project(st, target).ok_or("loop_target_project_unavailable")?;
+    if source_project != grant.project || target_project != grant.project {
         return Err("loop_control_project_changed");
     }
     if let Some(instance) = st

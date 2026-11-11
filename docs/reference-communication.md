@@ -144,6 +144,13 @@ apply. Frozen deliveries retain their mode and authorization reference.
 Revocation prevents new effects while allowing previous receipts to replay.
 No refusal silently changes the requested delivery mode.
 
+Authorization, binding and revocation write silent audit events containing
+the grant hash and action, never the token. Grant changes and their audit
+share one transaction. A `rejected` receipt is final for its key, even when
+the original cause has cleared. Loop preserves that receipt and requires
+an explicit `retry-refused` after checking the cause, or new work evidence.
+Unknown outcomes and timeouts retain the exact original key and envelope.
+
 `bridget_send.intent` and CLI `--intent` distinguish:
 
 | Intent | Behavior |

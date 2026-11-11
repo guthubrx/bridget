@@ -11518,6 +11518,14 @@ fn check_guidance(
         {
             warn!("refus de guidage non journalisé : {error}");
         }
+        let reason = if matches!(facts.actor, crate::guidance::GuidanceActor::Loop { .. }) {
+            format!(
+                "{} Détail natif : {reason}",
+                loop_control::guidance_recovery(code)
+            )
+        } else {
+            reason
+        };
         return Err((code.into(), reason));
     }
     Ok(facts)
