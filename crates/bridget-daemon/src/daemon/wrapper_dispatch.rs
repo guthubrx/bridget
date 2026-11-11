@@ -2243,3 +2243,182 @@ pub(super) fn on_service_request(version: u16, issuer_scope: String, request_id:
                 }
             }
         }
+
+pub(super) fn on_spawn_order(posture: Option<bridget_transport::protocol::SpawnPosture>, agent_type: String, project: Option<bridget_transport::protocol::ProjectReference>, agent_id: Option<String>, cwd: String, persistent: bool, command_id: String, issued_at: i64, deadline_at: i64, ownership: Option<bridget_transport::protocol::SpawnOwnership>, conn_id: &str, state: &Arc<Mutex<DaemonState>>) -> Option<DaemonToWrapper> {
+            let mut st = state.lock().unwrap_or_else(|error| error.into_inner());
+            let order = FleetSpawnOrder {
+                remote_placement: None,
+                posture,
+                agent_type,
+                requested_name: agent_id,
+                cwd: PathBuf::from(cwd),
+                persistent,
+                project,
+                command_id: command_id.clone(),
+                issued_at,
+                ownership,
+                deadline_at,
+            };
+            // Seul endroit du programme où les deux machines coexistent : le
+            // daemon cherche le `cwd` chez LUI, le demandeur peut être au bout
+            // du tunnel. `conn_hosts` porte l'hôte attesté à l'enregistrement.
+            let hosts = crate::lifecycle::SpawnHosts {
+                searched_on: st.host.clone(),
+                // Absence de connexion connue OU hote non atteste : meme fait,
+                // meme valeur. Le rendu s en chargera, pas deux litteraux.
+                requested_from: st
+                    .conn_hosts
+                    .get(conn_id)
+                    .filter(|host| bridget_core::host_is_attested(host))
+                    .cloned()
+                    .unwrap_or_else(|| bridget_core::HOTE_NON_ATTESTE.to_string()),
+            };
+            // Un projet retiré est refusé avant toute résolution de posture ou
+            // de fournisseur. Une clé connue reste traitée par son canon durable.
+            if !st.fleet.knows_command(&command_id)
+                && let Some(project) = &order.project
+            {
+                return Some(DaemonToWrapper::SpawnRejected {
+                    command_id,
+                    reason: SpawnRefusal::DockerRuntimeUnavailable {
+                        project_id: project.project_id.clone(),
+                    },
+                });
+            }
+            // La capacité seule ne vaut pas attribution humaine. Le choix de
+            // développement est autorisé sur cette connexion et cet ordre,
+            // jamais en modifiant l'état global du référent.
+            if posture == Some(bridget_transport::protocol::SpawnPosture::Development)
+                && !(st.connection_roles.get(conn_id) == Some(&ConnectionRole::Client)
+                    && control_client_actor(&st, conn_id).is_some()
+                    && st.client_negotiations.get(conn_id).is_some_and(|client| {
+                        client.version == CLIENT_CONTRACT_VERSION
+                            && client
+                                .capabilities
+                                .contains(&ClientCapability::ControlStateV1)
+                    }))
+            {
+                return Some(DaemonToWrapper::SpawnRejected {
+                    command_id,
+                    reason: SpawnRefusal::UnsupportedCapability {
+                        agent_type: order.agent_type,
+                        model: String::new(),
+                        capability: "posture_development_human_principal_required".to_string(),
+                    },
+                });
+            }
+            let scoped_registry = match posture {
+                // Le canon et la définition durable sont l'autorité du rejeu,
+                // même si le registre a changé depuis le premier envoi.
+                Some(_) if st.fleet.knows_command(&command_id) => None,
+                Some(posture) => match st.registry.for_spawn_posture(&order.agent_type, posture) {
+                    Ok(registry) => Some(registry),
+                    Err(detail) => {
+                        return Some(DaemonToWrapper::SpawnRejected {
+                            command_id,
+                            reason: SpawnRefusal::UnsupportedCapability {
+                                agent_type: order.agent_type,
+                                model: String::new(),
+                                capability: detail,
+                            },
+                        });
+                    }
+                },
+                None => None,
+            };
+            // Sans choix explicite, conserver la politique globale existante.
+            let resolved_type = if posture.is_some() {
+                Ok(order.agent_type.clone())
+            } else {
+                resolve_spawn_agent_type_for_posture(&st, &order.agent_type)
+            };
+            let order = match resolved_type {
+                Ok(agent_type) => FleetSpawnOrder {
+                    agent_type,
+                    ..order
+                },
+                Err(reason) => {
+                    return Some(DaemonToWrapper::SpawnRejected { command_id, reason });
+                }
+            };
+            let decision = crate::lifecycle::submit_spawn(
+                &st.fleet,
+                scoped_registry.as_ref().unwrap_or(&st.registry),
+                &st.source_env,
+                &order,
+                unix_timestamp(),
+                st.recovering,
+                &hosts,
+            );
+            match decision {
+                Ok(SpawnDecision::Ready(prepared)) => {
+                    let stop = Arc::new(ManagedStopControl::new());
+                    let supervisor_command = ManagedSupervisorCommand::Start {
+                        prepared: prepared.clone(),
+                        stop: Arc::clone(&stop),
+                    };
+                    st.managed_by_instance.insert(
+                        prepared.lease.instance_id.clone(),
+                        prepared.lease.command_id.clone(),
+                    );
+                    st.managed_spawns.insert(
+                        prepared.lease.command_id.clone(),
+                        ManagedSpawnRecord {
+                            lease: prepared.lease.clone(),
+                            agent_type: prepared.agent_type.clone(),
+                            requester_conns: vec![conn_id.to_string()],
+                            wrapper_conn: None,
+                            stop: Arc::clone(&stop),
+                        },
+                    );
+                    if st.managed_tx.send(supervisor_command).is_err() {
+                        let _ = st.fleet.fail(
+                            &prepared.lease,
+                            "negotiation_failed",
+                            "superviseur de processus indisponible",
+                        );
+                        st.managed_spawns.remove(&prepared.lease.command_id);
+                        st.managed_by_instance.remove(&prepared.lease.instance_id);
+                        st.managed_terminal_instances
+                            .insert(prepared.lease.instance_id.clone());
+                        return Some(DaemonToWrapper::SpawnRejected {
+                            command_id,
+                            reason: SpawnRefusal::NegotiationFailed {
+                                detail: "superviseur de processus indisponible".to_string(),
+                            },
+                        });
+                    }
+                    None
+                }
+                Ok(SpawnDecision::Await(waiter)) => {
+                    if let Some(record) = st.managed_spawns.get_mut(&waiter.command_id)
+                        && !record.requester_conns.iter().any(|id| id == conn_id)
+                    {
+                        record.requester_conns.push(conn_id.to_string());
+                    }
+                    None
+                }
+                Ok(SpawnDecision::Accepted { name, definition }) => {
+                    Some(DaemonToWrapper::SpawnAccepted {
+                        command_id,
+                        agent_id: name,
+                        definition,
+                    })
+                }
+                Ok(SpawnDecision::Rejected(reason)) => {
+                    Some(DaemonToWrapper::SpawnRejected { command_id, reason })
+                }
+                Ok(SpawnDecision::EnvelopeMismatch) => Some(DaemonToWrapper::IdempotencyResult {
+                    project_warnings: Vec::new(),
+                    operation_kind: "spawn".to_string(),
+                    idempotency_key: command_id,
+                    issue: IdempotencyIssue::EnvelopeMismatch,
+                }),
+                Err(error) => Some(DaemonToWrapper::SpawnRejected {
+                    command_id,
+                    reason: SpawnRefusal::NegotiationFailed {
+                        detail: error.to_string(),
+                    },
+                }),
+            }
+        }
