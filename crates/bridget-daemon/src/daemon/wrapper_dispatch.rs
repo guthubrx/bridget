@@ -4028,3 +4028,34 @@ pub(super) fn client_refusal(
         _ => None,
     }
 }
+
+pub(super) fn on_observation_capabilities(events: Vec<bridget_transport::protocol::ObservationKind>, runtime_catalogue: bool, conn_id: &str, state: &Arc<Mutex<DaemonState>>) -> Option<DaemonToWrapper> {
+            let mut st = state.lock().recover_poison();
+            let Some((agent, instance)) = live_connection_identity(&st, conn_id) else {
+                return Some(DaemonToWrapper::Nack {
+                    id: "observation-capabilities".into(),
+                    reason: "primary_identity_required".into(),
+                });
+            };
+            if st.auxiliary_connections.contains(conn_id)
+                || events.len() > 3
+                || events.iter().enumerate().any(|(i, event)| {
+                    *event == bridget_transport::protocol::ObservationKind::FileCollision
+                        || events[..i].contains(event)
+                })
+            {
+                return Some(DaemonToWrapper::Nack {
+                    id: "observation-capabilities".into(),
+                    reason: "invalid_primary_capabilities".into(),
+                });
+            }
+            if runtime_catalogue {
+                st.runtime_catalogue_connections
+                    .insert(conn_id.into(), (agent.clone(), instance));
+            } else {
+                st.runtime_catalogue_connections.remove(conn_id);
+            }
+            st.observations
+                .set_source(conn_id, &agent, events, Instant::now());
+            None
+        }

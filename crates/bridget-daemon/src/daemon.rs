@@ -16596,36 +16596,7 @@ fn handle_wrapper_message_with_peer(
         WrapperToDaemon::ObservationCapabilities {
             events,
             runtime_catalogue,
-        } => {
-            let mut st = state.lock().recover_poison();
-            let Some((agent, instance)) = live_connection_identity(&st, conn_id) else {
-                return Some(DaemonToWrapper::Nack {
-                    id: "observation-capabilities".into(),
-                    reason: "primary_identity_required".into(),
-                });
-            };
-            if st.auxiliary_connections.contains(conn_id)
-                || events.len() > 3
-                || events.iter().enumerate().any(|(i, event)| {
-                    *event == bridget_transport::protocol::ObservationKind::FileCollision
-                        || events[..i].contains(event)
-                })
-            {
-                return Some(DaemonToWrapper::Nack {
-                    id: "observation-capabilities".into(),
-                    reason: "invalid_primary_capabilities".into(),
-                });
-            }
-            if runtime_catalogue {
-                st.runtime_catalogue_connections
-                    .insert(conn_id.into(), (agent.clone(), instance));
-            } else {
-                st.runtime_catalogue_connections.remove(conn_id);
-            }
-            st.observations
-                .set_source(conn_id, &agent, events, Instant::now());
-            None
-        }
+        } => wrapper_dispatch::on_observation_capabilities(events, runtime_catalogue, conn_id, state),
         WrapperToDaemon::HumanLineage { request } => {
             native_lineage::handle(conn_id, &request, state)
         }
