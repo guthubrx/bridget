@@ -4059,3 +4059,28 @@ pub(super) fn on_observation_capabilities(events: Vec<bridget_transport::protoco
                 .set_source(conn_id, &agent, events, Instant::now());
             None
         }
+
+pub(super) fn on_guichet_claim(version: u16, issuer_scope: String, request_id: String, claim_token: String, conn_id: &str, state: &Arc<Mutex<DaemonState>>) -> Option<DaemonToWrapper> {
+            if version != SERVICE_CONTRACT_VERSION {
+                return Some(DaemonToWrapper::ServiceRejected {
+                    reason: ServiceRefusal::InvalidEnvelope,
+                });
+            }
+            let st = state.lock().recover_poison();
+            match st.store.claim_guichet(
+                conn_id,
+                &issuer_scope,
+                &request_id,
+                &claim_token,
+                unix_timestamp(),
+            ) {
+                Ok(Ok(claim)) => Some(guichet_claim_response(claim)),
+                Ok(Err(result)) => Some(guichet_result_response(issuer_scope, request_id, result)),
+                Err(error) => {
+                    error!("rejeu claim guichet: {error}");
+                    Some(DaemonToWrapper::ServiceRejected {
+                        reason: ServiceRefusal::TransitionInvalid,
+                    })
+                }
+            }
+        }

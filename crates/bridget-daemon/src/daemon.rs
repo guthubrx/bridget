@@ -16968,30 +16968,7 @@ fn handle_wrapper_message_with_peer(
             issuer_scope,
             request_id,
             claim_token,
-        } => {
-            if version != SERVICE_CONTRACT_VERSION {
-                return Some(DaemonToWrapper::ServiceRejected {
-                    reason: ServiceRefusal::InvalidEnvelope,
-                });
-            }
-            let st = state.lock().recover_poison();
-            match st.store.claim_guichet(
-                conn_id,
-                &issuer_scope,
-                &request_id,
-                &claim_token,
-                unix_timestamp(),
-            ) {
-                Ok(Ok(claim)) => Some(guichet_claim_response(claim)),
-                Ok(Err(result)) => Some(guichet_result_response(issuer_scope, request_id, result)),
-                Err(error) => {
-                    error!("rejeu claim guichet: {error}");
-                    Some(DaemonToWrapper::ServiceRejected {
-                        reason: ServiceRefusal::TransitionInvalid,
-                    })
-                }
-            }
-        }
+        } => wrapper_dispatch::on_guichet_claim(version, issuer_scope, request_id, claim_token, conn_id, state),
         WrapperToDaemon::GuichetLookup {
             version,
             issuer_scope,
