@@ -6076,7 +6076,7 @@ fn task_view(task: &Task, phase: Option<&str>, full: bool) -> Value {
         "child_agent_id":task.child,"message_id":task.mission,
         "agent_type":agent_type,"model":model,"effort":effort,"cwd":task.cwd,"posture":task.effective_posture.or(*posture),
         "mission_deadline_at":task.mission_deadline_at,
-        "round":task.round_no(),"idle_deadline_at":task.idle_deadline_at,"continuable":task.remote_placement.is_none() && task.continuable_at(unix_timestamp()),
+        "round":task.round_no(),"round_limit":crate::delegation::MAX_TASK_ROUNDS,"rounds_remaining":crate::delegation::MAX_TASK_ROUNDS.saturating_sub(task.round_no()),"idle_deadline_at":task.idle_deadline_at,"continuable":task.remote_placement.is_none() && task.continuable_at(unix_timestamp()),
         "result":if full {body} else {None},"error":task.projected_error(),
         "work_state":work_state,"summary":summary,
         "summary_truncated":body.zip(summary).is_some_and(|(body, summary)| body.len() > summary.len()),
@@ -6686,7 +6686,7 @@ fn project_continuation(
             "idle_deadline_elapsed",
             "Conserver cette tâche et ses produits. Son délai de garde est dépassé ; cela ne prouve pas l’arrêt physique. Faire confirmer clôture, arrêt et rapport avant toute suite autorisée, sans prolonger la garde ni rejouer une ancienne mission.",
         )
-    } else if task.round_no() >= 8 {
+    } else if task.round_no() >= crate::delegation::MAX_TASK_ROUNDS {
         (
             "closed",
             "round_limit",
@@ -12047,7 +12047,7 @@ fn handle_locked_with_remote_proof(
             if !saved.result_sent {
                 return Err("result_delivery_pending".into());
             }
-            if saved.round_no() >= 8 {
+            if saved.round_no() >= crate::delegation::MAX_TASK_ROUNDS {
                 return Err("round_limit".into());
             }
             if saved.remote_placement.is_some() {

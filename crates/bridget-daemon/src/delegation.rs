@@ -17,6 +17,7 @@ pub(crate) const MAX_AUTO_ADMISSION_METADATA_V2_BYTES: usize = 128 * 1024;
 /// Alias conservé pour les appelants 163 : il ne doit jamais valider un reçu v2.
 #[cfg(test)]
 pub(crate) const MAX_AUTO_ADMISSION_METADATA_BYTES: usize = MAX_AUTO_ADMISSION_METADATA_V1_BYTES;
+pub(crate) const MAX_TASK_ROUNDS: u32 = 8;
 pub(crate) const MAX_ACTIVE_ADMISSIONS: usize = 128;
 pub(crate) const MAX_ACTIVE_ADMISSIONS_PER_OWNER: usize = 16;
 
@@ -1310,7 +1311,7 @@ impl Task {
     pub(crate) fn continuable_at(&self, now: i64) -> bool {
         self.continuation_guard_open()
             && self.guarded
-            && self.round_no() < 8
+            && self.round_no() < MAX_TASK_ROUNDS
             && self.idle_deadline_at.is_some_and(|deadline| deadline > now)
     }
 }

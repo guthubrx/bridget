@@ -873,7 +873,7 @@ impl DeferredNativeMissionContext {
     fn project(&self, message: &bridget_core::BridgetMessage) -> bridget_core::BridgetMessage {
         let mut projected = message_for_provider(message);
         if message.id == self.mission_id {
-            projected.body = format!("{}\n\nMission Bridget :\n{}", self.card, message.body);
+            projected.body = format!("{}\n\nMission Bridget :\n{}\n\nExécute la mission ci-dessus dans ce tour, dans les limites de ton mandat et de tes permissions, y compris la lecture seule. Une simple acceptation ou une promesse de travail ne constitue pas son résultat. Poursuis le travail autorisé ; si une décision ou un accès indispensable manque, rends le blocage précis et les éléments déjà produits. Réserve la réponse finale au résultat vérifié ou au blocage constaté, sans fabriquer de succès ni élargir tes droits.", self.card, message.body);
         }
         projected
     }

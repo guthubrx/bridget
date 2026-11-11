@@ -1,6 +1,25 @@
 use super::*;
 
 #[test]
+fn spec273_round_budget_is_visible_before_refusal_without_opening_a_guard() {
+    let (state, config, mut task, _parent, _child) = native160_mission(false);
+    let before = serde_json::to_value(&task).unwrap();
+    for (round, remaining) in [(0, 7), (1, 7), (7, 1), (8, 0), (9, 0)] {
+        task.round = round;
+        let view = task_view(&task, None, true);
+        assert_eq!(view["round_limit"], 8);
+        assert_eq!(view["rounds_remaining"], remaining);
+        assert_eq!(view["continuable"], false, "aucune garde ouverte par le compteur");
+    }
+    let st = state.lock().unwrap();
+    assert_eq!(serde_json::to_value(st.delegation_store.get(&task.task_id).unwrap().unwrap()).unwrap(), before, "projection sans mutation durable");
+    drop(st);
+    drop(state);
+    cleanup(&config);
+}
+
+
+#[test]
 fn spec272_admission_cancel_fences_creation_and_preserves_owner_and_terminal_states() {
     let (state, config, task, _parent, _child) = native160_mission(false);
     let st = state.lock().unwrap();
