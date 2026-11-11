@@ -4802,3 +4802,13 @@ pub(super) fn on_runtime_catalogue_reported(token: String, outcome: bridget_tran
             }
             None
         }
+
+pub(super) fn on_lookup(operation_kind: String, idempotency_key: String, conn_id: &str, state: &Arc<Mutex<DaemonState>>) -> Option<DaemonToWrapper> {
+            let st = state.lock().recover_poison();
+            Some(handle_idempotency_lookup(
+                conn_id,
+                operation_kind,
+                idempotency_key,
+                &st,
+            ))
+        }

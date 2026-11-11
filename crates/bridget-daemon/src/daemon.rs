@@ -16902,15 +16902,7 @@ fn handle_wrapper_message_with_peer(
         WrapperToDaemon::Lookup {
             operation_kind,
             idempotency_key,
-        } => {
-            let st = state.lock().recover_poison();
-            Some(handle_idempotency_lookup(
-                conn_id,
-                operation_kind,
-                idempotency_key,
-                &st,
-            ))
-        }
+        } => wrapper_dispatch::on_lookup(operation_kind, idempotency_key, conn_id, state),
         WrapperToDaemon::ControlExecution { command } => {
             wrapper_dispatch::on_control_execution(command, conn_id, state)
         }
