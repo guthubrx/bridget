@@ -17340,20 +17340,7 @@ fn handle_wrapper_message_with_peer(
             request_id,
             applied,
             reason,
-        } => {
-            let st = state.lock().recover_poison();
-            if user_input::native_ack(conn_id, &request_id, Some(applied), None, &st) {
-                return None;
-            }
-            native_child_requests::acknowledged(
-                conn_id,
-                &request_id,
-                applied,
-                reason.as_deref(),
-                &st,
-            );
-            None
-        }
+        } => wrapper_dispatch::on_child_request_answered(request_id, applied, reason, conn_id, state),
         WrapperToDaemon::ChildRequestClosed {
             request_id,
             state: closed_state,

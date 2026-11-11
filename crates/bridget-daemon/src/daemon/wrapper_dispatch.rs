@@ -4464,3 +4464,18 @@ pub(super) fn on_control_execution(command: bridget_transport::protocol::Executi
                 &mut st,
             ))
         }
+
+pub(super) fn on_child_request_answered(request_id: String, applied: bool, reason: Option<String>, conn_id: &str, state: &Arc<Mutex<DaemonState>>) -> Option<DaemonToWrapper> {
+            let st = state.lock().recover_poison();
+            if user_input::native_ack(conn_id, &request_id, Some(applied), None, &st) {
+                return None;
+            }
+            native_child_requests::acknowledged(
+                conn_id,
+                &request_id,
+                applied,
+                reason.as_deref(),
+                &st,
+            );
+            None
+        }
