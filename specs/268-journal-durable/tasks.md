@@ -4,5 +4,5 @@
 - [x] Expliquer les dépendances manquantes et le parcours queue sans contourner steer.
 - [x] Reproduire le faux AgentUnknown après perte de présence.
 - [x] Corriger le diagnostic sans modifier les tâches ou les droits.
-- [ ] Tester, faire relire, distribuer et activer.
-- [ ] Vérifier le refus réel, informer le contrôleur, pousser et nettoyer avec gardes.
+- [x] Tester, faire relire, distribuer et activer sur les sept services.
+- [x] Vérifier le refus réel, pousser et nettoyer avec gardes. Contrôleur non routable : diagnostic conservé et partagé au propriétaire racine, sans autre route.
