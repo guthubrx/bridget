@@ -12,6 +12,7 @@ build:
 
 release:
 	python3 scripts/build.py cargo build --release
+	@if [ "$$(uname -s)" = Linux ]; then python3 scripts/check-linux-abi.py "$(RELEASE_BIN)"; fi
 
 test:
 	python3 scripts/build.py cargo test

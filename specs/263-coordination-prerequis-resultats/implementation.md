@@ -28,3 +28,5 @@ La décision D1 du programme 260 reste respectée. build-runtime.py reconstruit 
 À compléter avec les reçus de qualification et de chargement réels avant clôture.
 
 Les sept avertissements Linux préexistants de la base ont été corrigés sans changement de comportement : conversions entières explicites communes aux plateformes et conditions let regroupées. Ces ajustements ne déclenchent aucune extraction réservée au programme 260.
+
+La qualification de distribution a refusé le premier binaire Linux avant activation sur Debian 12 : il exigeait glibc 2.39. Le candidat commun est reconstruit sur Debian 12. Le script check-linux-abi.py impose désormais glibc 2.36 au plus à make release sur Linux ; une absence de preuve n’est pas un succès. Trois tests et un refus réel du premier binaire qualifient cette garde.
