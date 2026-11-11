@@ -14,6 +14,8 @@ Statut du programme : In Progress. Règles : `contracts/regles-implementeur.md`.
 | 5 | intégré | T054 à T068 faits |
 | 6 | intégré | T069 à T080 faits (158 blocs en repli) |
 | 7 | intégré | T081 à T091 faits (T090 différée D7) |
+| 8 | partiel | T092 à T095, T097, T098 faits ; T096 non faite |
+| 9 | partiel | T099, T100, T102, T103, T112, T113 faits ; T101, T104 arrêtées ; T105 à T111 non faites |
 | 12 | intégré | T125 à T127 faits |
 | 13 | intégré | T128 à T136 faits ; T137 partiel (job CI différé) |
 | 14 | intégré | T138 à T140 faits |
@@ -269,3 +271,25 @@ Code exécutable modifié (aiguillage du démon) : **activation en attente**.
 
 ### Bilan lot 7
 Code exécutable modifié (traces et compteurs) : **activation en attente**.
+
+### Lot 8 - Erreurs sans texte fragile (T092 à T098)
+- Statut : T092, T093 à T095 (partielles), T097, T098 faits ; T096 non faite.
+- Commits : `refactor(daemon): Partager deux textes d'erreur entre emetteur et comparaisons`, correction du classement.
+- Fichiers : `daemon.rs`, `daemon/wrapper_dispatch.rs`, `daemon/native_workspace_preparation210.rs`, `daemon/native_delegation.rs`, `validation/lot08-classement.md`.
+- Vérifications : inventaire de 52 comparaisons de texte en production (et non 375 : le relevé initial comptait d'autres receveurs et des tests en ligne) ; trois constantes partagées (`CROSS_PROJECT_REASON_REQUIRED`, deux préfixes `REMOTE_*_PREPARE_PREFIX`) remplacent 16 littéraux identiques, texte inchangé au caractère près ; `clippy -D warnings` code 0. Porte combinée avec le lot 9 (voir plus bas).
+- Écarts : 45 comparaisons restent non traitées (paires entre fichiers, textes composés, phrases de guidage) ; aucune annotation « texte externe » (T096) n'a été écrite faute d'avoir établi une source externe ; T097 fermée par D13 (aucun niveau 2, aucune liste candidate rédigée au-delà du classement).
+- Non vérifié : rien de plus.
+
+### Lot 9 - Fonctions lisibles (T099 à T113, partiel)
+- Statut : T099, T100, T102, T103, T112, T113 faites ; T101, T104 arrêtées ; T105 à T111 non faites.
+- Commits : cinq structures d'arguments (`prompt_request`, `resolve_target`, `reconnect_managed_session`, `connect_and_register_at`, `connect_and_register_with_domain_at`), exemptions et annotations.
+- Fichiers : `outils/regrouper_arguments.py` (nouvel outil), `outils/longues_fonctions.py`, `validation/lot09-restes.md`, `lot09-restes-longues.txt`, `lot09-restes-params.txt`.
+- Vérifications : chaque regroupement compile (`C-CHECK` complet avant chaque commit). Porte (lots 8 et 9 ensemble) sur cliché isolé de `HEAD` : `C-ECHECS` = base + le test instable connu `reprise_daemon_redelivre...` ; `C-NOMS` identique à la base (0 ligne de différence).
+- Écarts :
+  - **SC09 non atteint** : `launch_session_with_status` (1 359 lignes) et `spawn_reader` de `codex_app_server.rs` (1 098 lignes) restent au-dessus de 1 000 lignes. Le découpage manuel (T105 à T111) n'a pas été entrepris : variables locales partagées sur plusieurs centaines de lignes, risque élevé, sans outil de vérification autre que les tests.
+  - Quatre fonctions à 15 paramètres ou plus restent sans structure (`handle_register_with_channel`, `post`, `apply`, `spawn_reader`) : voir `lot09-restes.md`.
+  - Les lots 8 et 9 partagent une seule porte de tests (écart par rapport à une porte par lot, pour limiter la durée).
+- Non vérifié : rien de plus.
+
+### Bilan lots 8 et 9
+Code exécutable modifié (constantes, signatures internes) : **activation en attente**.

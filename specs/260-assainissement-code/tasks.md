@@ -1,6 +1,6 @@
 # Tâches 260 - Assainissement du code et du dépôt
 
-Statut : In Progress. 111 tâches cochées sur 157 (voir `implementation.md` pour le détail et les lots bloqués). La mise en oeuvre est en cours : lots 0, 1 (sauf T024), 2, 3, 4, 5, 6, 7, 12, 14, 13 (T137 partiel), 15, 17 traités.
+Statut : In Progress. 123 tâches cochées sur 157 (voir `implementation.md` pour le détail et les lots bloqués). La mise en oeuvre est en cours : lots 0, 1 (sauf T024), 2, 3, 4, 5, 6, 7, 8 (partiel), 9 (partiel), 12, 14, 13 (T137 partiel), 15, 17 traités.
 Spécification : `spec.md`. Plan : `plan.md`. Règles : `contracts/regles-implementeur.md`. Portes : `decisions.md`. Démarrage et clôture : `quickstart.md`.
 
 ## Comment lire ce fichier
@@ -129,21 +129,21 @@ Spécification : `spec.md`. Plan : `plan.md`. Règles : `contracts/regles-implem
 
 ## Lot 8 - Erreurs sans texte fragile (guide : `guides/lot-08-erreurs.md`)
 
-- [ ] T092 [L8] Inventaire des comparaisons de texte et classement A/B/C/D ; `validation/lot08-classement.md`.
-- [ ] T093 [L8] Niveau 1 : constantes partagées, `native_delegation.rs`, `delegation_mcp.rs`, `native_permission_change.rs`.
-- [ ] T094 [L8] Niveau 1 : `codex_app_server.rs`, `attach.rs`, `cli.rs`, `communication/client.rs`.
-- [ ] T095 [L8] Niveau 1 : `daemon.rs`, `wrapper.rs`, `mcp.rs`, `reaper.rs`, `registry.rs`, autres.
+- [x] T092 [L8] Inventaire des comparaisons de texte et classement A/B/C/D ; `validation/lot08-classement.md`.
+- [x] T093 [L8] Niveau 1 : constantes partagées, `native_delegation.rs`, `delegation_mcp.rs`, `native_permission_change.rs`.
+- [x] T094 [L8] Niveau 1 : `codex_app_server.rs`, `attach.rs`, `cli.rs`, `communication/client.rs`.
+- [x] T095 [L8] Niveau 1 : `daemon.rs`, `wrapper.rs`, `mcp.rs`, `reaper.rs`, `registry.rs`, autres.
 - [ ] T096 [L8] Classe B : commentaire qui nomme la source du texte externe.
-- [ ] T097 [L8] [D13] Niveau 2 (types d'erreur) : fermée sans liste validée par François ; liste candidate écrite.
-- [ ] T098 [L8] Porte : `C-TESTS`, `C-ECHECS`, `C-NOMS` ; contrôle des chaînes durables ; bilan ; fin de lot.
+- [x] T097 [L8] [D13] Niveau 2 (types d'erreur) : fermée sans liste validée par François ; liste candidate écrite.
+- [x] T098 [L8] Porte : `C-TESTS`, `C-ECHECS`, `C-NOMS` ; contrôle des chaînes durables ; bilan ; fin de lot.
 
 ## Lot 9 - Fonctions lisibles (guide : `guides/lot-09-fonctions.md`)
 
-- [ ] T099 [L9] Constat : `outils/longues_fonctions.py`, fichiers `validation/lot09-depart-*.txt`.
-- [ ] T100 [L9] Structure d'arguments : `prompt_request` (21 paramètres).
+- [x] T099 [L9] Constat : `outils/longues_fonctions.py`, fichiers `validation/lot09-depart-*.txt`.
+- [x] T100 [L9] Structure d'arguments : `prompt_request` (21 paramètres).
 - [ ] T101 [L9] Structure d'arguments : `handle_register_with_channel` (17).
-- [ ] T102 [L9] Structure d'arguments : `resolve_target` (17).
-- [ ] T103 [L9] Structures d'arguments : `reconnect_managed_session`, `connect_and_register_at`, `connect_and_register_with_domain_at`.
+- [x] T102 [L9] Structure d'arguments : `resolve_target` (17).
+- [x] T103 [L9] Structures d'arguments : `reconnect_managed_session`, `connect_and_register_at`, `connect_and_register_with_domain_at`.
 - [ ] T104 [L9] Structures d'arguments : `post` (threads), `apply` (réparation d'espace), `spawn_reader` (flux JSON Claude).
 - [ ] T105 [L9] Découper `launch_session_with_status` (1371 lignes) sous 1000.
 - [ ] T106 [L9] Découper `spawn_reader` de `codex_app_server.rs` (1101 lignes) sous 1000.
@@ -152,8 +152,8 @@ Spécification : `spec.md`. Plan : `plan.md`. Règles : `contracts/regles-implem
 - [ ] T109 [L9] Réduire `admit_delegate` (777 lignes).
 - [ ] T110 [L9] Réduire `apply_specialist_inner` (727 lignes).
 - [ ] T111 [L9] Réduire `handle_idempotent_send_with_result_authority` (625 lignes).
-- [ ] T112 [L9] Exemptions (`tools`, deux `init_schema`), commentaire des fonctions à 12-14 paramètres, `validation/lot09-restes.md`.
-- [ ] T113 [L9] Porte : `C-TESTS`, `C-ECHECS`, `C-NOMS` ; aucune fonction de 1000 lignes ou plus ; bilan ; fin de lot.
+- [x] T112 [L9] Exemptions (`tools`, deux `init_schema`), commentaire des fonctions à 12-14 paramètres, `validation/lot09-restes.md`.
+- [x] T113 [L9] Porte : `C-TESTS`, `C-ECHECS`, `C-NOMS` ; aucune fonction de 1000 lignes ou plus ; bilan ; fin de lot.
 
 ## Lot 10 - Format uniforme (guide : `guides/lot-10-format.md`)
 
