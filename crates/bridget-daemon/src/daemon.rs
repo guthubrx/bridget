@@ -17583,23 +17583,7 @@ fn handle_wrapper_message_with_peer(
             cache_read_input_tokens,
             provider_kind,
             source,
-        } => {
-            let mut st = state.lock().recover_poison();
-            Some(handle_usage(
-                &agent,
-                bridget_transport::protocol::UsageTokens {
-                    input_tokens,
-                    output_tokens,
-                    cache_creation_input_tokens,
-                    cache_read_input_tokens,
-                },
-                source,
-                provider_kind,
-                execution_id,
-                execution_generation,
-                &mut st,
-            ))
-        }
+        } => wrapper_dispatch::on_usage(agent, input_tokens, execution_id, execution_generation, output_tokens, cache_creation_input_tokens, cache_read_input_tokens, provider_kind, source, state),
 
         WrapperToDaemon::UsageWindow {
             agent,

@@ -4084,3 +4084,21 @@ pub(super) fn on_guichet_claim(version: u16, issuer_scope: String, request_id: S
                 }
             }
         }
+
+pub(super) fn on_usage(agent: String, input_tokens: u64, execution_id: Option<String>, execution_generation: Option<u64>, output_tokens: u64, cache_creation_input_tokens: u64, cache_read_input_tokens: u64, provider_kind: Option<String>, source: bridget_transport::protocol::UsageSource, state: &Arc<Mutex<DaemonState>>) -> Option<DaemonToWrapper> {
+            let mut st = state.lock().recover_poison();
+            Some(handle_usage(
+                &agent,
+                bridget_transport::protocol::UsageTokens {
+                    input_tokens,
+                    output_tokens,
+                    cache_creation_input_tokens,
+                    cache_read_input_tokens,
+                },
+                source,
+                provider_kind,
+                execution_id,
+                execution_generation,
+                &mut st,
+            ))
+        }
