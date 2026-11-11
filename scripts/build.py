@@ -343,12 +343,26 @@ def observed_run(arguments, budget=None, timeout=15, limit=MAX_OBSERVATION_BYTES
     return subprocess.CompletedProcess(arguments, 124, b"", b"")
 
 
-def process_output_complete(stdout, exempt=()):
+def process_output_complete(stdout, exempt=(), diagnostics=None):
     # Les types explicitement non fichiers n'ont pas de chemin à protéger.
     nonfiles = {"a_inode", "netlink", "unix", "IPv4", "IPv6", "sock", "pack", "PIPE",
                 "KQUEUE", "PSXSEM", "PSXSHM", "systm", "NPOLICY", "FSEVENTS", "NEXUS", "CHAN", "rte"}
     pid, record = None, {}
     seen = False
+
+    def refused():
+        # Métadonnées fermées seulement : jamais le nom ou le chemin du fichier.
+        if diagnostics is not None and not diagnostics:
+            descriptor = record.get("f", "")
+            if descriptor not in {"cwd", "rtd", "txt", "mem", "DEL", "NOFD"} and not re.fullmatch(r"[0-9]{1,8}[ruw]?", descriptor):
+                descriptor = "unknown"
+            kind = record.get("t", "unknown")
+            if kind not in nonfiles | {"REG", "DIR", "CHR", "BLK", "FIFO", "LINK", "VREG", "VDIR", "unknown"}:
+                kind = "unknown"
+            code = "cwd_unavailable_enoent" if record.get("f") == "cwd" and record.get("n") == "cwd|rtd info error: No such file or directory" else "process_record_unverifiable"
+            diagnostics.append({"code": code, "pid": int(pid) if pid and pid.isascii() and pid.isdigit() and len(pid) <= 10 else None,
+                                "descriptor": descriptor, "type": kind})
+        return False
 
     def valid():
         kind, name = record.get("t"), record.get("n", "")
@@ -392,22 +406,24 @@ def process_output_complete(stdout, exempt=()):
             field, value = chr(raw[0]), os.fsdecode(raw[1:])
             if field in {"p", "f"}:
                 if record and not valid():
-                    return False
+                    return refused()
                 record = {}
             if field == "p":
                 if not value.isdigit():
-                    return False
+                    return refused()
                 pid = value
             elif field in {"f", "t", "D", "n"}:
                 if pid is None or field in record:
-                    return False
+                    return refused()
                 record[field] = value
                 seen = True
             else:
-                return False
+                return refused()
         except (ValueError, UnicodeError):
-            return False
-    return seen and (not record or valid())
+            return refused()
+    if not seen or record and not valid():
+        return refused()
+    return True
 
 
 def parse_open_paths(stdout, ignore_own=()):
@@ -538,6 +554,7 @@ def busy_paths(scopes=(), budget=None, ignore_own=()):
     budget = budget or ObservationBudget()
     command = LSOF_OPEN_FILES
     before, fuse = None, ()
+    diagnostics = []
     try:
         if any(not str(scope).isascii() or not str(scope).isprintable() or "\\" in str(scope) or "^" in str(scope) for scope in scopes):
             raise ValueError("escaped scope unavailable")
@@ -568,10 +585,12 @@ def busy_paths(scopes=(), budget=None, ignore_own=()):
             exempt = foreign_mount_exemptions(result.stderr, scopes, mounts)
             result = observed_run([*command, *(arg for name in exempt for arg in ("-e", name))],
                                   budget, timeout=30)
-            if result.returncode or result.stderr.strip() or not process_output_complete(result.stdout, (*fuse, *exempt)):
+            if result.returncode or result.stderr.strip() or not process_output_complete(result.stdout, (*fuse, *exempt), diagnostics):
+                if not diagnostics:
+                    log(f"Conserver les caches : lecture lsof après exclusion non qualifiée (code={result.returncode}, diagnostics={len(result.stderr)} octets). Faire vérifier ce lecteur et ses diagnostics sur cette machine, sans retirer la garde.")
                 raise ValueError("incomplete scoped observation")
             budget.exempt_mounts = len(exempt)
-        elif not process_output_complete(result.stdout, fuse):
+        elif not process_output_complete(result.stdout, fuse, diagnostics):
             raise ValueError("incomplete process records")
         aliases = []
         if before is not None and scopes:
@@ -598,6 +617,8 @@ def busy_paths(scopes=(), budget=None, ignore_own=()):
             paths = [path for path in paths if path in roots or not roots.isdisjoint(path.parents)]
         return paths
     except (OSError, ValueError, UnicodeError):
+        if diagnostics:
+            log("Conserver les caches : observation d'un processus incomplète " + json.dumps(diagnostics[0], ensure_ascii=False) + ". Faire vérifier ce processus et son descripteur avec son propriétaire ; ne pas arrêter un autre travail pour nettoyer. Les autres travaux autorisés suivent leur propre état.")
         budget.failures.add("process_observation_incomplete")
         return None
 

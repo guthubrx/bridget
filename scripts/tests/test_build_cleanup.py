@@ -58,6 +58,19 @@ class CleanupTests(unittest.TestCase):
         return build.prune(self.repo, kwargs.pop("max_bytes", 0),
                            kwargs.pop("max_age", 0), **kwargs)
 
+    def test_refus_cwd_garde_la_cause_et_le_pid_sans_exposer_de_chemin(self):
+        notes = []
+        raw = b"p420\nfcwd\nncwd|rtd info error: No such file or directory\n"
+        self.assertFalse(build.process_output_complete(raw, diagnostics=notes))
+        self.assertEqual(notes, [{"code": "cwd_unavailable_enoent", "pid": 420,
+                                  "descriptor": "cwd", "type": "unknown"}])
+        notes = []
+        self.assertFalse(build.process_output_complete(
+            b"p421\nfsecret-token\ntsecret-type\nn/private/customer/secret\n", diagnostics=notes))
+        self.assertNotIn("secret", json.dumps(notes))
+        self.assertNotIn("customer", json.dumps(notes))
+        self.assertEqual(notes[0]["code"], "process_record_unverifiable")
+
     def test_cache_seul_supprime_executable_sources_et_sauvegardes_conserves(self):
         path = self.profile()
         (self.repo / "source.rs").write_text("source")
