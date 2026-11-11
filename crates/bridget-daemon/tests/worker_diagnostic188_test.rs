@@ -190,16 +190,17 @@ impl Drop for LiveWorker {
                 o.status.success() && String::from_utf8_lossy(&o.stdout).trim() == "bridget"
             });
         if identified {
+            // SAFETY: kill ne déréférence aucun pointeur ; ses arguments sont des entiers.
             unsafe {
                 libc::kill(self.child.id() as i32, libc::SIGTERM);
             };
             std::thread::sleep(std::time::Duration::from_secs(3));
         }
-        if self.child.try_wait().ok().flatten().is_none() {
-            if let Some(f) = self.fixture.take() {
-                eprintln!("fixture conservée : {}", f.0.display());
-                std::mem::forget(f);
-            }
+        if self.child.try_wait().ok().flatten().is_none()
+            && let Some(f) = self.fixture.take()
+        {
+            eprintln!("fixture conservée : {}", f.0.display());
+            std::mem::forget(f);
         }
     }
 }
