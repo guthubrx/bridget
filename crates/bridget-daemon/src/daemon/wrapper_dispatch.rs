@@ -4207,3 +4207,24 @@ pub(super) fn on_journal_read_error(subscription_id: String, line: u64, offset: 
             }
             None
         }
+
+pub(super) fn on_guichet_lookup(version: u16, issuer_scope: String, request_id: String, state: &Arc<Mutex<DaemonState>>) -> Option<DaemonToWrapper> {
+            if version != SERVICE_CONTRACT_VERSION {
+                return Some(DaemonToWrapper::ServiceRejected {
+                    reason: ServiceRefusal::InvalidEnvelope,
+                });
+            }
+            let st = state.lock().recover_poison();
+            match st
+                .store
+                .lookup_guichet(&issuer_scope, &request_id, unix_timestamp())
+            {
+                Ok(result) => Some(guichet_result_response(issuer_scope, request_id, result)),
+                Err(error) => {
+                    error!("lookup guichet: {error}");
+                    Some(DaemonToWrapper::ServiceRejected {
+                        reason: ServiceRefusal::TransitionInvalid,
+                    })
+                }
+            }
+        }

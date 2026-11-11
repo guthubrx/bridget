@@ -16973,26 +16973,7 @@ fn handle_wrapper_message_with_peer(
             version,
             issuer_scope,
             request_id,
-        } => {
-            if version != SERVICE_CONTRACT_VERSION {
-                return Some(DaemonToWrapper::ServiceRejected {
-                    reason: ServiceRefusal::InvalidEnvelope,
-                });
-            }
-            let st = state.lock().recover_poison();
-            match st
-                .store
-                .lookup_guichet(&issuer_scope, &request_id, unix_timestamp())
-            {
-                Ok(result) => Some(guichet_result_response(issuer_scope, request_id, result)),
-                Err(error) => {
-                    error!("lookup guichet: {error}");
-                    Some(DaemonToWrapper::ServiceRejected {
-                        reason: ServiceRefusal::TransitionInvalid,
-                    })
-                }
-            }
-        }
+        } => wrapper_dispatch::on_guichet_lookup(version, issuer_scope, request_id, state),
         WrapperToDaemon::GuichetReply {
             version,
             issuer_scope,
