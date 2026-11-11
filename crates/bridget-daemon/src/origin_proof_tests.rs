@@ -193,6 +193,67 @@ fn spec254_local_directory_prepare_reaches_real_helper_without_git_or_ssh() {
         generic_before,
         "registre de profil inchangé"
     );
+    // 263 : la vue d'un commit sur le même worker réutilise aussi ce
+    // registre attesté, même si le profil général décrit une autre identité.
+    let git = |args: &[&str]| {
+        let output = std::process::Command::new("git")
+            .arg("-C")
+            .arg(&source)
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8(output.stdout).unwrap().trim().to_owned()
+    };
+    git(&["init", "-q"]);
+    git(&[
+        "-c",
+        "user.name=Fixture",
+        "-c",
+        "user.email=fixture@example.com",
+        "commit",
+        "--allow-empty",
+        "-qm",
+        "Fixture263",
+    ]);
+    git(&["config", "--local", "remote.origin.url", "fixture:263"]);
+    let head = git(&["rev-parse", "HEAD"]);
+    let mut config: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    config["machines"][&envelope.worker.machine_id]["mappings"] = serde_json::json!({"local263":{
+        "source_host":envelope.worker.machine_id,"source_root":source,"remote_root":source,
+        "expected_git_identity":"fixture:263","mapping_revision":1}});
+    bridget_transport::fsutil::write_private_file_atomic(
+        &path,
+        &serde_json::to_vec(&config).unwrap(),
+    )
+    .unwrap();
+    if let OriginProofOperation::PrepareProject {
+        source, project_id, ..
+    } = &mut envelope.request
+    {
+        source.workspace = Some(WorkspaceRequest::CommitView {});
+        source.expected_base_commit = Some(head);
+        *project_id = Some("local263".into());
+    }
+    assert!(envelope.validate_shape().is_ok());
+    let result = execute_with_context(&envelope, || 10_000, |_| panic!("no provider"), Some(&path));
+    assert!(
+        matches!(
+            result,
+            OriginProofResult::ProjectPrepared {
+                preparation_error: None,
+                project: Some(_),
+                ..
+            }
+        ),
+        "{result:?}"
+    );
+    assert_eq!(std::fs::read(&generic).unwrap(), generic_before);
 }
 
 #[test]

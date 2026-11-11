@@ -193,7 +193,11 @@ fn execute_with_context(
                     }
                     crate::lifecycle::validate_parent_source_base(parent, source)
                         .map_err(closed_source_error)?;
-                    if !source.is_local_shared_directory(&request.worker.machine_id, target_machine)
+                    let local_worker_registry = source
+                        .is_local_shared_directory(&request.worker.machine_id, target_machine)
+                        || (request.worker.machine_id == *target_machine
+                            && matches!(source.workspace, Some(WorkspaceRequest::CommitView {})));
+                    if !local_worker_registry
                         && registry
                             .parent()
                             .is_none_or(|root| !crate::project_preparation::has_link(root))
@@ -215,7 +219,7 @@ fn execute_with_context(
                     let payload = serde_json::json!({"registry":registry,"machine_id":target_machine,
                         "origin_host":request.worker.machine_id,"source_root":selected,
                         "cwd":source.cwd,"commit":source.expected_base_commit,"project_id":project_id,
-                        "origin_worker_registry":source.is_local_shared_directory(&request.worker.machine_id,target_machine),
+                        "origin_worker_registry":local_worker_registry,
                         "objects_only":matches!(source.workspace,Some(WorkspaceRequest::CommitView {}))});
                     let prepared = crate::project_preparation::prepare_receipt_until(
                         &payload,

@@ -847,7 +847,7 @@ fn observe_stably(
     let outcome = if before
         .iter()
         .flatten()
-        .any(|m| m.mode & libc::S_IFMT as u32 != libc::S_IFREG as u32)
+        .any(|m| u64::from(m.mode) & u64::from(libc::S_IFMT) != u64::from(libc::S_IFREG))
     {
         Err("diagnostic_file_type_invalid".into())
     } else {

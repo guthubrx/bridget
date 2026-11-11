@@ -10421,6 +10421,8 @@ pub(super) fn catalogue_scope212(
     result["catalogue_guidance"] = json!({
         "next_action":"Pour une auto-délégation distante, choisir les identifiants machine_id, engine et model dans fleet.options. L’admission vérifie ensuite la cible et les droits.",
         "scope":"Les verdicts providers portent seulement sur la machine d’origine. Un refus local ne prouve pas que le programme manque sur un serveur.",
+        "project_resources":"Le placement traduit le dépôt et les racines déclarées ; il ne copie pas les données externes, alias SSH, clés ni accès à un autre hôte. Si la mission exige une ressource déjà disponible sur une machine précise, vérifier ce prérequis et fournir machine_id avant l'admission. Une option de flotte ne prouve pas cet accès.",
+        "web":"L'accès web dépend de la politique effective de la mission, pas seulement de la machine. Avec Claude/GLM, discovery limite les outils à Read, Glob et Grep et interdit WebSearch, WebFetch et Bash. Changer de machine ne lève pas cette limite. Pour une recherche web, vérifier les droits hérités et les outils de la connexion avant l'admission ; ne pas demander discovery/commit_view pour obtenir ces outils ni élargir les droits pour contourner un refus. Le catalogue n'atteste pas la disponibilité web d'une connexion.",
         "other_work":"Les autres travaux autorisés suivent leur propre état."
     });
     if let Some(providers) = result.get_mut("providers").and_then(Value::as_array_mut) {

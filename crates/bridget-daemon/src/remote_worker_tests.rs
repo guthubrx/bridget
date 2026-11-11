@@ -12164,3 +12164,54 @@ fn spec262_protected_path_reason_is_closed_scoped_and_negotiated() {
     assert!(!current.admits(&[capability]));
     assert!(current.admits(&[WorkerCapability::CandidateProbeV2, capability]));
 }
+
+#[test]
+fn spec263_view_capacity_keeps_its_closed_cause() {
+    let fixture = Fixture::new();
+    let (mut runtime, mut intent, prepared) = c19_prepared_view_fixture(&fixture);
+    let mut command = prepared.command.clone();
+    command.command_id = "capacity263".into();
+    command.task_id = "capacity263".into();
+    let request = prepared.request.clone();
+    intent.binding =
+        commit_view_preparation_binding(&runtime.identity, &command, &request).unwrap();
+    for index in 0..128 {
+        runtime.prepared.insert(
+            format!("reserved263-{index}"),
+            PreparedRuntime {
+                routing: prepared.routing.clone(),
+                command: prepared.command.clone(),
+                request: prepared.request.clone(),
+                prepared: prepared.prepared.clone(),
+                expires: prepared.expires,
+            },
+        );
+    }
+    assert!(matches!(
+        runtime.begin_prepared_view(&command, &request, None, c19_plan(&intent)),
+        Err((
+            WorkerRefusal::ResourceLimit,
+            Some(crate::workspace_git::ExportFailure::MetadataCapacity)
+        ))
+    ));
+    let response = WorkerResponse {
+        version: REMOTE_WORKER_VERSION,
+        correlation_id: "capacity263".into(),
+        connection_epoch: "epoch263".into(),
+        worker: runtime.identity.clone(),
+        command,
+        response: WorkerRuntime::view_prepare_rejection((
+            WorkerRefusal::ResourceLimit,
+            Some(crate::workspace_git::ExportFailure::MetadataCapacity),
+        )),
+    };
+    response.validate().unwrap();
+    assert!(matches!(
+        response.response,
+        WorkerResponseOperation::CommitViewRejected {
+            reason: WorkerRefusal::ResourceLimit,
+            failure: crate::workspace_git::ExportFailure::MetadataCapacity
+        }
+    ));
+    assert!(runtime.held.is_empty() && runtime.running.is_empty());
+}

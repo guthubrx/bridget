@@ -5566,7 +5566,14 @@ impl WorkerRuntime {
         if !self.held.is_empty()
             || (self.prepared.len() >= 128 && !self.prepared.contains_key(&command.command_id))
         {
-            return Err((WorkerRefusal::ResourceLimit, None));
+            return Err((
+                WorkerRefusal::ResourceLimit,
+                Some(if self.held.is_empty() {
+                    crate::workspace_git::ExportFailure::MetadataCapacity
+                } else {
+                    crate::workspace_git::ExportFailure::OperationCapacity
+                }),
+            ));
         }
         let registry = self.registry().map_err(|r| (r, None))?;
         if let Some((selection, _, _)) = &routing {
@@ -5686,7 +5693,10 @@ impl WorkerRuntime {
             return Ok(true);
         }
         if self.view_preparations.len() >= 128 {
-            return Err((WorkerRefusal::ResourceLimit, None));
+            return Err((
+                WorkerRefusal::ResourceLimit,
+                Some(crate::workspace_git::ExportFailure::OperationCapacity),
+            ));
         }
         let seed = self.native_view_plan(&request.command, prepare)?;
         let read = self.begin_prepared_view(&request.command, prepare, routing, seed)?;
@@ -6255,7 +6265,14 @@ impl WorkerRuntime {
             return Ok(Some(previous.prepared.clone()));
         }
         if self.prepared.len() >= 128 || !self.held.is_empty() {
-            return Err((WorkerRefusal::ResourceLimit, None));
+            return Err((
+                WorkerRefusal::ResourceLimit,
+                Some(if self.held.is_empty() {
+                    crate::workspace_git::ExportFailure::MetadataCapacity
+                } else {
+                    crate::workspace_git::ExportFailure::OperationCapacity
+                }),
+            ));
         }
         let prepared = WorkerPrepared {
             workspace: Some(

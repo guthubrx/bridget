@@ -439,7 +439,11 @@ pub(crate) fn read_journal_excerpt(
         if let Some(rejection) = outcome.rejected {
             return Err(ClientError::Technical {
                 code: "journal_unavailable",
-                message: format!("journal indisponible : {:?}", rejection.reason),
+                message: format!(
+                    "journal indisponible ({:?}) : {}",
+                    rejection.reason,
+                    attach_refusal_message(&rejection, agent, &[])
+                ),
             });
         }
         for event in outcome.events {
@@ -4337,7 +4341,7 @@ fn attach_refusal_message(
             }
         }
         AttachRefusal::AgentStopped => format!(
-            "équipier « {} » arrêté ; son historique reste consultable dans le journal de session, mais le suivi direct exige de le relancer",
+            "équipier « {} » arrêté ; consulter son historique conservé dans la vue native de la tâche. bridget_journal suit ici un flux actif : ce refus ne prouve pas une perte du journal. Pour une mission native, lire aussi son résultat avec bridget_task_status et conserver son task_id ; ne pas la relancer pour lire son historique. Ce refus concerne cette lecture, pas les autres travaux autorisés",
             sanitize_inline(agent)
         ),
         AttachRefusal::JournalUnavailable => format!(

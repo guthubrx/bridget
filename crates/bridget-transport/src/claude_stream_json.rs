@@ -165,6 +165,8 @@ struct ActiveTurn {
     message_id: String,
     completion: mpsc::Sender<ManagedTerminal>,
     response: String,
+    /// Réponses déjà terminées pendant l'attente des tâches de fond.
+    preceding_responses: Vec<String>,
     /// Nombre d'événements journal `update` texte déjà écrits pour ce tour.
     text_updates: usize,
     /// Issue fournisseur (`end_turn`, …) — absente ⇒ le fil affiche « inconnu ».
@@ -1217,6 +1219,7 @@ fn spawn_worker(
                 message_id: message.id.clone(),
                 completion,
                 response: String::new(),
+                preceding_responses: Vec::new(),
                 text_updates: 0,
                 stop_reason: None,
                 permission_denied: false,
@@ -1282,7 +1285,12 @@ fn spawn_worker(
             let (response, stop_reason) = {
                 let mut state = queue.0.lock().recover_poison();
                 match state.active.take() {
-                    Some(active) => (active.response, active.stop_reason),
+                    Some(mut active) => {
+                        // Une seule concaténation, O(total des textes), sans
+                        // recopier tout l'historique à chaque notification.
+                        active.preceding_responses.push(active.response);
+                        (active.preceding_responses.join("\n\n"), active.stop_reason)
+                    }
                     None => (String::new(), None),
                 }
             };
@@ -2096,9 +2104,14 @@ fn spawn_reader(
                     if matches!(terminal, ManagedTerminal::Completed)
                         && active.background_tasks.pending()
                     {
-                        // Comme T3, une fin de tour ne clôt pas les tâches du fournisseur.
-                        // Le prochain rapport reste dans la même mission et son délai initial.
-                        active.response.clear();
+                        // Une fin de tour ne clôt pas les tâches du fournisseur.
+                        // Garder le rapport : le tour suivant peut n'être qu'une
+                        // note de fin. La mission conserve son délai initial.
+                        if !active.response.is_empty() {
+                            active
+                                .preceding_responses
+                                .push(std::mem::take(&mut active.response));
+                        }
                         active.text_updates = 0;
                         active.stop_reason = None;
                     } else {

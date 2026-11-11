@@ -11975,6 +11975,24 @@ fn prepare_dispatch(
             })
     });
 
+    // Une ronde achevée ne reçoit plus de guidage. Nommer ce fait avant le
+    // contrôle des dossiers physiques, sans admettre ni remplacer une mission.
+    if message.intent == Some(bridget_core::MessageIntent::SteerCurrent)
+        && let Some((owner, instance)) = live_connection_identity(st, conn_id)
+        && let Ok(Some(task)) = st.delegation_store.for_child(&routing_to)
+        && task.owner == owner
+        && task.owner_instance == instance
+        && task.state == "result_available"
+    {
+        return Err((
+            "intent_not_permitted",
+            format!(
+                "Lire bridget_task_status pour la tâche {} : cette ronde a déjà rendu son résultat et ne reçoit plus de steer. Si l'enfant reste gardé et qu'un complément est autorisé, ouvrir une nouvelle ronde avec bridget_task_continue, le même task_id et une nouvelle request_id. Conserver le résultat ; ne pas recréer la mission ni ajouter un motif hors projet pour forcer ce guidage. Ce refus concerne cet envoi ; les autres travaux autorisés suivent leur propre état.",
+                task.task_id
+            ),
+        ));
+    }
+
     let explicit_reason = crate::communication::validate_cross_project_reason(
         message.cross_project_reason.as_deref(),
     )

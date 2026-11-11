@@ -20870,6 +20870,39 @@ fn native174_projet_mission_admise_entre_deux_emplacements() {
 }
 
 #[test]
+fn spec263_steer_after_result_names_the_existing_round_instead_of_a_foreign_project() {
+    let (shared, config, task_id, _, _) =
+        parent_en_cours_avec_projets_174(request("closed263"), 0, true);
+    let mut st = shared.lock().unwrap();
+    let mut task = st.delegation_store.get(&task_id).unwrap().unwrap();
+    task.state = "result_available".into();
+    st.delegation_store.save(&task).unwrap();
+    let before = serde_json::to_vec(&st.delegation_store.get(&task_id).unwrap().unwrap()).unwrap();
+    let mut message = bridget_core::BridgetMessage::new(&task.owner, &task.child, "complément");
+    message.intent = Some(bridget_core::MessageIntent::SteerCurrent);
+    let refusal = prepare_dispatch(
+        &mut st,
+        &mut message,
+        "conn-1",
+        task.owner.clone(),
+        "closed263".into(),
+        "closed-message263".into(),
+        false,
+    )
+    .err()
+    .unwrap();
+    assert_eq!(refusal.0, "intent_not_permitted");
+    assert!(refusal.1.contains(&task_id) && refusal.1.contains("bridget_task_continue"));
+    assert!(!refusal.1.contains("cross_project_reason_required"));
+    assert_eq!(
+        serde_json::to_vec(&st.delegation_store.get(&task_id).unwrap().unwrap()).unwrap(),
+        before
+    );
+    drop(st);
+    cleanup(&config);
+}
+
+#[test]
 fn spec247_parent_coordonne_enfant_distant_sans_faux_autre_projet() {
     let (shared, config, task_id, _, _) =
         parent_en_cours_avec_projets_174(request("coord247"), 0, true);

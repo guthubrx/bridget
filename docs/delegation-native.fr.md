@@ -1142,12 +1142,22 @@ Un dépôt étranger reste refusé. Le dossier `.git` ne sert jamais de racine d
 - **`discovery` :** avec un parent attesté, la mission reste en lecture seule. Sans
   preuve, cette valeur suit le chemin 148 : un grant humain existant est requis,
   sinon `delegation_grant_required`.
+  Avec Claude ou GLM, les seuls outils sont `Read`, `Glob` et `Grep`.
+  `WebSearch`, `WebFetch` et `Bash` sont interdits. Cette posture et sa
+  stratégie `commit_view` ne conviennent donc pas à une recherche Internet.
+  Changer de machine ne change pas ce plafond. Vérifier la politique héritée
+  et les outils de la connexion avant de confier une recherche web.
 - **`development` :** avec un parent attesté, l'écriture n'est accordée que si la
   politique du parent et la cible le permettent. Sans preuve, la demande est refusée
   avec `permission_attestation_unavailable`. Le motif éventuel figure dans
   `development_refusal`.
 
 **Ce qui passe d'un parent à une cible (149) :**
+
+Le placement du dépôt ne prouve pas l'accès aux ressources externes du projet.
+Bridget ne transfère ni données externes, ni alias SSH, ni clés. Vérifier ces
+prérequis et fournir `machine_id` quand une ressource impose une destination.
+Le catalogue ne certifie pas la disponibilité du web ou d'un hôte SSH.
 
 - **Codex vers Codex :** Bridget garde la politique d'approbation, le bac à sable et le
   réseau du parent. Un parent en lecture seule ne donne pas `development`

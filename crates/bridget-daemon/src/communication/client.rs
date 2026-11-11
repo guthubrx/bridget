@@ -14,7 +14,7 @@ use std::os::fd::AsRawFd;
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::net::UnixStream;
 use std::path::Path;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 #[path = "../lineage_client.rs"]
 mod lineage;
@@ -1078,6 +1078,19 @@ impl std::fmt::Display for ClientError {
     }
 }
 
+// Diagnostic fermé : aucun chemin de socket, corps, compte ou texte d'erreur.
+// L'appelant conserve son refus et son contrat de rejeu.
+fn note_transport_failure(stage: &'static str, error: &io::Error) {
+    eprintln!(
+        "bridget_client_transport_failed stage={stage} io_kind={:?} observed_at={}",
+        error.kind(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs()
+    );
+}
+
 pub(crate) struct DaemonConnection {
     writer: UnixStream,
     reader: BufReader<UnixStream>,
@@ -1135,9 +1148,12 @@ impl DaemonConnection {
             connect_nonblocking(socket, deadline)
         };
         crate::mcp::check_tool_call(None)?;
-        let stream = connected.map_err(|error| ClientError::Technical {
-            code: "daemon_unreachable",
-            message: format!("daemon Bridget injoignable : {error}"),
+        let stream = connected.map_err(|error| {
+            note_transport_failure("connect", &error);
+            ClientError::Technical {
+                code: "daemon_unreachable",
+                message: format!("daemon Bridget injoignable : {error}"),
+            }
         })?;
         let reader_stream = stream.try_clone().map_err(|error| ClientError::Technical {
             code: "daemon_unreachable",
@@ -1226,6 +1242,7 @@ impl DaemonConnection {
                     Ok(size) => offset += size,
                     Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
                     Err(error) => {
+                        note_transport_failure("write", &error);
                         return Err(ClientError::Technical {
                             code: after_write,
                             message: format!("écriture daemon impossible : {error}"),
@@ -1287,9 +1304,12 @@ impl DaemonConnection {
                     })
                 })
             };
-            let line = frame.map_err(|error| ClientError::Technical {
-                code: failure_code,
-                message: format!("réponse daemon indisponible : {error}"),
+            let line = frame.map_err(|error| {
+                note_transport_failure("read", &error);
+                ClientError::Technical {
+                    code: failure_code,
+                    message: format!("réponse daemon indisponible : {error}"),
+                }
             })?;
             let response = decode(&line).map_err(|_| ClientError::Technical {
                 code: failure_code,

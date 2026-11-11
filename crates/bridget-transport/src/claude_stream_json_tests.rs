@@ -249,7 +249,10 @@ sys.stdin.readline()
         .collect();
     assert_eq!(
         results,
-        vec![("background-mission", "rapport final, commit termine")]
+        vec![(
+            "background-mission",
+            "calcul en cours, rapport a venir\n\ntoujours en cours\n\nrapport final, commit termine"
+        )]
     );
     transport.stop();
     fs::remove_dir_all(root).unwrap();

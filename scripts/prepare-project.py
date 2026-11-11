@@ -735,8 +735,11 @@ def remote_registry(request):
     require(type(request.get("origin_worker_registry", False)) is bool,
             "project_preparation_operation")
     if request.get("origin_worker_registry", False):
-        require(request.get("commit") is None
-                and request["machine_id"] == request["origin_host"],
+        require(request["machine_id"] == request["origin_host"]
+                and (request.get("commit") is None
+                     or (request.get("objects_only") is True
+                         and re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}",
+                                          request["commit"]) is not None)),
                 "project_preparation_operation")
         _, config = registry_read(expected)
         machine(config, request)

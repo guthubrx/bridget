@@ -1,0 +1,1330 @@
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -192,7 +192,7 @@
+ 
+ [[package]]
+ name = "bridget-core"
+-version = "0.8.27"
++version = "0.8.29"
+ dependencies = [
+  "serde",
+  "serde_json",
+@@ -201,7 +201,7 @@
+ 
+ [[package]]
+ name = "bridget-daemon"
+-version = "0.8.27"
++version = "0.8.29"
+ dependencies = [
+  "axum",
+  "base64",
+@@ -229,7 +229,7 @@
+ 
+ [[package]]
+ name = "bridget-transport"
+-version = "0.8.27"
++version = "0.8.29"
+ dependencies = [
+  "bridget-core",
+  "libc",
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -7,7 +7,7 @@
+ ]
+ 
+ [workspace.package]
+-version = "0.8.27"
++version = "0.8.29"
+ edition = "2024"
+ license = "MIT"
+ 
+--- a/crates/bridget-daemon/src/attach.rs
++++ b/crates/bridget-daemon/src/attach.rs
+@@ -439,7 +439,11 @@
+         if let Some(rejection) = outcome.rejected {
+             return Err(ClientError::Technical {
+                 code: "journal_unavailable",
+-                message: format!("journal indisponible : {:?}", rejection.reason),
++                message: format!(
++                    "journal indisponible ({:?}) : {}",
++                    rejection.reason,
++                    attach_refusal_message(&rejection, agent, &[])
++                ),
+             });
+         }
+         for event in outcome.events {
+@@ -4251,7 +4255,7 @@
+             }
+         }
+         AttachRefusal::AgentStopped => format!(
+-            "équipier « {} » arrêté ; son historique reste consultable dans le journal de session, mais le suivi direct exige de le relancer",
++            "équipier « {} » arrêté ; consulter son historique conservé dans la vue native de la tâche. bridget_journal suit ici un flux actif : ce refus ne prouve pas une perte du journal. Pour une mission native, lire aussi son résultat avec bridget_task_status et conserver son task_id ; ne pas la relancer pour lire son historique. Ce refus concerne cette lecture, pas les autres travaux autorisés",
+             sanitize_inline(agent)
+         ),
+         AttachRefusal::JournalUnavailable => format!(
+--- a/crates/bridget-daemon/src/cli.rs
++++ b/crates/bridget-daemon/src/cli.rs
+@@ -2797,7 +2797,21 @@
+             .and_then(serde_json::Value::as_str)
+             .ok_or_else(|| "delegate : cwd invalide".to_string())?,
+     );
+-    if let Some(base_commit) = source_base_commit(source)? {
++    let base = source_base_commit(source).map_err(|code| {
++        if let Some(result) = crate::lifecycle::source_base_failure_guidance(&code) {
++            format!(
++                "{}: {}\n{}\nrequest_id: {request_id}",
++                result["code"]
++                    .as_str()
++                    .unwrap_or("workspace_base_preflight_failed"),
++                result["message"].as_str().unwrap_or(""),
++                result["detail"]["recovery"].as_str().unwrap_or("")
++            )
++        } else {
++            code
++        }
++    })?;
++    if let Some(base_commit) = base {
+         payload_object.insert(
+             "expected_base_commit".into(),
+             serde_json::Value::String(base_commit),
+--- a/crates/bridget-daemon/src/cli_hook_tests.rs
++++ b/crates/bridget-daemon/src/cli_hook_tests.rs
+@@ -1819,3 +1819,30 @@
+         reader.read_line(&mut line).unwrap();
+         decode(line.trim()).unwrap()
+     }
++
++#[test]
++fn spec262_delegate_cli_reports_ancestor_head_with_guidance_and_request_id() {
++    let root = std::env::temp_dir().join(format!("bridget-cli262-{}", uuid::Uuid::new_v4()));
++    let nested = root.join("documents");
++    std::fs::create_dir_all(&nested).unwrap();
++    assert!(
++        std::process::Command::new("git")
++            .args(["init", "--quiet"])
++            .arg(&root)
++            .status()
++            .unwrap()
++            .success()
++    );
++    let error = parse_delegate_args(
++        &argv(&["revue", "--request-id", "cli262-refused"]),
++        &nested,
++        || panic!(),
++    )
++    .unwrap_err();
++    assert!(error.contains("workspace_base_unavailable"));
++    assert!(error.contains("ancêtre"));
++    assert!(error.contains("HEAD"));
++    assert!(error.contains("cli262-refused"));
++    assert!(!error.contains("source_head:{"));
++    std::fs::remove_dir_all(root).unwrap();
++}
+--- a/crates/bridget-daemon/src/communication/client.rs
++++ b/crates/bridget-daemon/src/communication/client.rs
+@@ -12,7 +12,7 @@
+ use std::os::unix::ffi::OsStrExt;
+ use std::os::unix::net::UnixStream;
+ use std::path::Path;
+-use std::time::{Duration, Instant};
++use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+ 
+ #[path = "../lineage_client.rs"]
+ mod lineage;
+@@ -1059,6 +1059,19 @@
+     }
+ }
+ 
++// Diagnostic fermé : aucun chemin de socket, corps, compte ou texte d'erreur.
++// L'appelant conserve son refus et son contrat de rejeu.
++fn note_transport_failure(stage: &'static str, error: &io::Error) {
++    eprintln!(
++        "bridget_client_transport_failed stage={stage} io_kind={:?} observed_at={}",
++        error.kind(),
++        SystemTime::now()
++            .duration_since(UNIX_EPOCH)
++            .unwrap_or_default()
++            .as_secs()
++    );
++}
++
+ pub(crate) struct DaemonConnection {
+     writer: UnixStream,
+     reader: BufReader<UnixStream>,
+@@ -1116,9 +1129,12 @@
+             connect_nonblocking(socket, deadline)
+         };
+         crate::mcp::check_tool_call(None)?;
+-        let stream = connected.map_err(|error| ClientError::Technical {
+-            code: "daemon_unreachable",
+-            message: format!("daemon Bridget injoignable : {error}"),
++        let stream = connected.map_err(|error| {
++            note_transport_failure("connect", &error);
++            ClientError::Technical {
++                code: "daemon_unreachable",
++                message: format!("daemon Bridget injoignable : {error}"),
++            }
+         })?;
+         let reader_stream = stream.try_clone().map_err(|error| ClientError::Technical {
+             code: "daemon_unreachable",
+@@ -1207,6 +1223,7 @@
+                     Ok(size) => offset += size,
+                     Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+                     Err(error) => {
++                        note_transport_failure("write", &error);
+                         return Err(ClientError::Technical {
+                             code: after_write,
+                             message: format!("écriture daemon impossible : {error}"),
+@@ -1266,9 +1283,12 @@
+                     })
+                 })
+             };
+-            let line = frame.map_err(|error| ClientError::Technical {
+-                code: failure_code,
+-                message: format!("réponse daemon indisponible : {error}"),
++            let line = frame.map_err(|error| {
++                note_transport_failure("read", &error);
++                ClientError::Technical {
++                    code: failure_code,
++                    message: format!("réponse daemon indisponible : {error}"),
++                }
+             })?;
+             let response = decode(&line).map_err(|_| ClientError::Technical {
+                 code: failure_code,
+--- a/crates/bridget-daemon/src/daemon.rs
++++ b/crates/bridget-daemon/src/daemon.rs
+@@ -220,6 +220,12 @@
+     fn drop(&mut self) {
+         self.0.fetch_sub(1, Ordering::AcqRel);
+     }
++}
++
++fn reply_timeout_guidance(to: &str, timeout_secs: u64, msg_id: &str) -> String {
++    format!(
++        "Consultez l'état et le journal de la demande #{msg_id} avant de décider d'une suite. {to} n'a pas répondu dans le délai de {timeout_secs} s. Cette expiration concerne l'attente de cette réponse seulement : elle n'annule aucune tâche et ne prouve ni arrêt ni absence d'exécution. Conservez la référence complète et toute clé de requête associée. Si une tâche est connue, consultez son statut et son résultat. Tant que l'issue reste inconnue, ne renvoyez pas la mission et ne créez pas de remplacement auprès d'un autre destinataire. Les autres travaux autorisés suivent leur propre état."
++    )
+ }
+ 
+ /// Sonde sans consommation et sans changer O_NONBLOCK sur la connexion partagée.
+@@ -6977,10 +6983,8 @@
+                         if from == UI_HUMAN_SENDER || from == UI_HUMAN_AGENT_ID {
+                             let now = unix_now_secs();
+                             let context = serde_json::json!({
+-                                "summary": format!(
+-                                    "{to} n’a pas répondu en {timeout_secs} s à ta demande #{}.",
+-                                    &msg_id[..msg_id.len().min(8)]
+-                                ),
++                                "summary": reply_timeout_guidance(&to, timeout_secs, &msg_id),
++                                "message_id": msg_id,
+                                 "to": to,
+                                 "timeout_secs": timeout_secs,
+                             })
+@@ -7002,12 +7006,7 @@
+                         drop(st);
+                         // Aucun verrou global pendant la notification réseau.
+                         if let Some(sender_writer) = sender_writer {
+-                            let body = format!(
+-                                "{} n'a pas repondu en {}s au message #{}.\nTu peux reessayer, changer de destinataire ou abandonner.",
+-                                to,
+-                                timeout_secs,
+-                                &msg_id[..msg_id.len().min(8)]
+-                            );
++                            let body = reply_timeout_guidance(&to, timeout_secs, &msg_id);
+                             match deliver_to_agent(&sender_writer, &from, &body) {
+                                 Ok(_) => info!(
+                                     "palier 3 (timeout notifié à {} : {} n'a pas répondu)",
+@@ -11824,6 +11823,24 @@
+             })
+     });
+ 
++    // Une ronde achevée ne reçoit plus de guidage. Nommer ce fait avant le
++    // contrôle des dossiers physiques, sans admettre ni remplacer une mission.
++    if message.intent == Some(bridget_core::MessageIntent::SteerCurrent)
++        && let Some((owner, instance)) = live_connection_identity(st, conn_id)
++        && let Ok(Some(task)) = st.delegation_store.for_child(&routing_to)
++        && task.owner == owner
++        && task.owner_instance == instance
++        && task.state == "result_available"
++    {
++        return Err((
++            "intent_not_permitted",
++            format!(
++                "Lire bridget_task_status pour la tâche {} : cette ronde a déjà rendu son résultat et ne reçoit plus de steer. Si l'enfant reste gardé et qu'un complément est autorisé, ouvrir une nouvelle ronde avec bridget_task_continue, le même task_id et une nouvelle request_id. Conserver le résultat ; ne pas recréer la mission ni ajouter un motif hors projet pour forcer ce guidage. Ce refus concerne cet envoi ; les autres travaux autorisés suivent leur propre état.",
++                task.task_id
++            ),
++        ));
++    }
++
+     let explicit_reason = crate::communication::validate_cross_project_reason(
+         message.cross_project_reason.as_deref(),
+     )
+@@ -14824,6 +14841,8 @@
+             let capabilities = hello.capabilities.clone();
+             (!capabilities.is_empty()
+                 && capabilities.len() <= 32
++                && (!capabilities.contains(&WorkerCapability::CandidateProbePermissionReasonsV1)
++                    || capabilities.contains(&WorkerCapability::CandidateProbeV2))
+                 && (!capabilities.contains(&WorkerCapability::OriginProjectContextV1)
+                     || capabilities.contains(&WorkerCapability::OriginProofV1))
+                 && (!capabilities.contains(&WorkerCapability::ModelOptionsV1)
+@@ -14833,7 +14852,7 @@
+                 && capabilities.iter().all(|capability| {
+                     matches!(
+                         capability,
+-                        WorkerCapability::CandidateProbeV1 | WorkerCapability::CandidateProbeV2 | WorkerCapability::WorkloadToolsV1 | WorkerCapability::ReleaseLeaseV2 | WorkerCapability::ParentSourceProofV1 | WorkerCapability::ResultSlotDeadlineV1 | WorkerCapability::OriginProofV1 | WorkerCapability::OriginProjectContextV1 | WorkerCapability::WorkspaceRepairV1 | WorkerCapability::StartRecoveryV1 | WorkerCapability::WorkspaceFailureV1 | WorkerCapability::ProviderCatalogueV1 | WorkerCapability::ModelOptionsV1 | WorkerCapability::ProviderAccountsV1 | WorkerCapability::WorkspaceViewV1 | WorkerCapability::ExecutionStatusV1 | WorkerCapability::ProgramCompatibilityV1
++                        WorkerCapability::CandidateProbeV1 | WorkerCapability::CandidateProbeV2 | WorkerCapability::CandidateProbePermissionReasonsV1 | WorkerCapability::WorkloadToolsV1 | WorkerCapability::ReleaseLeaseV2 | WorkerCapability::ParentSourceProofV1 | WorkerCapability::ResultSlotDeadlineV1 | WorkerCapability::OriginProofV1 | WorkerCapability::OriginProjectContextV1 | WorkerCapability::WorkspaceRepairV1 | WorkerCapability::StartRecoveryV1 | WorkerCapability::WorkspaceFailureV1 | WorkerCapability::ProviderCatalogueV1 | WorkerCapability::ModelOptionsV1 | WorkerCapability::ProviderAccountsV1 | WorkerCapability::WorkspaceViewV1 | WorkerCapability::ExecutionStatusV1 | WorkerCapability::ProgramCompatibilityV1
+                     ) || (crate::workspace_git::COMMIT_VIEW_LAUNCH_ENABLED
+                         && matches!(capability,WorkerCapability::WorkspaceViewCreateV1))
+                 })
+@@ -15227,6 +15246,9 @@
+                 || result.connection_epoch != worker.epoch
+                 || result.worker != worker.identity
+                 || result.validate_shape().is_err()
++                || (!worker.capabilities.contains(&WorkerCapability::CandidateProbePermissionReasonsV1)
++                    && result.verdicts.iter().any(|verdict| matches!(verdict,
++                        CandidateProbeV2Verdict::Ineligible { reason: bridget_transport::protocol::CandidateProbeRefusal::PermissionPathProtected, .. })))
+             {
+                 return refused(WorkerRefusal::StaleConnection);
+             }
+@@ -20144,6 +20166,7 @@
+                     "auto_delegate_v1".to_string(),
+                     "auto_delegate_v2".to_string(),
+                     "worker_candidate_probe_v2".to_string(),
++                    "worker_candidate_probe_permission_reasons_v1".to_string(),
+                     "worker_workload_tools_v1".to_string(),
+                     "worker_release_lease_v2".to_string(),
+                     "worker_parent_source_proof_v1".to_string(),
+--- a/crates/bridget-daemon/src/daemon/native_delegation.rs
++++ b/crates/bridget-daemon/src/daemon/native_delegation.rs
+@@ -646,6 +646,9 @@
+             Some(CandidateProbeRefusal::DefinitionUnavailable) => (
+                 "Comparez le profil, le moteur, le modèle et l'effort demandés avec leur déclaration actuelle sur la même machine. Faites aussi vérifier la version et l'empreinte du programme face à l'observation enregistrée ; le contrôle précis refusé n'a pas été conservé. Ce motif seul ne prouve pas un défaut de compte ou d'abonnement.",
+                 "Si le programme a changé, demandez au responsable de qualifier cette version avant de mettre à jour son observation, ou à l'utilisateur de décider un retour vers une version déjà qualifiée. Ne remplacez pas une empreinte pour contourner la garde et ne changez ni compte, ni droits, ni modèle sur ce seul code."),
++            Some(CandidateProbeRefusal::PermissionPathProtected) => (
++                "Faites vérifier cwd, le placement du projet et les répertoires hérités du parent : un chemin hérité ou projeté recouvre un espace privé protégé du worker, ou se trouve dedans. Vérifiez notamment additional_directories et les racines accessibles. Ce refus maintient cette protection ; réattester le même contexte ne suffit pas.",
++                "Si le contexte du parent est trop large, demandez à l'utilisateur une session dans un dossier de projet autorisé avec les seuls répertoires nécessaires, puis réattestez ce contexte. Ne déplacez pas l'espace privé, ne retirez pas sa protection et ne supprimez pas une restriction pour forcer l'admission."),
+             Some(CandidateProbeRefusal::PermissionsChanged) => (
+                 "Réattestez le parent, puis vérifiez si ses restrictions peuvent être conservées par le moteur demandé. Ce motif seul ne prouve pas qu'un droit a changé. Consultez detail.permission_projection.",
+                 "Si une restriction n'est pas traduisible, demandez à l'utilisateur la décision sur cette restriction ou sur le moteur ; ne retirez aucune protection pour essayer."),
+@@ -660,7 +663,7 @@
+                 "Si les modifications ne vous appartiennent pas, demandez à leur propriétaire ou à l'utilisateur quelle conservation et quelle préparation autoriser."),
+             Some(CandidateProbeRefusal::WorkspaceBusy) => (
+                 "Conservez les tâches actives. Shared doit parfois changer le HEAD de la racine ; une exécution dans un worktree descendant protège aussi cette opération. Pour une contre-revue limitée à un commit, une vue commit_view isolée évite ce changement si ce choix est autorisé. Vérifiez d’abord detail.admission : aucune nouvelle clé pendant une admission en attente ou inconnue. Après refus confirmé sans tâche, un changement autorisé de workspace exige une nouvelle demande et sa propre clé. detail.workspace_tasks donne des pistes du maître, pas le détenteur attesté de la garde worker. Demandez sa corrélation ciblée au mainteneur si nécessaire, sans libérer de garde ni arrêter autrui.",
+-                "Demandez une décision seulement si le même dossier partagé est indispensable et reste occupé : attendre son propriétaire ou autoriser une vue isolée compatible. Ne demandez pas l’arrêt d’un travail indépendant pour une simple contre-revue."),
++                "Demandez une décision à l'utilisateur seulement si le même dossier partagé est indispensable et reste occupé : attendre son propriétaire ou autoriser une vue isolée compatible. Ne demandez pas l’arrêt d’un travail indépendant pour une simple contre-revue."),
+             Some(CandidateProbeRefusal::WorkspaceDiverged) => (
+                 "Comparez la base attendue avec le HEAD du dossier cible, pas seulement le HEAD source. Shared refuse lorsque ce HEAD cible n'est pas un ancêtre de la base demandée ; ne reculez ni ne remplacez son histoire. Pour revoir un commit publié sans déplacer ce dossier, le parcours natif commit_view en discovery peut convenir si ses outils sont chargés. Il ne contient pas les modifications non commitées : publier le travail à revoir avant une revue distante. Toute autre enveloppe exige une nouvelle demande autorisée après clarification de l'ancienne issue et fin de ses appels.",
+                 "Si la divergence exige de modifier un dossier partagé, demandez à son propriétaire ou à l'utilisateur quelle préparation autoriser après conservation du travail."),
+@@ -737,7 +740,7 @@
+             },
+         };
+         let underlying=if reason["kind"].as_str().is_some_and(|kind|kind.starts_with("tool_")) {reason["kind"].clone()}
+-        else if reason["kind"]=="candidate" && matches!(reason["code"].as_str(),Some("program_upgrade_check_pending"|"program_protocol_incompatible"|"program_check_unavailable")) {reason["code"].clone()} else {json!("unobserved")};
++        else if reason["kind"]=="candidate" && matches!(reason["code"].as_str(),Some("program_upgrade_check_pending"|"program_protocol_incompatible"|"program_check_unavailable"|"permission_path_protected")) {reason["code"].clone()} else {json!("unobserved")};
+         json!({"kind":reason["kind"],"code":reason["code"],
+             "scope":"candidate_subset","underlying_cause":underlying,
+             "next_action":next_action,"human_action":human_action})
+@@ -757,6 +760,23 @@
+             "recovery":"Ce motif concerne au moins un candidat de cette admission, pas un arrêt global. Conserver la machine, le moteur, la clé et l’enveloppe. Faire lire au responsable Bridget le diagnostic worker corrélé pour distinguer règle non traduisible, contexte manquant et divergence constatée. Ne pas réinstaller le programme, changer de compte ou retirer une restriction pour essayer. Les autres travaux autorisés suivent leur propre état. Après correction, un rejeu strict de la même clé et enveloppe exige state=not_recorded et la fin confirmée de tout appel concurrent. Si une tâche est connue, la suivre ; si l’admission est pending ou d’issue inconnue, préserver sa clé sans remplacement. Un refus durable suit son propre conseil de clôture avant une nouvelle clé.",
+             "human_action":"Si la règle ne peut pas être conservée par le moteur demandé, demander à l’utilisateur la décision sur cette restriction ou sur le moteur ; aucun élargissement ni remplacement automatique."
+         });
++    }
++    if reasons
++        .iter()
++        .any(|r| r["kind"] == "candidate" && r["code"] == "permission_path_protected")
++    {
++        let protected = json!({
++            "cause":"machine_path_protected",
++            "scope":"candidate_subset",
++            "message":"Un répertoire hérité ou projeté recouvre un espace privé protégé du worker, ou se trouve dedans. Le contrôle de protection a refusé cette projection.",
++            "recovery":"Vérifiez les répertoires hérités du parent et leurs recouvrements avec les espaces privés sur la cible. Demandez à l'utilisateur un contexte de projet plus précis si nécessaire, puis réattestez-le. Ne changez ni compte ni protection pour contourner ce refus. Ce motif ne concerne que les candidats cités ; les autres travaux autorisés suivent leur propre état. Consultez detail.admission avant toute suite. Un rejeu strict conserve sa clé et son enveloppe ; une enveloppe corrigée exige la clôture confirmée de l'ancienne demande sans tâche ni appel concurrent avant une nouvelle clé. Une issue inconnue ne permet aucun remplacement."
++        });
++        if !result["detail"]["permission_projection"].is_null() {
++            let unresolved = result["detail"]["permission_projection"].take();
++            result["detail"]["permission_projection"] = json!({"cause":"multiple","scope":"candidate_subset","checks":[unresolved,protected]});
++        } else {
++            result["detail"]["permission_projection"] = protected;
++        }
+     }
+     if reasons
+         .iter()
+@@ -786,7 +806,7 @@
+         let message = format!("{action} Ce refus concerne les candidats cités de cette admission. Consultez son état dans detail.admission et les vérifications dans detail.probe_checks. Les autres travaux autorisés suivent leur propre état.");
+         result["message"] = json!(message);
+         result["detail"]["message"] = json!(message);
+-        result["detail"]["verification"] = json!("Les motifs reçus sont conservés dans detail.reasons. Leur sous-cause non conservée reste inconnue ; les vérifications à faire figurent dans detail.probe_checks.");
++        result["detail"]["verification"] = json!("Les motifs reçus sont conservés dans detail.reasons. Les causes attestées et les vérifications utiles figurent dans detail.probe_checks. Une cause marquée unobserved exige le diagnostic corrélé ; elle ne prouve aucune panne de compte, de réseau ou de droits.");
+         if !mixed && !queue_only {
+             result["detail"]["human_action"] = human;
+         }
+@@ -4518,6 +4538,7 @@
+         };
+         return json!({"status":"refused","code":"workspace_preflight_technical","message":message,"detail":{"message":message,"recovery":recovery}});
+     }
++    if let Some(result) = crate::lifecycle::source_base_failure_guidance(code) { return result; }
+     if code == "workspace_base_preflight_failed" || code.starts_with("workspace_base_preflight_failed:") {
+         let message = "Bridget n’a pas pu contrôler le dossier source avant l’admission.";
+         let recovery = "Le champ cwd désigne un dossier sur la machine du parent appelant. machine_id choisit seulement la destination : vérifier le chemin par SSH sur cette destination ne valide pas la source. Sur la machine du parent, vérifiez que cwd existe et est lisible, puis exécutez git rev-parse --show-toplevel et git rev-parse HEAD dans ce dossier. Corrigez le chemin ou l’accès Git en cas d’échec. En shared, le HEAD source doit être égal à expected_base_commit. Ne changez pas le SHA attendu et ne déplacez pas un checkout utilisé pour contourner le refus. Si shared est imposé, conservez ce mode ; sinon, pour une base figée en worktree autorisé, donnez le même SHA complet à workspace.base_ref et expected_base_commit. Ce refus technique ne clôt pas une admission déjà en cours et ne prouve pas l’absence de tâche. Suivez toute tâche connue avec bridget_task_status. Un rejeu strict conserve request_id et tous les paramètres : admission_pending signifie que la demande reste en attente. Avant une nouvelle clé pour des paramètres corrigés, confirmez qu’aucune tâche et aucune admission en cours ne subsistent pour l’ancienne demande. Si le sort reste inconnu, ne créez pas de nouvelle demande.";
+@@ -8408,6 +8429,8 @@
+     result["catalogue_guidance"] = json!({
+         "next_action":"Pour une auto-délégation distante, choisir les identifiants machine_id, engine et model dans fleet.options. L’admission vérifie ensuite la cible et les droits.",
+         "scope":"Les verdicts providers portent seulement sur la machine d’origine. Un refus local ne prouve pas que le programme manque sur un serveur.",
++        "project_resources":"Le placement traduit le dépôt et les racines déclarées ; il ne copie pas les données externes, alias SSH, clés ni accès à un autre hôte. Si la mission exige une ressource déjà disponible sur une machine précise, vérifier ce prérequis et fournir machine_id avant l'admission. Une option de flotte ne prouve pas cet accès.",
++        "web":"L'accès web dépend de la politique effective de la mission, pas seulement de la machine. Avec Claude/GLM, discovery limite les outils à Read, Glob et Grep et interdit WebSearch, WebFetch et Bash. Changer de machine ne lève pas cette limite. Pour une recherche web, vérifier les droits hérités et les outils de la connexion avant l'admission ; ne pas demander discovery/commit_view pour obtenir ces outils ni élargir les droits pour contourner un refus. Le catalogue n'atteste pas la disponibilité web d'une connexion.",
+         "other_work":"Les autres travaux autorisés suivent leur propre état."
+     });
+     if let Some(providers) = result.get_mut("providers").and_then(Value::as_array_mut) {
+--- a/crates/bridget-daemon/src/daemon/native_delegation_tests.rs
++++ b/crates/bridget-daemon/src/daemon/native_delegation_tests.rs
+@@ -17992,6 +17992,40 @@
+         drop(st);
+         cleanup(&config);
+     }
++
++#[test]
++fn spec263_steer_after_result_names_the_existing_round_instead_of_a_foreign_project() {
++    let (shared, config, task_id, _, _) =
++        parent_en_cours_avec_projets_174(request("closed263"), 0, true);
++    let mut st = shared.lock().unwrap();
++    let mut task = st.delegation_store.get(&task_id).unwrap().unwrap();
++    task.state = "result_available".into();
++    st.delegation_store.save(&task).unwrap();
++    let before = serde_json::to_vec(&st.delegation_store.get(&task_id).unwrap().unwrap()).unwrap();
++    let mut message = bridget_core::BridgetMessage::new(&task.owner, &task.child, "complément");
++    message.intent = Some(bridget_core::MessageIntent::SteerCurrent);
++    let refusal = prepare_dispatch(
++        &mut st,
++        &mut message,
++        "conn-1",
++        task.owner.clone(),
++        "closed263".into(),
++        "closed-message263".into(),
++        false,
++    )
++    .err()
++    .unwrap();
++    assert_eq!(refusal.0, "intent_not_permitted");
++    assert!(refusal.1.contains(&task_id) && refusal.1.contains("bridget_task_continue"));
++    assert!(!refusal.1.contains("cross_project_reason_required"));
++    assert_eq!(
++        serde_json::to_vec(&st.delegation_store.get(&task_id).unwrap().unwrap()).unwrap(),
++        before
++    );
++    drop(st);
++    cleanup(&config);
++}
++
+ 
+     #[test]
+     fn spec247_parent_coordonne_enfant_distant_sans_faux_autre_projet() {
+@@ -21005,7 +21039,8 @@
+         use bridget_transport::protocol::CandidateProbeRefusal::*;
+         let (state, config, _rx, _reader, request, _root) = routing168_fixture(1);
+         for reason in [InvalidRequest, MappingUnavailable, DefinitionUnavailable,
+-            PermissionsChanged, WorkspaceUnavailable, WorkspaceLimit, WorkspaceDirty,
++            PermissionsChanged,
++        PermissionPathProtected, WorkspaceUnavailable, WorkspaceLimit, WorkspaceDirty,
+             WorkspaceBusy, WorkspaceDiverged, WorkspaceBaseUnavailable,
+             CapabilityUnavailable, ResourceLimit] {
+             let mut plan = routing168_plan(&state, &request);
+@@ -21023,7 +21058,7 @@
+             assert_eq!(initial["code"], "routing_candidate_unavailable");
+             assert_eq!(check["code"], code);
+             assert_eq!(check["scope"], "candidate_subset");
+-            assert_eq!(check["underlying_cause"], "unobserved");
++            assert_eq!(check["underlying_cause"], if reason == PermissionPathProtected { code.clone() } else { json!("unobserved") });
+             assert!(check["next_action"].as_str().is_some_and(|s| s.len() > 40));
+             assert!(check["human_action"].as_str().is_some_and(|s| s.contains("utilisateur")));
+             assert_eq!(initial["detail"]["probe_checks"], replay["detail"]["probe_checks"]);
+@@ -22342,3 +22377,135 @@
+         cleanup(&config);cleanup(&remote_config);
+     }
+ 
++
++#[test]
++fn spec262_nested_folder_reports_detected_git_root_and_unresolved_head() {
++    let root = std::env::temp_dir().join(format!("bridget-262-git-{}", uuid::Uuid::new_v4()));
++    let nested = root.join("documents/nested");
++    std::fs::create_dir_all(&nested).unwrap();
++    assert_eq!(crate::lifecycle::source_base_commit(&nested).unwrap(), None);
++    assert!(
++        std::process::Command::new("git")
++            .args(["init", "--quiet"])
++            .arg(&root)
++            .status()
++            .unwrap()
++            .success()
++    );
++    // Existing history can coexist with a HEAD pointing at a missing branch.
++    let git = |args: &[&str]| {
++        let output = std::process::Command::new("git")
++            .arg("-C")
++            .arg(&root)
++            .args(args)
++            .output()
++            .unwrap();
++        assert!(output.status.success());
++        String::from_utf8(output.stdout).unwrap()
++    };
++    git(&[
++        "-c",
++        "user.name=Fixture",
++        "-c",
++        "user.email=fixture@example.invalid",
++        "commit",
++        "--quiet",
++        "--allow-empty",
++        "-m",
++        "fixture",
++    ]);
++    let commit = git(&["rev-parse", "HEAD"]).trim().to_owned();
++    git(&["symbolic-ref", "HEAD", "refs/heads/missing-reference"]);
++    let error = crate::lifecycle::source_base_commit(&nested).unwrap_err();
++    let result = failure(&error);
++    assert_eq!(result["code"], "workspace_base_unavailable");
++    assert_eq!(result["detail"]["cause"], "source_head_unresolved");
++    assert_eq!(
++        result["detail"]["git_root"],
++        std::fs::canonicalize(&root).unwrap().to_str().unwrap()
++    );
++    assert_eq!(result["detail"]["scope"], "this_request");
++    assert!(
++        result["detail"]["recovery"]
++            .as_str()
++            .unwrap()
++            .contains("ancêtre")
++    );
++    git(&["cat-file", "-e", &commit]);
++    assert!(
++        !failure("workspace_base_unavailable:source_head:{invalid}")
++            .to_string()
++            .contains("{invalid}")
++    );
++    std::fs::remove_dir_all(root).unwrap();
++}
++
++#[test]
++fn spec262_protected_path_guidance_identifies_the_guard_without_weakening_it() {
++    let reasons = json!([{"kind":"candidate","code":"permission_path_protected","candidates":18}]);
++    let result = failure(&format!("routing_candidate_unavailable:{reasons}"));
++    assert_eq!(result["detail"]["reasons"], reasons);
++    assert_eq!(
++        result["detail"]["permission_projection"]["cause"],
++        "machine_path_protected"
++    );
++    assert_eq!(
++        result["detail"]["probe_checks"][0]["underlying_cause"],
++        "permission_path_protected"
++    );
++    assert!(result["message"].as_str().unwrap().contains("espace privé"));
++    assert!(
++        result["message"]
++            .as_str()
++            .unwrap()
++            .contains("autres travaux")
++    );
++    assert!(
++        result["detail"]["permission_projection"]["recovery"]
++            .as_str()
++            .unwrap()
++            .contains("issue inconnue")
++    );
++}
++
++#[test]
++fn spec262_reply_timeout_preserves_full_reference_and_does_not_authorize_replacement() {
++    let reference = "mcp-12345-long-unique-reference";
++    let text = reply_timeout_guidance("recipient", 600, reference);
++    assert!(text.contains(reference));
++    assert!(text.contains("600 s"));
++    assert!(text.contains("n'annule aucune tâche"));
++    assert!(text.contains("ne renvoyez pas la mission"));
++    assert!(text.contains("autres travaux"));
++    assert!(!text.contains("Tu peux reessayer"));
++}
++
++#[test]
++fn spec262_mixed_permission_causes_remain_distinct() {
++    let reasons = json!([{"kind":"candidate","code":"permissions_changed","candidates":1},
++        {"kind":"candidate","code":"permission_path_protected","candidates":2}]);
++    let result = failure(&format!("routing_candidate_unavailable:{reasons}"));
++    let projection = &result["detail"]["permission_projection"];
++    assert_eq!(projection["cause"], "multiple");
++    assert_eq!(projection["checks"][0]["cause"], "unobserved");
++    assert_eq!(projection["checks"][1]["cause"], "machine_path_protected");
++    assert_eq!(
++        result["detail"]["probe_checks"].as_array().unwrap().len(),
++        2
++    );
++}
++
++#[test]
++fn spec262_git_version_refusal_identifies_executed_environment() {
++    let result = failure(
++        "workspace_base_preflight_failed: workspace_git_unsupported: Git 2.44 ou plus est requis",
++    );
++    assert_eq!(result["code"], "workspace_base_preflight_failed");
++    assert_eq!(result["detail"]["cause"], "git_version_unsupported");
++    assert!(
++        result["detail"]["recovery"]
++            .as_str()
++            .unwrap()
++            .contains("PATH global")
++    );
++}
+--- a/crates/bridget-daemon/src/delegation_mcp.rs
++++ b/crates/bridget-daemon/src/delegation_mcp.rs
+@@ -107,8 +107,8 @@
+             "annotations":{"readOnlyHint":false,"destructiveHint":false,"idempotentHint":true}}),
+         json!({"name":"bridget_refresh_models","description":"Demande une nouvelle observation des modèles annoncés par Codex sur les serveurs. Aucun login, modèle, profil, droit ou mission modifié. La réponse requested n’atteste pas une lecture terminée : relire ensuite bridget_capabilities et fleet.connection_catalogues. Une demande par serveur au plus toutes les 30 secondes. Un ancien worker reste non vérifié.","inputSchema":{"type":"object","properties":{"machine_id":{"type":"string","minLength":1,"maxLength":256}},"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":false,"idempotentHint":false}}),
+         json!({"name":"bridget_capabilities","description":"Catalogue natif : providers contient les verdicts locaux sur la machine d’origine ; ces refus ne décrivent pas les serveurs. fleet.options donne les choix distants déclarés pour auto_delegate (machine_id, engine, model). Ces choix ne prouvent ni éligibilité ni authentification : l’admission vérifie la cible, les droits et le dossier. Fonctionne sans T3.","inputSchema":{"type":"object","properties":{},"additionalProperties":false},"annotations":{"readOnlyHint":true,"destructiveHint":false,"idempotentHint":true}}),
+-        json!({"name":"bridget_delegate","description":"Crée un enfant Bridget et remet sa mission en un appel natif. Conserver request_id sur retry identique ; tâche, résultat et annulation appartiennent au parent. keep_alive_secs garde l'enfant après la remise pour une nouvelle ronde. Le brief est déclaré par le parent ; sources_not_verified : aucune source citée n'est vérifiée. Le journal peut être lu plus largement que l'enfant ; aucun secret dans le brief. Corps du dossier ≤ 16 Kio, refusé plutôt que tronqué.","inputSchema":{"type":"object","properties":{"quota_fallback_authorized":{"type":"boolean","description":"true seulement après accord humain explicite pour une bascule de moteur ou de compte en cas de quota dans cette mission. Absent/faux : question humaine. Aucun droit ni budget supplémentaire."},"request_id":{"type":"string","minLength":1,"maxLength":128},"agent_type":{"type":"string"},"model":{"type":"string"},"effort":{"type":["string","null"]},"task":{"type":"string","minLength":1,"maxLength":65536},"machine_id":{"type":"string","minLength":1,"maxLength":256,"description":"Machine de destination de la mission. Le champ cwd reste le dossier source sur la machine du parent."},"project_id":{"type":"string","minLength":1,"maxLength":256},"cwd":{"type":"string","minLength":1,"description":"Chemin absolu du dossier source sur la machine du parent appelant. Même avec machine_id distant, ne pas fournir le chemin de destination ; Bridget traduit le chemin via le mapping du projet."},"posture":{"type":"string","enum":["discovery","development"]},"reply_timeout":{"type":"integer","minimum":60,"maximum":86400,"description":"Délai de réponse de la mission en secondes (défaut 3600)."},"workspace":workspace_schema,"child_requests":{"type":"string","enum":["deny","forward"],"description":"Remonter les demandes de l’enfant Codex ; absent : deny, politique inchangée."},"keep_alive_secs":{"type":"integer","minimum":60,"maximum":7200,"description":"Durée de garde après la remise du résultat ; absent : aucune garde."},"resume_on_limit":{"type":"boolean","description":"Attendre puis reprendre après une limite d’usage attestée ; absent ou faux : inactif. Au plus 6 h et 2 rondes, même fournisseur."},"brief":brief_schema,"fallback":{"type":"array","minItems":1,"maxItems":3,"items":{"type":"object","properties":{"agent_type":{"type":"string","minLength":1},"model":{"type":"string","minLength":1},"effort":{"type":"string","minLength":1}},"required":["agent_type","model"],"additionalProperties":false}}},"required":["request_id","agent_type","model","task","cwd"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":true,"idempotentHint":true,"openWorldHint":true}}),
+-        json!({"name":"bridget_auto_delegate","description":"Demande une admission de flotte V2. Les axes machine, moteur, connexion, modèle et effort restent indépendants. Omettre agent_type : utiliser engine pour le moteur et, seulement si nécessaire, connection_id issu du catalogue pour une connexion précise. cwd désigne le dossier source sur la machine du parent ; machine_id désigne la destination. expected_base_commit est obligatoire dans un dépôt Git, en worktree ou pour compilation ; hors Git seulement, general/shared peut l’omettre : dossier local sur la machine source, ou dossier distant déjà présent et mappé ; aucun transfert automatique hors Git. La stratégie commit_view exige explicitement posture=discovery et expected_base_commit ; pour écrire, utiliser shared ou worktree avec posture=development. Il exige un SHA complet (40 caractères hexadécimaux (SHA-1)). Conserver request_id au rejeu strict. Un maître sans auto_delegate_v2 refuse explicitement.","inputSchema":{"type":"object","properties":{"quota_fallback_authorized":{"type":"boolean","description":"true seulement si l’utilisateur a déjà autorisé explicitement le changement de moteur ou de compte en cas de quota pour cette mission. Omettre sinon : une question humaine sera ouverte après un refus fournisseur constaté. Aucun accord n’est déduit du choix automatique initial ; aucun droit ni budget supplémentaire."},"request_id":{"type":"string","minLength":1,"maxLength":128},"machine_id":{"type":"string","minLength":1,"maxLength":256,"description":"Machine de destination de la mission. Le champ cwd reste le dossier source sur la machine du parent."},"project_id":{"type":"string","minLength":1,"maxLength":256},"engine":{"type":"string","minLength":1,"maxLength":256},"connection_id":{"type":"string","minLength":1,"maxLength":256},"model":{"type":"string","minLength":1,"maxLength":256},"effort":{"type":"string","minLength":1,"maxLength":256},"workload":{"type":"string","enum":["general","compilation"],"default":"general"},"expected_base_commit":{"type":"string","minLength":40,"maxLength":40,"pattern":"^[0-9a-fA-F]{40}$","description":"Obligatoire dans un dépôt Git et pour compilation/worktree. Omission permise seulement hors Git en general/shared. SHA source complet : exactement 40 caractères hexadécimaux (SHA-1), jamais un nom de branche. En shared : HEAD source ; en worktree : commit résolu de workspace.base_ref (HEAD si absent)."},"task":{"type":"string","minLength":1,"maxLength":65536},"cwd":{"type":"string","minLength":1,"description":"Chemin absolu du dossier source sur la machine du parent appelant. Même avec machine_id distant, ne pas fournir le chemin de destination ; Bridget traduit le chemin via le mapping du projet."},"posture":{"type":"string","enum":["discovery","development"]},"reply_timeout":{"type":"integer","minimum":60,"maximum":86400,"default":3600,"description":"Durée maximale de chaque ronde en secondes, à partir de sa remise effective. Une nouvelle ronde admise renouvelle ce budget ; un rejeu strict ne le renouvelle pas. Défaut : 3600 (1 h), y compris development. Pour un travail long, fournir par exemple 14400 (4 h), au plus 86400 et dans la limite du parent. Ce délai est distinct de wait_timeout et keep_alive_secs. Fixer la valeur avant la première admission ; ne pas modifier une enveloppe déjà admise au rejeu."},"workspace":workspace_schema,"child_requests":{"type":"string","enum":["deny","forward"]},"keep_alive_secs":{"type":"integer","minimum":60,"maximum":7200},"brief":brief_schema,"urgent":{"type":"boolean"},"deliverable":{"type":"string","minLength":1,"maxLength":128}},"required":["request_id","task","cwd"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":true,"idempotentHint":true,"openWorldHint":true}}),
++        json!({"name":"bridget_delegate","description":"Crée un enfant Bridget et remet sa mission en un appel natif. Conserver request_id sur retry identique ; tâche, résultat et annulation appartiennent au parent. keep_alive_secs garde l'enfant après la remise pour une nouvelle ronde. Le brief est déclaré par le parent ; sources_not_verified : aucune source citée n'est vérifiée. Le journal peut être lu plus largement que l'enfant ; aucun secret dans le brief. Corps du dossier ≤ 16 Kio, refusé plutôt que tronqué.","inputSchema":{"type":"object","properties":{"quota_fallback_authorized":{"type":"boolean","description":"true seulement après accord humain explicite pour une bascule de moteur ou de compte en cas de quota dans cette mission. Absent/faux : question humaine. Aucun droit ni budget supplémentaire."},"request_id":{"type":"string","minLength":1,"maxLength":128},"agent_type":{"type":"string"},"model":{"type":"string"},"effort":{"type":["string","null"]},"task":{"type":"string","minLength":1,"maxLength":65536},"machine_id":{"type":"string","minLength":1,"maxLength":256,"description":"Machine de destination de la mission. Vérifier les prérequis propres au projet : données externes, accès SSH et outils ne sont pas garantis par le placement du dépôt. Le champ cwd reste le dossier source sur la machine du parent."},"project_id":{"type":"string","minLength":1,"maxLength":256},"cwd":{"type":"string","minLength":1,"description":"Chemin absolu du dossier source sur la machine du parent appelant. Même avec machine_id distant, ne pas fournir le chemin de destination ; Bridget traduit le chemin via le mapping du projet."},"posture":{"type":"string","enum":["discovery","development"],"description":"Omettre pour hériter des droits attestés du parent. discovery réduit à la lecture seule ; avec Claude/GLM, seuls Read, Glob et Grep sont permis, sans WebSearch, WebFetch ni Bash. Ne convient pas à une recherche web. Changer de machine ne lève pas cette limite. development reste borné par les droits du parent."},"reply_timeout":{"type":"integer","minimum":60,"maximum":86400,"description":"Délai de réponse de la mission en secondes (défaut 3600)."},"workspace":workspace_schema,"child_requests":{"type":"string","enum":["deny","forward"],"description":"Remonter les demandes de l’enfant Codex ; absent : deny, politique inchangée."},"keep_alive_secs":{"type":"integer","minimum":60,"maximum":7200,"description":"Durée de garde après la remise du résultat ; absent : aucune garde."},"resume_on_limit":{"type":"boolean","description":"Attendre puis reprendre après une limite d’usage attestée ; absent ou faux : inactif. Au plus 6 h et 2 rondes, même fournisseur."},"brief":brief_schema,"fallback":{"type":"array","minItems":1,"maxItems":3,"items":{"type":"object","properties":{"agent_type":{"type":"string","minLength":1},"model":{"type":"string","minLength":1},"effort":{"type":"string","minLength":1}},"required":["agent_type","model"],"additionalProperties":false}}},"required":["request_id","agent_type","model","task","cwd"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":true,"idempotentHint":true,"openWorldHint":true}}),
++        json!({"name":"bridget_auto_delegate","description":"Demande une admission de flotte V2. Les axes machine, moteur, connexion, modèle et effort restent indépendants. Omettre agent_type : utiliser engine pour le moteur et, seulement si nécessaire, connection_id issu du catalogue pour une connexion précise. cwd désigne le dossier source sur la machine du parent ; machine_id désigne la destination. expected_base_commit est obligatoire dans un dépôt Git, en worktree ou pour compilation ; hors Git seulement, general/shared peut l’omettre : dossier local sur la machine source, ou dossier distant déjà présent et mappé ; aucun transfert automatique hors Git. La stratégie commit_view exige explicitement posture=discovery et expected_base_commit ; pour écrire, utiliser shared ou worktree avec posture=development. Il exige un SHA complet (40 caractères hexadécimaux (SHA-1)). Conserver request_id au rejeu strict. Un maître sans auto_delegate_v2 refuse explicitement.","inputSchema":{"type":"object","properties":{"quota_fallback_authorized":{"type":"boolean","description":"true seulement si l’utilisateur a déjà autorisé explicitement le changement de moteur ou de compte en cas de quota pour cette mission. Omettre sinon : une question humaine sera ouverte après un refus fournisseur constaté. Aucun accord n’est déduit du choix automatique initial ; aucun droit ni budget supplémentaire."},"request_id":{"type":"string","minLength":1,"maxLength":128},"machine_id":{"type":"string","minLength":1,"maxLength":256,"description":"Machine de destination de la mission. Vérifier les prérequis propres au projet : données externes, accès SSH et outils ne sont pas garantis par le placement du dépôt. Le champ cwd reste le dossier source sur la machine du parent."},"project_id":{"type":"string","minLength":1,"maxLength":256},"engine":{"type":"string","minLength":1,"maxLength":256},"connection_id":{"type":"string","minLength":1,"maxLength":256},"model":{"type":"string","minLength":1,"maxLength":256},"effort":{"type":"string","minLength":1,"maxLength":256},"workload":{"type":"string","enum":["general","compilation"],"default":"general"},"expected_base_commit":{"type":"string","minLength":40,"maxLength":40,"pattern":"^[0-9a-fA-F]{40}$","description":"Obligatoire dans un dépôt Git et pour compilation/worktree. Omission permise seulement hors Git en general/shared. SHA source complet : exactement 40 caractères hexadécimaux (SHA-1), jamais un nom de branche. En shared : HEAD source ; en worktree : commit résolu de workspace.base_ref (HEAD si absent)."},"task":{"type":"string","minLength":1,"maxLength":65536},"cwd":{"type":"string","minLength":1,"description":"Chemin absolu du dossier source sur la machine du parent appelant. Même avec machine_id distant, ne pas fournir le chemin de destination ; Bridget traduit le chemin via le mapping du projet."},"posture":{"type":"string","enum":["discovery","development"],"description":"Omettre pour hériter des droits attestés du parent. discovery réduit à la lecture seule ; avec Claude/GLM, seuls Read, Glob et Grep sont permis, sans WebSearch, WebFetch ni Bash. Ne convient pas à une recherche web. Changer de machine ne lève pas cette limite. development reste borné par les droits du parent."},"reply_timeout":{"type":"integer","minimum":60,"maximum":86400,"default":3600,"description":"Durée maximale de chaque ronde en secondes, à partir de sa remise effective. Une nouvelle ronde admise renouvelle ce budget ; un rejeu strict ne le renouvelle pas. Défaut : 3600 (1 h), y compris development. Pour un travail long, fournir par exemple 14400 (4 h), au plus 86400 et dans la limite du parent. Ce délai est distinct de wait_timeout et keep_alive_secs. Fixer la valeur avant la première admission ; ne pas modifier une enveloppe déjà admise au rejeu."},"workspace":workspace_schema,"child_requests":{"type":"string","enum":["deny","forward"]},"keep_alive_secs":{"type":"integer","minimum":60,"maximum":7200},"brief":brief_schema,"urgent":{"type":"boolean"},"deliverable":{"type":"string","minLength":1,"maxLength":128}},"required":["request_id","task","cwd"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":true,"idempotentHint":true,"openWorldHint":true}}),
+         json!({"name":"bridget_task_repair_workspace","description":"Répare explicitement le dossier déplacé de sa même tâche distante, après résultat remis. Conserver request_id sur rejeu identique. Aucun tour métier créé. Les pairs ou adaptations non qualifiés refusent sans forçage.","inputSchema":{"type":"object","properties":{"task_id":{"type":"string","minLength":1},"request_id":{"type":"string","minLength":1,"maxLength":128},"target_cwd":{"type":"string","minLength":1,"maxLength":4096},"expected_head":{"type":"string","pattern":"^[0-9a-fA-F]{40}$","minLength":40,"maxLength":40}},"required":["task_id","request_id","target_cwd","expected_head"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":true,"idempotentHint":true,"openWorldHint":true}}),
+         json!({"name":"bridget_task_continue","description":"Ouvre une nouvelle ronde sur son enfant encore gardé, après la remise du résultat. Employer une nouvelle request_id à chaque ronde et la conserver sur retry identique. Le brief est déclaré par le parent ; sources_not_verified : aucune source citée n'est vérifiée. Le journal peut être lu plus largement que l'enfant ; aucun secret dans le brief. Corps du dossier ≤ 16 Kio, refusé plutôt que tronqué. Dans brief.references, chaque objet exige kind et label ; kind=file exige aussi host et path absolu.","inputSchema":{"type":"object","properties":{"task_id":{"type":"string","minLength":1},"request_id":{"type":"string","minLength":1,"maxLength":128},"task":{"type":"string","minLength":1,"maxLength":65536},"brief":brief_schema},"required":["task_id","request_id","task"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":false,"idempotentHint":true,"openWorldHint":true}}),
+         json!({"name":"bridget_task_respond","description":"Répond à une question de son enfant avec l'identifiant lu dans le statut ou l'avis. Les approbations appartiennent à l'humain. Aucun secret dans la réponse.","inputSchema":{"type":"object","properties":{"task_id":{"type":"string","minLength":1},"request_id":{"type":"string","minLength":1},"decision":{"type":"string","enum":["accept","decline","cancel"]},"answer":{"type":"object","description":"Pour accept uniquement : chaque identifiant de question porte un tableau de chaînes, 8 Kio au plus."}},"required":["task_id","request_id","decision"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":false,"idempotentHint":true,"openWorldHint":true}}),
+--- a/crates/bridget-daemon/src/lifecycle.rs
++++ b/crates/bridget-daemon/src/lifecycle.rs
+@@ -580,6 +580,18 @@
+         crate::workspace_git::READ_TIMEOUT,
+     )
+     .map_err(|error| format!("workspace_base_preflight_failed: {error}"))?;
++    if !head.success() && !head.truncated {
++        let git_root = root.stdout.trim();
++        if Path::new(git_root).is_absolute()
++            && git_root.len() <= 4096
++            && !git_root.chars().any(bridget_core::is_disallowed_control)
++        {
++            return Err(format!(
++                "workspace_base_unavailable:source_head:{}",
++                serde_json::json!({"git_root":git_root})
++            ));
++        }
++    }
+     let commit = head.stdout.trim();
+     if !head.success()
+         || head.truncated
+@@ -1977,3 +1989,39 @@
+     }
+     submit_spawn_with_policy(supervisor,registry,source,order,now,false,hosts,true,false)
+ }
++
++/// Contexte fermé du contrôle source ; aucun stderr Git n'est rendu.
++pub(crate) fn source_base_failure_guidance(code: &str) -> Option<serde_json::Value> {
++    if code
++        == "workspace_base_preflight_failed: workspace_git_unsupported: Git 2.44 ou plus est requis"
++    {
++        let message = "Vérifiez la version de Git choisie par le PATH de cet appel. Le contrôle source exige Git 2.44 ou plus et a refusé la version exécutée.";
++        let recovery = "Exécutez git --version dans le même environnement que l'appelant. Une autre installation présente sur la machine ne suffit pas si le PATH ne la choisit pas. Réutilisez une version déjà qualifiée si son emploi est autorisé ; sinon demandez l'installation ou la qualification au responsable. Ne changez pas le PATH global ni le dépôt pour contourner ce refus. Cette demande seule est refusée ; les autres travaux autorisés suivent leur propre état. Conservez toute tâche et request_id connues et vérifiez leur issue avant toute suite.";
++        return Some(
++            serde_json::json!({"status":"refused","code":"workspace_base_preflight_failed","message":message,
++            "detail":{"message":message,"recovery":recovery,"cause":"git_version_unsupported","scope":"this_request","minimum_git":"2.44"}}),
++        );
++    }
++
++    if let Some(encoded) = code.strip_prefix("workspace_base_unavailable:source_head:")
++        && encoded.len() <= 8192
++        && let Ok(value) = serde_json::from_str::<serde_json::Value>(encoded)
++        && let Some(object) = value.as_object()
++        && object.len() == 1
++        && let Some(root) = object.get("git_root").and_then(serde_json::Value::as_str)
++        && Path::new(root).is_absolute()
++        && root.len() <= 4096
++        && !root.chars().any(bridget_core::is_disallowed_control)
++    {
++        let message = format!(
++            "Vérifiez le HEAD du dépôt source détecté par Git : {root}. Dans ce dépôt, HEAD ne désigne pas un commit accessible."
++        );
++        let recovery = "Exécutez git rev-parse --show-toplevel puis git rev-parse --verify 'HEAD^{commit}' dans cwd, sur la machine du parent. Un dossier sans .git peut hériter du dépôt d'un ancêtre : il n'est alors pas hors Git. Un HEAD introuvable ne prouve pas l'absence d'histoire. Vérifiez sa référence et les commits conservés avant toute réparation avec le propriétaire du dépôt. Si ce dépôt ancêtre est involontaire, demandez un dossier source autorisé réellement hors de ce dépôt ; ne supprimez pas .git et ne créez pas de dépôt factice. Ne faites ni reset ni fetch sans avoir établi le dépôt et la référence voulus. Ce refus concerne cette demande ; les autres travaux autorisés suivent leur propre état. Conservez request_id et toute tâche connue. Avant une enveloppe corrigée et une nouvelle clé, confirmez le refus sans tâche ni admission concurrente ; une issue inconnue ne permet aucun remplacement.";
++        return Some(
++            serde_json::json!({"status":"refused","code":"workspace_base_unavailable","message":message,
++            "detail":{"message":message,"recovery":recovery,"scope":"this_request",
++            "cause":"source_head_unresolved","git_root":root,"reference":"HEAD"}}),
++        );
++    }
++    None
++}
+--- a/crates/bridget-daemon/src/native_permissions149_tests.rs
++++ b/crates/bridget-daemon/src/native_permissions149_tests.rs
+@@ -1941,3 +1941,24 @@
+     assert!(!permits_command_execution(&json!({"kind":"codex","sandbox_policy":{"type":"readOnly"}}),true));
+     assert!(!permits_command_execution(&json!({"kind":"unknown"}),false));
+ }
++
++#[test]
++fn spec262_inherited_ancestor_of_worker_private_space_is_refused_without_changing_policy() {
++    let (root, _env, mut mapping, protected) = remote162_fixture("262-protected-ancestor");
++    mapping.source_root = mapping.remote_root.clone();
++    let mut policy = json!({"additional_directories":[root]});
++    let before = policy.clone();
++    assert_eq!(
++        project_policy_directories171(&mut policy, &mapping, &protected, None, true),
++        Err("machine_path_protected".into())
++    );
++    assert_eq!(
++        policy, before,
++        "aucun retrait silencieux d'un répertoire hérité"
++    );
++    let safe = root.join("authorised-documents");
++    fs::create_dir(&safe).unwrap();
++    let mut precise = json!({"additional_directories":[safe]});
++    assert!(project_policy_directories171(&mut precise, &mapping, &protected, None, true).is_ok());
++    fs::remove_dir_all(root).unwrap();
++}
+--- a/crates/bridget-daemon/src/origin_proof.rs
++++ b/crates/bridget-daemon/src/origin_proof.rs
+@@ -115,7 +115,8 @@
+                         return Err("cwd_outside_parent_project".to_owned());
+                     }
+                     crate::lifecycle::validate_parent_source_base(parent,source).map_err(closed_source_error)?;
+-                    if !source.is_local_shared_directory(&request.worker.machine_id,target_machine)
++                    let local_worker_registry=source.is_local_shared_directory(&request.worker.machine_id,target_machine) || (request.worker.machine_id == *target_machine && matches!(source.workspace,Some(WorkspaceRequest::CommitView {})));
++                    if !local_worker_registry
+                         && registry.parent().is_none_or(|root| !crate::project_preparation::has_link(root)) {
+                         return Err("project_preparation_link_missing".into());
+                     }
+@@ -127,7 +128,7 @@
+                     let payload=serde_json::json!({"registry":registry,"machine_id":target_machine,
+                         "origin_host":request.worker.machine_id,"source_root":selected,
+                         "cwd":source.cwd,"commit":source.expected_base_commit,"project_id":project_id,
+-                        "origin_worker_registry":source.is_local_shared_directory(&request.worker.machine_id,target_machine),
++                        "origin_worker_registry":local_worker_registry,
+                         "objects_only":matches!(source.workspace,Some(WorkspaceRequest::CommitView {}))});
+                     let prepared=crate::project_preparation::prepare_receipt_until(&payload,
+                         std::time::Instant::now()+std::time::Duration::from_millis(budget as u64))?;
+@@ -335,6 +336,67 @@
+         assert!(!source.join(".git").exists());
+         assert_eq!(std::fs::read_dir(&source).unwrap().count(),0,"aucun contenu copié ou créé");
+         assert_eq!(std::fs::read(&generic).unwrap(),generic_before,"registre de profil inchangé");
++    // 263 : la vue d'un commit sur le même worker réutilise aussi ce
++    // registre attesté, même si le profil général décrit une autre identité.
++    let git = |args: &[&str]| {
++        let output = std::process::Command::new("git")
++            .arg("-C")
++            .arg(&source)
++            .args(args)
++            .output()
++            .unwrap();
++        assert!(
++            output.status.success(),
++            "{}",
++            String::from_utf8_lossy(&output.stderr)
++        );
++        String::from_utf8(output.stdout).unwrap().trim().to_owned()
++    };
++    git(&["init", "-q"]);
++    git(&[
++        "-c",
++        "user.name=Fixture",
++        "-c",
++        "user.email=fixture@example.com",
++        "commit",
++        "--allow-empty",
++        "-qm",
++        "Fixture263",
++    ]);
++    git(&["config", "--local", "remote.origin.url", "fixture:263"]);
++    let head = git(&["rev-parse", "HEAD"]);
++    let mut config: serde_json::Value =
++        serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
++    config["machines"][&envelope.worker.machine_id]["mappings"] = serde_json::json!({"local263":{
++        "source_host":envelope.worker.machine_id,"source_root":source,"remote_root":source,
++        "expected_git_identity":"fixture:263","mapping_revision":1}});
++    bridget_transport::fsutil::write_private_file_atomic(
++        &path,
++        &serde_json::to_vec(&config).unwrap(),
++    )
++    .unwrap();
++    if let OriginProofOperation::PrepareProject {
++        source, project_id, ..
++    } = &mut envelope.request
++    {
++        source.workspace = Some(WorkspaceRequest::CommitView {});
++        source.expected_base_commit = Some(head);
++        *project_id = Some("local263".into());
++    }
++    assert!(envelope.validate_shape().is_ok());
++    let result = execute_with_context(&envelope, || 10_000, |_| panic!("no provider"), Some(&path));
++    assert!(
++        matches!(
++            result,
++            OriginProofResult::ProjectPrepared {
++                preparation_error: None,
++                project: Some(_),
++                ..
++            }
++        ),
++        "{result:?}"
++    );
++    assert_eq!(std::fs::read(&generic).unwrap(), generic_before);
+     }
+ 
+     #[test]
+--- a/crates/bridget-daemon/src/remote_worker.rs
++++ b/crates/bridget-daemon/src/remote_worker.rs
+@@ -64,6 +64,7 @@
+ fn permission_diagnostic_code(error: &str) -> &str {
+     match error {
+             "effort_unavailable"
++        | "machine_path_protected"
+             | "machine_path_unverifiable"
+             | "model_unavailable"
+             | "permission_attestation_unavailable"
+@@ -133,10 +134,26 @@
+     correlation_id: &'a str,
+     admission_id: &'a str,
+     emitted: std::cell::Cell<usize>,
++    protected_candidates: std::cell::RefCell<BTreeSet<String>>,
+ }
+ impl<'a> ProbePermissionDiagnostics<'a> {
+     fn new(correlation_id: &'a str, admission_id: &'a str) -> Self {
+-        Self { correlation_id, admission_id, emitted: std::cell::Cell::new(0) }
++        Self { correlation_id, admission_id, emitted: std::cell::Cell::new(0), protected_candidates: std::cell::RefCell::new(BTreeSet::new()) }
++    }
++    fn refusal(
++        &self,
++        candidate_id: &str,
++        reason: CandidateProbeRefusal,
++        negotiated: bool,
++    ) -> CandidateProbeRefusal {
++        if negotiated
++            && reason == CandidateProbeRefusal::PermissionsChanged
++            && self.protected_candidates.borrow().contains(candidate_id)
++        {
++            CandidateProbeRefusal::PermissionPathProtected
++        } else {
++            reason
++        }
+     }
+     fn note(&self, candidate_id: &str, site: ProbePermissionSite, error: &str) -> Option<String> {
+         self.note_with_witness(candidate_id, site, error, None)
+@@ -145,8 +162,7 @@
+         detail: Option<(Option<crate::native_permissions::ProjectionGuard>,
+             &crate::native_permissions::ProjectionWitnessSummary171)>,
+     ) -> Option<String> {
+-        if self.emitted.get() >= MAX_PROBE_PERMISSION_NOTES
+-            || self.correlation_id.len() != 36
++        if self.correlation_id.len() != 36
+             || uuid::Uuid::parse_str(self.correlation_id).is_err()
+             || self.admission_id.len() != 34
+             || !self.admission_id.starts_with("a-")
+@@ -155,6 +171,14 @@
+         { return None; }
+         // Exact closed codes only, never an error message or a prefix match.
+         let code = permission_diagnostic_code(error);
++        if code == "machine_path_protected" {
++            self.protected_candidates
++                .borrow_mut()
++                .insert(candidate_id.to_owned());
++        }
++        if self.emitted.get() >= MAX_PROBE_PERMISSION_NOTES {
++            return None;
++        }
+         let mut value = serde_json::json!({"event":"worker_probe_permission_refused",
+             "correlation_id":self.correlation_id,"admission_id":self.admission_id,
+             "candidate_id":candidate_id,"site":site.as_str(),"code":code});
+@@ -3740,6 +3764,7 @@
+     last_resource_refresh: Instant,
+     provider_accounts_negotiated: bool,
+     program_compatibility_negotiated: bool,
++    permission_reasons_negotiated: bool,
+ }
+ 
+ impl WorkerRuntime {
+@@ -4024,7 +4049,7 @@
+         }
+         if !self.held.is_empty()
+             || (self.prepared.len()>=128 && !self.prepared.contains_key(&command.command_id)) {
+-            return Err((WorkerRefusal::ResourceLimit,None));
++            return Err((WorkerRefusal::ResourceLimit,Some(if self.held.is_empty(){crate::workspace_git::ExportFailure::MetadataCapacity}else{crate::workspace_git::ExportFailure::OperationCapacity})));
+         }
+         let registry=self.registry().map_err(|r|(r,None))?;
+         if let Some((selection,_,_))=&routing {
+@@ -4088,7 +4113,7 @@
+             pending.correlations.insert(request.correlation_id.clone());
+             return Ok(true);
+         }
+-        if self.view_preparations.len()>=128 {return Err((WorkerRefusal::ResourceLimit,None));}
++        if self.view_preparations.len()>=128 {return Err((WorkerRefusal::ResourceLimit,Some(crate::workspace_git::ExportFailure::OperationCapacity)));}
+         let seed=self.native_view_plan(&request.command,prepare)?;
+         let read=self.begin_prepared_view(&request.command,prepare,routing,seed)?;
+         self.view_preparations.insert(key,PendingViewPreparation{operation_digest:digest,read,
+@@ -4373,7 +4398,7 @@
+             return Ok(Some(previous.prepared.clone()));
+         }
+         if self.prepared.len()>=128 || !self.held.is_empty() {
+-            return Err((WorkerRefusal::ResourceLimit,None));
++            return Err((WorkerRefusal::ResourceLimit,Some(if self.held.is_empty(){crate::workspace_git::ExportFailure::MetadataCapacity}else{crate::workspace_git::ExportFailure::OperationCapacity})));
+         }
+         let prepared=WorkerPrepared {
+             workspace:Some(serde_json::to_value(record).map_err(|_|(WorkerRefusal::WorkspacePrepareFailed,None))?),
+@@ -4909,6 +4934,7 @@
+             last_resource_refresh: Instant::now(),
+             provider_accounts_negotiated: false,
+             program_compatibility_negotiated: false,
++            permission_reasons_negotiated: false,
+         };
+         runtime
+             .reconcile_all()
+@@ -5018,7 +5044,7 @@
+         let prepared=self.prepared.values().map(|p|PathBuf::from(&p.prepared.placement.execution_cwd)).collect();
+         read::ProbeReadContext {config:self.config.clone(),identity:self.identity.clone(),
+             credential:self.credential.clone(),source:self.source.clone(),prepared,command_roots:std::cell::RefCell::new(None),
+-            provider_accounts_negotiated:self.provider_accounts_negotiated,host_resources:self.host_resources.clone()}
++            provider_accounts_negotiated:self.provider_accounts_negotiated, permission_reasons_negotiated:self.permission_reasons_negotiated,host_resources:self.host_resources.clone()}
+     }
+ 
+     fn dispatch_probe_read(&self,inbound:WorkerInbound,slot:&Arc<AtomicBool>,
+@@ -6748,7 +6774,7 @@
+ 
+ #[derive(Debug,Clone,Copy,Default)]
+ struct MasterWorkerFeatures {
+-    candidate_probe:bool,probe_v2:bool,workload_tools:bool,release_lease:bool,source_proof:bool,
++    candidate_probe:bool,probe_v2:bool, permission_reasons:bool,workload_tools:bool,release_lease:bool,source_proof:bool,
+     slot_deadline:bool,workspace_diagnostics:bool,origin_proof:bool,origin_project_context:bool,workspace_repair:bool,
+     start_recovery:bool,workspace_failure:bool,provider_catalogue:bool,model_options:bool,provider_accounts:bool,workspace_view:bool,workspace_view_create:bool,execution_status:bool,program_compatibility:bool,
+ }
+@@ -6756,7 +6782,7 @@
+     fn supports(&self,capability:WorkerCapability)->bool {
+         match capability {
+             WorkerCapability::CandidateProbeV1=>self.candidate_probe,
+-            WorkerCapability::CandidateProbeV2=>self.probe_v2,
++            WorkerCapability::CandidateProbeV2=>self.probe_v2, WorkerCapability::CandidateProbePermissionReasonsV1=>self.probe_v2 && self.permission_reasons,
+             WorkerCapability::WorkloadToolsV1=>self.workload_tools && self.probe_v2,
+             WorkerCapability::ReleaseLeaseV2=>self.release_lease,
+             WorkerCapability::ParentSourceProofV1=>self.source_proof,
+@@ -6776,7 +6802,7 @@
+         }
+     }
+     fn capabilities(&self)->Vec<WorkerCapability> {
+-        [WorkerCapability::CandidateProbeV1,WorkerCapability::CandidateProbeV2,WorkerCapability::WorkloadToolsV1,
++        [WorkerCapability::CandidateProbeV1,WorkerCapability::CandidateProbeV2, WorkerCapability::CandidateProbePermissionReasonsV1,WorkerCapability::WorkloadToolsV1,
+             WorkerCapability::ReleaseLeaseV2,WorkerCapability::ParentSourceProofV1,
+             WorkerCapability::ResultSlotDeadlineV1,WorkerCapability::OriginProofV1,WorkerCapability::OriginProjectContextV1,
+             WorkerCapability::WorkspaceRepairV1,WorkerCapability::StartRecoveryV1,WorkerCapability::WorkspaceFailureV1, WorkerCapability::ProviderCatalogueV1, WorkerCapability::ModelOptionsV1, WorkerCapability::ProviderAccountsV1, WorkerCapability::WorkspaceViewV1,WorkerCapability::WorkspaceViewCreateV1,WorkerCapability::ExecutionStatusV1,WorkerCapability::ProgramCompatibilityV1]
+@@ -6785,7 +6811,7 @@
+                 && (*v!=WorkerCapability::WorkspaceViewCreateV1 || crate::workspace_git::COMMIT_VIEW_LAUNCH_ENABLED)).collect()
+     }
+     fn admits(&self,accepted:&[WorkerCapability])->bool {
+-        accepted.len()<=32
++        accepted.len()<=32 && (!accepted.contains(&WorkerCapability::CandidateProbePermissionReasonsV1) || accepted.contains(&WorkerCapability::CandidateProbeV2))
+             && (!accepted.contains(&WorkerCapability::WorkloadToolsV1)
+                 || accepted.contains(&WorkerCapability::CandidateProbeV2))
+             && (!accepted.contains(&WorkerCapability::OriginProjectContextV1)
+@@ -6834,7 +6860,7 @@
+             if features.iter().any(|v|v=="remote_worker_v1")=>{
+             let has=|name:&str|features.iter().any(|v|v==name);
+             Ok(MasterWorkerFeatures {
+-                candidate_probe:has("worker_candidate_probe_v1"),probe_v2:has("worker_candidate_probe_v2"),
++                candidate_probe:has("worker_candidate_probe_v1"),probe_v2:has("worker_candidate_probe_v2"), permission_reasons:has("worker_candidate_probe_permission_reasons_v1"),
+                 workload_tools:has("worker_workload_tools_v1"),
+                 release_lease:has("worker_release_lease_v2"),source_proof:has("worker_parent_source_proof_v1"),
+                 slot_deadline:has("worker_result_slot_deadline_v1"),
+@@ -6982,7 +7008,7 @@
+                 }
+                 _ => return Err("worker_handshake_invalid".into()),
+             };
+-        runtime.provider_accounts_negotiated = negotiated.contains(&WorkerCapability::ProviderAccountsV1);
++        runtime.provider_accounts_negotiated = negotiated.contains(&WorkerCapability::ProviderAccountsV1); runtime.permission_reasons_negotiated=negotiated.contains(&WorkerCapability::CandidateProbePermissionReasonsV1);
+         runtime.program_compatibility_negotiated = negotiated.contains(&WorkerCapability::ProgramCompatibilityV1);
+         if negotiated.contains(&WorkerCapability::ProviderCatalogueV1) {catalogues.activate(&epoch);} else {catalogues.deactivate();}
+         let mut catalogue_sent=BTreeMap::<String,(String,u64)>::new();
+--- a/crates/bridget-daemon/src/remote_worker_read.rs
++++ b/crates/bridget-daemon/src/remote_worker_read.rs
+@@ -712,7 +712,7 @@
+     let outcome = if before
+         .iter()
+         .flatten()
+-        .any(|m| m.mode & libc::S_IFMT as u32 != libc::S_IFREG as u32)
++        .any(|m| u64::from(m.mode) & u64::from(libc::S_IFMT) != u64::from(libc::S_IFREG))
+     {
+         Err("diagnostic_file_type_invalid".into())
+     } else {
+@@ -1362,7 +1362,7 @@
+     pub(super) source:crate::lifecycle::SourceEnvironment,
+     pub(super) prepared:Vec<PathBuf>,
+     pub(super) command_roots:RefCell<Option<Result<Vec<PathBuf>,CandidateProbeRefusal>>>,
+-    pub(super) provider_accounts_negotiated:bool,
++    pub(super) provider_accounts_negotiated:bool, pub(super) permission_reasons_negotiated:bool,
+     pub(super) host_resources:crate::host_resources::HostResourceCollector,
+ }
+ impl ProbeReadContext {
+@@ -1737,7 +1737,11 @@
+                     CandidateProbeVerdict::Ineligible { reason, .. } => {
+                         CandidateProbeV2Verdict::Ineligible {
+                             candidate_id: candidate.candidate_id.clone(),
+-                            reason,
++                            reason: diagnostics.refusal(
++                                &candidate.candidate_id,
++                                reason,
++                                self.permission_reasons_negotiated,
++                            ),
+                         }
+                     }
+                 };
+@@ -1749,7 +1753,7 @@
+             for verdict in &mut verdicts {
+                 if let CandidateProbeV2Verdict::Eligible { candidate_id, .. } = verdict {
+                     observe_probe_permission_failure(&code, Some((&diagnostics, candidate_id)), ProbePermissionSite::BatchFinish);
+-                    *verdict = CandidateProbeV2Verdict::Ineligible { candidate_id: candidate_id.clone(), reason: CandidateProbeRefusal::PermissionsChanged };
++                    *verdict = CandidateProbeV2Verdict::Ineligible { candidate_id: candidate_id.clone(), reason: diagnostics.refusal(candidate_id, CandidateProbeRefusal::PermissionsChanged, self.permission_reasons_negotiated) };
+                 }
+             }
+         }
+--- a/crates/bridget-daemon/src/remote_worker_tests.rs
++++ b/crates/bridget-daemon/src/remote_worker_tests.rs
+@@ -6584,3 +6584,129 @@
+         assert_eq!(fs::read(&enrolled).unwrap(),before);assert_eq!(fs::read(invalid).unwrap(),b"{");
+     }
+ 
++
++#[test]
++fn spec262_protected_path_reason_is_closed_scoped_and_negotiated() {
++    let diagnostics = ProbePermissionDiagnostics::new(
++        "26200000-0000-4000-8000-000000000001",
++        "a-26200000000000000000000000000001",
++    );
++    let note = diagnostics
++        .note(
++            "c001",
++            ProbePermissionSite::Projection,
++            "machine_path_protected",
++        )
++        .unwrap();
++    assert_eq!(
++        serde_json::from_str::<serde_json::Value>(&note).unwrap()["code"],
++        "machine_path_protected"
++    );
++    let old = CandidateProbeRefusal::PermissionsChanged;
++    assert_eq!(diagnostics.refusal("c001", old, false), old);
++    assert_eq!(diagnostics.refusal("c002", old, true), old);
++    assert_eq!(
++        diagnostics.refusal("c001", old, true),
++        CandidateProbeRefusal::PermissionPathProtected
++    );
++    assert_eq!(
++        diagnostics.refusal("c001", CandidateProbeRefusal::ResourceLimit, true),
++        CandidateProbeRefusal::ResourceLimit
++    );
++    assert_eq!(
++        permission_diagnostic_code("machine_path_protected:private-token"),
++        "unknown"
++    );
++    diagnostics.note(
++        "c002",
++        ProbePermissionSite::Projection,
++        "machine_path_protected",
++    );
++    assert_eq!(
++        diagnostics.refusal("c001", old, true),
++        CandidateProbeRefusal::PermissionPathProtected
++    );
++    assert_eq!(
++        diagnostics.refusal("c002", old, true),
++        CandidateProbeRefusal::PermissionPathProtected
++    );
++    diagnostics.emitted.set(MAX_PROBE_PERMISSION_NOTES);
++    assert!(
++        diagnostics
++            .note(
++                "c003",
++                ProbePermissionSite::Projection,
++                "machine_path_protected"
++            )
++            .is_none()
++    );
++    assert_eq!(
++        diagnostics.refusal("c003", old, true),
++        CandidateProbeRefusal::PermissionPathProtected
++    );
++    let old_master = MasterWorkerFeatures {
++        probe_v2: true,
++        ..Default::default()
++    };
++    let current = MasterWorkerFeatures {
++        probe_v2: true,
++        permission_reasons: true,
++        ..Default::default()
++    };
++    let capability = WorkerCapability::CandidateProbePermissionReasonsV1;
++    assert!(!old_master.capabilities().contains(&capability));
++    assert!(!old_master.admits(&[WorkerCapability::CandidateProbeV2, capability]));
++    assert!(!current.admits(&[capability]));
++    assert!(current.admits(&[WorkerCapability::CandidateProbeV2, capability]));
++}
++
++#[test]
++fn spec263_view_capacity_keeps_its_closed_cause() {
++    let fixture = Fixture::new();
++    let (mut runtime, mut intent, prepared) = c19_prepared_view_fixture(&fixture);
++    let mut command = prepared.command.clone();
++    command.command_id = "capacity263".into();
++    command.task_id = "capacity263".into();
++    let request = prepared.request.clone();
++    intent.binding =
++        commit_view_preparation_binding(&runtime.identity, &command, &request).unwrap();
++    for index in 0..128 {
++        runtime.prepared.insert(
++            format!("reserved263-{index}"),
++            PreparedRuntime {
++                routing: prepared.routing.clone(),
++                command: prepared.command.clone(),
++                request: prepared.request.clone(),
++                prepared: prepared.prepared.clone(),
++                expires: prepared.expires,
++            },
++        );
++    }
++    assert!(matches!(
++        runtime.begin_prepared_view(&command, &request, None, c19_plan(&intent)),
++        Err((
++            WorkerRefusal::ResourceLimit,
++            Some(crate::workspace_git::ExportFailure::MetadataCapacity)
++        ))
++    ));
++    let response = WorkerResponse {
++        version: REMOTE_WORKER_VERSION,
++        correlation_id: "capacity263".into(),
++        connection_epoch: "epoch263".into(),
++        worker: runtime.identity.clone(),
++        command,
++        response: WorkerRuntime::view_prepare_rejection((
++            WorkerRefusal::ResourceLimit,
++            Some(crate::workspace_git::ExportFailure::MetadataCapacity),
++        )),
++    };
++    response.validate().unwrap();
++    assert!(matches!(
++        response.response,
++        WorkerResponseOperation::CommitViewRejected {
++            reason: WorkerRefusal::ResourceLimit,
++            failure: crate::workspace_git::ExportFailure::MetadataCapacity
++        }
++    ));
++    assert!(runtime.held.is_empty() && runtime.running.is_empty());
++}
+--- a/crates/bridget-daemon/src/wrapper.rs
++++ b/crates/bridget-daemon/src/wrapper.rs
+@@ -630,11 +630,10 @@
+                 let signal = crate::managed_process::remote_drain::signal_pass();
+                 if !reported && started.elapsed() >= REMOTE_DRAIN_DIAGNOSTIC_AFTER {
+                     let cause = if signal.is_err() { "signal_refused" } else { "owners_waiting" };
+-                    if let Some(writer) = journal.as_ref().and_then(|j|j.writer.as_ref()) {
+-                        if let Ok(payload) = remote_drain_wait_payload(&command, &machine, "closing_transport", cause) {
+-                            let _ = writer.enqueue("error", None, payload);
+-                        }
+-                    }
++                    if let Some(writer) = journal.as_ref().and_then(|j|j.writer.as_ref())
++ && let Ok(payload) = remote_drain_wait_payload(&command, &machine, "closing_transport", cause) {
++ let _ = writer.enqueue("error", None, payload);
++ }
+                     eprintln!("bridget_remote_drain221 task={} command={} machine={} phase=closing_transport cause={cause}",
+                         command.task_id, command.command_id, machine);
+                     reported = true;
+@@ -646,11 +645,10 @@
+             Err(_) => {
+                 // Pas de boucle infinie d'allocation de threads. Le transport
+                 // garde son propre arrêt et aucune preuve de fin n'est créée.
+-                if let Some(writer) = fallback.as_ref().and_then(|j|j.writer.as_ref()) {
+-                    if let Ok(payload) = remote_drain_wait_payload(&self.command, &self.machine, "closing_transport", "signaler_unavailable") {
+-                        let _ = writer.enqueue("error", None, payload);
+-                    }
+-                }
++                if let Some(writer) = fallback.as_ref().and_then(|j|j.writer.as_ref())
++ && let Ok(payload) = remote_drain_wait_payload(&self.command, &self.machine, "closing_transport", "signaler_unavailable") {
++ let _ = writer.enqueue("error", None, payload);
++ }
+                 eprintln!("bridget_remote_drain221 task={} command={} machine={} phase=closing_transport cause=signaler_unavailable",
+                     self.command.task_id, self.command.command_id, self.machine);
+             }
+@@ -4807,11 +4805,10 @@
+     crate::environment::validate_existing_tree(&journal_root.join(&my_name))?;
+     transport.activate_journal(&journal_root, &my_name, Some(live_feed.clone()))?;
+     #[cfg(target_os = "linux")]
+-    if let Some(guard) = &remote_drain {
+-        if let Some((writer, session)) = transport.journal_writer() {
+-            guard.set_journal(&journal_root, &my_name, &session, Some(writer));
+-        }
+-    }
++    if let Some(guard) = &remote_drain
++ && let Some((writer, session)) = transport.journal_writer() {
++ guard.set_journal(&journal_root, &my_name, &session, Some(writer));
++ }
+     apply_pending_profile_instructions(socket, transport.as_mut(), &my_name, &instance_id);
+     send_wrapper_message(&writer, WrapperToDaemon::JournalReady { receipt_probe: true });
+     send_wrapper_message(&writer, WrapperToDaemon::DaemonIdentityRequest);
+@@ -5386,11 +5383,10 @@
+                         let feed=JournalLiveFeed::default();
+                         if transport.activate_journal(&journal_root,&my_name,Some(feed.clone())).is_ok() {
+                             #[cfg(target_os = "linux")]
+-                            if let Some(guard) = &remote_drain {
+-                                if let Some((writer, session)) = transport.journal_writer() {
+-                                    guard.set_journal(&journal_root, &my_name, &session, Some(writer));
+-                                }
+-                            }
++                            if let Some(guard) = &remote_drain
++ && let Some((writer, session)) = transport.journal_writer() {
++ guard.set_journal(&journal_root, &my_name, &session, Some(writer));
++ }
+                             relay.shutdown();
+                             let relay_writer=writer.clone();
+                             relay=AttachRelayWorker::start(journal_root.join(&my_name),feed,
+@@ -5672,11 +5668,10 @@
+                         warn!("journal après relance impossible: {error}");
+                     } else {
+                         #[cfg(target_os = "linux")]
+-                        if let Some(guard) = &remote_drain {
+-                            if let Some((writer, session)) = transport.journal_writer() {
+-                                guard.set_journal(&journal_root, &my_name, &session, Some(writer));
+-                            }
+-                        }
++                        if let Some(guard) = &remote_drain
++ && let Some((writer, session)) = transport.journal_writer() {
++ guard.set_journal(&journal_root, &my_name, &session, Some(writer));
++ }
+                     }
+                     apply_pending_profile_instructions(
+                         socket,
+--- a/crates/bridget-transport/src/claude_stream_json.rs
++++ b/crates/bridget-transport/src/claude_stream_json.rs
+@@ -161,6 +161,8 @@
+     message_id: String,
+     completion: mpsc::Sender<ManagedTerminal>,
+     response: String,
++    /// Réponses déjà terminées pendant l'attente des tâches de fond.
++    preceding_responses: Vec<String>,
+     /// Nombre d'événements journal `update` texte déjà écrits pour ce tour.
+     text_updates: usize,
+     /// Issue fournisseur (`end_turn`, …) — absente ⇒ le fil affiche « inconnu ».
+@@ -1243,6 +1245,7 @@
+                 message_id: message.id.clone(),
+                 completion,
+                 response: String::new(),
++                preceding_responses: Vec::new(),
+                 text_updates: 0,
+                 stop_reason: None,
+                 permission_denied: false,
+@@ -1311,7 +1314,12 @@
+             let (response, stop_reason) = {
+                 let mut state = queue.0.lock().unwrap_or_else(|poison| poison.into_inner());
+                 match state.active.take() {
+-                    Some(active) => (active.response, active.stop_reason),
++                    Some(mut active) => {
++                        // Une seule concaténation, O(total des textes), sans
++                        // recopier tout l'historique à chaque notification.
++                        active.preceding_responses.push(active.response);
++                        (active.preceding_responses.join("\n\n"), active.stop_reason)
++                    }
+                     None => (String::new(), None),
+                 }
+             };
+@@ -2045,9 +2053,14 @@
+                     if matches!(terminal, ManagedTerminal::Completed)
+                         && active.background_tasks.pending()
+                     {
+-                        // Comme T3, une fin de tour ne clôt pas les tâches du fournisseur.
+-                        // Le prochain rapport reste dans la même mission et son délai initial.
+-                        active.response.clear();
++                        // Une fin de tour ne clôt pas les tâches du fournisseur.
++                        // Garder le rapport : le tour suivant peut n'être qu'une
++                        // note de fin. La mission conserve son délai initial.
++                        if !active.response.is_empty() {
++                            active
++                                .preceding_responses
++                                .push(std::mem::take(&mut active.response));
++                        }
+                         active.text_updates = 0;
+                         active.stop_reason = None;
+                     } else {
+--- a/crates/bridget-transport/src/claude_stream_json_tests.rs
++++ b/crates/bridget-transport/src/claude_stream_json_tests.rs
+@@ -245,7 +245,7 @@
+             .collect();
+         assert_eq!(
+             results,
+-            vec![("background-mission", "rapport final, commit termine")]
++            vec![("background-mission", "calcul en cours, rapport a venir\n\ntoujours en cours\n\nrapport final, commit termine")]
+         );
+         transport.stop();
+         fs::remove_dir_all(root).unwrap();
+--- a/crates/bridget-transport/src/protocol.rs
++++ b/crates/bridget-transport/src/protocol.rs
+@@ -2907,6 +2907,7 @@
+ pub enum WorkerCapability {
+     CandidateProbeV1,
+     CandidateProbeV2,
++    CandidateProbePermissionReasonsV1,
+     WorkloadToolsV1,
+     ReleaseLeaseV2,
+     WorkspaceRepairV1,
+@@ -3251,6 +3252,7 @@
+     MappingUnavailable,
+     DefinitionUnavailable,
+     PermissionsChanged,
++    PermissionPathProtected,
+     WorkspaceUnavailable,
+     WorkspaceLimit,
+     WorkspaceDirty,
+--- a/crates/bridget-transport/src/protocol_tests.rs
++++ b/crates/bridget-transport/src/protocol_tests.rs
+@@ -40,11 +40,15 @@
+             connection_epoch: "epoch".into(), worker: worker162_identity(), command: worker162_command(),
+             request: WorkerRequestOperation::ParentSourceProof { parent: parent.clone(), source: source.clone() } };
+         assert_eq!(request.validate(), Ok(()));
+-        for invalid in ["/other", "/remote/project/../other"] {
++        for invalid in ["/remote/project/../other"] {
+             if let WorkerRequestOperation::ParentSourceProof { source, .. } = &mut request.request { source.cwd = invalid.into(); }
+             assert_eq!(request.validate(), Err(WorkerRefusal::InvalidEnvelope));
+         }
+-        request.request = WorkerRequestOperation::ParentSourceProof { parent: parent.clone(), source: WorkerSourceBase { expected_base_commit: Some("x".repeat(40)), ..source } };
++        if let WorkerRequestOperation::ParentSourceProof { source, .. } = &mut request.request {
++        source.cwd = "/another-authorised-project".into();
++    }
++    assert_eq!(request.validate(), Ok(()), "le parent global n'est pas limité à son cwd ; le worker contrôle le mandat réel");
++    request.request = WorkerRequestOperation::ParentSourceProof { parent: parent.clone(), source: WorkerSourceBase { expected_base_commit: Some("x".repeat(40)), ..source } };
+         assert_eq!(request.validate(), Err(WorkerRefusal::InvalidEnvelope));
+         let old = WorkerRequestOperation::ParentProof { parent: parent.clone(), expected_revision: 1 };
+         assert_eq!(serde_json::to_value(&old).unwrap(), serde_json::json!({"operation":"parent_proof","parent":parent,"expected_revision":1}));
+--- a/docs/delegation-native.fr.md
++++ b/docs/delegation-native.fr.md
+@@ -1142,12 +1142,22 @@
+ - **`discovery` :** avec un parent attesté, la mission reste en lecture seule. Sans
+   preuve, cette valeur suit le chemin 148 : un grant humain existant est requis,
+   sinon `delegation_grant_required`.
++  Avec Claude ou GLM, les seuls outils sont `Read`, `Glob` et `Grep`.
++  `WebSearch`, `WebFetch` et `Bash` sont interdits. Cette posture et sa
++  stratégie `commit_view` ne conviennent donc pas à une recherche Internet.
++  Changer de machine ne change pas ce plafond. Vérifier la politique héritée
++  et les outils de la connexion avant de confier une recherche web.
+ - **`development` :** avec un parent attesté, l'écriture n'est accordée que si la
+   politique du parent et la cible le permettent. Sans preuve, la demande est refusée
+   avec `permission_attestation_unavailable`. Le motif éventuel figure dans
+   `development_refusal`.
+ 
+ **Ce qui passe d'un parent à une cible (149) :**
++
++Le placement du dépôt ne prouve pas l'accès aux ressources externes du projet.
++Bridget ne transfère ni données externes, ni alias SSH, ni clés. Vérifier ces
++prérequis et fournir `machine_id` quand une ressource impose une destination.
++Le catalogue ne certifie pas la disponibilité du web ou d'un hôte SSH.
+ 
+ - **Codex vers Codex :** Bridget garde la politique d'approbation, le bac à sable et le
+   réseau du parent. Un parent en lecture seule ne donne pas `development`
+--- a/scripts/prepare-project.py
++++ b/scripts/prepare-project.py
+@@ -735,8 +735,11 @@
+     require(type(request.get("origin_worker_registry", False)) is bool,
+             "project_preparation_operation")
+     if request.get("origin_worker_registry", False):
+-        require(request.get("commit") is None
+-                and request["machine_id"] == request["origin_host"],
++        require(request["machine_id"] == request["origin_host"]
++                and (request.get("commit") is None
++                     or (request.get("objects_only") is True
++                         and re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}",
++                                          request["commit"]) is not None)),
+                 "project_preparation_operation")
+         _, config = registry_read(expected)
+         machine(config, request)

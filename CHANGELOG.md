@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.8.29
+
+- Conserver les comptes rendus précédents quand une tâche de fond retarde le résultat final.
+- Préparer une vue locale avec le registre du worker attesté, sans consulter une autre identité de profil.
+- Expliquer la ronde déjà terminée avant un refus de guidage et conserver les causes précises des limites de préparation.
+- Préciser les outils interdits en discovery, les ressources externes non transférées et la lecture des journaux après arrêt.
+- Journaliser l’étape et le type fermé des erreurs de transport, sans contenu ni chemin.
+
 ## 0.8.28
 
 - Transmettre le refus d’un chemin protégé dans l’admission, avec sa cause constatée et une capacité négociée compatible avec les anciens pairs. Conserver les causes distinctes d’un même lot.
