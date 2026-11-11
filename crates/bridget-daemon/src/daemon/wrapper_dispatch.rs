@@ -4354,3 +4354,16 @@ pub(super) fn on_disk_space(fact: bridget_transport::protocol::DiskSpaceFact, co
             presence.disk_space = Some(fact);
             None
         }
+
+pub(super) fn on_control_state_set(version: u16, command_id: String, expected_generation: u64, paused: Option<bool>, auto_objectives_cap: Option<u32>, reason: Option<String>, agent_posture: Option<bridget_transport::protocol::AgentPosture>, auto_reassignment: Option<bool>, conn_id: &str, state: &Arc<Mutex<DaemonState>>) -> Option<DaemonToWrapper> { Some(handle_control_state_set(
+            state,
+            conn_id,
+            version,
+            &command_id,
+            expected_generation,
+            paused,
+            auto_objectives_cap,
+            reason.as_deref(),
+            agent_posture,
+            auto_reassignment,
+        )) }
