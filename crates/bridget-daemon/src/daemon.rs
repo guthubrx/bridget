@@ -16563,14 +16563,7 @@ fn handle_wrapper_message_with_peer(
             source,
             host,
             worktree_root,
-        } => Some(announce_communication_project(
-            state,
-            conn_id,
-            &root,
-            source,
-            &host,
-            worktree_root.as_deref(),
-        )),
+        } => wrapper_dispatch::on_communication_project_fact(root, source, host, worktree_root, conn_id, state),
         WrapperToDaemon::DirectoryScoped { scope } => {
             wrapper_dispatch::on_directory_scoped(scope, conn_id, state)
         }

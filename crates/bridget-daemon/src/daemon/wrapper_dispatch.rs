@@ -4780,3 +4780,12 @@ pub(super) fn on_domain(agent: String, domain: Option<String>, conn_id: &str, st
                 &mut st,
             ))
         }
+
+pub(super) fn on_communication_project_fact(root: String, source: bridget_transport::protocol::CommunicationProjectSource, host: String, worktree_root: Option<String>, conn_id: &str, state: &Arc<Mutex<DaemonState>>) -> Option<DaemonToWrapper> { Some(announce_communication_project(
+            state,
+            conn_id,
+            &root,
+            source,
+            &host,
+            worktree_root.as_deref(),
+        )) }
