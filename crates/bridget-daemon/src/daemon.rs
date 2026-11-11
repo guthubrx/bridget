@@ -16675,9 +16675,7 @@ fn handle_wrapper_message_with_peer(
             subject,
             context,
             options,
-        } => Some(handle_human_inbox_deposit(
-            state, version, &dedup_key, kind, &subject, &context, &options,
-        )),
+        } => wrapper_dispatch::on_human_inbox_deposit(version, dedup_key, kind, subject, context, options, state),
         WrapperToDaemon::ControlFocusPublish { version, focus } => {
             Some(handle_control_focus_publish(state, version, focus))
         }

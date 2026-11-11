@@ -4850,3 +4850,7 @@ pub(super) fn on_child_request(request: bridget_transport::protocol::ChildProvid
                 native_child_requests::receive(conn_id, request, state)
             }
         }
+
+pub(super) fn on_human_inbox_deposit(version: u16, dedup_key: String, kind: bridget_transport::protocol::HumanInboxKind, subject: bridget_transport::protocol::HumanInboxSubject, context: String, options: Vec<String>, state: &Arc<Mutex<DaemonState>>) -> Option<DaemonToWrapper> { Some(handle_human_inbox_deposit(
+            state, version, &dedup_key, kind, &subject, &context, &options,
+        )) }
