@@ -17287,14 +17287,7 @@ fn handle_wrapper_message_with_peer(
         WrapperToDaemon::ChildRequestClosed {
             request_id,
             state: closed_state,
-        } => {
-            let st = state.lock().recover_poison();
-            if user_input::native_ack(conn_id, &request_id, None, Some(closed_state), &st) {
-                return None;
-            }
-            native_child_requests::closed(conn_id, &request_id, closed_state, &st);
-            None
-        }
+        } => wrapper_dispatch::on_child_request_closed(request_id, closed_state, conn_id, state),
 
         // Le contrôle de rôle mobile est exécuté avant cette matrice.
         WrapperToDaemon::AgentTracking { .. }

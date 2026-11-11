@@ -4829,3 +4829,12 @@ pub(super) fn on_delegation_cancel(version: u16, task_id: String, request_id: St
             &task_id,
             &request_id,
         )) }
+
+pub(super) fn on_child_request_closed(request_id: String, closed_state: bridget_transport::protocol::ChildRequestClosedState, conn_id: &str, state: &Arc<Mutex<DaemonState>>) -> Option<DaemonToWrapper> {
+            let st = state.lock().recover_poison();
+            if user_input::native_ack(conn_id, &request_id, None, Some(closed_state), &st) {
+                return None;
+            }
+            native_child_requests::closed(conn_id, &request_id, closed_state, &st);
+            None
+        }
