@@ -12799,11 +12799,15 @@ pub(super) fn capture_reply(
         let Some(past) = past else {
             return super::agent_tracking::retain_classic_reply(st, conn, message);
         };
-        return Ok(past.child == message.from
+        let authorized = past.child == message.from
             && past.owner == message.to
             && past.child_instance.as_ref().is_some_and(|instance| {
                 live_connection_identity(st, conn) == Some((past.child.clone(), instance.clone()))
-            }));
+            });
+        if authorized && message.id.starts_with("reply244-") {
+            return Err("retained_reply_native_past_mission: Conservez cette réponse et le task_id existant ; cette ronde est close. Le parent consulte les résultats et fichiers conservés. Ne recréez pas la mission pour renvoyer ce résultat.".into());
+        }
+        return Ok(authorized);
     };
     if task.child != message.from
         || task.owner != message.to
@@ -12819,6 +12823,9 @@ pub(super) fn capture_reply(
     }
     if message.body.len() > 262144 || message.body.trim().is_empty() {
         return Err("native_result_invalid".into());
+    }
+    if (task.terminal() || task.state == "cancelling") && task.result.is_none() {
+        return Err("retained_reply_native_terminal: Conservez cette réponse et le task_id existant ; la tâche est déjà close ou en arrêt. Faites récupérer le résultat conservé par le propriétaire ou la maintenance. Aucune nouvelle mission ni réouverture n'est autorisée par ce refus.".into());
     }
     if quota_enabled(&task) && task.state == "working" {
         if task.quota_hold.is_some() {
@@ -12837,7 +12844,11 @@ pub(super) fn capture_reply(
     // Un résultat est durable avant l'ACK au wrapper. Le parent sera réveillé
     // seulement quand tous les mandats descendants ont fini.
     st.delegation_store.save(&task)?;
-    settle_result_tracked_request(st, &task)?;
+    if let Err(error) = settle_result_tracked_request(st, &task) {
+        warn!(
+            "résultat local enregistré, clôture du suivi différée au prochain entretien : {error}"
+        );
+    }
     Ok(true)
 }
 
@@ -16750,6 +16761,13 @@ pub(super) fn result_suppresses_reminders(st: &DaemonState, mission: &str) -> bo
     let Ok(Some(task)) = st.delegation_store.for_mission(mission) else {
         return false;
     };
+    if !st.store.get_request(mission).is_ok_and(|request| {
+        request.is_some_and(|request| {
+            request.state == "open" && request.sender == task.owner && request.target == task.child
+        })
+    }) {
+        return false;
+    }
     task.result.is_some()
         && (task.remote_placement.is_none()
             || task.remote_result_receipts.iter().any(|receipt| {

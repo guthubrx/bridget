@@ -12264,13 +12264,19 @@ fn authorize_wrapper_reply(
     if request.sender != message.to || request.target != message.from {
         return Err("wrapper_reply_correlation_mismatch".into());
     }
-    if st
+    if let Some(task) = st
         .delegation_store
         .for_mission(correlation)?
         .or(st.delegation_store.past_mission_task(correlation)?)
-        .is_some_and(|task| task.remote_placement.is_some())
     {
-        return Err("remote_result_requires_worker".into());
+        if task.remote_placement.is_some() {
+            return Err("remote_result_requires_worker".into());
+        }
+        if task.child != message.from || task.owner != message.to
+            || task.child_instance.as_deref() != Some(instance)
+        {
+            return Err("wrapper_reply_task_correlation_mismatch".into());
+        }
     }
     Ok(())
 }

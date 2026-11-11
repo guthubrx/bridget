@@ -1,6 +1,75 @@
 use super::*;
 
 #[test]
+fn spec265_terminal_without_result_refuses_ack_and_preserves_the_outbox() {
+    let (state, config, mut task, _parent, _child) = native160_mission(false);
+    let root = config.db_path.parent().unwrap().join("late265");
+    let outbox =
+        crate::reply_outbox::ReplyOutbox::open(&root, task.child_instance.as_deref().unwrap())
+            .unwrap();
+    let mut original = bridget_core::BridgetMessage::new(&task.owner, &task.child, "mission");
+    original.id = task.mission.clone();
+    let mut reply =
+        bridget_core::BridgetMessage::new(&task.child, &task.owner, "finale tardive conservée");
+    reply.in_reply_to = Some(task.mission.clone());
+    let reply = outbox.retain(&original, reply, unix_timestamp()).unwrap();
+    for terminal in ["failed", "cancelled", "cancelling"] {
+        task.state = terminal.into();
+        state.lock().unwrap().delegation_store.save(&task).unwrap();
+        let response =
+            handle_wrapper_message("child-conn", WrapperToDaemon::Send(reply.clone()), &state);
+        assert!(
+            matches!(response, Some(DaemonToWrapper::Nack { reason, .. }) if reason.starts_with("retained_reply_native_terminal:"))
+        );
+        let saved = state
+            .lock()
+            .unwrap()
+            .delegation_store
+            .get(&task.task_id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(saved.state, terminal);
+        assert!(saved.result.is_none());
+        assert_eq!(
+            outbox.pending(unix_timestamp()).unwrap().unwrap().body,
+            reply.body
+        );
+    }
+    drop(state);
+    cleanup(&config);
+}
+
+#[test]
+fn spec265_closed_tracking_does_not_hold_a_pending_reminder_forever() {
+    let (state, config, mut task, _parent, _child) = native160_mission(false);
+    let mut st = state.lock().unwrap();
+    task.result = Some("rapport".into());
+    st.delegation_store.save(&task).unwrap();
+    st.store
+        .connection()
+        .execute(
+            "UPDATE tracked_requests SET state='cancelled' WHERE id=?1",
+            [&task.mission],
+        )
+        .unwrap();
+    let now = Instant::now();
+    st.pending_replies
+        .iter_mut()
+        .find(|p| p.msg_id == task.mission)
+        .unwrap()
+        .created_at = now - Duration::from_secs(1000);
+    super::super::collect_reminder_actions(&mut st, now);
+    assert!(!st.pending_replies.iter().any(|p| p.msg_id == task.mission));
+    assert_eq!(
+        st.store.get_request(&task.mission).unwrap().unwrap().state,
+        "cancelled"
+    );
+    drop(st);
+    drop(state);
+    cleanup(&config);
+}
+
+#[test]
 fn spec265_remote_and_foreign_replies_still_require_their_authority() {
     let (state, config, mut task, _parent, _child) = native160_mission(false);
     let st = state.lock().unwrap();
@@ -51,7 +120,7 @@ fn spec265_local_result_settles_tracking_after_a_sql_failure_without_new_work() 
     st.store.connection().execute_batch("CREATE TRIGGER local265_answer_fail BEFORE UPDATE OF state ON tracked_requests WHEN NEW.state='answered' BEGIN SELECT RAISE(ABORT,'test265'); END;").unwrap();
     let mut reply = bridget_core::BridgetMessage::new(&task.child, &task.owner, "rapport durable");
     reply.in_reply_to = Some(task.mission.clone());
-    assert!(capture_reply(&mut st, "child-conn", &reply).is_err());
+    assert!(capture_reply(&mut st, "child-conn", &reply).unwrap());
     assert!(result_suppresses_reminders(&st, &task.mission));
     assert_eq!(
         st.delegation_store

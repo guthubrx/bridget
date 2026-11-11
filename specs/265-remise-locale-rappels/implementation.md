@@ -23,3 +23,13 @@ Quatre régressions ciblées, trois scénarios voisins remote170 et vingt-huit s
 La reconstruction265 reproduit les quatre fichiers attendus de la base exécutable264. Les variantes de noms de modules réservées au programme260 sont adaptées seulement dans le patch de construction. Aucun code260 supplémentaire n’est activé.
 
 Activation et revue en cours. Ne pas annoncer la livraison avant activation vérifiée.
+
+## Revue indépendante et corrections complémentaires
+
+La revue de la tâche 473ab1da-d91c-41b5-b873-a6f402458d7d confirme la distinction des identités. Elle relève un acquittement sans conservation possible pour une finale tardive sur une tâche terminale, ainsi qu’un message trompeur après sauvegarde suivie d’un échec SQL de clôture. Ces deux défauts sont corrigés avant activation. Une réponse hors ronde ou après clôture reste explicitement refusée et conservée dans la boîte du wrapper ; aucun acquittement de capture n'est fabriqué. Le suivi SQL différé ne fait plus annoncer que le résultat durable manquerait. Le filtre des rappels exige aussi une demande ouverte exactement corrélée, et l'autorité de wrapper vérifie l'enfant et son instance contre la tâche locale.
+
+Les six régressions réussissent sur main, dont trois états terminaux, conservation de la finale tardive, reprise SQL et retrait du rappel d'une demande déjà close. Les deux cas initiaux avaient échoué avant patch. Les réponses historiques récupérées représentent 10376 octets de texte au total ; aucune de leurs tâches n'est rouverte.
+
+La première admission de revue a été refusée sans tâche à cause d'un SHA mal saisi par le parent. La demande corrigée a rencontré une coupure avant transmission pendant l'activation264 ; son rejeu strict après retour du lien a admis une seule tâche. Revue lue, accusée puis clôture propriétaire demandée ; sa vue reste conservée.
+
+Les quarante scénarios native153 réussissent sur main après la vérification de compatibilité : les anciennes enveloppes tardives restent absorbées sans notification ni mutation de la nouvelle ronde. Pour une nouvelle enveloppe reply244 conservée, une ancienne ronde rend un refus explicite, afin de garder la matière dans sa boîte. L’analyse statique stricte finale de main réussit.
