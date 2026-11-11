@@ -17467,25 +17467,7 @@ fn handle_wrapper_message_with_peer(
             model,
             effort,
             source,
-        } => {
-            let mut st = state.lock().recover_poison();
-            if source == bridget_transport::protocol::RuntimeSource::Declared {
-                let instance_id = match self_mutation_instance(&st, conn_id, &agent, "runtime") {
-                    Ok(instance_id) => instance_id,
-                    Err(response) => return Some(*response),
-                };
-                Some(handle_runtime_for_instance(
-                    &agent,
-                    model,
-                    effort,
-                    source,
-                    Some(&instance_id),
-                    &mut st,
-                ))
-            } else {
-                Some(handle_runtime(&agent, model, effort, source, &mut st))
-            }
-        }
+        } => wrapper_dispatch::on_runtime(agent, model, effort, source, conn_id, state),
 
         WrapperToDaemon::ServedModel { agent, model } => {
             let mut st = state.lock().recover_poison();

@@ -4167,3 +4167,23 @@ pub(super) fn on_snapshot_caught_up(subscription_id: String, through_seq: Option
             }
             None
         }
+
+pub(super) fn on_runtime(agent: String, model: String, effort: Option<String>, source: bridget_transport::protocol::RuntimeSource, conn_id: &str, state: &Arc<Mutex<DaemonState>>) -> Option<DaemonToWrapper> {
+            let mut st = state.lock().recover_poison();
+            if source == bridget_transport::protocol::RuntimeSource::Declared {
+                let instance_id = match self_mutation_instance(&st, conn_id, &agent, "runtime") {
+                    Ok(instance_id) => instance_id,
+                    Err(response) => return Some(*response),
+                };
+                Some(handle_runtime_for_instance(
+                    &agent,
+                    model,
+                    effort,
+                    source,
+                    Some(&instance_id),
+                    &mut st,
+                ))
+            } else {
+                Some(handle_runtime(&agent, model, effort, source, &mut st))
+            }
+        }
