@@ -4252,3 +4252,26 @@ pub(super) fn on_unregister(conn_id: &str, state: &Arc<Mutex<DaemonState>>) -> O
             }
             None
         }
+
+pub(super) fn on_guichet_claim_next(version: u16, conn_id: &str, state: &Arc<Mutex<DaemonState>>) -> Option<DaemonToWrapper> {
+            if version != SERVICE_CONTRACT_VERSION {
+                return Some(DaemonToWrapper::ServiceRejected {
+                    reason: ServiceRefusal::UnsupportedVersion {
+                        supported_versions: vec![SERVICE_CONTRACT_VERSION],
+                    },
+                });
+            }
+            let mut st = state.lock().recover_poison();
+            match st.store.claim_next_guichet(conn_id, unix_timestamp()) {
+                Ok(GuichetNext::Claimed(claim)) => Some(guichet_claim_response(claim)),
+                Ok(GuichetNext::Empty) => Some(DaemonToWrapper::GuichetEmpty {
+                    version: SERVICE_CONTRACT_VERSION,
+                }),
+                Err(error) => {
+                    error!("claim guichet: {error}");
+                    Some(DaemonToWrapper::ServiceRejected {
+                        reason: ServiceRefusal::TransitionInvalid,
+                    })
+                }
+            }
+        }

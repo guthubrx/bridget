@@ -16941,28 +16941,7 @@ fn handle_wrapper_message_with_peer(
             conn_id,
             state,
         ),
-        WrapperToDaemon::GuichetClaimNext { version } => {
-            if version != SERVICE_CONTRACT_VERSION {
-                return Some(DaemonToWrapper::ServiceRejected {
-                    reason: ServiceRefusal::UnsupportedVersion {
-                        supported_versions: vec![SERVICE_CONTRACT_VERSION],
-                    },
-                });
-            }
-            let mut st = state.lock().recover_poison();
-            match st.store.claim_next_guichet(conn_id, unix_timestamp()) {
-                Ok(GuichetNext::Claimed(claim)) => Some(guichet_claim_response(claim)),
-                Ok(GuichetNext::Empty) => Some(DaemonToWrapper::GuichetEmpty {
-                    version: SERVICE_CONTRACT_VERSION,
-                }),
-                Err(error) => {
-                    error!("claim guichet: {error}");
-                    Some(DaemonToWrapper::ServiceRejected {
-                        reason: ServiceRefusal::TransitionInvalid,
-                    })
-                }
-            }
-        }
+        WrapperToDaemon::GuichetClaimNext { version } => wrapper_dispatch::on_guichet_claim_next(version, conn_id, state),
         WrapperToDaemon::GuichetClaim {
             version,
             issuer_scope,
