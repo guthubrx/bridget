@@ -3196,7 +3196,7 @@ pub(crate) fn tools() -> Vec<Value> {
         }),
         json!({
             "name": "guichet_request_status",
-            "description": "Relire uniquement une demande du guichet historique. Ne consulte pas les admissions de bridget_auto_delegate. Une clé absente ou expirée ne prouve pas la non-exécution : applied reste null sans résultat métier. Pour une réponse native perdue, conserver le propriétaire, la request_id et l’enveloppe ; un rejeu strict peut admettre la mission si elle n’avait jamais été reçue, donc seulement si le mandat reste valide.",
+            "description": "Relire uniquement une demande du guichet historique. Ne consulte pas les admissions de bridget_auto_delegate. Sans résultat métier durable, applied vaut null. Une clé absente ou expirée n’atteste pas une non-exécution ; conserver l’outil et les identifiants d’origine.",
             "inputSchema": {
                 "type": "object",
                 "properties": {

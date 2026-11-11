@@ -67,3 +67,9 @@ couverts sur chaque plateforme. Les deux builds release réussissent ; Linux
 exige glibc 2.34, sous le plafond 2.36. La recette cumulative est vérifiée sans
 fuzz ; ses cinq fichiers du delta correspondent à l’export compilé. La revue
 R2 porte sur les conditions de guidage R1 et conserve son identifiant natif.
+
+R2 confirme les corrections des points 1, 2 et 4. Sa dernière remarque sur la
+description guichet est traitée en retirant son conseil de rejeu natif ; seul
+le périmètre de lecture et l’absence de preuve restent dans cette description.
+Le candidat non activé r1 est remplacé par r2, sans réutiliser son répertoire
+exécutable immuable. Le reste de la logique et les garanties wire ne changent pas.
