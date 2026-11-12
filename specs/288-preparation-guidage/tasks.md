@@ -6,3 +6,4 @@
 - [x] Activer le maître, Cartae, KSSTORE et les deux Mac ; vérifier le retour et les processus conservés.
 - [ ] Activer SYSLE2 : retenu par client_check_unavailable / probe_timeout, contrôle de version Claude à 6,69 s pour une borne de 2 s. Worker 287 préservé.
 - [x] Sources de correction alignées sur les trois checkouts Linux ; ménage gardé et reçus conservés.
+- [ ] Corriger la course entre redémarrage du connecteur et remise initiale : incident a716ff89 documenté, parcours ponctuel suspendu.

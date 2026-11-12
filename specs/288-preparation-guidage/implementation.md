@@ -27,3 +27,11 @@ L’activation SYSLE2 reste incomplète : deux contrôles d’installation ont r
 Ménage exécuté : 1,15 Gio logiques d’intermédiaires Mac retirés par la commande installed. Trois anciennes images inutilisées ont été retirées sur Mac, M1 et KSSTORE. Les images Mac 266/281/284/285 restent utilisées ; les anciennes images Cartae sont gardées faute d’observation privilégiée complète. Aucun travail métier, dossier de revue ou worktree actif retiré. Le checkout principal n’a aucune branche de travail ni worktree auxiliaire.
 
 Preuves locales : /Users/moi/.cache/bridget288-preparation. Les compteurs de suppression sont des tailles logiques, pas une mesure d’espace physique récupéré sur APFS. La livraison complète à toutes les machines ne peut pas être déclarée tant que SYSLE2 n’a pas franchi son contrôle.
+
+## Incident de maintenance découvert après activation
+
+La tâche a716ff89-0c56-4eaa-9f21-b91dcc35b24c, admise le 12 novembre à 16:50:29 Paris, a échoué à 16:50:44 avec native_sender_primary_absent. Le connecteur a redémarré à 16:50:41 ; le parent Territoire a été réexposé à 16:51:00 seulement. Le maître lui-même n’a redémarré qu’à 16:51:19. Le processus enfant 97364 figurait parmi les processus conservés, mais la remise initiale a échoué pendant l’absence du parent. La vérification des PID n’était donc pas une preuve de conservation des missions.
+
+Preuves : aucun tracked_request ni événement ledger pour la mission 2b1e7e20-a67f-43e4-bb07-f2d72ab7f287 ; delivery_acked=false ; cleanup_done=true ; enfant présent dans cancel_stopped. Worker terminal à 16:50:54, PID absent. Placement shared, aucun worktree propre à retirer. Le commit b0e7bfdc64dac056c963484a206796217e781ce7 est présent. Le lien parent est revenu et observé busy. Aucune nouvelle tâche n’a été lancée par la maintenance.
+
+Le parcours ponctuel de redémarrage du connecteur est suspendu dans /Users/moi/.cache/bridget288-preparation/deploy-mac281.py. Une relecture ponctuelle des admissions ne ferme pas la course entre contrôle et arrêt. La protection des admissions pendant cette coupure reste à corriger avec le mécanisme natif de maintenance ; aucune relaxation de l’attestation du parent ni réparation directe de la base n’est acceptable. Ce défaut n’est pas déclaré corrigé par le lot 288. Preuve bornée : /Users/moi/.cache/bridget288-preparation/territoire-initial-dispatch-incident.json.
