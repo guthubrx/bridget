@@ -78,3 +78,16 @@ sur le Mac, 127 450 521 600 sur Cartae, 39 552 901 120 sur SYSLE2 et
 variations à ce seul ménage. Les reçus restent dans
 /Users/moi/.cache/bridget281-incidents. Les configurations MCP abandonnées dont
 l’absence d’usage n’est pas prouvée ne sont pas purgées.
+
+## Contrôle après reconnexion : continuation Vie des habitants
+
+Les deux refus primary_absent du 12 novembre à 04:54:56.040 et 04:55:17.366
+Paris précèdent la commande métier pendant la reconnexion de maintenance.
+Le même parent relit ensuite la tâche 76395328-f7d7-493a-aa31-c3904f883df4
+à 04:55:47.191 : result_available, ronde 4, continuable=true, error=null.
+À 05:00:18.020, la même demande vdh-population-region-r10-r5-20261112-0455
+est admise : mission_pending, ronde 5, error=null. Le diagnostic ne rejoue
+aucune commande. La présence native actuelle du parent est confirmée.
+Les métadonnées assainies, sans corps métier, sont conservées dans
+/Users/moi/.cache/bridget281-incidents/vdh-reconnection-observed.json.
+Cet épisode transitoire n’appelle ni nouveau correctif ni autre redémarrage.
