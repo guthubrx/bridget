@@ -20,21 +20,17 @@ l'incident.
 5. **Un stub ne se crée que si le fichier n'existe pas.** Un fichier existant
    appartient à son auteur, committé ou pas. *(Incident : stub écrasant le
    config.rs WIP d'un autre agent.)*
-6. **Le checkout principal n'est PAS un chantier.** Il appartient au référent
-   (docs, greffe, merges) et au daemon (binaire de production). Aucun agent
-   n'y écrit du code, aucun agent n'y bascule de branche. *(Incident
-   2026-08-24 19h17 : un agent a basculé le checkout principal sur sa branche
-   — le commit de docs du référent a atterri dessus — pendant qu'un second
-   agent y modifiait wrapper.rs : course à deux mains dans le même arbre,
-   travail extrait en patchs de sauvetage, checkout rendu à main.)*
-   **Garde automatisée (carte de reprise) :** l'alerte règle 6 ne se déclenche
-   que si le chemin est l'entrée primaire d'un dépôt à **≥ 2 worktrees**.
-   Conséquence mesurée (jury 2026-08-25) : **nettoyer les worktrees désarme
-   cette alerte** — le même principal cesse d'être signalé dès que le dernier
-   worktree lié est purgé. La protection est donc maximale quand le dépôt
-   viole le rangement (purge sous 24 h, plafond de worktrees) et nulle quand
-   il est propre. Sens choisi : se taire plutôt que crier faux sur un clone
-   de revue. Ne pas croire que la carte remplace cette règle sociale.
+6. **Respecter le dossier attribué et les consignes du dépôt.** Les règles
+   historiques réservaient le checkout principal au référent et au daemon.
+   Une mission `shared` et les décisions explicites du propriétaire peuvent
+   prévoir ce checkout. La topologie Git seule ne détermine pas les droits.
+   La carte de reprise signale l'entrée primaire d'un dépôt ayant au moins
+   deux worktrees. Elle ne doit ni interdire une écriture autorisée par la
+   mission, ni proposer de choisir un autre worktree. En cas de conflit entre
+   les consignes, conserver le dossier et demander au propriétaire de trancher
+   avant l'écriture concernée. Ne jamais changer de branche pour le résoudre.
+   *(Incident du 12 novembre 2026 : une ancienne alerte systématique a contredit
+   une mission partagée ; l'enfant a ensuite utilisé un ancien worktree.)*
 7. **Le worktree de l'auteur n'est JAMAIS ouvert au relecteur.** Toute revue
    (lecture appuyée exceptée) se fait sur une COPIE DÉTACHÉE du SHA gelé :
    mutants plantés et restaurés chez soi, jamais chez l'auteur. *(Incident

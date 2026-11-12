@@ -483,7 +483,7 @@ fn carte_de_reprise_reconstruit_identite_et_worktree_durables() {
     assert!(context.contains("branche=resume-wt"), "{context}");
     assert!(context.contains(" M tracked.txt"), "{context}");
     assert!(context.contains("n'atteste PAS la capacité d'exécution"));
-    assert!(!context.contains("ALERTE règle 6"));
+    assert!(!context.contains("Constat Git : ce chemin est le checkout principal"));
     assert!(!context.contains("Mission service compagnon"));
     assert!(!context.contains("objectif_id="));
     assert!(!context.contains("reprends la mission"));
@@ -593,7 +593,7 @@ fn carte_de_reprise_est_bornee_et_dit_qu_elle_tronque() {
 }
 
 #[test]
-fn carte_de_reprise_checkout_principal_alerte_regle_6() {
+fn spec286_carte_principal_respecte_placement_sans_imposer_worktree() {
     let root = resume_root("principal");
     let principal = root.join("checkout-principal");
     init_principal_checkout(&principal);
@@ -610,11 +610,16 @@ fn carte_de_reprise_checkout_principal_alerte_regle_6() {
         "fixture-digest",
     );
     assert!(
-        context.contains("ALERTE règle 6"),
-        "checkout principal d'un dépôt à worktrees liés doit alerter: {context}"
+        context.contains("Constat Git : ce chemin est le checkout principal"),
+        "la carte doit constater la topologie sans imposer de placement: {context}"
     );
     assert!(
-        context.contains("checkout principal") || context.contains("N'y écris PAS"),
+        context.contains("Respectez le placement demandé, y compris shared")
+            && context.contains("ne choisissez pas un autre worktree")
+            && context.contains("demandez au propriétaire de la mission de trancher")
+            && context.contains("ne crée ni interdiction ni autorisation")
+            && !context.contains("N'y écris PAS")
+            && !context.contains("travaille uniquement dans un worktree attesté"),
         "{context}"
     );
     fs::remove_dir_all(root).unwrap();
@@ -650,7 +655,7 @@ fn carte_de_reprise_clone_de_revue_ne_doit_pas_alerter() {
     let context =
         managed_resume_context(&clone, "sans-mission", "fixture", "acp", "fixture-digest");
     assert!(
-        !context.contains("ALERTE règle 6"),
+        !context.contains("Constat Git : ce chemin est le checkout principal"),
         "un clone de revue n'est PAS le checkout principal : {context}"
     );
     fs::remove_dir_all(root).unwrap();

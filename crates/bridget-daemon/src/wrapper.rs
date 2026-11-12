@@ -400,7 +400,7 @@ fn managed_resume_context(
     }
     if is_protected_principal_checkout(worktree) {
         lines.push(
-            "ALERTE règle 6 : ce chemin est le checkout principal d'un dépôt à worktrees liés (entrée primaire de `git worktree list`, ≥2 worktrees). Ce n'est ni un worktree lié ni un clone de revue. N'y écris PAS ; travaille uniquement dans un worktree attesté."
+            "Vérifiez les consignes de la mission et du dépôt avant toute écriture dans le dossier attribué. Constat Git : ce chemin est le checkout principal d'un dépôt à worktrees liés (entrée primaire de `git worktree list`, ≥2 worktrees). Ce constat ne crée ni interdiction ni autorisation d'écriture. Respectez le placement demandé, y compris shared ; ne choisissez pas un autre worktree depuis cette carte. Si les consignes sont incompatibles, conservez le dossier et demandez au propriétaire de la mission de trancher avant l'écriture concernée. Les autres travaux autorisés suivent leur propre état."
                 .to_string(),
         );
     }
@@ -938,27 +938,11 @@ fn deliver_injected_message<S: Transport + ?Sized>(
     })
 }
 
-/// Règle 6 — ce que cette détection GARANTIT exactement :
-/// alerte ssi `path` est l'entrée **primaire** de `git worktree list` d'un
-/// dépôt qui a **au moins un worktree lié** (≥ 2 entrées).
-///
-/// Ne s'applique donc PAS à :
-/// - un worktree lié (`.git` fichier / entrée non primaire) ;
-/// - un clone de revue isolé (une seule entrée — doctrine « copie détachée ») ;
-/// - un dépôt `git init` sans worktree lié ;
-/// - un arbre sans `.git`.
-///
-/// **Trou assumé (AWC 2026-08-25) :** la protection apparaît et disparaît
-/// avec le nombre de worktrees liés. Mesuré : le même principal alerte tant
-/// qu'un worktree lié existe, et **cesse d'alerter** dès que le dernier est
-/// purgé (`worktree remove`). Donc **nettoyer les worktrees désarme la
-/// règle 6** — exactement quand le dépôt redevient conforme aux règles de
-/// rangement (purge sous 24 h, plafond de worktrees). Sens de l'erreur
-/// choisi à dessein : se taire plutôt que crier faux sur un clone. Voir
-/// aussi `docs/regles-chantier.md` règle 6.
-///
-/// Elle ne compare PAS les URL distantes (un clone du même remote aurait la
-/// même URL) et ne dépend PAS d'un chemin absolu gravé en dur.
+/// Détecte uniquement la topologie Git : entrée primaire avec au moins un
+/// worktree lié. Ce fait ne détermine ni les permissions ni le placement.
+/// Un clone isolé, un worktree lié et un arbre sans Git ne sont pas signalés.
+/// La présence du constat varie avec les worktrees ; les consignes de la mission
+/// et du dépôt restent applicables indépendamment de cette observation.
 fn is_protected_principal_checkout(path: &Path) -> bool {
     let git = |args: &[&str]| -> Option<String> {
         let output =

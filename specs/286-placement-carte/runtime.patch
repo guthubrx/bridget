@@ -1,0 +1,135 @@
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -7,7 +7,7 @@
+ ]
+ 
+ [workspace.package]
+-version = "0.8.49"
++version = "0.8.50"
+ edition = "2024"
+ license = "MIT"
+ 
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -192,7 +192,7 @@
+ 
+ [[package]]
+ name = "bridget-core"
+-version = "0.8.49"
++version = "0.8.50"
+ dependencies = [
+  "serde",
+  "serde_json",
+@@ -201,7 +201,7 @@
+ 
+ [[package]]
+ name = "bridget-daemon"
+-version = "0.8.49"
++version = "0.8.50"
+ dependencies = [
+  "axum",
+  "base64",
+@@ -229,7 +229,7 @@
+ 
+ [[package]]
+ name = "bridget-transport"
+-version = "0.8.49"
++version = "0.8.50"
+ dependencies = [
+  "bridget-core",
+  "libc",
+--- a/crates/bridget-daemon/src/wrapper.rs
++++ b/crates/bridget-daemon/src/wrapper.rs
+@@ -397,7 +397,7 @@
+     }
+     if is_protected_principal_checkout(worktree) {
+         lines.push(
+-            "ALERTE règle 6 : ce chemin est le checkout principal d'un dépôt à worktrees liés (entrée primaire de `git worktree list`, ≥2 worktrees). Ce n'est ni un worktree lié ni un clone de revue. N'y écris PAS ; travaille uniquement dans un worktree attesté."
++            "Vérifiez les consignes de la mission et du dépôt avant toute écriture dans le dossier attribué. Constat Git : ce chemin est le checkout principal d'un dépôt à worktrees liés (entrée primaire de `git worktree list`, ≥2 worktrees). Ce constat ne crée ni interdiction ni autorisation d'écriture. Respectez le placement demandé, y compris shared ; ne choisissez pas un autre worktree depuis cette carte. Si les consignes sont incompatibles, conservez le dossier et demandez au propriétaire de la mission de trancher avant l'écriture concernée. Les autres travaux autorisés suivent leur propre état."
+                 .to_string(),
+         );
+     }
+@@ -893,27 +893,11 @@
+     })
+ }
+ 
+-/// Règle 6 — ce que cette détection GARANTIT exactement :
+-/// alerte ssi `path` est l'entrée **primaire** de `git worktree list` d'un
+-/// dépôt qui a **au moins un worktree lié** (≥ 2 entrées).
+-///
+-/// Ne s'applique donc PAS à :
+-/// - un worktree lié (`.git` fichier / entrée non primaire) ;
+-/// - un clone de revue isolé (une seule entrée — doctrine « copie détachée ») ;
+-/// - un dépôt `git init` sans worktree lié ;
+-/// - un arbre sans `.git`.
+-///
+-/// **Trou assumé (AWC 2026-08-25) :** la protection apparaît et disparaît
+-/// avec le nombre de worktrees liés. Mesuré : le même principal alerte tant
+-/// qu'un worktree lié existe, et **cesse d'alerter** dès que le dernier est
+-/// purgé (`worktree remove`). Donc **nettoyer les worktrees désarme la
+-/// règle 6** — exactement quand le dépôt redevient conforme aux règles de
+-/// rangement (purge sous 24 h, plafond de worktrees). Sens de l'erreur
+-/// choisi à dessein : se taire plutôt que crier faux sur un clone. Voir
+-/// aussi `docs/regles-chantier.md` règle 6.
+-///
+-/// Elle ne compare PAS les URL distantes (un clone du même remote aurait la
+-/// même URL) et ne dépend PAS d'un chemin absolu gravé en dur.
++/// Détecte uniquement la topologie Git : entrée primaire avec au moins un
++/// worktree lié. Ce fait ne détermine ni les permissions ni le placement.
++/// Un clone isolé, un worktree lié et un arbre sans Git ne sont pas signalés.
++/// La présence du constat varie avec les worktrees ; les consignes de la mission
++/// et du dépôt restent applicables indépendamment de cette observation.
+ fn is_protected_principal_checkout(path: &Path) -> bool {
+     let git = |args: &[&str]| -> Option<String> {
+         let output =
+--- a/crates/bridget-daemon/src/wrapper_prompt_tests.rs
++++ b/crates/bridget-daemon/src/wrapper_prompt_tests.rs
+@@ -484,7 +484,7 @@
+         assert!(context.contains("branche=resume-wt"), "{context}");
+         assert!(context.contains(" M tracked.txt"), "{context}");
+         assert!(context.contains("n'atteste PAS la capacité d'exécution"));
+-        assert!(!context.contains("ALERTE règle 6"));
++        assert!(!context.contains("Constat Git : ce chemin est le checkout principal"));
+         assert!(!context.contains("Mission service compagnon"));
+         assert!(!context.contains("objectif_id="));
+         assert!(!context.contains("reprends la mission"));
+@@ -591,7 +591,7 @@
+     }
+ 
+     #[test]
+-    fn carte_de_reprise_checkout_principal_alerte_regle_6() {
++    fn spec286_carte_principal_respecte_placement_sans_imposer_worktree() {
+         let root = resume_root("principal");
+         let principal = root.join("checkout-principal");
+         init_principal_checkout(&principal);
+@@ -608,11 +608,16 @@
+             "fixture-digest",
+         );
+         assert!(
+-            context.contains("ALERTE règle 6"),
+-            "checkout principal d'un dépôt à worktrees liés doit alerter: {context}"
+-        );
+-        assert!(
+-            context.contains("checkout principal") || context.contains("N'y écris PAS"),
++            context.contains("Constat Git : ce chemin est le checkout principal"),
++            "la carte doit constater la topologie sans imposer de placement: {context}"
++        );
++        assert!(
++            context.contains("Respectez le placement demandé, y compris shared")
++                && context.contains("ne choisissez pas un autre worktree")
++                && context.contains("demandez au propriétaire de la mission de trancher")
++                && context.contains("ne crée ni interdiction ni autorisation")
++                && !context.contains("N'y écris PAS")
++                && !context.contains("travaille uniquement dans un worktree attesté"),
+             "{context}"
+         );
+         fs::remove_dir_all(root).unwrap();
+@@ -648,7 +653,7 @@
+         let context =
+             managed_resume_context(&clone, "sans-mission", "fixture", "acp", "fixture-digest");
+         assert!(
+-            !context.contains("ALERTE règle 6"),
++            !context.contains("Constat Git : ce chemin est le checkout principal"),
+             "un clone de revue n'est PAS le checkout principal : {context}"
+         );
+         fs::remove_dir_all(root).unwrap();
