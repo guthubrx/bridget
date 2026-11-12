@@ -1,0 +1,21 @@
+--- a/crates/bridget-daemon/src/mcp.rs
++++ b/crates/bridget-daemon/src/mcp.rs
+@@ -2917,15 +2917,15 @@
+         }),
+         json!({
+             "name": "bridget_send",
+-            "description": "Envoyer une action/demande directe, ou conserver un avis avec intent=information sans prompt ni réveil. reply=false seul peut encore lancer un tour. Pour un bulletin de maintenance général : information ou fil silencieux ; ne pas réveiller toutes les présences connectées. Pour la coordination répétée, utiliser bridget_thread : preuves longues et comptes rendus kind=history avec notify:[], action/blocage/décision courts (≤2048 octets), supersedes_seq pour remplacer explicitement. Ne pas doubler le fil partagé par des rafales de messages directs récapitulatifs. reply=false signifie sans réponse attendue, pas sans action. Aucun ancien message libre n'est filtré automatiquement.",
++            "description": "Envoyer une action/demande directe, ou conserver un avis avec intent=information sans prompt ni réveil. steer refuse reply=true. Entre agents ordinaires, steer et interrupt exigent le lien parent-enfant reconnu ; un rôle pair ne donne pas ce droit (not_parent). Pour demander une réponse à un pair, utiliser queue avec reply=true ; la remise peut attendre la fin de son tour. reply=false seul peut encore lancer un tour. Pour un bulletin de maintenance général : information ou fil silencieux ; ne pas réveiller toutes les présences connectées. Pour la coordination répétée, utiliser bridget_thread : preuves longues et comptes rendus kind=history avec notify:[], action/blocage/décision courts (≤2048 octets), supersedes_seq pour remplacer explicitement. Ne pas doubler le fil partagé par des rafales de messages directs récapitulatifs. reply=false signifie sans réponse attendue, pas sans action. Aucun ancien message libre n'est filtré automatiquement.",
+             "inputSchema": {
+                 "type": "object",
+                 "properties": {
+                     "to": { "type": "string", "minLength": 1 },
+                     "body": { "type": "string", "minLength": 1 },
+                     "cross_project_reason": { "type": "string", "minLength": 1, "maxLength": 512, "description": "Motif volontaire d'un échange hors projet ; 1–512 octets UTF-8 sans contrôles. Ne pas déduire le motif depuis body. Le warning est rendu hors corps." },
+-                    "intent": { "type": "string", "enum": ["queue", "steer", "interrupt", "information"], "default": "queue", "description": "information : conserver au journal sans réveiller le modèle, sans reply ni in_reply_to. queue : remise normale, peut lancer un tour au repos. steer : guider le tour courant. interrupt : interrompre et lancer un tour, selon droits. Un résultat attendu garde son parcours normal." },
+-                    "reply": { "type": "boolean", "default": false },
++                    "intent": { "type": "string", "enum": ["queue", "steer", "interrupt", "information"], "default": "queue", "description": "information : conserver au journal sans réveiller le modèle, sans reply ni in_reply_to. queue : remise normale, peut lancer un tour au repos. steer : guider le tour courant, avec reply absent ou false. interrupt : interrompre et lancer un tour, selon droits. Pour un agent ordinaire, ces deux guidages exigent un lien de parent vers son enfant dans le même projet ; les pairs sont refusés avec not_parent. Les contrôles humains et boucles autorisées gardent leurs droits propres. Un résultat attendu garde son parcours normal." },
++                    "reply": { "type": "boolean", "default": false, "description": "Demander une réponse suivie. reply=true est incompatible avec steer. Pour une demande à un pair, utiliser queue avec reply=true." },
+                     "reply_timeout": { "type": "integer", "minimum": 1, "description": "Délai de réponse en secondes, 60 si omis avec reply=true. Commence à l’admission et inclut l’attente en file ; choisir avant le premier envoi." },
+                     "in_reply_to": { "type": "string", "minLength": 1, "description": "Identifiant de la demande Bridget à résoudre par cette réponse." },
+                     "id": { "type": "string", "minLength": 1, "description": "Premier envoi : omettre id et issued_at. Pour un rejeu strict, recopier ensemble id et issued_at reçus ; ne pas créer un id seul." },
