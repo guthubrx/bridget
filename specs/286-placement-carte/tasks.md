@@ -3,5 +3,6 @@
 - [x] Comparer placement enregistré, carte reçue et commandes réelles.
 - [x] Remplacer la règle globale de worktree par un constat sans autorité.
 - [x] Vérifier les cartes sur Mac et Linux.
-- [ ] Revue indépendante, publication et activation vérifiées sans arrêt T3.
-- [ ] Commit, push et ménage gardé.
+- [x] Publication et activation vérifiées sans arrêt T3.
+- [ ] Revue indépendante non exécutée : admission refusée, reçu conservé.
+- [x] Commit, push et ménage gardé, conservations documentées.
