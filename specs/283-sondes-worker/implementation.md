@@ -30,4 +30,22 @@ et le test limité à la sérialisation sont traitées. Le test parcourt mainten
 le vrai contrôle : refus Git `miss`, même refus `hit`, puis mapping absent.
 Une seule recherche `BTreeMap::entry` produit l'étiquette et la valeur.
 
-Qualification : 31 tests ciblés, Clippy strict workspace/all-targets et release réussis sur Mac et Debian 12. Activation encore en cours.
+Qualification : 31 tests ciblés, Clippy strict workspace/all-targets et release réussis sur Mac et Debian 12. Activation vérifiée le 12 novembre 2026 avec la version 0.8.48.
+
+## Premières observations du runtime actif
+
+Deux sondes naturelles de KS, après activation, portent la même admission
+`a-b8180a56941625f291f5f127a946ec17`, avec un candidat chacune :
+
+| Corrélation | Total candidat | Mapping | Git | Readiness |
+|---|---:|---:|---:|---:|
+| 355eac89-779f-44ab-b349-beff6ff74ff8 | 13 567 ms | 0 ms | 78 ms | 13 488 ms |
+| cd01c91a-0ba9-448a-8080-64590ca96070 | 12 774 ms | 0 ms | 66 ms | 12 708 ms |
+
+Le coût est localisé dans le contrôle de préparation et de permissions
+(`readiness`), à plus de 99 % du temps candidat. Ce résultat ne distingue pas
+encore ses opérations internes et ne prouve pas le coût du hachage. Aucune
+mission métier n'a été créée pour obtenir ces mesures. Les deux cas ne
+mesurent pas une sonde complète à quatre candidats ni son taux d'échec.
+
+Preuve locale : /Users/moi/.cache/bridget283-284/ks-phases-after.json.

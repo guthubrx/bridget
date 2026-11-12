@@ -10,9 +10,15 @@ Instrumentation mapping/git/readiness proposée ; coût du hachage suspecté mai
 - [x] Conserver le diff et les tests proposés, sans toucher aux autres fichiers.
 - [x] Revoir le delta et obtenir une preuve de régression utile.
 - [x] Qualifier dans le runtime cumulatif, sans compiler le programme réservé de main.
-- [ ] Intégrer, publier et activer le correctif validé.
+- [x] Intégrer, publier et activer le correctif validé.
 
-État : revue traitée, 31 tests ciblés réussis sur Mac et Linux ; Clippy strict et builds réussis, activation en cours. Les tests Rust n’ont pas
-été exécutés par le responsable délégué. Les fichiers modifiés sont conservés
-sur SYSLE2 dans /home/moi/.local/share/bridget-projects/bridget/repository.
-Copie du delta : /Users/moi/.cache/bridget282-trafic/development-283.patch.
+État : intégré dans main, qualifié puis activé avec la version 0.8.48
+(`284-sondes-continuation-r1`). Les propositions déléguées ont été revues et
+corrigées par le mainteneur ; 31 tests ciblés par plateforme, Clippy strict
+et releases ont réussi sur Mac et Debian 12. Les sources SYS sont propres et
+alignées. Les propositions originales restent conservées comme preuves.
+
+Publication : https://github.com/guthubrx/bridget/releases/tag/v0.8.48
+Commit du code : `1e917ec4ae279ee90d32f80d02ae8de11ded1c44`.
+
+La mesure en production localise désormais le coût dans `readiness`. Sa réduction reste ouverte ; aucune optimisation de cette phase n’est livrée.
