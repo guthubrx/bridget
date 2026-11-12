@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.8.46 - 2026-11-12
+
+- L’entretien conserve les configurations MCP des fournisseurs ; le propriétaire garde son nettoyage à la fermeture.
+- Un diagnostic de démarrage tardif précise un échec générique sans rouvrir la tâche ni écraser une cause précise.
+
 ## 0.8.45 - 2026-11-12
 
 - Une liaison SSH indisponible ne masque plus une cible unique attestée pendant la préparation.

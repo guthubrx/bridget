@@ -6559,27 +6559,6 @@ fn claude_mcp_config_in(
     Ok(EphemeralMcpConfig { path })
 }
 
-/// Retire les `mcp-*.json` orphelins laissés par un crash (Drop non exécuté).
-pub(crate) fn purge_orphan_mcp_configs(directory: &Path) {
-    let Ok(entries) = std::fs::read_dir(directory) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        let name = entry.file_name();
-        let name = name.to_string_lossy();
-        if name.starts_with("mcp-")
-            && name.ends_with(".json")
-            && let Err(error) = std::fs::remove_file(entry.path())
-        {
-            warn!(
-                "purge MCP orphelin impossible {}: {}",
-                entry.path().display(),
-                error
-            );
-        }
-    }
-}
-
 fn codex_mcp_override(server: &serde_json::Value) -> Result<String, Box<dyn std::error::Error>> {
     let command = server["command"].as_str().ok_or("commande MCP absente")?;
     let environment = ["HOME", "BRIDGET_HOME", "BRIDGET_SOCKET"]

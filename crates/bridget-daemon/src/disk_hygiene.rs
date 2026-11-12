@@ -1,7 +1,7 @@
 //! Purge bornée des copies orphelines dans le namespace autorisé et alerte disque.
 //! Aucun inventaire des worktrees de l'hôte.
 //!
-//! Discipline alignée sur `purge_orphan_mcp_configs` : best-effort, log
+//! Discipline de nettoyage des seuls temporaires privés attestés : best-effort, log
 //! nominatif, jamais d'effacement sous un processus vivant (fail-closed si la
 //! sonde propriétaire est incertaine).
 //!

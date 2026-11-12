@@ -6768,7 +6768,8 @@ pub fn run(config: DaemonConfig) -> Result<(), Box<dyn std::error::Error>> {
         std::fs::remove_file(&config.socket_path)?;
     }
     std::fs::create_dir_all(config.socket_path.parent().unwrap())?;
-    crate::wrapper::purge_orphan_mcp_configs(config.socket_path.parent().unwrap());
+    // Les configurations MCP appartiennent aux wrappers, y compris avant leur
+    // inscription. Le démon ne dispose pas d’une preuve autorisant leur retrait.
     // WARN disque synchrone (statvfs = O(1)). Le ramassage /tmp sort du chemin
     // critique — thread détaché après readiness (bisect fable2).
     crate::disk_hygiene::warn_if_disk_low(std::path::Path::new("/"));
@@ -9878,7 +9879,8 @@ fn run_maintenance(state: &Arc<Mutex<DaemonState>>, root: &std::path::Path) {
             tmp.deleted.len()
         );
     }
-    crate::wrapper::purge_orphan_mcp_configs(root);
+    // Garder les configurations MCP : seule la fermeture de leur propriétaire
+    // autorise leur retrait. Un fournisseur peut encore les lire avant register.
     let home = std::env::var_os("HOME").map(PathBuf::from);
     for log in crate::disk_hygiene::service_logs(root, home.as_deref()) {
         match crate::disk_hygiene::rotate_log_if_large(&log, crate::disk_hygiene::LOG_ROTATE_BYTES)
@@ -15770,7 +15772,9 @@ fn handle_worker_message(
                 }
                 if let Some(failure) = observation.startup_failure
                     && let Ok(Some(mut task)) = st.delegation_store.get(&response.command.task_id)
-                    && task.state == "starting"
+                    && (task.state == "starting"
+                        || (task.state == "failed"
+                            && task.error.as_deref() == Some("remote_start_failed")))
                     && task.mission_issued_at.is_none()
                 {
                     let detail = match observation.exit_code {

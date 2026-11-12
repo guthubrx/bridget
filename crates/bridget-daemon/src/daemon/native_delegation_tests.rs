@@ -26001,6 +26001,42 @@ fn monitor_fixture205() -> (
 }
 
 #[test]
+fn spec281_late_startup_diagnostic_enriches_only_generic_failure() {
+    use bridget_transport::protocol::*;
+    let (state, config, mut task, _reader) = monitor_fixture205();
+    task.state = "failed".into();
+    for previous in ["remote_start_failed", "remote_start_failed:permission_changed"] {
+        task.error = Some(previous.into());
+        let (worker, command) = {
+            let st = state.lock().unwrap();
+            st.delegation_store.save(&task).unwrap();
+            (st.remote_workers["cartae"].identity.clone(), remote_command_identity(&st, &task).unwrap())
+        };
+        assert!(handle_worker_message(&state, "worker205", WrapperToDaemon::WorkerResponse {
+            response: WorkerResponse {
+                version: REMOTE_WORKER_VERSION,
+                correlation_id: uuid::Uuid::new_v4().to_string(),
+                connection_epoch: "epoch205".into(),
+                worker, command,
+                response: WorkerResponseOperation::Observation { observation: WorkerObservation {
+                    phase: WorkerCommandPhase::Terminal, native_ready: false,
+                    exit_code: Some(0), observed_at: unix_timestamp(), workspace: None,
+                    permission_digest: None, startup_failure: Some(WorkerStartupFailure::ExitedBeforeReady),
+                }},
+            }
+        }).is_none());
+        let current = state.lock().unwrap().delegation_store.get(&task.task_id).unwrap().unwrap();
+        assert_eq!(current.state, "failed");
+        assert_eq!(current.error.as_deref(), Some(if previous == "remote_start_failed" {
+            "remote_start_failed:exited_before_ready:exit=0"
+        } else { previous }));
+        assert!(current.mission_issued_at.is_none());
+    }
+    drop(state);
+    cleanup(&config);
+}
+
+#[test]
 fn spec205_start_monitor_does_not_fill_queue_while_worker_is_busy() {
     use bridget_transport::protocol::*;
     let (state, config, task, mut reader) = monitor_fixture205();

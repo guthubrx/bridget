@@ -25473,3 +25473,21 @@ fn spec277_project_resolution_log_is_scoped_and_discards_free_data() {
     assert_eq!(value["cause"], "origin_proof_unavailable");
     assert!(!value.to_string().contains("private"));
 }
+
+#[test]
+fn spec281_maintenance_keeps_provider_configuration_before_registration() {
+    let (st, config) = state_with_registered_agent("mcp281");
+    let root = st.fixture_root.as_ref().unwrap().0.join("mcp-state");
+    std::fs::create_dir_all(&root).unwrap();
+    let path = root.join(format!("mcp-{}.json", uuid::Uuid::new_v4()));
+    let bytes = br#"{"mcpServers":{"bridget":{"type":"stdio","command":"/bin/true","args":[]}}}"#;
+    bridget_transport::fsutil::write_private_file_atomic(&path, bytes).unwrap();
+    let state = Arc::new(Mutex::new(st));
+    // Le fournisseur peut lire le fichier avant toute inscription au démon.
+    run_maintenance(&state, &root);
+    assert_eq!(std::fs::read(&path).unwrap(), bytes);
+    run_maintenance(&state, &root);
+    assert_eq!(std::fs::read(&path).unwrap(), bytes);
+    drop(state);
+    let _ = std::fs::remove_file(config.db_path);
+}

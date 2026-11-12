@@ -87,7 +87,7 @@ toucher `~/.config/maicie/config.json` / greffe prod pour « tester ».
 
 Chemin critique **après** `0e5bad4` (dans `a3707b8`) :
 
-1. `purge_orphan_mcp_configs` (sync, léger) + `warn_if_disk_low` (`statvfs` O(1))
+1. `warn_if_disk_low` (`statvfs` O(1)). Depuis la 0.8.46, le démon ne supprime plus les configurations MCP des fournisseurs au démarrage ni pendant l’entretien. Leur propriétaire les retire à sa fermeture normale ; sans preuve de fin, elles sont conservées.
 2. `UnixListener::bind` → log « daemon écoute » = **prêt**
 3. Thread détaché `ramasse-copies` : filtre d’âge **avant** sonde, **1** `lsof` global, borne **128** entrées âgées / passage (`MAX_ENTRIES_PER_PASS`)
 

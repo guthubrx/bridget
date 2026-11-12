@@ -726,12 +726,10 @@ fn spawn_gere_injecte_mcp_identite_et_path() {
             .join("instance-abc")
     );
 
-    let orphan = root.join("mcp-crash.json");
-    std::fs::write(&orphan, b"{}").unwrap();
-    purge_orphan_mcp_configs(&root);
-    assert!(!orphan.exists());
-
+    let config_path = config.path().to_path_buf();
+    assert!(config_path.is_file());
     drop(config);
+    assert!(!config_path.exists(), "le propriétaire retire sa configuration");
     std::fs::remove_dir_all(root).unwrap();
 }
 
