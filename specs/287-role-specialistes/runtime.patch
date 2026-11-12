@@ -1,0 +1,137 @@
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -7,7 +7,7 @@
+ ]
+ 
+ [workspace.package]
+-version = "0.8.50"
++version = "0.8.51"
+ edition = "2024"
+ license = "MIT"
+ 
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -192,7 +192,7 @@
+ 
+ [[package]]
+ name = "bridget-core"
+-version = "0.8.50"
++version = "0.8.51"
+ dependencies = [
+  "serde",
+  "serde_json",
+@@ -201,7 +201,7 @@
+ 
+ [[package]]
+ name = "bridget-daemon"
+-version = "0.8.50"
++version = "0.8.51"
+ dependencies = [
+  "axum",
+  "base64",
+@@ -229,7 +229,7 @@
+ 
+ [[package]]
+ name = "bridget-transport"
+-version = "0.8.50"
++version = "0.8.51"
+ dependencies = [
+  "bridget-core",
+  "libc",
+--- a/crates/bridget-daemon/src/delegation_mcp.rs
++++ b/crates/bridget-daemon/src/delegation_mcp.rs
+@@ -100,7 +100,7 @@
+         {"type":"object","properties":{"strategy":{"const":"worktree","description":"Dossier de travail isolé : seuls strategy et les chaînes facultatives base_ref et branch sont acceptés."},"base_ref":{"type":"string","description":"Référence Git disponible dans cwd sur la machine du parent. Pour une base figée, fournir le même SHA complet que expected_base_commit ; un nom de branche peut avancer. Un commit présent uniquement sur la destination doit d’abord être récupéré dans le dépôt source."},"branch":{"type":"string"}},"required":["strategy"],"additionalProperties":false}
+     ]});
+     let mut definitions=vec![
+-        json!({"name":"bridget_specialists","description":"Catalogue des spécialistes. Fournir version:1 comme nombre JSON (sans guillemets) à chaque appel. Lecture : action search (role_id facultatif), list ou get (specialist_agent_id requis). Exemple : {version:1,action:search,role_id:mainteneur-bridget}. L’action catalogue n’existe pas. Le schéma expose les autres actions de profils, rôles et mémoire sourcée. Déclarer ses rôles ne donne aucun droit. request_role choisit un responsable unique et conserve sa clé ; request_status relit la demande sans réveil. Une activation durable ou un mandat permanent exige l'administration humaine. Budget Bridget sans plafond par défaut ; restrictions techniques et fournisseur restent distinctes.","inputSchema":specialists_schema222(),"annotations":{"readOnlyHint":false,"destructiveHint":false,"idempotentHint":true}}),
++        json!({"name":"bridget_specialists","description":"Catalogue des spécialistes. Fournir version:1 comme nombre JSON (sans guillemets) à chaque appel. Lecture : action search (role_id obligatoire), list (sans filtre de rôle) ou get (specialist_agent_id requis). Exemple : {version:1,action:search,role_id:mainteneur-bridget}. L’action catalogue n’existe pas. Le schéma expose les autres actions de profils, rôles et mémoire sourcée. Déclarer ses rôles ne donne aucun droit. request_role choisit un responsable unique et conserve sa clé ; request_status relit la demande sans réveil. Une activation durable ou un mandat permanent exige l'administration humaine. Budget Bridget sans plafond par défaut ; restrictions techniques et fournisseur restent distinctes.","inputSchema":specialists_schema222(),"annotations":{"readOnlyHint":false,"destructiveHint":false,"idempotentHint":true}}),
+         json!({"name":"bridget_read_commit_file","description":"Rend disponible un fichier omis dans la vue privée du commit exact de sa tâche active. path est le chemin relatif indiqué dans la carte de la vue, sans ../ ni chemin absolu. Sans task_id, l'enfant lit sa propre tâche ; avec task_id, le parent doit en être propriétaire. Copie privée contrôlée, aucun changement du dépôt source, de la base, des comptes ou des droits. Un fichier existant divergent n'est jamais écrasé. Après succès, lire le chemin de données renvoyé. Une ancienne tâche clôturée ne redémarre pas par cette lecture.",
+             "inputSchema":{"type":"object","properties":{"task_id":{"type":"string","minLength":1,"maxLength":128},
+                 "path":{"type":"string","minLength":1,"maxLength":4096}},"required":["path"],"additionalProperties":false},
+@@ -270,6 +270,10 @@
+             request: serde_json::from_value(args.clone()).map_err(|_| {
+                 let correction = if args.get("version").and_then(Value::as_u64).is_none() {
+                     r#"Fournissez version:1 comme nombre JSON, sans guillemets. Le champ version est absent ou n'est pas un entier positif ; une chaîne comme "1" n'est pas acceptée."#
++                } else if args.get("action").and_then(Value::as_str) == Some("search")
++                    && args.get("role_id").and_then(Value::as_str).is_none()
++                {
++                    r#"Fournissez role_id comme chaîne pour l’action search : ce champ est obligatoire. Pour consulter le catalogue sans filtre de rôle, utilisez {"version":1,"action":"list"}."#
+                 } else if args.get("action").and_then(Value::as_str) == Some("catalogue") {
+                     "Utilisez une action du schéma, par exemple search. L’action catalogue n’existe pas."
+                 } else {
+--- a/crates/bridget-daemon/src/delegation_mcp_tests.rs
++++ b/crates/bridget-daemon/src/delegation_mcp_tests.rs
+@@ -1076,3 +1076,72 @@
+     assert!(valid.is_err());
+     assert!(!matches!(valid, Err(ClientError::InvalidParams(_))));
+ }
++
++#[test]
++fn spec287_specialists_search_requires_role_and_list_does_not() {
++    let catalogue = tools(&json!({}));
++    let tool = catalogue
++        .iter()
++        .find(|t| t["name"] == "bridget_specialists")
++        .unwrap();
++    let description = tool["description"].as_str().unwrap();
++    assert!(description.contains("role_id obligatoire"));
++    assert!(description.contains("list (sans filtre de rôle)"));
++    assert!(!description.contains("role_id facultatif"));
++    let branches = tool["inputSchema"]["oneOf"].as_array().unwrap();
++    for (action, requires_role) in [("search", true), ("list", false)] {
++        let branch = branches
++            .iter()
++            .find(|b| b["properties"]["action"]["const"] == action)
++            .unwrap();
++        assert_eq!(
++            branch["required"]
++                .as_array()
++                .unwrap()
++                .contains(&json!("role_id")),
++            requires_role
++        );
++    }
++    let identity = ResolvedIdentity {
++        name: "owner".into(),
++        instance_id: "instance".into(),
++        delegated_origin: None,
++    };
++    for role in [None, Some(Value::Null), Some(json!(true)), Some(json!(1))] {
++        let mut args = json!({"version":1,"action":"search"});
++        if let Some(role) = role {
++            args["role_id"] = role;
++        }
++        let error = execute_with_proof(
++            &identity,
++            "bridget_specialists",
++            &args,
++            Path::new("/missing/never-connected287.sock"),
++            None,
++        );
++        assert!(matches!(error, Err(ClientError::InvalidParams(message))
++            if message.contains("role_id") && message.contains("obligatoire")
++                && message.contains(r#"{"version":1,"action":"list"}"#)
++                && message.contains("Aucun appel envoyé")));
++    }
++    for args in [
++        json!({"version":1,"action":"list"}),
++        json!({"version":1,"action":"search","role_id":"mainteneur-bridget"}),
++    ] {
++        assert!(
++            serde_json::from_value::<bridget_transport::specialists::SpecialistRequest>(
++                args.clone()
++            )
++            .is_ok()
++        );
++        let result = execute_with_proof(
++            &identity,
++            "bridget_specialists",
++            &args,
++            Path::new("/missing/never-connected287.sock"),
++            None,
++        );
++        assert!(result.is_err());
++        assert!(!matches!(result, Err(ClientError::InvalidParams(_))));
++    }
++}

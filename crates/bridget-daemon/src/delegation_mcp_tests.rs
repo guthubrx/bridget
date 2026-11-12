@@ -1237,3 +1237,72 @@ fn spec285_specialists_version_type_names_real_refusal_without_connection() {
     assert!(valid.is_err());
     assert!(!matches!(valid, Err(ClientError::InvalidParams(_))));
 }
+
+#[test]
+fn spec287_specialists_search_requires_role_and_list_does_not() {
+    let catalogue = tools(&json!({}));
+    let tool = catalogue
+        .iter()
+        .find(|t| t["name"] == "bridget_specialists")
+        .unwrap();
+    let description = tool["description"].as_str().unwrap();
+    assert!(description.contains("role_id obligatoire"));
+    assert!(description.contains("list (sans filtre de rôle)"));
+    assert!(!description.contains("role_id facultatif"));
+    let branches = tool["inputSchema"]["oneOf"].as_array().unwrap();
+    for (action, requires_role) in [("search", true), ("list", false)] {
+        let branch = branches
+            .iter()
+            .find(|b| b["properties"]["action"]["const"] == action)
+            .unwrap();
+        assert_eq!(
+            branch["required"]
+                .as_array()
+                .unwrap()
+                .contains(&json!("role_id")),
+            requires_role
+        );
+    }
+    let identity = ResolvedIdentity {
+        name: "owner".into(),
+        instance_id: "instance".into(),
+        delegated_origin: None,
+    };
+    for role in [None, Some(Value::Null), Some(json!(true)), Some(json!(1))] {
+        let mut args = json!({"version":1,"action":"search"});
+        if let Some(role) = role {
+            args["role_id"] = role;
+        }
+        let error = execute_with_proof(
+            &identity,
+            "bridget_specialists",
+            &args,
+            Path::new("/missing/never-connected287.sock"),
+            None,
+        );
+        assert!(matches!(error, Err(ClientError::InvalidParams(message))
+            if message.contains("role_id") && message.contains("obligatoire")
+                && message.contains(r#"{"version":1,"action":"list"}"#)
+                && message.contains("Aucun appel envoyé")));
+    }
+    for args in [
+        json!({"version":1,"action":"list"}),
+        json!({"version":1,"action":"search","role_id":"mainteneur-bridget"}),
+    ] {
+        assert!(
+            serde_json::from_value::<bridget_transport::specialists::SpecialistRequest>(
+                args.clone()
+            )
+            .is_ok()
+        );
+        let result = execute_with_proof(
+            &identity,
+            "bridget_specialists",
+            &args,
+            Path::new("/missing/never-connected287.sock"),
+            None,
+        );
+        assert!(result.is_err());
+        assert!(!matches!(result, Err(ClientError::InvalidParams(_))));
+    }
+}
