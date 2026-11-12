@@ -4314,6 +4314,7 @@ pub(super) fn on_unregister(
         st.observations.remove_source(conn_id, Instant::now());
         st.conn_hosts.remove(conn_id);
         st.communication_projects.remove(conn_id);
+        st.native_project_retries.remove(conn_id);
         st.conn_operating_systems.remove(conn_id);
         st.service_negotiations.remove(conn_id);
         st.terminal_sessions.remove(conn_id);

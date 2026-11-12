@@ -17098,6 +17098,11 @@ fn spec254_native_hostname_equal_to_coordinator_never_reads_coordinator_path() {
     native_foreign_git_project_fixture("coordinator253");
 }
 
+#[test]
+fn spec278_native_project_recovers_on_heartbeat_without_recreating_mission() {
+    native_foreign_git_project_fixture("different-system-host");
+}
+
 fn native_foreign_git_project_fixture(reported_host: &str) {
     use bridget_transport::protocol::*;
     use std::io::BufRead;
@@ -17147,16 +17152,104 @@ fn native_foreign_git_project_fixture(reported_host: &str) {
             reported_host,
             None
         ),
-        DaemonToWrapper::ProjectContextResult { project: None, .. }
+        DaemonToWrapper::ProjectContextResult { project: None, project_warnings }
+        if project_warnings.iter().any(|w| w.reason.as_deref().is_some_and(|r| r.contains("automatiquement")))
     ));
+    // Un chemin équivalent mais démesuré ne reste pas dans la file en mémoire.
+    let oversized = format!("/tmp{}", "/".repeat(4096));
+    let _ = announce_communication_project(
+        &shared,
+        "child253",
+        &oversized,
+        CommunicationProjectSource::Git,
+        reported_host,
+        None,
+    );
+    assert!(
+        !shared
+            .lock()
+            .unwrap()
+            .native_project_retries
+            .contains_key("child253")
+    );
+    let _ = announce_communication_project(
+        &shared,
+        "child253",
+        "/tmp",
+        CommunicationProjectSource::Git,
+        reported_host,
+        None,
+    );
+    let pending = shared.lock().unwrap().native_project_retries["child253"].clone();
+    assert_eq!(pending.worker, "cartae");
+    let mut wrong = pending.clone();
+    wrong.owner.1 = "27800000-0000-4000-8000-000000000001".into();
+    assert!(matches!(
+        announce_communication_project_inner(
+            &shared,
+            "child253",
+            "/tmp",
+            CommunicationProjectSource::Git,
+            reported_host,
+            None,
+            Some(&wrong)
+        ),
+        DaemonToWrapper::Nack { .. }
+    ));
+    assert!(
+        shared
+            .lock()
+            .unwrap()
+            .native_project_retries
+            .get("child253")
+            == Some(&pending)
+    );
+    // Atteindre vraiment les clauses d'identité et de commande, carte égale au fait.
+    for mut invalid in [pending.clone(), pending.clone()].into_iter().enumerate() {
+        if invalid.0 == 0 {
+            invalid.1.owner.1 = "27800000-0000-4000-8000-000000000002".into();
+        } else {
+            invalid.1.command.instance_id = "27800000-0000-4000-8000-000000000003".into();
+        }
+        shared
+            .lock()
+            .unwrap()
+            .native_project_retries
+            .insert("child253".into(), invalid.1.clone());
+        assert!(matches!(
+            announce_communication_project_inner(
+                &shared,
+                "child253",
+                "/tmp",
+                CommunicationProjectSource::Git,
+                reported_host,
+                None,
+                Some(&invalid.1)
+            ),
+            DaemonToWrapper::Nack { .. }
+        ));
+        assert!(
+            !shared
+                .lock()
+                .unwrap()
+                .native_project_retries
+                .contains_key("child253")
+        );
+    }
+    shared
+        .lock()
+        .unwrap()
+        .native_project_retries
+        .insert("child253".into(), pending.clone());
     let (writer, peer) = UnixStream::pair().unwrap();
     {
         let mut st = shared.lock().unwrap();
+        let machine = json!({"enabled":true,"worker_id":"worker-cartae","provisioning_revision":1,
+            "credential_fingerprint":"a".repeat(64),"mappings":{}});
+        let mut other_machine = machine.clone();
+        other_machine["worker_id"] = json!("worker-other");
         st.registry = AgentRegistry::from_json(
-            &json!({"machines":{"cartae":{
-                "enabled":true,"worker_id":"worker-cartae","provisioning_revision":1,
-                "credential_fingerprint":"a".repeat(64),"mappings":{}}}})
-            .to_string(),
+            &json!({"machines":{"cartae":machine,"other":other_machine}}).to_string(),
             "/tmp/registry253.json",
         )
         .unwrap();
@@ -17180,12 +17273,38 @@ fn native_foreign_git_project_fixture(reported_host: &str) {
             },
         );
     }
+    {
+        let mut st = shared.lock().unwrap();
+        st.remote_workers.insert(
+            "other".into(),
+            super::super::RemoteWorkerConnection {
+                identity: WorkerIdentity {
+                    machine_id: "other".into(),
+                    worker_id: "worker-other".into(),
+                    provisioning_revision: 1,
+                },
+                conn_id: "worker-other253".into(),
+                epoch: "other-epoch".into(),
+                capabilities: vec![WorkerCapability::OriginProofV1],
+                catalogues: HashMap::new(),
+                catalogue_refresh_id: "other-epoch".into(),
+                catalogue_refresh_at: None,
+                last_contact: Instant::now(),
+                last_contact_at: unix_timestamp(),
+                contact: WorkerContactState::Connected,
+            },
+        );
+    }
+    let seen = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let observed = seen.clone();
+    let native_host = reported_host.to_owned();
     let other = shared.clone();
     let task_id = task.task_id.clone();
     let worker = std::thread::spawn(move || {
-        peer.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        peer.set_read_timeout(Some(Duration::from_secs(15)))
+            .unwrap();
         let mut reader = std::io::BufReader::new(peer);
-        for case in 0..2 {
+        for case in 0..5 {
             let mut line = String::new();
             reader.read_line(&mut line).unwrap();
             let DaemonToWrapper::OriginProofRequest { request } =
@@ -17196,8 +17315,33 @@ fn native_foreign_git_project_fixture(reported_host: &str) {
             assert!(
                 matches!(&request.request,OriginProofOperation::CommunicationProject {source:CommunicationProjectSource::Git,root,..} if root=="/tmp")
             );
+            observed.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            if case == 3 {
+                other
+                    .lock()
+                    .unwrap()
+                    .remote_workers
+                    .get_mut("cartae")
+                    .unwrap()
+                    .contact = WorkerContactState::Stale;
+                let _ = announce_communication_project(
+                    &other,
+                    "child253",
+                    "/tmp",
+                    CommunicationProjectSource::Git,
+                    &native_host,
+                    None,
+                );
+                other
+                    .lock()
+                    .unwrap()
+                    .remote_workers
+                    .get_mut("cartae")
+                    .unwrap()
+                    .contact = WorkerContactState::Connected;
+            }
             let mut state = other.lock().unwrap();
-            if case == 1 {
+            if case == 4 {
                 let mut ended = state.delegation_store.get(&task_id).unwrap().unwrap();
                 ended.state = "cancelled".into();
                 state.delegation_store.save(&ended).unwrap();
@@ -17210,16 +17354,89 @@ fn native_foreign_git_project_fixture(reported_host: &str) {
                     correlation_id: request.correlation_id,
                     connection_epoch: request.connection_epoch,
                     worker: request.worker,
-                    response: OriginProofResult::CommunicationProject {
-                        project: Some(CommunicationProject {
-                            host: "cartae".into(),
-                            root: "/tmp/.git".into(),
-                        }),
+                    response: if case == 0 {
+                        OriginProofResult::Rejected {
+                            reason: WorkerRefusal::ResourceLimit,
+                        }
+                    } else {
+                        OriginProofResult::CommunicationProject {
+                            project: Some(CommunicationProject {
+                                host: "cartae".into(),
+                                root: "/tmp/.git".into(),
+                            }),
+                        }
                     },
                 },
             );
         }
     });
+    assert!(handle_worker_message(&shared, "worker253", WrapperToDaemon::Heartbeat).is_none());
+    let busy_deadline = Instant::now() + Duration::from_secs(15);
+    loop {
+        if seen.load(std::sync::atomic::Ordering::SeqCst) == 1
+            && !shared
+                .lock()
+                .unwrap()
+                .project_retry_workers
+                .contains("cartae")
+        {
+            break;
+        }
+        assert!(Instant::now() < busy_deadline, "reprise busy non terminée");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert!(
+        shared
+            .lock()
+            .unwrap()
+            .native_project_retries
+            .get("child253")
+            == Some(&pending)
+    );
+    assert!(agent_communication_project(&shared.lock().unwrap(), &task.child).is_none());
+    assert!(
+        handle_worker_message(&shared, "worker-other253", WrapperToDaemon::Heartbeat).is_none()
+    );
+    assert!(
+        !shared
+            .lock()
+            .unwrap()
+            .project_retry_workers
+            .contains("other")
+    );
+    assert_eq!(seen.load(std::sync::atomic::Ordering::SeqCst), 1);
+    assert!(handle_worker_message(&shared, "worker253", WrapperToDaemon::Heartbeat).is_none());
+    let deadline = Instant::now() + Duration::from_secs(15);
+    loop {
+        if agent_communication_project(&shared.lock().unwrap(), &task.child).is_some() {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "projet non repris au retour du worker"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert!(
+        !shared
+            .lock()
+            .unwrap()
+            .native_project_retries
+            .contains_key("child253")
+    );
+    let st = shared.lock().unwrap();
+    assert_eq!(
+        agent_communication_project(&st, &task.child).unwrap().host,
+        "cartae"
+    );
+    assert!(!st.t3_project_connections.contains("child253"));
+    assert!(!st.t3_thread_bindings.contains_key("child253"));
+    assert_eq!(
+        serde_json::to_vec(&st.delegation_store.get(&task.task_id).unwrap().unwrap()).unwrap(),
+        before
+    );
+    drop(st);
+    // Le chemin public avec worker disponible reste directement couvert.
     assert!(matches!(
         announce_communication_project(
             &shared,
@@ -17234,18 +17451,59 @@ fn native_foreign_git_project_fixture(reported_host: &str) {
             ..
         }
     ));
-    let st = shared.lock().unwrap();
-    assert_eq!(
-        agent_communication_project(&st, &task.child).unwrap().host,
-        "cartae"
+    // ABA : nouvelle annonce publique, identique sauf sa révision, pendant la RPC.
+    let _ = announce_communication_project(
+        &shared,
+        "child253",
+        "",
+        CommunicationProjectSource::Git,
+        reported_host,
+        None,
     );
-    assert!(!st.t3_project_connections.contains("child253"));
-    assert!(!st.t3_thread_bindings.contains_key("child253"));
-    assert_eq!(
-        serde_json::to_vec(&st.delegation_store.get(&task.task_id).unwrap().unwrap()).unwrap(),
-        before
+    shared
+        .lock()
+        .unwrap()
+        .remote_workers
+        .get_mut("cartae")
+        .unwrap()
+        .contact = WorkerContactState::Stale;
+    let _ = announce_communication_project(
+        &shared,
+        "child253",
+        "/tmp",
+        CommunicationProjectSource::Git,
+        reported_host,
+        None,
     );
-    drop(st);
+    shared
+        .lock()
+        .unwrap()
+        .remote_workers
+        .get_mut("cartae")
+        .unwrap()
+        .contact = WorkerContactState::Connected;
+    let pending_race = shared.lock().unwrap().native_project_retries["child253"].clone();
+    assert!(matches!(
+        announce_communication_project_inner(
+            &shared,
+            "child253",
+            "/tmp",
+            CommunicationProjectSource::Git,
+            reported_host,
+            None,
+            Some(&pending_race)
+        ),
+        DaemonToWrapper::Nack { .. }
+    ));
+    assert!(agent_communication_project(&shared.lock().unwrap(), &task.child).is_none());
+    let latest = shared.lock().unwrap().native_project_retries["child253"].clone();
+    assert!(latest.sequence > pending_race.sequence);
+    let mut same_fact = pending_race;
+    same_fact.sequence = latest.sequence;
+    assert!(
+        same_fact == latest,
+        "seule la révision distingue les deux annonces"
+    );
     // La tâche prend fin pendant l'échange : la preuve Git ne ressuscite pas son autorité.
     assert!(matches!(
         announce_communication_project(
@@ -17262,6 +17520,19 @@ fn native_foreign_git_project_fixture(reported_host: &str) {
     assert!(
         communication_project_command253(&shared.lock().unwrap(), "child253", "cartae", "/tmp")
             .is_none()
+    );
+    shared
+        .lock()
+        .unwrap()
+        .native_project_retries
+        .insert("child253".into(), pending);
+    let _ = handle_wrapper_message("child253", WrapperToDaemon::Unregister, &shared);
+    assert!(
+        !shared
+            .lock()
+            .unwrap()
+            .native_project_retries
+            .contains_key("child253")
     );
     drop(shared);
     cleanup(&config);

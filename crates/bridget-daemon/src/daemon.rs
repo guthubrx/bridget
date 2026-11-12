@@ -1065,6 +1065,9 @@ struct DaemonState {
             bool,
         ),
     >,
+    native_project_retries: HashMap<String, NativeProjectRetry>,
+    project_retry_workers: HashSet<String>,
+    project_announcement_sequence: u64,
     observations: crate::observation::Observations,
     observation_sequences: HashMap<String, u64>,
     /// Session 102 : version d'alerte de fil acceptée par connexion principale,
@@ -4872,6 +4875,9 @@ impl DaemonState {
             observation_sequences: HashMap::new(),
             thread_notice_versions: HashMap::new(),
             communication_projects: HashMap::new(),
+            native_project_retries: HashMap::new(),
+            project_retry_workers: HashSet::new(),
+            project_announcement_sequence: 0,
             ledger_read_permits: crate::ledger::search::ReadPermits::default(),
             thread_wake_departures: VecDeque::new(),
             observation_tx,
@@ -5107,6 +5113,7 @@ impl DaemonState {
         self.conn_names.remove(&old_conn);
         self.conn_hosts.remove(&old_conn);
         self.communication_projects.remove(&old_conn);
+        self.native_project_retries.remove(&old_conn);
         self.conn_operating_systems.remove(&old_conn);
         self.auxiliary_connections.remove(&old_conn);
         self.thread_notice_versions.remove(&old_conn);
@@ -5204,6 +5211,7 @@ impl DaemonState {
             self.conn_names.remove(&conn_id);
             self.conn_hosts.remove(&conn_id);
             self.communication_projects.remove(&conn_id);
+            self.native_project_retries.remove(&conn_id);
             self.conn_operating_systems.remove(&conn_id);
             self.auxiliary_connections.remove(&conn_id);
         }
@@ -7524,6 +7532,7 @@ fn handle_connection(
         st.observations.remove_source(&conn_id, Instant::now());
         st.conn_hosts.remove(&conn_id);
         st.communication_projects.remove(&conn_id);
+        st.native_project_retries.remove(&conn_id);
         st.conn_operating_systems.remove(&conn_id);
         st.connection_roles.remove(&conn_id);
         st.late_worker_prepares.forget_connection(&conn_id);
@@ -10960,6 +10969,98 @@ fn project_resolution_diagnostic277(
         "instance_id":id(1),"cause":cause})
 }
 
+#[derive(Clone, PartialEq, Eq)]
+struct NativeProjectRetry {
+    sequence: u64,
+    owner: (String, String),
+    worker: String,
+    command: bridget_transport::protocol::WorkerCommandIdentity,
+    root: String,
+    host: String,
+}
+
+fn native_project_retry_matches(st: &DaemonState, conn: &str, fact: &NativeProjectRetry) -> bool {
+    st.native_project_retries.get(conn) == Some(fact)
+        && live_connection_identity(st, conn).as_ref() == Some(&fact.owner)
+        && native_delegation::native_communication_project_worker(st, conn, &fact.root)
+            == Some((fact.worker.clone(), fact.command.clone()))
+}
+
+struct ProjectRetryWorker {
+    state: Arc<Mutex<DaemonState>>,
+    machine: String,
+}
+impl Drop for ProjectRetryWorker {
+    fn drop(&mut self) {
+        self.state
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .project_retry_workers
+            .remove(&self.machine);
+    }
+}
+
+// Un lot de lectures par worker, seulement après son heartbeat authentifié.
+// Aucun prompt, lancement fournisseur ou nouvelle autorité. O(connexions en attente).
+fn retry_native_projects(state: &Arc<Mutex<DaemonState>>, machine: &str) {
+    let pending = {
+        let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+        if !origin_proof::worker_is_current(&st, machine)
+            || st.project_retry_workers.contains(machine)
+        {
+            return;
+        }
+        let mut pending = st
+            .native_project_retries
+            .iter()
+            .filter(|(_, fact)| fact.worker == machine)
+            .map(|(conn, fact)| (conn.clone(), fact.clone()))
+            .collect::<Vec<_>>();
+        // Ordre stable : les annonces les plus anciennes passent en premier.
+        pending.sort_unstable_by_key(|(_, fact)| fact.sequence);
+        if pending.is_empty() {
+            return;
+        }
+        st.project_retry_workers.insert(machine.to_owned());
+        pending
+    };
+    let guard = ProjectRetryWorker {
+        state: state.clone(),
+        machine: machine.to_owned(),
+    };
+    let state = state.clone();
+    // En cas d'échec de spawn, le Drop du garde libère le créneau ; les faits restent.
+    let _ = std::thread::Builder::new()
+        .name("bridget-project-retry".into())
+        .spawn(move || {
+            let _guard = guard;
+            for (conn, fact) in pending {
+                let _ = announce_communication_project_inner(
+                    &state,
+                    &conn,
+                    &fact.root,
+                    bridget_transport::protocol::CommunicationProjectSource::Git,
+                    &fact.host,
+                    None,
+                    Some(&fact),
+                );
+                // Une capacité encore indisponible est commune au lot. Garder
+                // les faits et attendre le prochain heartbeat, sans marteler.
+                if state
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .native_project_retries
+                    .get(&conn)
+                    == Some(&fact)
+                {
+                    break;
+                }
+            }
+        });
+}
+
+// L'annonce d'origine reste l'entrée publique interne ; la reprise seule porte
+// le fait attendu, nécessaire pour ne jamais écraser une annonce plus récente.
 fn announce_communication_project(
     state: &Arc<Mutex<DaemonState>>,
     conn_id: &str,
@@ -10968,9 +11069,33 @@ fn announce_communication_project(
     host: &str,
     worktree: Option<&str>,
 ) -> DaemonToWrapper {
+    announce_communication_project_inner(state, conn_id, root, source, host, worktree, None)
+}
+fn announce_communication_project_inner(
+    state: &Arc<Mutex<DaemonState>>,
+    conn_id: &str,
+    root: &str,
+    source: bridget_transport::protocol::CommunicationProjectSource,
+    host: &str,
+    worktree: Option<&str>,
+    retry: Option<&NativeProjectRetry>,
+) -> DaemonToWrapper {
     use bridget_transport::protocol::CommunicationProjectSource;
-    let (owner, local, foreign, native_command, proof_host, generation) = {
-        let st = state.lock().recover_poison();
+    let (owner, local, foreign, native_command, proof_host, generation, announcement_sequence) = {
+        let mut st = state.lock().recover_poison();
+        if let Some(expected) = retry {
+            if !native_project_retry_matches(&st, conn_id, expected) {
+                if st.native_project_retries.get(conn_id) == Some(expected) {
+                    st.native_project_retries.remove(conn_id);
+                }
+                return DaemonToWrapper::Nack {
+                    id: "communication-project".into(),
+                    reason: "project_retry_stale".into(),
+                };
+            }
+        } else {
+            st.native_project_retries.remove(conn_id);
+        }
         let owner = live_connection_identity(&st, conn_id);
         let bare = owner.is_none()
             && !st.conn_names.contains_key(conn_id)
@@ -10981,6 +11106,18 @@ fn announce_communication_project(
         if st.auxiliary_connections.contains(conn_id) || (owner.is_none() && !bare) {
             return DaemonToWrapper::Nack { id: "communication-project".into(), reason: "communication_project_owner_required : une connexion auxiliaire hérite du projet".into() };
         }
+        let announcement_sequence = if let Some(expected) = retry {
+            expected.sequence
+        } else {
+            let Some(next) = st.project_announcement_sequence.checked_add(1) else {
+                return DaemonToWrapper::Nack {
+                    id: "communication-project".into(),
+                    reason: "project_announcement_revision_exhausted".into(),
+                };
+            };
+            st.project_announcement_sequence = next;
+            next
+        };
         let t3 = st
             .conn_instances
             .get(conn_id)
@@ -11016,6 +11153,7 @@ fn announce_communication_project(
             native_command.as_ref().map(|(_, command)| command.clone()),
             native_command.map_or_else(|| host.to_owned(), |(host, _)| host),
             st.instance_id.clone(),
+            announcement_sequence,
         )
     };
     let (resolved, unavailable, resolution_cause) = if local {
@@ -11045,6 +11183,19 @@ fn announce_communication_project(
             native_delegation::native_communication_project_worker(&st, conn_id, root).as_ref()
                 == Some(&(proof_host.clone(), command.clone()))
         });
+    if let Some(expected) = retry {
+        if !native_project_retry_matches(&st, conn_id, expected) {
+            if st.native_project_retries.get(conn_id) == Some(expected) {
+                st.native_project_retries.remove(conn_id);
+            }
+            return DaemonToWrapper::Nack {
+                id: "communication-project".into(),
+                reason: "project_retry_stale".into(),
+            };
+        }
+    } else {
+        st.native_project_retries.remove(conn_id);
+    }
     let previous = st
         .communication_projects
         .get(conn_id)
@@ -11062,6 +11213,32 @@ fn announce_communication_project(
     } else {
         None
     };
+    if project.is_none()
+        && unchanged
+        && !conflicting
+        && root.len() <= 4096
+        && host.len() <= 255
+        && matches!(
+            resolution_cause.as_str(),
+            "origin_worker_unavailable" | "origin_proof_busy"
+        )
+    {
+        if let (Some(owner), Some(command)) = (&owner, &native_command) {
+            st.native_project_retries.insert(
+                conn_id.to_owned(),
+                NativeProjectRetry {
+                    sequence: announcement_sequence,
+                    owner: owner.clone(),
+                    worker: proof_host.clone(),
+                    command: command.clone(),
+                    root: root.to_owned(),
+                    host: host.to_owned(),
+                },
+            );
+        }
+    } else {
+        st.native_project_retries.remove(conn_id);
+    }
     let last_known = previous.1.or_else(|| project.clone());
     st.communication_projects
         .insert(conn_id.into(), (project.clone(), last_known, conflicting));
@@ -11075,12 +11252,22 @@ fn announce_communication_project(
         st.t3_project_connections.remove(conn_id);
         st.t3_thread_bindings.remove(conn_id);
     }
+    let retry_pending = st.native_project_retries.contains_key(conn_id);
     invalidate_human_authority(&mut st);
     drop(st);
     let warnings = if project.is_none() {
-        eprintln!("bridget_communication_project {}", project_resolution_diagnostic277(
-            &owner, unchanged, conflicting, &resolution_cause));
-        crate::communication::project_scope(None, None, "", None).unwrap_or_default()
+        eprintln!(
+            "bridget_communication_project {}",
+            project_resolution_diagnostic277(&owner, unchanged, conflicting, &resolution_cause)
+        );
+        let mut warnings =
+            crate::communication::project_scope(None, None, "", None).unwrap_or_default();
+        if retry_pending {
+            for warning in &mut warnings {
+                warning.reason = Some("Relisez le projet dans l'annuaire au retour du worker. La preuve de cette connexion native sera reprise automatiquement à son prochain heartbeat ; un worker encore occupé diffère cette lecture. Aucune mission ne doit être recréée pour ce contexte manquant. Les autres travaux autorisés suivent leur propre état.".into());
+            }
+        }
+        warnings
     } else {
         Vec::new()
     };
@@ -15480,6 +15667,8 @@ fn handle_worker_message(
             worker.contact = WorkerContactState::Connected;
             worker.last_contact = Instant::now();
             worker.last_contact_at = unix_now_secs();
+            drop(st);
+            retry_native_projects(state, &machine);
             None
         }
         WrapperToDaemon::WorkerResponse { response } => {

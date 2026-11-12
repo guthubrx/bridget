@@ -92,3 +92,21 @@ résultat ciblé ; il n’a pas été supprimé, modifié ni déclaré réussi.
 Clippy strict workspace/all-targets et les builds release passent sur Mac et
 Debian12. Le binaire Linux exige glibc2.34, sous le plafond2.36. Le paquet Android
 0.8.42/8042 est compilé et sa signature compatible est vérifiée contre0.8.41.
+
+
+Activation 277 vérifiée sur le maître, le service mobile et les workers Mac,
+Cartae, SYS, KS et M1. Le retour pointe vers 276 après vérification des formats
+et de l’image. Les six fichiers publics 0.8.42 ont été téléchargés anonymement
+et leurs tailles et empreintes vérifiées. Les sources sont poussées sur main.
+T3 conserve son PID et sa date de démarrage. Sa façade MCP266 reste chargée,
+conformément à la décision de garder T3 ouvert.
+
+Le relevé après passage contient douze événements sur 124,3 secondes, 2278
+octets, onze identités, au plus deux événements par identité. Aucun emballement
+du journal n’est observé. Quatre connexions natives restent sans projet après
+un refus origin_worker_unavailable et le retour du worker : le défaut fonctionnel
+confirmé est traité par 278. Les refus historiques dont la sortie SSH a été
+perdue restent sans cause prouvée ; la nouvelle signature ne la reconstitue pas.
+Le ménage natif Mac retire déjà 4,66 Gio logiques d’intermédiaires. La source
+runtime et le cache Linux sont réutilisés pour 278 ; le ménage commun suit son
+installation vérifiée. Aucun espace de travail métier n’est supprimé.

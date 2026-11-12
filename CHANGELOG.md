@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.8.43 - 2026-11-12
+
+- Les connexions natives reprennent leur preuve de projet au retour du worker, sans relancer la mission.
+- Une annonce plus récente, un arrêt ou une connexion retirée invalident les anciennes réponses de preuve.
+
 ## 0.8.42 - 2026-11-12
 
 - Les échecs de préparation SSH conservent une signature de diagnostic fermée, sans sortie privée ni provenance supposée.
