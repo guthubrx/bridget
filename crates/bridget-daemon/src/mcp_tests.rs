@@ -7135,3 +7135,29 @@ fn spec276_observed_guichet_results_keep_their_boolean() {
         assert_eq!(view["terminal"], true);
     }
 }
+
+#[test]
+fn spec279_send_receipt_names_default_and_explicit_reply_budget_without_changing_wire() {
+    for timeout in [None, Some(3600u64)] {
+        let mut args = json!({"to":"89000000-0000-4000-8000-000000000157","body":"demande","reply":true,"intent":"queue","id":"guidance156","issued_at":1_700_000_000});
+        if let Some(value) = timeout {
+            args["reply_timeout"] = json!(value);
+        }
+        let (wire, result) = guidance156_capture_send(args).unwrap();
+        let WrapperToDaemon::SendIdempotent { message, .. } = decode(&wire).unwrap() else {
+            panic!("send")
+        };
+        assert_eq!(
+            message.reply_timeout, timeout,
+            "le reçu ne modifie pas le canon durable"
+        );
+        assert_eq!(result["reply_timeout_secs"], timeout.unwrap_or(60));
+        assert_eq!(result["reply_budget_includes_queue"], true);
+        assert!(
+            result["reply_timeout_guidance"]
+                .as_str()
+                .unwrap()
+                .contains("in_flight")
+        );
+    }
+}

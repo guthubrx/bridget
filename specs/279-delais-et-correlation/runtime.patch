@@ -1,0 +1,396 @@
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -7,7 +7,7 @@
+ ]
+ 
+ [workspace.package]
+-version = "0.8.43"
++version = "0.8.44"
+ edition = "2024"
+ license = "MIT"
+ 
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -192,7 +192,7 @@
+ 
+ [[package]]
+ name = "bridget-core"
+-version = "0.8.43"
++version = "0.8.44"
+ dependencies = [
+  "serde",
+  "serde_json",
+@@ -201,7 +201,7 @@
+ 
+ [[package]]
+ name = "bridget-daemon"
+-version = "0.8.43"
++version = "0.8.44"
+ dependencies = [
+  "axum",
+  "base64",
+@@ -229,7 +229,7 @@
+ 
+ [[package]]
+ name = "bridget-transport"
+-version = "0.8.43"
++version = "0.8.44"
+ dependencies = [
+  "bridget-core",
+  "libc",
+--- a/crates/bridget-daemon/src/daemon.rs
++++ b/crates/bridget-daemon/src/daemon.rs
+@@ -226,7 +226,7 @@
+ 
+ fn reply_timeout_guidance(to: &str, timeout_secs: u64, msg_id: &str) -> String {
+     format!(
+-        "Consultez l'état et le journal de la demande #{msg_id} avant de décider d'une suite. {to} n'a pas répondu dans le délai de {timeout_secs} s. Cette expiration concerne l'attente de cette réponse seulement : elle n'annule aucune tâche et ne prouve ni arrêt ni absence d'exécution. Conservez la référence complète et toute clé de requête associée. Si une tâche est connue, consultez son statut et son résultat. Tant que l'issue reste inconnue, ne renvoyez pas la mission et ne créez pas de remplacement auprès d'un autre destinataire. Les autres travaux autorisés suivent leur propre état."
++        "Consultez l'état et le journal de la demande #{msg_id} avant de décider d'une suite. {to} n'a pas répondu dans le délai de {timeout_secs} s. Le délai de réponse inclut l'attente en file avant démarrage. Pour une future demande encore autorisée, choisir reply_timeout avant son premier envoi ; omis, il vaut 60 s. Cette expiration concerne l'attente de cette réponse seulement : elle n'annule aucune tâche et ne prouve ni arrêt ni absence d'exécution. Conservez la référence complète et toute clé de requête associée. Si une tâche est connue, consultez son statut et son résultat. Tant que l'issue reste inconnue, ne renvoyez pas la mission et ne créez pas de remplacement auprès d'un autre destinataire. Les autres travaux autorisés suivent leur propre état."
+     )
+ }
+ 
+--- a/crates/bridget-daemon/src/daemon/origin_proof.rs
++++ b/crates/bridget-daemon/src/daemon/origin_proof.rs
+@@ -73,24 +73,42 @@
+     let (tx, rx) = mpsc::sync_channel(1);
+     let (writer, request, connection) = {
+         let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+-        if !worker_is_current(&st,host) {return Err("origin_worker_unavailable".into());}
+-        let worker=st.remote_workers.get(host).ok_or("origin_worker_unavailable")?;
+-        if let OriginProofOperation::PrepareProject {return_context,..}=&mut operation {
+-            *return_context=worker.capabilities.contains(&WorkerCapability::OriginProjectContextV1);
+-        }
+-        let view_source=match &operation {
+-            OriginProofOperation::Sources {source,..}=>source.as_ref(),
+-            OriginProofOperation::PrepareProject {source,..}=>Some(source),
+-            _=>None,
+-        }.is_some_and(|source|matches!(source.workspace,
+-            Some(bridget_transport::protocol::WorkspaceRequest::CommitView {})));
++        if !worker_is_current(&st, host) {
++            return Err("origin_worker_unavailable".into());
++        }
++        let worker = st
++            .remote_workers
++            .get(host)
++            .ok_or("origin_worker_unavailable")?;
++        if let OriginProofOperation::PrepareProject { return_context, .. } = &mut operation {
++            *return_context = worker
++                .capabilities
++                .contains(&WorkerCapability::OriginProjectContextV1);
++        }
++        let view_source = match &operation {
++            OriginProofOperation::Sources { source, .. } => source.as_ref(),
++            OriginProofOperation::PrepareProject { source, .. } => Some(source),
++            _ => None,
++        }
++        .is_some_and(|source| {
++            matches!(
++                source.workspace,
++                Some(bridget_transport::protocol::WorkspaceRequest::CommitView {})
++            )
++        });
+         // La même capacité couvre la préparation source sans checkout et le créateur.
+         // Un ancien lecteur ne reçoit jamais cette demande qu'il pourrait mal préparer.
+         if view_source && !crate::workspace_git::COMMIT_VIEW_LAUNCH_ENABLED {
+             return Err("workspace_commit_view_not_enabled".into());
+         }
+-        if view_source && (!worker.capabilities.contains(&WorkerCapability::WorkspaceViewCreateV1)
+-            || !worker.capabilities.contains(&WorkerCapability::WorkspaceViewV1)) {
++        if view_source
++            && (!worker
++                .capabilities
++                .contains(&WorkerCapability::WorkspaceViewCreateV1)
++                || !worker
++                    .capabilities
++                    .contains(&WorkerCapability::WorkspaceViewV1))
++        {
+             return Err("origin_commit_view_unsupported".into());
+         }
+         let request = OriginProofRequest {
+@@ -101,13 +119,18 @@
+             expires_at_ms: crate::origin_proof::now_ms().saturating_add(budget.as_millis() as i64),
+             request: operation,
+         };
+-        let same_machine=matches!(&request.request,OriginProofOperation::PrepareProject {target_machine,..}
++        let same_machine = matches!(&request.request,OriginProofOperation::PrepareProject {target_machine,..}
+             if target_machine==&request.worker.machine_id);
+-        let outside_parent=cwd_outside_parent(&request.request);
+-        request.validate_shape_detailed()
+-            .map_err(|(field,reason)| if field=="cwd" && outside_parent {
+-                "cwd_outside_parent_project".to_owned()
+-            } else {shape_error(field,reason,same_machine)})?;
++        let outside_parent = cwd_outside_parent(&request.request);
++        request
++            .validate_shape_detailed()
++            .map_err(|(field, reason)| {
++                if field == "cwd" && outside_parent {
++                    "cwd_outside_parent_project".to_owned()
++                } else {
++                    shape_error(field, reason, same_machine)
++                }
++            })?;
+         let connection = worker.conn_id.clone();
+         let writer = st
+             .connections
+@@ -128,7 +151,11 @@
+         );
+         (writer, request, connection)
+     };
+-    let preparation=matches!(&request.request,OriginProofOperation::PrepareProject {..});
++    let preparation_target = match &request.request {
++        OriginProofOperation::PrepareProject { target_machine, .. } => Some(target_machine.clone()),
++        _ => None,
++    };
++    let preparation = preparation_target.is_some();
+     let correlation = request.correlation_id.clone();
+     let epoch = request.connection_epoch.clone();
+     let identity = request.worker.clone();
+@@ -144,6 +171,18 @@
+     } else {
+         None
+     };
++    if let (
++        Some(target),
++        Some(OriginProofResult::ProjectPrepared {
++            preparation_error: Some(code),
++            ..
++        }),
++    ) = (preparation_target, response.as_ref())
++        && let Some(event) =
++            preparation_failure_diagnostic279(&correlation, host, &target, code, unix_now_secs())
++    {
++        eprintln!("bridget_project_preparation_result {}", event);
++    }
+     let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+     st.pending_origin_proofs.remove(&correlation);
+     if Instant::now() >= deadline
+@@ -158,6 +197,7 @@
+     }
+     checked_response(response, preparation)
+ }
++
+ fn checked_response(response: Option<OriginProofResult>, preparation: bool) -> Result<OriginProofResult, String> {
+     match response {
+         Some(OriginProofResult::Rejected { reason: WorkerRefusal::ResourceLimit }) => {
+@@ -1015,3 +1055,65 @@
+         }
+     }
+ }
++
++// Même corrélation sur le maître et la source, sans contenu de mission ni stderr.
++fn preparation_failure_diagnostic279(
++    correlation: &str,
++    source: &str,
++    target: &str,
++    code: &str,
++    at: i64,
++) -> Option<serde_json::Value> {
++    if Uuid::parse_str(correlation).is_err()
++        || code != "project_preparation_process_failed"
++        || [source, target].iter().any(|h| {
++            h.len() > 255 || h.chars().any(char::is_control) || !bridget_core::host_is_attested(h)
++        })
++    {
++        return None;
++    }
++    Some(
++        serde_json::json!({"version":1,"scope":"this_request","correlation_id":correlation,
++        "source_machine":source,"target_machine":target,"code":code,"observed_at_unix":at}),
++    )
++}
++#[cfg(test)]
++#[test]
++fn spec279_preparation_master_log_joins_source_without_free_text() {
++    let id = "27900000-0000-4000-8000-000000000001";
++    let log = preparation_failure_diagnostic279(
++        id,
++        "source",
++        "target",
++        "project_preparation_process_failed",
++        123,
++    )
++    .unwrap();
++    assert_eq!(log["correlation_id"], id);
++    assert_eq!(log["observed_at_unix"], 123);
++    assert_eq!(log["source_machine"], "source");
++    assert_eq!(log["target_machine"], "target");
++    assert!(
++        preparation_failure_diagnostic279(id, "source", "target", "private stderr", 123).is_none()
++    );
++    assert!(
++        preparation_failure_diagnostic279(
++            "private token",
++            "source",
++            "target",
++            "project_preparation_process_failed",
++            123
++        )
++        .is_none()
++    );
++    assert!(
++        preparation_failure_diagnostic279(
++            id,
++            "private\nhost",
++            "target",
++            "project_preparation_process_failed",
++            123
++        )
++        .is_none()
++    );
++}
+--- a/crates/bridget-daemon/src/project_preparation.rs
++++ b/crates/bridget-daemon/src/project_preparation.rs
+@@ -86,9 +86,11 @@
+         .get("correlation_id")
+         .and_then(Value::as_str)
+         .filter(|value| uuid::Uuid::parse_str(value).is_ok());
+-    Some(serde_json::json!({"version":1,"scope":"this_request",
++    Some(
++        serde_json::json!({"version":1,"scope":"this_request","observed_at_unix":std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs(),
+         "code":"project_preparation_process_failed","correlation_id":correlation,
+-        "operation":detail["operation"],"exit_code":detail["exit_code"],"cause":"unobserved","stderr_signature":signature}))
++        "operation":detail["operation"],"exit_code":detail["exit_code"],"cause":"unobserved","stderr_signature":signature}),
++    )
+ }
+ 
+ fn prepare_script(
+@@ -429,3 +431,19 @@
+         assert_eq!(result, Err("project_preparation_failed".into()));
+     }
+ }
++
++#[cfg(test)]
++#[test]
++fn spec279_source_preparation_log_is_timestamped_and_correlated() {
++    let request = serde_json::json!({"correlation_id":"27900000-0000-4000-8000-000000000001"});
++    let answer = serde_json::json!({"error":"project_preparation_process_failed","detail":{"operation":"inspect","exit_code":255}});
++    let before = std::time::SystemTime::now()
++        .duration_since(std::time::UNIX_EPOCH)
++        .unwrap()
++        .as_secs();
++    let event = process_diagnostic(&request, &answer).unwrap();
++    assert!(event["observed_at_unix"].as_u64().unwrap() >= before);
++    assert_eq!(event["correlation_id"], request["correlation_id"]);
++    assert_eq!(event["cause"], "unobserved");
++    assert!(event.get("stderr").is_none());
++}
+--- a/crates/bridget-daemon/src/daemon/native_admission_guidance211.rs
++++ b/crates/bridget-daemon/src/daemon/native_admission_guidance211.rs
+@@ -44,7 +44,7 @@
+ 
+         "project_preparation_process_failed" => (
+             "Faites lire le refus de préparation à la même heure dans la sortie d’erreur du worker source.",
+-            "La commande ssh de préparation a rendu un code de sortie non nul. Le responsable Bridget doit lire l’événement bridget_project_preparation à l’heure de ce refus dans la sortie d’erreur du service worker de la machine source du parent : journal de l’unité sous systemd, ou StandardErrorPath du plist chargé sous launchd. Rapprocher heure, opération inspect/prepare et exit_code ; correlation_id identifie le contrôle dans ce journal, mais ne figure pas dans ce reçu et ne suffit pas seul à retrouver la demande. Ces faits ne prouvent ni panne de réseau ni défaut de compte ou de droits ; la cause amont reste à vérifier avant une reprise. Conserver la clé, l’enveloppe et tout dépôt préparé ; lire detail.admission pour suivre une tâche existante ou une admission encore incertaine. Ne pas recréer une mission pour tester la liaison. Les autres travaux autorisés suivent leur propre état.",
++            "La commande ssh de préparation a rendu un code de sortie non nul. Le responsable Bridget doit lire l’événement bridget_project_preparation à l’heure de ce refus dans la sortie d’erreur du service worker de la machine source du parent : journal de l’unité sous systemd, ou StandardErrorPath du plist chargé sous launchd. Rapprocher observed_at_unix, opération inspect/prepare et exit_code. Quand la préparation passe par un worker source distant du maître, celui-ci journalise bridget_project_preparation_result avec les machines source/cible et le même correlation_id ; ce champ permet de joindre les deux journaux. Il ne figure pas dans ce reçu et ne doit pas être inventé. Un ancien worker peut ne pas avoir conservé cet horodatage ni sa signature : sa cause historique reste alors inconnue. Ces faits ne prouvent ni panne de réseau ni défaut de compte ou de droits ; la cause amont reste à vérifier avant une reprise. Conserver la clé, l’enveloppe et tout dépôt préparé ; lire detail.admission pour suivre une tâche existante ou une admission encore incertaine. Ne pas recréer une mission pour tester la liaison. Les autres travaux autorisés suivent leur propre état.",
+             None,
+         ),
+         "project_preparation_transport_failed" => (
+--- a/crates/bridget-daemon/src/mcp.rs
++++ b/crates/bridget-daemon/src/mcp.rs
+@@ -1428,6 +1428,11 @@
+         Err(error) => Err(error),
+     }?;
+     // Aussi sur accusé perdu : intention demandée, jamais effet promis.
++    if reply {
++        result["reply_timeout_secs"] = json!(reply_timeout.unwrap_or(60));
++        result["reply_budget_includes_queue"] = json!(true);
++        result["reply_timeout_guidance"] = json!("Le délai de réponse commence à l'admission de cet envoi et inclut son attente en file. Il vaut 60 s si reply_timeout est omis. queue attend la fin du tour actif ; in_flight ne prouve ni lecture ni démarrage. Choisissez un délai adapté avant le premier envoi, sans modifier les paramètres d'une clé existante. L'expiration de cette demande n'arrête aucune autre mission.");
++    }
+     if let Some(intent) = requested_intent {
+         result["intent"] = json!(intent);
+         result["effect"] = json!("unconfirmed");
+@@ -2921,7 +2926,7 @@
+                     "cross_project_reason": { "type": "string", "minLength": 1, "maxLength": 512, "description": "Motif volontaire d'un échange hors projet ; 1–512 octets UTF-8 sans contrôles. Ne pas déduire le motif depuis body. Le warning est rendu hors corps." },
+                     "intent": { "type": "string", "enum": ["queue", "steer", "interrupt", "information"], "default": "queue", "description": "information : conserver au journal sans réveiller le modèle, sans reply ni in_reply_to. queue : remise normale, peut lancer un tour au repos. steer : guider le tour courant. interrupt : interrompre et lancer un tour, selon droits. Un résultat attendu garde son parcours normal." },
+                     "reply": { "type": "boolean", "default": false },
+-                    "reply_timeout": { "type": "integer", "minimum": 1 },
++                    "reply_timeout": { "type": "integer", "minimum": 1, "description": "Délai de réponse en secondes, 60 si omis avec reply=true. Commence à l’admission et inclut l’attente en file ; choisir avant le premier envoi." },
+                     "in_reply_to": { "type": "string", "minLength": 1, "description": "Identifiant de la demande Bridget à résoudre par cette réponse." },
+                     "id": { "type": "string", "minLength": 1, "description": "Premier envoi : omettre id et issued_at. Pour un rejeu strict, recopier ensemble id et issued_at reçus ; ne pas créer un id seul." },
+                     "issued_at": { "type": "integer", "minimum": 1, "description": "Horodatage renvoyé par le premier appel ; requis avec id pour rejouer le même contrat." }
+--- a/crates/bridget-daemon/src/mcp_tests.rs
++++ b/crates/bridget-daemon/src/mcp_tests.rs
+@@ -6914,3 +6914,29 @@
+         assert_eq!(view["terminal"], true);
+     }
+ }
++
++#[test]
++fn spec279_send_receipt_names_default_and_explicit_reply_budget_without_changing_wire() {
++    for timeout in [None, Some(3600u64)] {
++        let mut args = json!({"to":"89000000-0000-4000-8000-000000000157","body":"demande","reply":true,"intent":"queue","id":"guidance156","issued_at":1_700_000_000});
++        if let Some(value) = timeout {
++            args["reply_timeout"] = json!(value);
++        }
++        let (wire, result) = guidance156_capture_send(args).unwrap();
++        let WrapperToDaemon::SendIdempotent { message, .. } = decode(&wire).unwrap() else {
++            panic!("send")
++        };
++        assert_eq!(
++            message.reply_timeout, timeout,
++            "le reçu ne modifie pas le canon durable"
++        );
++        assert_eq!(result["reply_timeout_secs"], timeout.unwrap_or(60));
++        assert_eq!(result["reply_budget_includes_queue"], true);
++        assert!(
++            result["reply_timeout_guidance"]
++                .as_str()
++                .unwrap()
++                .contains("in_flight")
++        );
++    }
++}
+--- a/crates/bridget-daemon/src/t3code.rs
++++ b/crates/bridget-daemon/src/t3code.rs
+@@ -2547,6 +2547,9 @@
+             Discard::Saturated => {
+                 format!("file du fil saturée à {QUEUE_BOUND}, remise écartée")
+             }
++            Discard::Expired(which) if matches!(which, "de demande" | "de réponse") => format!(
++                "Relisez cette demande #{} dans bridget_ledger. Son échéance {which} est dépassée avant démarrage : ce pont ne l'a pas injectée. Le délai de réponse ({} s, 60 s par défaut) inclut l'attente en file. La même clé ne rouvre pas cette demande expirée. Si une suite dépasse votre mandat, demandez au propriétaire de décider d'un nouvel envoi avec un délai adapté. Les autres travaux autorisés suivent leur propre état.",
++                message.id, message.reply_timeout.unwrap_or(60)),
+             Discard::Expired(which) => format!("échéance {which} dépassée avant démarrage"),
+             Discard::RequestClosed(state) => format!("demande {state} avant démarrage"),
+             Discard::GuidanceUnavailable(reason) => reason.into(),
+--- a/crates/bridget-daemon/src/t3code_tests.rs
++++ b/crates/bridget-daemon/src/t3code_tests.rs
+@@ -3954,3 +3954,39 @@
+         worker.journal.stop();
+         worker.relay.shutdown();
+     }
++
++#[test]
++fn spec279_expired_queued_request_names_budget_and_scope_without_injecting() {
++    let (mut worker, peer) = worker099();
++    let mut frame = idempotent113("budget279");
++    if let DaemonToWrapper::DeliverIdempotent { message, .. } = &mut frame {
++        message.reply = true;
++        message.reply_timeout = None;
++    }
++    worker.handle_frame(frame);
++    worker.handle_frame(DaemonToWrapper::RequestList {
++        requests: vec![RequestInfo {
++            id: "budget279".into(),
++            sender: "alice".into(),
++            target: worker.agent_id.clone(),
++            state: "open".into(),
++            created_at: 0,
++            deadline_at: 0,
++            cancel_reason: None,
++            deferred_reminder_level: None,
++            deferred_reminder_at: None,
++        }],
++    });
++    let (_tx, inbox) = mpsc::channel();
++    worker.drive_queue(&inbox);
++    assert!(worker.queue.is_empty());
++    let frames = frames113(peer);
++    let reason = rejection113(&frames, "budget279").unwrap();
++    assert!(
++        reason.contains("60 s")
++            && reason.contains("attente en file")
++            && reason.contains("ce pont ne l'a pas injectée")
++    );
++    assert!(reason.contains("propriétaire") && reason.contains("autres travaux"));
++    assert!(saga_closed113(&frames, "d-budget279"));
++}

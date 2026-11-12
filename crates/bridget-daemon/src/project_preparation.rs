@@ -86,9 +86,11 @@ fn process_diagnostic(request: &Value, answer: &Value) -> Option<Value> {
         .get("correlation_id")
         .and_then(Value::as_str)
         .filter(|value| uuid::Uuid::parse_str(value).is_ok());
-    Some(serde_json::json!({"version":1,"scope":"this_request",
+    Some(
+        serde_json::json!({"version":1,"scope":"this_request","observed_at_unix":std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs(),
         "code":"project_preparation_process_failed","correlation_id":correlation,
-        "operation":detail["operation"],"exit_code":detail["exit_code"],"cause":"unobserved","stderr_signature":signature}))
+        "operation":detail["operation"],"exit_code":detail["exit_code"],"cause":"unobserved","stderr_signature":signature}),
+    )
 }
 
 fn prepare_script(
@@ -428,4 +430,20 @@ mod tests {
         );
         assert_eq!(result, Err("project_preparation_failed".into()));
     }
+}
+
+#[cfg(test)]
+#[test]
+fn spec279_source_preparation_log_is_timestamped_and_correlated() {
+    let request = serde_json::json!({"correlation_id":"27900000-0000-4000-8000-000000000001"});
+    let answer = serde_json::json!({"error":"project_preparation_process_failed","detail":{"operation":"inspect","exit_code":255}});
+    let before = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let event = process_diagnostic(&request, &answer).unwrap();
+    assert!(event["observed_at_unix"].as_u64().unwrap() >= before);
+    assert_eq!(event["correlation_id"], request["correlation_id"]);
+    assert_eq!(event["cause"], "unobserved");
+    assert!(event.get("stderr").is_none());
 }

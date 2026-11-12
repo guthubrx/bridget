@@ -2744,6 +2744,9 @@ impl LinkWorker {
             Discard::Saturated => {
                 format!("file du fil saturée à {QUEUE_BOUND}, remise écartée")
             }
+            Discard::Expired(which) if matches!(which, "de demande" | "de réponse") => format!(
+                "Relisez cette demande #{} dans bridget_ledger. Son échéance {which} est dépassée avant démarrage : ce pont ne l'a pas injectée. Le délai de réponse ({} s, 60 s par défaut) inclut l'attente en file. La même clé ne rouvre pas cette demande expirée. Si une suite dépasse votre mandat, demandez au propriétaire de décider d'un nouvel envoi avec un délai adapté. Les autres travaux autorisés suivent leur propre état.",
+                message.id, message.reply_timeout.unwrap_or(60)),
             Discard::Expired(which) => format!("échéance {which} dépassée avant démarrage"),
             Discard::RequestClosed(state) => format!("demande {state} avant démarrage"),
             Discard::GuidanceUnavailable(reason) => reason.into(),

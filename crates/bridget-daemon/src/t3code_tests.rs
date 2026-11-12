@@ -4292,3 +4292,39 @@ fn guidance156_t3_groupable_claude_inchange() {
     worker.journal.stop();
     worker.relay.shutdown();
 }
+
+#[test]
+fn spec279_expired_queued_request_names_budget_and_scope_without_injecting() {
+    let (mut worker, peer) = worker099();
+    let mut frame = idempotent113("budget279");
+    if let DaemonToWrapper::DeliverIdempotent { message, .. } = &mut frame {
+        message.reply = true;
+        message.reply_timeout = None;
+    }
+    worker.handle_frame(frame);
+    worker.handle_frame(DaemonToWrapper::RequestList {
+        requests: vec![RequestInfo {
+            id: "budget279".into(),
+            sender: "alice".into(),
+            target: worker.agent_id.clone(),
+            state: "open".into(),
+            created_at: 0,
+            deadline_at: 0,
+            cancel_reason: None,
+            deferred_reminder_level: None,
+            deferred_reminder_at: None,
+        }],
+    });
+    let (_tx, inbox) = mpsc::channel();
+    worker.drive_queue(&inbox);
+    assert!(worker.queue.is_empty());
+    let frames = frames113(peer);
+    let reason = rejection113(&frames, "budget279").unwrap();
+    assert!(
+        reason.contains("60 s")
+            && reason.contains("attente en file")
+            && reason.contains("ce pont ne l'a pas injectée")
+    );
+    assert!(reason.contains("propriétaire") && reason.contains("autres travaux"));
+    assert!(saga_closed113(&frames, "d-budget279"));
+}

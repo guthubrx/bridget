@@ -1462,6 +1462,11 @@ fn execute_send(
         Err(error) => Err(error),
     }?;
     // Aussi sur accusé perdu : intention demandée, jamais effet promis.
+    if reply {
+        result["reply_timeout_secs"] = json!(reply_timeout.unwrap_or(60));
+        result["reply_budget_includes_queue"] = json!(true);
+        result["reply_timeout_guidance"] = json!("Le délai de réponse commence à l'admission de cet envoi et inclut son attente en file. Il vaut 60 s si reply_timeout est omis. queue attend la fin du tour actif ; in_flight ne prouve ni lecture ni démarrage. Choisissez un délai adapté avant le premier envoi, sans modifier les paramètres d'une clé existante. L'expiration de cette demande n'arrête aucune autre mission.");
+    }
     if let Some(intent) = requested_intent {
         result["intent"] = json!(intent);
         result["effect"] = json!("unconfirmed");
@@ -2988,7 +2993,7 @@ pub(crate) fn tools() -> Vec<Value> {
                     "cross_project_reason": { "type": "string", "minLength": 1, "maxLength": 512, "description": "Motif volontaire d'un échange hors projet ; 1–512 octets UTF-8 sans contrôles. Ne pas déduire le motif depuis body. Le warning est rendu hors corps." },
                     "intent": { "type": "string", "enum": ["queue", "steer", "interrupt", "information"], "default": "queue", "description": "information : conserver au journal sans réveiller le modèle, sans reply ni in_reply_to. queue : remise normale, peut lancer un tour au repos. steer : guider le tour courant. interrupt : interrompre et lancer un tour, selon droits. Un résultat attendu garde son parcours normal." },
                     "reply": { "type": "boolean", "default": false },
-                    "reply_timeout": { "type": "integer", "minimum": 1 },
+                    "reply_timeout": { "type": "integer", "minimum": 1, "description": "Délai de réponse en secondes, 60 si omis avec reply=true. Commence à l’admission et inclut l’attente en file ; choisir avant le premier envoi." },
                     "in_reply_to": { "type": "string", "minLength": 1, "description": "Identifiant de la demande Bridget à résoudre par cette réponse." },
                     "id": { "type": "string", "minLength": 1, "description": "Premier envoi : omettre id et issued_at. Pour un rejeu strict, recopier ensemble id et issued_at reçus ; ne pas créer un id seul." },
                     "issued_at": { "type": "integer", "minimum": 1, "description": "Horodatage renvoyé par le premier appel ; requis avec id pour rejouer le même contrat." }

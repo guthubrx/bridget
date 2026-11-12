@@ -166,10 +166,11 @@ fn exchange(
         );
         (writer, request, connection)
     };
-    let preparation = matches!(
-        &request.request,
-        OriginProofOperation::PrepareProject { .. }
-    );
+    let preparation_target = match &request.request {
+        OriginProofOperation::PrepareProject { target_machine, .. } => Some(target_machine.clone()),
+        _ => None,
+    };
+    let preparation = preparation_target.is_some();
     let correlation = request.correlation_id.clone();
     let epoch = request.connection_epoch.clone();
     let identity = request.worker.clone();
@@ -185,6 +186,18 @@ fn exchange(
     } else {
         None
     };
+    if let (
+        Some(target),
+        Some(OriginProofResult::ProjectPrepared {
+            preparation_error: Some(code),
+            ..
+        }),
+    ) = (preparation_target, response.as_ref())
+        && let Some(event) =
+            preparation_failure_diagnostic279(&correlation, host, &target, code, unix_now_secs())
+    {
+        eprintln!("bridget_project_preparation_result {}", event);
+    }
     let mut st = state.lock().recover_poison();
     st.pending_origin_proofs.remove(&correlation);
     if Instant::now() >= deadline
@@ -199,6 +212,7 @@ fn exchange(
     }
     checked_response(response, preparation)
 }
+
 fn checked_response(
     response: Option<OriginProofResult>,
     preparation: bool,
@@ -836,4 +850,66 @@ mod source211_tests {
             );
         }
     }
+}
+
+// Même corrélation sur le maître et la source, sans contenu de mission ni stderr.
+fn preparation_failure_diagnostic279(
+    correlation: &str,
+    source: &str,
+    target: &str,
+    code: &str,
+    at: i64,
+) -> Option<serde_json::Value> {
+    if Uuid::parse_str(correlation).is_err()
+        || code != "project_preparation_process_failed"
+        || [source, target].iter().any(|h| {
+            h.len() > 255 || h.chars().any(char::is_control) || !bridget_core::host_is_attested(h)
+        })
+    {
+        return None;
+    }
+    Some(
+        serde_json::json!({"version":1,"scope":"this_request","correlation_id":correlation,
+        "source_machine":source,"target_machine":target,"code":code,"observed_at_unix":at}),
+    )
+}
+#[cfg(test)]
+#[test]
+fn spec279_preparation_master_log_joins_source_without_free_text() {
+    let id = "27900000-0000-4000-8000-000000000001";
+    let log = preparation_failure_diagnostic279(
+        id,
+        "source",
+        "target",
+        "project_preparation_process_failed",
+        123,
+    )
+    .unwrap();
+    assert_eq!(log["correlation_id"], id);
+    assert_eq!(log["observed_at_unix"], 123);
+    assert_eq!(log["source_machine"], "source");
+    assert_eq!(log["target_machine"], "target");
+    assert!(
+        preparation_failure_diagnostic279(id, "source", "target", "private stderr", 123).is_none()
+    );
+    assert!(
+        preparation_failure_diagnostic279(
+            "private token",
+            "source",
+            "target",
+            "project_preparation_process_failed",
+            123
+        )
+        .is_none()
+    );
+    assert!(
+        preparation_failure_diagnostic279(
+            id,
+            "private\nhost",
+            "target",
+            "project_preparation_process_failed",
+            123
+        )
+        .is_none()
+    );
 }

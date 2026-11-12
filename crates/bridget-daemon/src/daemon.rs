@@ -231,7 +231,7 @@ impl Drop for WaitPermit {
 
 fn reply_timeout_guidance(to: &str, timeout_secs: u64, msg_id: &str) -> String {
     format!(
-        "Consultez l'état et le journal de la demande #{msg_id} avant de décider d'une suite. {to} n'a pas répondu dans le délai de {timeout_secs} s. Cette expiration concerne l'attente de cette réponse seulement : elle n'annule aucune tâche et ne prouve ni arrêt ni absence d'exécution. Conservez la référence complète et toute clé de requête associée. Si une tâche est connue, consultez son statut et son résultat. Tant que l'issue reste inconnue, ne renvoyez pas la mission et ne créez pas de remplacement auprès d'un autre destinataire. Les autres travaux autorisés suivent leur propre état."
+        "Consultez l'état et le journal de la demande #{msg_id} avant de décider d'une suite. {to} n'a pas répondu dans le délai de {timeout_secs} s. Le délai de réponse inclut l'attente en file avant démarrage. Pour une future demande encore autorisée, choisir reply_timeout avant son premier envoi ; omis, il vaut 60 s. Cette expiration concerne l'attente de cette réponse seulement : elle n'annule aucune tâche et ne prouve ni arrêt ni absence d'exécution. Conservez la référence complète et toute clé de requête associée. Si une tâche est connue, consultez son statut et son résultat. Tant que l'issue reste inconnue, ne renvoyez pas la mission et ne créez pas de remplacement auprès d'un autre destinataire. Les autres travaux autorisés suivent leur propre état."
     )
 }
 

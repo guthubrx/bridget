@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.8.44 - 2026-11-12
+
+- Les reçus des demandes suivies annoncent le délai de réponse, 60 secondes par défaut, et son inclusion de l’attente en file.
+- Les refus avant remise précisent leur portée et les conditions d’une suite autorisée.
+- Les diagnostics de préparation SSH sont horodatés et reliés entre maître et worker source sans conserver de sortie privée.
+
 ## 0.8.43 - 2026-11-12
 
 - Les connexions natives reprennent leur preuve de projet au retour du worker, sans relancer la mission.
