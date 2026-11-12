@@ -1,0 +1,832 @@
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -7,7 +7,7 @@
+ ]
+ 
+ [workspace.package]
+-version = "0.8.47"
++version = "0.8.48"
+ edition = "2024"
+ license = "MIT"
+ 
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -192,7 +192,7 @@
+ 
+ [[package]]
+ name = "bridget-core"
+-version = "0.8.47"
++version = "0.8.48"
+ dependencies = [
+  "serde",
+  "serde_json",
+@@ -201,7 +201,7 @@
+ 
+ [[package]]
+ name = "bridget-daemon"
+-version = "0.8.47"
++version = "0.8.48"
+ dependencies = [
+  "axum",
+  "base64",
+@@ -229,7 +229,7 @@
+ 
+ [[package]]
+ name = "bridget-transport"
+-version = "0.8.47"
++version = "0.8.48"
+ dependencies = [
+  "bridget-core",
+  "libc",
+--- a/crates/bridget-daemon/src/remote_worker_read.rs
++++ b/crates/bridget-daemon/src/remote_worker_read.rs
+@@ -1352,6 +1352,31 @@
+ }
+ 
+ 
++/// Ventilation d'un contrôle de sonde v2. Étiquettes fermées ; aucun chemin,
++/// identifiant de dépôt, commande ni contenu de configuration.
++pub(super) struct CandidatePhases {
++    /// Dernière phase atteinte ; `verdict` signifie que les contrôles ont abouti.
++    pub(super) stage: &'static str,
++    /// None : phase non terminée, distinct de Some(0) : moins d'une milliseconde.
++    pub(super) mapping_ms: Option<u64>,
++    /// `not_reached` avant Git ; `uncached` seulement sans cache de lot.
++    pub(super) git: &'static str,
++    pub(super) git_ms: Option<u64>,
++    pub(super) readiness_ms: Option<u64>,
++}
++impl Default for CandidatePhases {
++    fn default() -> Self {
++        Self { stage: "mapping", mapping_ms: None, git: "not_reached", git_ms: None, readiness_ms: None }
++    }
++}
++impl CandidatePhases {
++    pub(super) fn report(&self, candidate_id: &str) -> serde_json::Value {
++        serde_json::json!({"candidate_id":candidate_id,"stage":self.stage,
++            "mapping_ms":self.mapping_ms,"git":self.git,"git_ms":self.git_ms,
++            "readiness_ms":self.readiness_ms})
++    }
++}
++
+ /// Lecture isolée : aucun store écrivain, token Prepared, Child ou runtime.
+ /// L'occupation est une photographie prudente ; Prepare relit toujours le
+ /// registre, les droits et les gardes vivantes avant toute mutation.
+@@ -1415,7 +1440,7 @@
+         }
+     }
+ 
+-    fn probe_one_candidate_for(
++    pub(super) fn probe_one_candidate_for(
+         &self,
+         probe: &CandidateProbe,
+         candidate: &CandidateProbeCandidate,
+@@ -1426,7 +1451,9 @@
+         git_facts: Option<&mut ProbeGitFacts>,
+         operation: &mut crate::native_permissions::PermissionReadOperation,
+         diagnostics: Option<(&ProbePermissionDiagnostics<'_>, &str)>,
++        mut phases: Option<&mut CandidatePhases>,
+     ) -> CandidateProbeVerdict {
++        let started = Instant::now();
+         let mapping_revision =
+             match registry.project_mapping(&self.identity.machine_id, &candidate.project_id) {
+                 Ok(mapping) => mapping.mapping_revision,
+@@ -1438,7 +1465,7 @@
+                 }
+             };
+         let mut request = self.candidate_prepare(probe, candidate, mapping_revision);
+-        request.service_tier=service_tier.map(str::to_owned);
++        request.service_tier = service_tier.map(str::to_owned);
+         if request.validate().is_err() {
+             return CandidateProbeVerdict::Ineligible {
+                 candidate_id: candidate.candidate_id.clone(),
+@@ -1456,14 +1483,20 @@
+                 };
+             }
+         };
++        if let Some(phases) = phases.as_deref_mut() {
++            phases.mapping_ms = Some(started.elapsed().as_millis() as u64);
++            phases.stage = "git";
++        }
++        let git_started = Instant::now();
+         let read_git_facts = || {
+             let (mapping, cwd) = self
+-                .read_view().mapping_paths_and_git(&request, mapping, workload)
++                .read_view()
++                .mapping_paths_and_git(&request, mapping, workload)
+                 .map_err(|_| CandidateProbeRefusal::MappingUnavailable)?;
+             self.probe_workspace_preconditions(&request, &mapping, &cwd)?;
+             Ok((mapping, cwd))
+         };
+-        let checked = if let Some(cache) = git_facts {
++        let (checked, git_label) = if let Some(cache) = git_facts {
+             // Worker/provisioning/epoch/registre/protections sont constants dans
+             // ce seul lot. Tout fait variable de mapping/base figure dans la clé.
+             let key = match serde_json::to_vec(&(
+@@ -1489,10 +1522,17 @@
+             };
+             // Le refus commun est lui aussi mémorisé : une base absente ne
+             // provoque pas 128 préflights. Aucun résultat ne quitte ce lot.
+-            cache.entry(key).or_insert_with(read_git_facts).clone()
++            match cache.entry(key) {
++                std::collections::btree_map::Entry::Occupied(entry) => (entry.get().clone(), "hit"),
++                std::collections::btree_map::Entry::Vacant(entry) => (entry.insert(read_git_facts()).clone(), "miss"),
++            }
+         } else {
+-            read_git_facts()
++            (read_git_facts(), "uncached")
+         };
++        if let Some(phases) = phases.as_deref_mut() {
++            phases.git = git_label;
++            phases.git_ms = Some(git_started.elapsed().as_millis() as u64);
++        }
+         let (mapping, cwd) = match checked {
+             Ok(values) => values,
+             Err(reason) => {
+@@ -1502,17 +1542,38 @@
+                 };
+             }
+         };
+-        let (checked_readiness,program_failure)=crate::provider_program_compat::capture(||self.read_view().inspect_candidate(registry, &request, &mapping, &cwd, operation, diagnostics, self.provider_accounts_negotiated));
++        if let Some(phases) = phases.as_deref_mut() { phases.stage = "readiness"; }
++        let readiness_started = Instant::now();
++        let (checked_readiness, program_failure) = crate::provider_program_compat::capture(|| {
++            self.read_view().inspect_candidate(
++                registry,
++                &request,
++                &mapping,
++                &cwd,
++                operation,
++                diagnostics,
++                self.provider_accounts_negotiated,
++            )
++        });
++        if let Some(phases) = phases.as_deref_mut() {
++            phases.readiness_ms = Some(readiness_started.elapsed().as_millis() as u64);
++        }
+         let readiness = match checked_readiness {
+             Ok(readiness) => readiness,
+             Err(WorkerRefusal::DefinitionChanged) => {
+                 return CandidateProbeVerdict::Ineligible {
+                     candidate_id: candidate.candidate_id.clone(),
+                     reason: match program_failure {
+-                        Some(crate::provider_program_compat::UpgradeRefusal::Pending)=>CandidateProbeRefusal::ProgramUpgradeCheckPending,
+-                        Some(crate::provider_program_compat::UpgradeRefusal::Incompatible)=>CandidateProbeRefusal::ProgramProtocolIncompatible,
+-                        Some(crate::provider_program_compat::UpgradeRefusal::Unavailable)=>CandidateProbeRefusal::ProgramCheckUnavailable,
+-                        None=>CandidateProbeRefusal::DefinitionUnavailable,
++                        Some(crate::provider_program_compat::UpgradeRefusal::Pending) => {
++                            CandidateProbeRefusal::ProgramUpgradeCheckPending
++                        }
++                        Some(crate::provider_program_compat::UpgradeRefusal::Incompatible) => {
++                            CandidateProbeRefusal::ProgramProtocolIncompatible
++                        }
++                        Some(crate::provider_program_compat::UpgradeRefusal::Unavailable) => {
++                            CandidateProbeRefusal::ProgramCheckUnavailable
++                        }
++                        None => CandidateProbeRefusal::DefinitionUnavailable,
+                     },
+                 };
+             }
+@@ -1529,7 +1590,9 @@
+                 };
+             }
+         };
+-        if command_write.is_some_and(|writes| !crate::native_permissions::permits_command_execution(&readiness.child_policy,writes)) {
++        if command_write.is_some_and(|writes| {
++            !crate::native_permissions::permits_command_execution(&readiness.child_policy, writes)
++        }) {
+             return CandidateProbeVerdict::Ineligible {
+                 candidate_id: candidate.candidate_id.clone(),
+                 reason: CandidateProbeRefusal::CommandExecutionUnavailable,
+@@ -1544,6 +1607,7 @@
+                 };
+             }
+         };
++        if let Some(phases) = phases { phases.stage = "verdict"; }
+         CandidateProbeVerdict::Eligible {
+             candidate_id: candidate.candidate_id.clone(),
+             mapping_revision: mapping.mapping_revision,
+@@ -1552,12 +1616,11 @@
+             observed_at: worker_now(),
+         }
+     }
+-
+     pub(super) fn candidate_probe(
+         &self,
+         probe: &CandidateProbe,
+-        disconnected:&AtomicBool,
+-        deadline:Instant,
++        disconnected: &AtomicBool,
++        deadline: Instant,
+     ) -> Result<CandidateProbeResult, WorkerRefusal> {
+         probe.validate_shape()?;
+         if probe.worker != self.identity {
+@@ -1568,27 +1631,53 @@
+         let mut verdicts: Vec<CandidateProbeVerdict> = probe
+             .candidates
+             .iter()
+-            .map(|candidate| if disconnected.load(Ordering::Acquire)||Instant::now()>=deadline {
+-                CandidateProbeVerdict::Ineligible{candidate_id:candidate.candidate_id.clone(),reason:CandidateProbeRefusal::ResourceLimit}
+-            } else {match &registry {
+-                Ok(registry) => self.probe_one_candidate_for(probe, candidate, registry, None, None, None, None, &mut operation, None),
+-                Err(_) => CandidateProbeVerdict::Ineligible {
+-                    candidate_id: candidate.candidate_id.clone(),
+-                    reason: CandidateProbeRefusal::CapabilityUnavailable,
+-                },
+-            }})
++            .map(|candidate| {
++                if disconnected.load(Ordering::Acquire) || Instant::now() >= deadline {
++                    CandidateProbeVerdict::Ineligible {
++                        candidate_id: candidate.candidate_id.clone(),
++                        reason: CandidateProbeRefusal::ResourceLimit,
++                    }
++                } else {
++                    match &registry {
++                        Ok(registry) => self.probe_one_candidate_for(
++                            probe,
++                            candidate,
++                            registry,
++                            None,
++                            None,
++                            None,
++                            None,
++                            &mut operation,
++                            None,
++                            None,
++                        ),
++                        Err(_) => CandidateProbeVerdict::Ineligible {
++                            candidate_id: candidate.candidate_id.clone(),
++                            reason: CandidateProbeRefusal::CapabilityUnavailable,
++                        },
++                    }
++                }
++            })
+             .collect();
+         if operation.finish().is_err() {
+             for verdict in &mut verdicts {
+                 if let CandidateProbeVerdict::Eligible { candidate_id, .. } = verdict {
+-                    *verdict = CandidateProbeVerdict::Ineligible { candidate_id: candidate_id.clone(), reason: CandidateProbeRefusal::PermissionsChanged };
++                    *verdict = CandidateProbeVerdict::Ineligible {
++                        candidate_id: candidate_id.clone(),
++                        reason: CandidateProbeRefusal::PermissionsChanged,
++                    };
+                 }
+             }
+         }
+-        if Instant::now()>=deadline {
+-            for verdict in &mut verdicts {if let CandidateProbeVerdict::Eligible{candidate_id,..}=verdict {
+-                *verdict=CandidateProbeVerdict::Ineligible{candidate_id:candidate_id.clone(),reason:CandidateProbeRefusal::ResourceLimit};
+-            }}
++        if Instant::now() >= deadline {
++            for verdict in &mut verdicts {
++                if let CandidateProbeVerdict::Eligible { candidate_id, .. } = verdict {
++                    *verdict = CandidateProbeVerdict::Ineligible {
++                        candidate_id: candidate_id.clone(),
++                        reason: CandidateProbeRefusal::ResourceLimit,
++                    };
++                }
++            }
+         }
+         Ok(CandidateProbeResult {
+             version: WORKER_CANDIDATE_PROBE_VERSION,
+@@ -1600,15 +1689,14 @@
+             verdicts,
+         })
+     }
+-
+     pub(super) fn candidate_probe_v2(
+         &mut self,
+         probe: &CandidateProbeV2,
+-        disconnected:&AtomicBool,
+-        deadline:Instant,
++        disconnected: &AtomicBool,
++        deadline: Instant,
+     ) -> Result<CandidateProbeV2Result, WorkerRefusal> {
+         probe.validate_shape()?;
+-        let started=Instant::now();
++        let started = Instant::now();
+         if probe.worker != self.identity {
+             return Err(WorkerRefusal::StaleConnection);
+         }
+@@ -1640,26 +1728,45 @@
+                 )
+             })
+             .collect::<std::collections::HashMap<_, _>>();
+-        let forbidden_roots=registry.machines().get(&self.identity.machine_id).into_iter()
+-            .flat_map(|machine|machine.mappings.values()).map(|mapping|mapping.remote_root.clone()).collect::<Vec<_>>();
+-        let tool_observations=qualify_workload_tools(&self.source,&probe.required_tools,&forbidden_roots,
+-            deadline.min(Instant::now()+Duration::from_secs(3)));
+-        let tools_available=tool_observations.iter().all(|fact|
+-            fact.state==bridget_transport::protocol::WorkloadToolState::Available);
++        let forbidden_roots = registry
++            .machines()
++            .get(&self.identity.machine_id)
++            .into_iter()
++            .flat_map(|machine| machine.mappings.values())
++            .map(|mapping| mapping.remote_root.clone())
++            .collect::<Vec<_>>();
++        let tool_observations = qualify_workload_tools(
++            &self.source,
++            &probe.required_tools,
++            &forbidden_roots,
++            deadline.min(Instant::now() + Duration::from_secs(3)),
++        );
++        let tools_available = tool_observations
++            .iter()
++            .all(|fact| fact.state == bridget_transport::protocol::WorkloadToolState::Available);
+         let mut git_facts = ProbeGitFacts::new();
+         let mut operation = crate::native_permissions::PermissionReadOperation::default();
+-        let diagnostics = ProbePermissionDiagnostics::new(&probe.correlation_id, &probe.admission_id);
+-        let mut timings=Vec::with_capacity(probe.candidates.len());
++        let diagnostics =
++            ProbePermissionDiagnostics::new(&probe.correlation_id, &probe.admission_id);
++        let mut timings = Vec::with_capacity(probe.candidates.len());
++        let mut phase_reports = Vec::with_capacity(probe.candidates.len());
+         let mut verdicts: Vec<CandidateProbeV2Verdict> = probe
+             .candidates
+             .iter()
+             .map(|candidate| {
+-                if disconnected.load(Ordering::Acquire)||Instant::now()>=deadline {
+-                    return CandidateProbeV2Verdict::Ineligible {candidate_id:candidate.candidate_id.clone(),reason:CandidateProbeRefusal::ResourceLimit};
++                if disconnected.load(Ordering::Acquire) || Instant::now() >= deadline {
++                    return CandidateProbeV2Verdict::Ineligible {
++                        candidate_id: candidate.candidate_id.clone(),
++                        reason: CandidateProbeRefusal::ResourceLimit,
++                    };
+                 }
+-                if !tools_available {return CandidateProbeV2Verdict::Ineligible {
+-                    candidate_id:candidate.candidate_id.clone(),reason:CandidateProbeRefusal::WorkloadToolUnavailable};}
+-                let candidate_started=Instant::now();
++                if !tools_available {
++                    return CandidateProbeV2Verdict::Ineligible {
++                        candidate_id: candidate.candidate_id.clone(),
++                        reason: CandidateProbeRefusal::WorkloadToolUnavailable,
++                    };
++                }
++                let candidate_started = Instant::now();
+                 let registered = enabled
+                     && index
+                         .get(&(
+@@ -1671,7 +1778,10 @@
+                         ))
+                         .is_some_and(|entry| {
+                             entry.enabled
+-                                && candidate.service_tier.as_ref().is_none_or(|tier|entry.service_tiers.contains(tier))
++                                && candidate
++                                    .service_tier
++                                    .as_ref()
++                                    .is_none_or(|tier| entry.service_tiers.contains(tier))
+                                 && candidate
+                                     .effort
+                                     .as_ref()
+@@ -1711,15 +1821,18 @@
+                     parent: probe.parent.clone(),
+                     candidates: vec![legacy],
+                 };
+-                let verdict=match self.probe_one_candidate_for(
++                let mut phases = CandidatePhases::default();
++                let verdict = match self.probe_one_candidate_for(
+                     &legacy_probe,
+                     &legacy_probe.candidates[0],
+                     &registry,
+                     Some(candidate.workload),
+                     (!probe.required_tools.is_empty()).then_some(probe.requires_workspace_write),
+                     candidate.service_tier.as_deref(),
+-                    Some(&mut git_facts), &mut operation,
++                    Some(&mut git_facts),
++                    &mut operation,
+                     Some((&diagnostics, candidate.candidate_id.as_str())),
++                    Some(&mut phases),
+                 ) {
+                     CandidateProbeVerdict::Eligible {
+                         mapping_revision,
+@@ -1745,31 +1858,55 @@
+                         }
+                     }
+                 };
+-                timings.push((candidate.candidate_id.clone(),candidate_started.elapsed().as_millis() as u64));
++                timings.push((
++                    candidate.candidate_id.clone(),
++                    candidate_started.elapsed().as_millis() as u64,
++                ));
++                phase_reports.push(phases.report(&candidate.candidate_id));
+                 verdict
+             })
+             .collect();
+         if let Err(code) = operation.finish() {
+             for verdict in &mut verdicts {
+                 if let CandidateProbeV2Verdict::Eligible { candidate_id, .. } = verdict {
+-                    observe_probe_permission_failure(&code, Some((&diagnostics, candidate_id)), ProbePermissionSite::BatchFinish);
+-                    *verdict = CandidateProbeV2Verdict::Ineligible { candidate_id: candidate_id.clone(), reason: diagnostics.refusal(candidate_id, CandidateProbeRefusal::PermissionsChanged, self.permission_reasons_negotiated) };
++                    observe_probe_permission_failure(
++                        &code,
++                        Some((&diagnostics, candidate_id)),
++                        ProbePermissionSite::BatchFinish,
++                    );
++                    *verdict = CandidateProbeV2Verdict::Ineligible {
++                        candidate_id: candidate_id.clone(),
++                        reason: diagnostics.refusal(
++                            candidate_id,
++                            CandidateProbeRefusal::PermissionsChanged,
++                            self.permission_reasons_negotiated,
++                        ),
++                    };
+                 }
+             }
+         }
+         // Les contrôles Git peuvent durer : observer la charge à la remise,
+         // pour ne pas rendre périmé un échantillon pris avant leur lecture.
+         let resources = self.host_resources.collect(worker_now(), capacity);
+-        eprintln!("bridget_worker_probe172 {}",serde_json::json!({
++        eprintln!(
++            "bridget_worker_probe172 {}",
++            serde_json::json!({
+             "correlation_id":probe.correlation_id,"admission_id":probe.admission_id,
+             "candidates":probe.candidates.len(),"elapsed_ms":started.elapsed().as_millis() as u64,
+-            "candidate_elapsed_ms":timings}));
+-        if Instant::now()>=deadline {
+-            for verdict in &mut verdicts {if let CandidateProbeV2Verdict::Eligible{candidate_id,..}=verdict {
+-                *verdict=CandidateProbeV2Verdict::Ineligible{candidate_id:candidate_id.clone(),reason:CandidateProbeRefusal::ResourceLimit};
+-            }}
+-        }
+-        Ok(CandidateProbeV2Result { tool_observations,
++            "candidate_elapsed_ms":timings,"candidate_phases_ms":phase_reports})
++        );
++        if Instant::now() >= deadline {
++            for verdict in &mut verdicts {
++                if let CandidateProbeV2Verdict::Eligible { candidate_id, .. } = verdict {
++                    *verdict = CandidateProbeV2Verdict::Ineligible {
++                        candidate_id: candidate_id.clone(),
++                        reason: CandidateProbeRefusal::ResourceLimit,
++                    };
++                }
++            }
++        }
++        Ok(CandidateProbeV2Result {
++            tool_observations,
+             version: WORKER_CANDIDATE_PROBE_V2_VERSION,
+             correlation_id: probe.correlation_id.clone(),
+             connection_epoch: probe.connection_epoch.clone(),
+@@ -1780,7 +1917,6 @@
+             verdicts,
+         })
+     }
+-
+ }
+ 
+ pub(super) fn read_worker_command(root:&Path,worker:&WorkerIdentity,identity:&WorkerCommandIdentity)
+--- a/crates/bridget-daemon/src/remote_worker_tests.rs
++++ b/crates/bridget-daemon/src/remote_worker_tests.rs
+@@ -6808,3 +6808,113 @@
+         WorkerRefusal::ResourceLimit
+     );
+ }
++
++#[test]
++fn spec283_candidate_phases_follow_real_cache_and_early_refusal() {
++    let fixture = Fixture::new();
++    let (runtime, _, request, _) = c19_preparation_fixture(&fixture);
++    let context = runtime.probe_read_context();
++    let registry = runtime.registry().unwrap();
++    let candidate = CandidateProbeCandidate {
++        candidate_id: "c01".into(),
++        project_id: request.project_id.clone(),
++        origin_host: request.origin_host.clone(),
++        origin_cwd: request.origin_cwd.clone(),
++        source_root: request.source_root.clone(),
++        remote_root: request.remote_root.clone(),
++        source_root_identity: request.source_root_identity.clone(),
++        relative_cwd: request.relative_cwd.clone(),
++        base_commit: Some("f".repeat(40)),
++        agent_type: request.agent_type.clone(),
++        model: request.model.clone(),
++        effort: request.effort.clone(),
++        posture: Some(SpawnPosture::Discovery),
++        workspace: Some(bridget_transport::protocol::WorkspaceRequest::CommitView {}),
++    };
++    let probe = CandidateProbe {
++        version: WORKER_CANDIDATE_PROBE_VERSION,
++        correlation_id: "phases283".into(),
++        connection_epoch: "epoch283".into(),
++        worker: runtime.identity.clone(),
++        admission_id: "admission283".into(),
++        policy_revision: 1,
++        parent: request.parent.clone(),
++        candidates: vec![candidate.clone()],
++    };
++    let mut cache = ProbeGitFacts::new();
++    let mut operation = crate::native_permissions::PermissionReadOperation::default();
++    for label in ["miss", "hit"] {
++        let mut phases = read::CandidatePhases::default();
++        let result = context.probe_one_candidate_for(
++            &probe,
++            &candidate,
++            &registry,
++            None,
++            None,
++            None,
++            Some(&mut cache),
++            &mut operation,
++            None,
++            Some(&mut phases),
++        );
++        assert!(matches!(result, CandidateProbeVerdict::Ineligible {
++            reason: CandidateProbeRefusal::WorkspaceUnavailable, ..
++        }), "verdict={result:?}, phases={}", phases.report("c01"));
++        let report = phases.report("c01");
++        assert_eq!(report["git"], label);
++        assert_eq!(report["stage"], "git");
++        assert!(report["mapping_ms"].is_u64() && report["git_ms"].is_u64());
++        assert!(report["readiness_ms"].is_null());
++        assert_eq!(
++            report
++                .as_object()
++                .unwrap()
++                .keys()
++                .map(String::as_str)
++                .collect::<BTreeSet<_>>(),
++            BTreeSet::from([
++                "candidate_id",
++                "stage",
++                "mapping_ms",
++                "git",
++                "git_ms",
++                "readiness_ms"
++            ])
++        );
++        assert!(!report.to_string().contains(&request.remote_root));
++    }
++    assert_eq!(cache.len(), 1);
++    let mut missing = candidate.clone();
++    missing.project_id = "missing-project".into();
++    let mut phases = read::CandidatePhases::default();
++    let result = context.probe_one_candidate_for(
++        &probe,
++        &missing,
++        &registry,
++        None,
++        None,
++        None,
++        Some(&mut cache),
++        &mut operation,
++        None,
++        Some(&mut phases),
++    );
++    assert!(matches!(
++        result,
++        CandidateProbeVerdict::Ineligible {
++            reason: CandidateProbeRefusal::MappingUnavailable,
++            ..
++        }
++    ));
++    let report = phases.report("c02");
++    assert_eq!(report["stage"], "mapping");
++    assert_eq!(report["git"], "not_reached");
++    assert!(
++        report["mapping_ms"].is_null()
++            && report["git_ms"].is_null()
++            && report["readiness_ms"].is_null()
++    );
++    assert_eq!(cache.len(), 1);
++    operation.finish().unwrap();
++    assert!(runtime.store.commands().unwrap().is_empty());
++}
+--- a/crates/bridget-daemon/src/daemon/native_delegation.rs
++++ b/crates/bridget-daemon/src/daemon/native_delegation.rs
+@@ -5417,46 +5417,111 @@
+             })
+ }
+ 
+-fn project_continuation(st: &DaemonState, task: &Task, view: &mut Value, now: i64,
+-    worker: Option<&bridget_transport::protocol::WorkerObservation>) {
++fn project_continuation(
++    st: &DaemonState,
++    task: &Task,
++    view: &mut Value,
++    now: i64,
++    worker: Option<&bridget_transport::protocol::WorkerObservation>,
++) {
+     use bridget_transport::protocol::WorkerCommandPhase;
+-    if task.state!="result_available" {return;}
+-    let ended=task.remote_placement.is_some() && (task.child_instance.as_ref()
+-        .is_some_and(|id|st.managed_terminal_instances.contains(id))
+-        || worker.is_some_and(|v|matches!(v.phase,WorkerCommandPhase::Terminal|WorkerCommandPhase::Refused)));
+-    let eligible=task.continuable_at(now);
+-    let presence=if eligible && task.remote_placement.is_some() {
+-        Some(continuation_child_live(st,task))
+-    } else {None};
+-    let refused=worker.is_some_and(|v|v.phase==WorkerCommandPhase::Refused);
+-    let (status,code,action)=if refused {
+-        ("refused","remote_execution_ended","Conserver le résultat et les produits. Le worker signale que cette commande a été refusée ; cela ne prouve pas qu’elle a exécuté la mission. Clôturer la garde par le parcours propriétaire, puis vérifier arrêt et rapport avant une suite autorisée ; aucun rejeu ne lance cette commande.")
++    if task.state != "result_available" {
++        return;
++    }
++    let ended = task.remote_placement.is_some()
++        && (task
++            .child_instance
++            .as_ref()
++            .is_some_and(|id| st.managed_terminal_instances.contains(id))
++            || worker.is_some_and(|v| {
++                matches!(
++                    v.phase,
++                    WorkerCommandPhase::Terminal | WorkerCommandPhase::Refused
++                )
++            }));
++    let eligible = task.continuable_at(now);
++    // Même garde de présence que Continue, locale comme distante : une projection
++    // "eligible" ne doit pas coexister avec un refus keep_alive_ended au même instant.
++    let presence = if eligible {
++        Some(continuation_child_live(st, task))
++    } else {
++        None
++    };
++    let refused = worker.is_some_and(|v| v.phase == WorkerCommandPhase::Refused);
++    let (status, code, action) = if refused {
++        (
++            "refused",
++            "remote_execution_ended",
++            "Conserver le résultat et les produits. Le worker signale que cette commande a été refusée ; cela ne prouve pas qu’elle a exécuté la mission. Clôturer la garde par le parcours propriétaire, puis vérifier arrêt et rapport avant une suite autorisée ; aucun rejeu ne lance cette commande.",
++        )
+     } else if ended {
+-        ("ended","remote_execution_ended","Conserver le résultat, les commits et les fichiers de cette tâche. Le maître a confirmé que cette instance distante ne peut plus recevoir de ronde. Fermer sa garde par le parcours propriétaire puis vérifier arrêt et rapport avant une suite autorisée ; aucun rejeu ne redémarre cette commande.")
++        (
++            "ended",
++            "remote_execution_ended",
++            "Conserver le résultat, les commits et les fichiers de cette tâche. Le maître a confirmé que cette instance distante ne peut plus recevoir de ronde. Fermer sa garde par le parcours propriétaire puis vérifier arrêt et rapport avant une suite autorisée ; aucun rejeu ne redémarre cette commande.",
++        )
+     } else if task.guard_released {
+-        ("closed","keep_alive_ended","Conserver les produits. La garde de cette tâche est close ; ne pas rejouer sa clé pour relancer la commande.")
+-    } else if task.guarded && task.idle_deadline_at.is_some_and(|deadline|deadline<=now) {
+-        ("expired","idle_deadline_elapsed","Conserver cette tâche et ses produits. Son délai de garde est dépassé ; cela ne prouve pas l’arrêt physique. Faire confirmer clôture, arrêt et rapport avant toute suite autorisée, sans prolonger la garde ni rejouer une ancienne mission.")
++        (
++            "closed",
++            "keep_alive_ended",
++            "Conserver les produits. La garde de cette tâche est close ; ne pas rejouer sa clé pour relancer la commande.",
++        )
++    } else if task.guarded
++        && task
++            .idle_deadline_at
++            .is_some_and(|deadline| deadline <= now)
++    {
++        (
++            "expired",
++            "idle_deadline_elapsed",
++            "Conserver cette tâche et ses produits. Son délai de garde est dépassé ; cela ne prouve pas l’arrêt physique. Faire confirmer clôture, arrêt et rapport avant toute suite autorisée, sans prolonger la garde ni rejouer une ancienne mission.",
++        )
+     } else if task.round_no() >= crate::delegation::MAX_TASK_ROUNDS {
+-        ("closed","round_limit","Conserver les résultats. Le plafond de rondes de cette tâche est atteint ; clôturer sa garde par le parcours propriétaire avant une suite distincte autorisée.")
++        (
++            "closed",
++            "round_limit",
++            "Conserver les résultats. Le plafond de rondes de cette tâche est atteint ; clôturer sa garde par le parcours propriétaire avant une suite distincte autorisée.",
++        )
+     } else if !eligible {
+-        ("not_eligible","continuation_not_eligible","Relire l’état et les conditions de cette tâche : garde, remise du résultat et éventuelle réparation du dossier. Ne pas créer de remplacement d’issue inconnue.")
+-    } else if matches!(presence,Some(Err(_))) {
+-        ("unconfirmed","continuation_state_unavailable","Faire vérifier la lecture du magasin et de l’état natif par le responsable Bridget. Ce contrôle a échoué ; sa cause précise reste à établir. Conserver tâche, clé et produits, sans purger ni remplacer le travail.")
++        (
++            "not_eligible",
++            "continuation_not_eligible",
++            "Relire l’état et les conditions de cette tâche : garde, remise du résultat et éventuelle réparation du dossier. Ne pas créer de remplacement d’issue inconnue.",
++        )
++    } else if matches!(presence, Some(Err(_))) {
++        (
++            "unconfirmed",
++            "continuation_state_unavailable",
++            "Faire vérifier la lecture du magasin et de l’état natif par le responsable Bridget. Ce contrôle a échoué ; sa cause précise reste à établir. Conserver tâche, clé et produits, sans purger ni remplacer le travail.",
++        )
++    } else if task.remote_placement.is_none() && !matches!(presence, Some(Ok(true))) {
++        (
++            "unconfirmed",
++            "local_child_unconfirmed",
++            "L’agent enfant local n’est pas confirmé présent à cet instant ; cela ne prouve pas son arrêt. Ne pas appeler Continue pour tester ce lien : si la présence manque, ce parcours ferme la garde. Conserver tâche, clé et produits sans doublon ; demander une intervention ciblée si le lien ne revient pas.",
++        )
+     } else if task.remote_placement.is_some()
+-        && (!matches!(presence,Some(Ok(true))) || !worker.is_some_and(|v|
+-            v.phase==WorkerCommandPhase::Released && v.native_ready)) {
+-        ("unconfirmed","remote_execution_unconfirmed","Relire bridget_task_status pour obtenir une observation ciblée du worker. La commande n’est pas confirmée prête ; cela ne prouve pas son arrêt. Ne pas appeler Continue pour tester le lien : si la présence manque, ce parcours peut fermer la garde. Conserver tâche, clé et produits sans doublon ; demander une intervention ciblée si le lien ne revient pas.")
++        && (!matches!(presence, Some(Ok(true)))
++            || !worker.is_some_and(|v| v.phase == WorkerCommandPhase::Released && v.native_ready))
++    {
++        (
++            "unconfirmed",
++            "remote_execution_unconfirmed",
++            "Relire bridget_task_status pour obtenir une observation ciblée du worker. La commande n’est pas confirmée prête ; cela ne prouve pas son arrêt. Ne pas appeler Continue pour tester le lien : si la présence manque, ce parcours peut fermer la garde. Conserver tâche, clé et produits sans doublon ; demander une intervention ciblée si le lien ne revient pas.",
++        )
+     } else {
+-        ("eligible","continuation_requires_recheck","Une reprise de cette même tâche peut être demandée dans le mandat existant. Continue revérifie les droits, le contrôle et la commande distante avant remise ; cet état lu à un instant ne garantit pas qu’elle sera encore active au prochain appel.")
+-    };
+-    view["continuable"]=json!(status=="eligible");
+-    view["continuation"]=json!({"status":status,"code":code,"scope":"this_task",
++        (
++            "eligible",
++            "continuation_requires_recheck",
++            "Une reprise de cette même tâche peut être demandée dans le mandat existant. Continue revérifie les droits, le contrôle et la commande distante avant remise ; cet état lu à un instant ne garantit pas qu’elle sera encore active au prochain appel.",
++        )
++    };
++    view["continuable"] = json!(status == "eligible");
++    view["continuation"] = json!({"status":status,"code":code,"scope":"this_task",
+          "observed_at":now,"requires_recheck":true,"eligible_for_check":eligible,
+         "master_presence_confirmed":presence.as_ref().and_then(|v|v.as_ref().ok().copied()),"next_action":action,
+         "human_action":"Si l’arrêt, le lien ou la suite dépasse votre mandat, demander au propriétaire ou à l’utilisateur la décision ciblée sur le travail conservé. Les autres travaux autorisés suivent leur propre état ; aucun arrêt global n’est déduit."});
+ }
+-
+ /// O(log n+r log r+B), r<=32 demandes ; aucune mutation de remise.
+ fn current_task_view(st: &DaemonState, task: &Task, full: bool) -> Result<Value, String> {
+     let phase =
+--- a/crates/bridget-daemon/src/daemon/native_delegation_tests.rs
++++ b/crates/bridget-daemon/src/daemon/native_delegation_tests.rs
+@@ -22704,42 +22704,62 @@
+ 
+     #[test]
+     fn spec221_continuable_obeys_deadline_round_and_confirmed_remote_end() {
+-        let (mut st,config,mut task,_)=remote162_capture_fixture();
+-        task.state="result_available".into();task.guarded=true;task.guard_released=false;
+-        task.result_sent=true;task.round=5;task.idle_deadline_at=Some(101);
++        let (mut st, config, mut task, _) = remote162_capture_fixture();
++        task.state = "result_available".into();
++        task.guarded = true;
++        task.guard_released = false;
++        task.result_sent = true;
++        task.round = 5;
++        task.idle_deadline_at = Some(101);
+         assert!(task.continuable_at(100));
+-        assert!(!task.continuable_at(101));assert!(!task.continuable_at(102));
+-        task.idle_deadline_at=Some(200);task.round=8;assert!(!task.continuable_at(100));
+-        task.round=5;task.guarded=false;assert!(!task.continuable_at(100));
+-        task.guarded=true;
+-        task.idle_deadline_at=Some(i64::MAX);
++        assert!(!task.continuable_at(101));
++        assert!(!task.continuable_at(102));
++        task.idle_deadline_at = Some(200);
++        task.round = 8;
++        assert!(!task.continuable_at(100));
++        task.round = 5;
++        task.guarded = false;
++        assert!(!task.continuable_at(100));
++        task.guarded = true;
++        task.idle_deadline_at = Some(i64::MAX);
+         assert!(task.continuable_at(unix_timestamp()));
+-        assert_eq!(task_view(&task,None,true)["continuable"],false,
+-            "la projection brute ne promet aucune reprise distante");
+-        task.idle_deadline_at=Some(200);
+-        let before=serde_json::to_vec(&task).unwrap();
+-        let mut view=json!({});project_continuation(&st,&task,&mut view,100,None);
+-        assert_eq!(view["continuable"],false);
+-        assert_eq!(view["continuation"]["status"],"unconfirmed");
+-        st.managed_terminal_instances.insert("unrelated-instance".into());
+-        project_continuation(&st,&task,&mut view,100,None);
+-        assert_eq!(view["continuation"]["status"],"unconfirmed");
+-        st.managed_terminal_instances.insert(task.child_instance.clone().unwrap());
+-        project_continuation(&st,&task,&mut view,100,None);
+-        assert_eq!(view["continuable"],false);
+-        assert_eq!(view["continuation"]["code"],"remote_execution_ended");
+-        assert_eq!(before,serde_json::to_vec(&task).unwrap());
++        assert_eq!(
++            task_view(&task, None, true)["continuable"],
++            false,
++            "la projection brute ne promet aucune reprise distante"
++        );
++        task.idle_deadline_at = Some(200);
++        let before = serde_json::to_vec(&task).unwrap();
++        let mut view = json!({});
++        project_continuation(&st, &task, &mut view, 100, None);
++        assert_eq!(view["continuable"], false);
++        assert_eq!(view["continuation"]["status"], "unconfirmed");
++        st.managed_terminal_instances
++            .insert("unrelated-instance".into());
++        project_continuation(&st, &task, &mut view, 100, None);
++        assert_eq!(view["continuation"]["status"], "unconfirmed");
++        st.managed_terminal_instances
++            .insert(task.child_instance.clone().unwrap());
++        project_continuation(&st, &task, &mut view, 100, None);
++        assert_eq!(view["continuable"], false);
++        assert_eq!(view["continuation"]["code"], "remote_execution_ended");
++        assert_eq!(before, serde_json::to_vec(&task).unwrap());
+         st.managed_terminal_instances.clear();
+-        let mut local=task.clone();local.remote_placement=None;
+-        project_continuation(&st,&local,&mut view,100,None);
+-        assert_eq!(view["continuable"],true);
+-        assert_eq!(view["continuation"]["requires_recheck"],true);
+-        project_continuation(&st,&local,&mut view,200,None);
+-        assert_eq!(view["continuable"],false);
+-        assert_eq!(view["continuation"]["status"],"expired");
++        let mut local = task.clone();
++        local.remote_placement = None;
++        // Cette fixture n'enregistre aucune route enfant : le refus doit rester explicite.
++        assert!(!continuation_child_live(&st, &local).unwrap());
++        project_continuation(&st, &local, &mut view, 100, None);
++        assert_eq!(view["continuable"], false);
++        assert_eq!(view["continuation"]["master_presence_confirmed"], false);
++        assert_eq!(view["continuation"]["status"], "unconfirmed");
++        assert_eq!(view["continuation"]["code"], "local_child_unconfirmed");
++        assert_eq!(view["continuation"]["requires_recheck"], true);
++        project_continuation(&st, &local, &mut view, 200, None);
++        assert_eq!(view["continuable"], false);
++        assert_eq!(view["continuation"]["status"], "expired");
+         cleanup(&config);
+     }
+-
+     #[test]
+     fn spec221_workspace_busy_projection_requires_current_owner_and_shared() {
+         let (state,config,rx,_reader,mut request,_root)=routing168_fixture(1);

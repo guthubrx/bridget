@@ -1568,6 +1568,37 @@ impl WorkerReadView<'_> {
     }
 }
 
+/// Ventilation d'un contrôle de sonde v2. Étiquettes fermées ; aucun chemin,
+/// identifiant de dépôt, commande ni contenu de configuration.
+pub(super) struct CandidatePhases {
+    /// Dernière phase atteinte ; `verdict` signifie que les contrôles ont abouti.
+    pub(super) stage: &'static str,
+    /// None : phase non terminée, distinct de Some(0) : moins d'une milliseconde.
+    pub(super) mapping_ms: Option<u64>,
+    /// `not_reached` avant Git ; `uncached` seulement sans cache de lot.
+    pub(super) git: &'static str,
+    pub(super) git_ms: Option<u64>,
+    pub(super) readiness_ms: Option<u64>,
+}
+impl Default for CandidatePhases {
+    fn default() -> Self {
+        Self {
+            stage: "mapping",
+            mapping_ms: None,
+            git: "not_reached",
+            git_ms: None,
+            readiness_ms: None,
+        }
+    }
+}
+impl CandidatePhases {
+    pub(super) fn report(&self, candidate_id: &str) -> serde_json::Value {
+        serde_json::json!({"candidate_id":candidate_id,"stage":self.stage,
+            "mapping_ms":self.mapping_ms,"git":self.git,"git_ms":self.git_ms,
+            "readiness_ms":self.readiness_ms})
+    }
+}
+
 /// Lecture isolée : aucun store écrivain, token Prepared, Child ou runtime.
 /// L'occupation est une photographie prudente ; Prepare relit toujours le
 /// registre, les droits et les gardes vivantes avant toute mutation.
@@ -1654,7 +1685,7 @@ impl ProbeReadContext {
         }
     }
 
-    fn probe_one_candidate_for(
+    pub(super) fn probe_one_candidate_for(
         &self,
         probe: &CandidateProbe,
         candidate: &CandidateProbeCandidate,
@@ -1665,7 +1696,9 @@ impl ProbeReadContext {
         git_facts: Option<&mut ProbeGitFacts>,
         operation: &mut crate::native_permissions::PermissionReadOperation,
         diagnostics: Option<(&ProbePermissionDiagnostics<'_>, &str)>,
+        mut phases: Option<&mut CandidatePhases>,
     ) -> CandidateProbeVerdict {
+        let started = Instant::now();
         let mapping_revision =
             match registry.project_mapping(&self.identity.machine_id, &candidate.project_id) {
                 Ok(mapping) => mapping.mapping_revision,
@@ -1695,6 +1728,11 @@ impl ProbeReadContext {
                 };
             }
         };
+        if let Some(phases) = phases.as_deref_mut() {
+            phases.mapping_ms = Some(started.elapsed().as_millis() as u64);
+            phases.stage = "git";
+        }
+        let git_started = Instant::now();
         let read_git_facts = || {
             let (mapping, cwd) = self
                 .read_view()
@@ -1703,7 +1741,7 @@ impl ProbeReadContext {
             self.probe_workspace_preconditions(&request, &mapping, &cwd)?;
             Ok((mapping, cwd))
         };
-        let checked = if let Some(cache) = git_facts {
+        let (checked, git_label) = if let Some(cache) = git_facts {
             // Worker/provisioning/epoch/registre/protections sont constants dans
             // ce seul lot. Tout fait variable de mapping/base figure dans la clé.
             let key = match serde_json::to_vec(&(
@@ -1729,10 +1767,19 @@ impl ProbeReadContext {
             };
             // Le refus commun est lui aussi mémorisé : une base absente ne
             // provoque pas 128 préflights. Aucun résultat ne quitte ce lot.
-            cache.entry(key).or_insert_with(read_git_facts).clone()
+            match cache.entry(key) {
+                std::collections::btree_map::Entry::Occupied(entry) => (entry.get().clone(), "hit"),
+                std::collections::btree_map::Entry::Vacant(entry) => {
+                    (entry.insert(read_git_facts()).clone(), "miss")
+                }
+            }
         } else {
-            read_git_facts()
+            (read_git_facts(), "uncached")
         };
+        if let Some(phases) = phases.as_deref_mut() {
+            phases.git = git_label;
+            phases.git_ms = Some(git_started.elapsed().as_millis() as u64);
+        }
         let (mapping, cwd) = match checked {
             Ok(values) => values,
             Err(reason) => {
@@ -1742,6 +1789,10 @@ impl ProbeReadContext {
                 };
             }
         };
+        if let Some(phases) = phases.as_deref_mut() {
+            phases.stage = "readiness";
+        }
+        let readiness_started = Instant::now();
         let (checked_readiness, program_failure) = crate::provider_program_compat::capture(|| {
             self.read_view().inspect_candidate(
                 registry,
@@ -1753,6 +1804,9 @@ impl ProbeReadContext {
                 self.provider_accounts_negotiated,
             )
         });
+        if let Some(phases) = phases.as_deref_mut() {
+            phases.readiness_ms = Some(readiness_started.elapsed().as_millis() as u64);
+        }
         let readiness = match checked_readiness {
             Ok(readiness) => readiness,
             Err(WorkerRefusal::DefinitionChanged) => {
@@ -1802,6 +1856,9 @@ impl ProbeReadContext {
                 };
             }
         };
+        if let Some(phases) = phases {
+            phases.stage = "verdict";
+        }
         CandidateProbeVerdict::Eligible {
             candidate_id: candidate.candidate_id.clone(),
             mapping_revision: mapping.mapping_revision,
@@ -1843,6 +1900,7 @@ impl ProbeReadContext {
                             None,
                             None,
                             &mut operation,
+                            None,
                             None,
                         ),
                         Err(_) => CandidateProbeVerdict::Ineligible {
@@ -1944,6 +2002,7 @@ impl ProbeReadContext {
         let diagnostics =
             ProbePermissionDiagnostics::new(&probe.correlation_id, &probe.admission_id);
         let mut timings = Vec::with_capacity(probe.candidates.len());
+        let mut phase_reports = Vec::with_capacity(probe.candidates.len());
         let mut verdicts: Vec<CandidateProbeV2Verdict> = probe
             .candidates
             .iter()
@@ -2015,6 +2074,7 @@ impl ProbeReadContext {
                     parent: probe.parent.clone(),
                     candidates: vec![legacy],
                 };
+                let mut phases = CandidatePhases::default();
                 let verdict = match self.probe_one_candidate_for(
                     &legacy_probe,
                     &legacy_probe.candidates[0],
@@ -2025,6 +2085,7 @@ impl ProbeReadContext {
                     Some(&mut git_facts),
                     &mut operation,
                     Some((&diagnostics, candidate.candidate_id.as_str())),
+                    Some(&mut phases),
                 ) {
                     CandidateProbeVerdict::Eligible {
                         mapping_revision,
@@ -2054,6 +2115,7 @@ impl ProbeReadContext {
                     candidate.candidate_id.clone(),
                     candidate_started.elapsed().as_millis() as u64,
                 ));
+                phase_reports.push(phases.report(&candidate.candidate_id));
                 verdict
             })
             .collect();
@@ -2084,7 +2146,7 @@ impl ProbeReadContext {
             serde_json::json!({
             "correlation_id":probe.correlation_id,"admission_id":probe.admission_id,
             "candidates":probe.candidates.len(),"elapsed_ms":started.elapsed().as_millis() as u64,
-            "candidate_elapsed_ms":timings})
+            "candidate_elapsed_ms":timings,"candidate_phases_ms":phase_reports})
         );
         if Instant::now() >= deadline {
             for verdict in &mut verdicts {

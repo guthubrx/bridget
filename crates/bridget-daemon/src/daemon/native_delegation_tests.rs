@@ -27160,8 +27160,13 @@ fn spec221_continuable_obeys_deadline_round_and_confirmed_remote_end() {
     st.managed_terminal_instances.clear();
     let mut local = task.clone();
     local.remote_placement = None;
+    // Cette fixture n'enregistre aucune route enfant : le refus doit rester explicite.
+    assert!(!continuation_child_live(&st, &local).unwrap());
     project_continuation(&st, &local, &mut view, 100, None);
-    assert_eq!(view["continuable"], true);
+    assert_eq!(view["continuable"], false);
+    assert_eq!(view["continuation"]["master_presence_confirmed"], false);
+    assert_eq!(view["continuation"]["status"], "unconfirmed");
+    assert_eq!(view["continuation"]["code"], "local_child_unconfirmed");
     assert_eq!(view["continuation"]["requires_recheck"], true);
     project_continuation(&st, &local, &mut view, 200, None);
     assert_eq!(view["continuable"], false);

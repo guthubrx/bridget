@@ -1,4 +1,12 @@
 # Candidats refusés : machine et contrôle utile
+
+Complément du lot 283 : `candidate_phases_ms` ventile les contrôles effectivement
+entrés dans la sonde. `stage` donne la dernière phase atteinte ; une durée `null`
+signifie non terminée ou non atteinte, et `0` moins d'une milliseconde.
+Le cache Git distingue `not_reached`, `uncached`, `miss` et `hit`.
+Les candidats refusés avant ce contrôle restent absents des deux listes de durées.
+Le détail et les limites sont décrits dans le suivi du lot 283.
+
 Statut : livré, images vérifiées et lien natif revenu ; session221/C27, programme52/182 inchangé.
 
 ## Incident Roadie148

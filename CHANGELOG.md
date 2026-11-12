@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.8.48 - 2026-11-12
+
+- Le statut de continuation vérifie aussi la présence des enfants locaux avant de proposer une reprise.
+- Les sondes détaillent leur temps de contrôle par phase, sans changer leurs délais, leurs verdicts ou les vérifications de droits.
+
 ## 0.8.47 - 2026-11-12
 
 - Une remise qui attend la fin du tour ne relit plus tout l’inventaire local toutes les 500 ms.

@@ -6652,7 +6652,9 @@ fn project_continuation(
                 )
             }));
     let eligible = task.continuable_at(now);
-    let presence = if eligible && task.remote_placement.is_some() {
+    // Même garde de présence que Continue, locale comme distante : une projection
+    // "eligible" ne doit pas coexister avec un refus keep_alive_ended au même instant.
+    let presence = if eligible {
         Some(continuation_child_live(st, task))
     } else {
         None
@@ -6703,6 +6705,12 @@ fn project_continuation(
             "unconfirmed",
             "continuation_state_unavailable",
             "Faire vérifier la lecture du magasin et de l’état natif par le responsable Bridget. Ce contrôle a échoué ; sa cause précise reste à établir. Conserver tâche, clé et produits, sans purger ni remplacer le travail.",
+        )
+    } else if task.remote_placement.is_none() && !matches!(presence, Some(Ok(true))) {
+        (
+            "unconfirmed",
+            "local_child_unconfirmed",
+            "L’agent enfant local n’est pas confirmé présent à cet instant ; cela ne prouve pas son arrêt. Ne pas appeler Continue pour tester ce lien : si la présence manque, ce parcours ferme la garde. Conserver tâche, clé et produits sans doublon ; demander une intervention ciblée si le lien ne revient pas.",
         )
     } else if task.remote_placement.is_some()
         && (!matches!(presence, Some(Ok(true)))

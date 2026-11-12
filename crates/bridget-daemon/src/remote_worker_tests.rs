@@ -12313,3 +12313,121 @@ fn spec267_read_only_prepare_does_not_consume_or_require_a_preparation_slot() {
         WorkerRefusal::ResourceLimit
     );
 }
+
+#[test]
+fn spec283_candidate_phases_follow_real_cache_and_early_refusal() {
+    let fixture = Fixture::new();
+    let (runtime, _, request, _) = c19_preparation_fixture(&fixture);
+    let context = runtime.probe_read_context();
+    let registry = runtime.registry().unwrap();
+    let candidate = CandidateProbeCandidate {
+        candidate_id: "c01".into(),
+        project_id: request.project_id.clone(),
+        origin_host: request.origin_host.clone(),
+        origin_cwd: request.origin_cwd.clone(),
+        source_root: request.source_root.clone(),
+        remote_root: request.remote_root.clone(),
+        source_root_identity: request.source_root_identity.clone(),
+        relative_cwd: request.relative_cwd.clone(),
+        base_commit: Some("f".repeat(40)),
+        agent_type: request.agent_type.clone(),
+        model: request.model.clone(),
+        effort: request.effort.clone(),
+        posture: Some(SpawnPosture::Discovery),
+        workspace: Some(bridget_transport::protocol::WorkspaceRequest::CommitView {}),
+    };
+    let probe = CandidateProbe {
+        version: WORKER_CANDIDATE_PROBE_VERSION,
+        correlation_id: "phases283".into(),
+        connection_epoch: "epoch283".into(),
+        worker: runtime.identity.clone(),
+        admission_id: "admission283".into(),
+        policy_revision: 1,
+        parent: request.parent.clone(),
+        candidates: vec![candidate.clone()],
+    };
+    let mut cache = ProbeGitFacts::new();
+    let mut operation = crate::native_permissions::PermissionReadOperation::default();
+    for label in ["miss", "hit"] {
+        let mut phases = read::CandidatePhases::default();
+        let result = context.probe_one_candidate_for(
+            &probe,
+            &candidate,
+            &registry,
+            None,
+            None,
+            None,
+            Some(&mut cache),
+            &mut operation,
+            None,
+            Some(&mut phases),
+        );
+        assert!(
+            matches!(
+                result,
+                CandidateProbeVerdict::Ineligible {
+                    reason: CandidateProbeRefusal::WorkspaceUnavailable,
+                    ..
+                }
+            ),
+            "verdict={result:?}, phases={}",
+            phases.report("c01")
+        );
+        let report = phases.report("c01");
+        assert_eq!(report["git"], label);
+        assert_eq!(report["stage"], "git");
+        assert!(report["mapping_ms"].is_u64() && report["git_ms"].is_u64());
+        assert!(report["readiness_ms"].is_null());
+        assert_eq!(
+            report
+                .as_object()
+                .unwrap()
+                .keys()
+                .map(String::as_str)
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from([
+                "candidate_id",
+                "stage",
+                "mapping_ms",
+                "git",
+                "git_ms",
+                "readiness_ms"
+            ])
+        );
+        assert!(!report.to_string().contains(&request.remote_root));
+    }
+    assert_eq!(cache.len(), 1);
+    let mut missing = candidate.clone();
+    missing.project_id = "missing-project".into();
+    let mut phases = read::CandidatePhases::default();
+    let result = context.probe_one_candidate_for(
+        &probe,
+        &missing,
+        &registry,
+        None,
+        None,
+        None,
+        Some(&mut cache),
+        &mut operation,
+        None,
+        Some(&mut phases),
+    );
+    assert!(matches!(
+        result,
+        CandidateProbeVerdict::Ineligible {
+            reason: CandidateProbeRefusal::MappingUnavailable,
+            ..
+        }
+    ));
+    let report = phases.report("c02");
+    assert_eq!(report["stage"], "mapping");
+    assert_eq!(report["git"], "not_reached");
+    assert!(
+        report["mapping_ms"].is_null()
+            && report["git_ms"].is_null()
+            && report["readiness_ms"].is_null()
+    );
+    assert_eq!(cache.len(), 1);
+    operation.finish().unwrap();
+    assert!(runtime.store.commands().unwrap().is_empty());
+}
