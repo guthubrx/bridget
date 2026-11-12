@@ -57,3 +57,51 @@ couvre 40 tests par plateforme. Clippy strict workspace/all-targets passe sur
 les deux plateformes, avec reprise ciblée après les seules retouches des tests.
 Les images release 0.8.47 sont construites sur Mac et Debian 12 ; Linux exige
 glibc 2.34. Android 0.8.47/8047 conserve l’identité de signature précédente.
+
+## Activation et mesure
+
+Le commit 3675adf3da71467da162cada8344c48ca5954e49 est poussé. La publication
+0.8.47 contient six fichiers téléchargés sans authentification et vérifiés.
+Une première archive Linux avait été préparée pendant sa copie : le contrôle
+interne a détecté sa taille incomplète avant publication. L’archive a été recréée
+après copie, puis son exécutable comparé par SHA-256 au candidat installé.
+
+Le maître, le service mobile, les cinq workers et le connecteur local chargent
+282-trafic-inventaire-r1. Empreintes réellement chargées et pointeurs de retour
+281 vérifiés. Sur M1, aucun état de mise à jour absent auparavant n’est inventé.
+Le service mobile répond HTTP 200. La coupure du maître a duré 4,22 s ; les
+wrappers contrôlés ont conservé leur identité de processus. T3 conserve le PID
+77762 et sa naissance du 11 novembre à 14:10:41. Les anciennes images encore
+utilisées par des sessions restent conservées ; le correctif interne est chargé
+dans le connecteur sans changement du catalogue des outils déjà montés.
+
+Avant : 116 195 884 octets sur 15 intervalles d’une seconde, soit 7,746 Mo/s.
+Après : 83 850 100 octets sur 30 intervalles, soit 2,795 Mo/s, environ 64 % de
+moins. Les deux premières captures après chargement contenaient des lignes de
+processus absentes pendant l’amorçage de nettop : elles ne servent pas au bilan.
+La capture finale ignore l’amorçage, contrôle la monotonie du compteur et utilise
+les indices réels des observations. Ce sont des fenêtres successives de travail
+réel, pas une charge artificielle identique. Aucun gain CPU n’est attribué.
+L’inventaire commun reste volumineux ; ses historiques complets ne sont pas dans
+la réponse mesurée. Les propriétaires affectés ont reçu les avis silencieux.
+
+## Ménage et travaux distincts
+
+1,35 Gio d’intermédiaires Cargo sont retirés sur le Mac et 19,54 Gio sur le volume
+de compilation SYSLE2. Le premier contrôle Mac avait rencontré un descripteur
+non vérifiable ; une lecture ultérieure l’a identifié comme socket IPv4, puis le
+contrôle natif complet a réussi. Aucun processus n’a été arrêté pour nettoyer.
+Deux copies de recette et trois exports Mac (315 730 434 octets logiques) sont
+retirés. Les exports admissibles SYS, KS et M1 sont retirés. Une ancienne image
+KS et une M1 sont retirées ; actif, retour et images encore chargées sont gardés.
+Les contrôles incomplets Cartae/SYS conservent les autres images ; les exports
+Cartae non qualifiés restent aussi conservés. Aucun worktree supprimable trouvé.
+L’espace système libre mesuré sur le Mac est de 73 812 742 144 octets ; l’activité
+simultanée interdit d’attribuer toute sa variation à ce ménage.
+
+François a demandé deux chantiers de développement supplémentaires pendant cette
+livraison. Leurs fichiers sont distincts et conservés non commités dans le checkout
+partagé SYSLE2. Les deltas sont également sauvegardés dans les reçus privés du lot.
+Ils ne font pas partie du binaire 282 : 283 ventile les phases des sondes ; 284
+corrige une incohérence de présence locale dans la projection de continuation.
+Leur qualification et leur intégration suivent leurs propres tâches.
