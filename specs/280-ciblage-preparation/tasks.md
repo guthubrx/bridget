@@ -7,5 +7,5 @@
 - [x] Corriger sans affaiblir les contrôles de cible, d'ambiguïté et de politique.
 - [x] Faire la revue indépendante et documenter le coût de poursuite des probes.
 - [x] Terminer Python/Rust ciblés, Clippy, builds et recette cumulative.
-- [ ] Publier et activer, vérifier le bus sans arrêter T3.
-- [ ] Informer, pousser et effectuer le ménage gardé.
+- [x] Publier et activer, vérifier le bus sans arrêter T3.
+- [x] Informer, pousser et effectuer le ménage gardé, avec conservation des usages actifs et des fichiers dont le contrôle reste incomplet.

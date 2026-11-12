@@ -35,3 +35,54 @@ encore valides sont réutilisés, le code Rust fonctionnel étant inchangé hors
 embarquement du helper et version. La recette reproduit les quatre fichiers
 compilés sans fuzz, et conserve le cumul279 et les travaux précédents.
 Android0.8.45/8045 est signé et qualifié contre0.8.44.
+
+## Activation et publication du 12 novembre 2026
+
+Le code est poussé dans `main` au commit
+`70e82aa1e0ec409b492fba87959872ad81bb6033`. Les six fichiers de la publication
+0.8.45 sont accessibles sans authentification et leurs empreintes sont vérifiées.
+Le helper extrait du binaire Mac correspond intégralement à la source qualifiée ;
+ses 16 tests passent aussi contre cette extraction. Le binaire Linux installé
+embarque les mêmes octets du helper.
+
+Le maître, le service mobile et les cinq workers chargent les images 0.8.45.
+Les contrôles portent sur les exécutables réellement chargés, pas seulement les
+liens d'installation. Le retour 0.8.44 est vérifié dans les états privés des
+outils de mise à jour ; aucun état absent n'est inventé sur le M1. Le point de
+contrôle mobile répond HTTP 200 et une lecture native après le passage réussit.
+
+Cartae a d'abord refusé le changement de worker pendant une transition de
+lancement. Le même parcours a ensuite réussi après la fin de cette transition,
+sans désactiver la garde. Les wrappers et résultats ont été préservés. T3 garde
+son PID et sa date de démarrage. Sa façade MCP déjà montée reste en version 266 ;
+le présent correctif côté worker en bénéficie sans changement de protocole.
+Les propriétaires réellement affectés ont été prévenus avant et après le
+passage, avec conservation sans réveil. Devantures a reçu le diagnostic et le
+bilan du correctif, sans rejeu de ses missions E5 ou E6.
+
+## Ménage gardé
+
+Le script natif retire 3,67 Gio de caches Cargo sur le Mac. Les exports de
+compilation et copies obsolètes vérifiés inutilisés sont retirés sur le Mac,
+Cartae, KS et M1. Les images actives, le retour qualifié et les anciennes images
+encore chargées restent conservés. Le contrôle SpecKit ne trouve aucun worktree
+ni reconstructible supplémentaire admissible au retrait dans le dépôt principal.
+
+Sur SYSLE2, le contrôle de processus du worker 4041060 ne permet pas de qualifier
+certains descripteurs. Les caches et exports concernés restent donc conservés.
+Le contrôle initial des anciennes images Cartae était aussi incomplet : ces
+images restent conservées, bien que le contrôle distinct des exports ait réussi.
+Aucun autre travail n'est arrêté pour nettoyer. Ces conservations restent à
+réexaminer lors d'une livraison suivante.
+
+Après ce passage, l'espace disponible mesuré sur le volume système est de
+62 687 748 096 octets sur le Mac, 128 830 152 704 sur Cartae,
+39 678 816 256 sur SYSLE2 et 82 454 044 672 sur KS. Ces mesures incluent
+l'activité simultanée des machines ; les tailles logiques supprimées ne sont
+pas présentées comme un gain physique exclusivement attribuable au ménage.
+Les preuves et reçus sont conservés dans
+`/Users/moi/.cache/bridget280-incidents`.
+
+Les deux causes historiques restent inconnues : E5 a consommé environ 10 s dans
+le contrôle de rattachement, E6 a reçu le statut SSH 255 sans texte brut conservé.
+La reproduction du défaut corrigé ne suffit pas à lui attribuer cet ancien 255.

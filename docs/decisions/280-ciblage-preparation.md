@@ -1,6 +1,6 @@
 # 280 : isoler les échecs des autres liaisons de préparation
 
-Statut : qualification en cours.
+Statut : adopté et actif dans la version 0.8.45, le 12 novembre 2026.
 
 ## Contexte
 
