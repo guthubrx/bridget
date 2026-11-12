@@ -1,6 +1,6 @@
 # 279 : rendre les délais et les diagnostics exploitables
 
-Statut : qualification en cours.
+Statut : services activés et vérifiés le 12 novembre 2026 ; façade T3 montée conservée selon la décision utilisateur.
 
 ## Contexte
 

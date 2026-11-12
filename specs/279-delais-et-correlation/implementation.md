@@ -42,3 +42,35 @@ condition let chaînée, sans attribut de désactivation. Les autres90résultats
 encore valides sont réutilisés. La recette reproduit les dix fichiers runtime
 compilés sans fuzz et conserve les lots précédents, dont le travail260 réservé.
 Android0.8.44/8044 est compilé, signé et qualifié contre0.8.43.
+
+
+Activation279 vérifiée sur le maître/mobile et les cinq workers. Les images
+chargées et les pointeurs de retour278 sont vérifiés ; les processus des
+missions conservent leurs PID et dates de naissance. Le bus relit le résultat
+natif67a77219 sans erreur après reconnexion ; le service mobile rend HTTP200
+sur /v1/status. T3 reste PID77762, démarré le11novembre à14:10:41. La façade
+MCP266 déjà montée reste ancienne : ses reçus ne sont pas prétendus enrichis.
+Le nouveau guidage du cœur/connecteur est chargé ; les champs de reçu restent
+réservés aux façades nouvellement chargées. Aucun rechargement T3 n'est lancé.
+
+Publication v0.8.44 : six fichiers téléchargés anonymement et contrôlés.
+Sources exécutables poussées :76057028ef0ffe65003da6d3272a9526f6a88365.
+La compatibilité de retour278 est qualifiée sans lancer de rollback. Les six
+propriétaires des commandes réellement affectées reçoivent avant/après un
+avis information, stored_without_wakeup. Les diagnostics des trois signalements
+sont conservés de même, sans nouveau message métier ni mission de remplacement.
+
+Ménage :3,67Gio logiques d’intermédiaires Mac,203011585octets d’exports et
+37459680octets d’une ancienne image retirés. KS retire45319192octets d’image
+ancienne et94127268octets d’exports ; M1 retire37462256octets d’image et
+37495280octets d’exports. Cartae retire163042380octets d’exports. Les images
+actives279 et de retour278 restent, ainsi que les images anciennes réellement
+chargées par les wrappers ou la façade. Les preuves, la source runtime cumulative
+et les correspondances du registre sont conservées.
+
+Le cache SYS et ses copies ne sont pas forcés : le lecteur natif reste
+incomplet sur PID4029890/FD7. La même classe d’observation transitoire avait
+déjà été qualifiée pendant278 ; aucune nature de fichier n’est inventée ni
+aucun service arrêté pour obtenir une suppression. Les suppressions Cartae
+restent soumises à leur propre observation native. Le ménage SpecKit retire
+0octet, sans échec : un seul checkout, seule branche main, aucun retrait forcé.

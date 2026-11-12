@@ -6,5 +6,5 @@
 - [x] Horodater les diagnostics source et joindre le contrôle du maître par sa corrélation.
 - [x] Faire la revue indépendante et traiter les observations prouvées par les tests.
 - [x] Terminer la qualification ciblée, les builds et la recette cumulative.
-- [ ] Publier et activer les services concernés, sans arrêter T3.
-- [ ] Informer les propriétaires, pousser et nettoyer avec les conservations justifiées.
+- [x] Publier et activer les services concernés, sans arrêter T3.
+- [x] Informer les propriétaires, pousser et nettoyer avec les conservations justifiées.
