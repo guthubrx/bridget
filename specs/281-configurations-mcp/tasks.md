@@ -5,5 +5,5 @@
 - [x] Reproduire la purge d’un fichier avant l’inscription du fournisseur.
 - [x] Retirer la suppression globale et garder le nettoyage par propriétaire.
 - [x] Vérifier le complément tardif du diagnostic générique.
-- [ ] Tests ciblés, revue, Clippy et builds sur Mac et Debian 12.
-- [ ] Publier, activer, informer et nettoyer sans arrêter T3.
+- [x] Tests ciblés, revue, Clippy et builds sur Mac et Debian 12.
+- [x] Publier, activer, informer et nettoyer sans arrêter T3.

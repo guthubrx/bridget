@@ -1,6 +1,6 @@
 # 281 : nettoyage des configurations MCP par leur propriétaire
 
-Statut : qualification en cours.
+Statut : adopté et actif en 0.8.46, le 12 novembre 2026.
 
 La purge globale ne dispose d’aucune preuve de fin des fournisseurs, et les
 wrappers distants peuvent utiliser le namespace du maître. Un nom de fichier

@@ -37,3 +37,44 @@ passent sur les deux plateformes. La compilation finale suit les seules
 corrections de commentaires et de ligne vide. Linux exige glibc 2.34, sous
 le plafond 2.36. La recette cumulative reproduit les huit fichiers sans fuzz.
 Android 0.8.46/8046 est signé avec la même identité que 0.8.45.
+
+## Activation, publication et clôture
+
+Le code est poussé au commit 3391784b220d6493edceda269eaaa76c9ad4612e.
+Le complément Linux passe : huit tests ciblés par plateforme. Les compilations
+finales passent sur Mac et Debian 12 après les corrections de revue. La publication
+0.8.46 contient six fichiers téléchargés sans authentification et vérifiés par
+empreinte. Les deux archives contiennent les exécutables complets qualifiés.
+
+Le maître, le service mobile et les cinq workers chargent les images 0.8.46.
+Le contrôle porte sur les exécutables réellement chargés, avec retour 0.8.45
+qualifié et pointeur rollback vérifié par les écrivains natifs. Le M1 garde son
+absence préalable d’état de mise à jour ; aucun état n’y est inventé. Le contrôle
+mobile répond HTTP 200. La lecture native de la revue réussit après activation.
+La coupure du maître mesurée est de 3,63 s ; les wrappers contrôlés conservent
+leurs PID et dates de naissance. T3 conserve son PID 77762 et sa date de
+démarrage du 11 novembre à 14:10:41. Sa façade MCP déjà montée reste en 266,
+sans effet sur ce correctif interne dont le protocole reste inchangé.
+
+Les propriétaires de commandes réellement affectées ont reçu les avis avant et
+après le passage, conservés sans réveil. Devantures a reçu le diagnostic E9 ;
+Économie a reçu la cause du démarrage avorté et la correction. Aucune de leurs
+missions n’a été rejouée, annulée ou remplacée par cette maintenance.
+
+Ménage : 5,77 Gio de caches Cargo supprimés sur le Mac ; 1,80 Gio de release
+sur le volume de compilation SYSLE2. Le contrôle d’un descripteur du worker SYS
+est ensuite incomplet : les autres caches restent conservés. Les exports SYS
+ont pu être retirés lors d’un contrôle distinct complet. Sept images obsolètes
+Cartae, deux sur Mac, une sur KS et une sur M1 sont retirées après vérification
+d’absence d’usage. Les images actives, le retour et les anciennes images encore
+chargées restent conservés. Les exports Cartae dont le contrôle est incomplet
+restent conservés, sans arrêt de processus pour nettoyer.
+
+Les exports propres et deux copies de recette reconstructibles sont retirés du
+Mac. Le contrôle SpecKit ne trouve aucun worktree ni autre retrait admissible.
+L’espace système disponible mesuré après ce passage est de 62 014 107 648 octets
+sur le Mac, 127 450 521 600 sur Cartae, 39 552 901 120 sur SYSLE2 et
+81 815 572 480 sur KS. L’activité simultanée interdit d’attribuer toutes les
+variations à ce seul ménage. Les reçus restent dans
+/Users/moi/.cache/bridget281-incidents. Les configurations MCP abandonnées dont
+l’absence d’usage n’est pas prouvée ne sont pas purgées.
