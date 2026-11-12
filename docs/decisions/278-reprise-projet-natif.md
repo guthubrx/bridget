@@ -1,6 +1,6 @@
 # 278 : reprendre la preuve de projet au retour du worker
 
-Statut : correction qualifiée, activation en préparation.
+Statut : activé et vérifié en fonctionnement sur la flotte, le 12 novembre 2026.
 
 ## Contexte
 

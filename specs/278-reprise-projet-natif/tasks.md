@@ -5,5 +5,5 @@
 - [x] Refuser les identités, commandes et annonces devenues obsolètes avant et après RPC.
 - [x] Exercer la reprise sans mutation Task, le mauvais propriétaire, la nouvelle annonce et l’arrêt pendant preuve.
 - [x] Terminer tests voisins, Clippy, revue et builds.
-- [ ] Publier, activer puis vérifier la récupération réelle des contextes.
-- [ ] Informer les propriétaires, pousser et terminer le ménage277/278.
+- [x] Publier, activer puis vérifier la récupération réelle des contextes.
+- [x] Informer les propriétaires, pousser et terminer le ménage277/278, avec conservations justifiées.

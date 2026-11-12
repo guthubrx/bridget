@@ -73,3 +73,46 @@ les corrections R2, ainsi que Clippy strict workspace/all-targets et le build
 release. La recette reproduit les quatre fichiers compilés sans fuzz. Les
 douze tests Python inchangés restent couverts par la qualification277.
 Le paquet Android0.8.43/8043 est signé et compatible avec la signature0.8.42.
+
+
+Activation vérifiée : maître et mobile Cartae, workers Cartae, SYS, KS, Mac et
+M1. Les empreintes chargées sont celles des images 278 ; les pointeurs de
+retour sont ceux de 277, compatibles et conservés. Coupure du maître de
+quelques secondes, sans changement des PID et dates de naissance des wrappers
+actifs. Le service mobile répond HTTP200 sur /v1/status avec son Host attendu.
+T3 reste PID77762, démarré le11novembre à14:10:41. Sa façade MCP266 reste
+chargée ; aucun nouveau catalogue n’est prétendu actif dans cette façade.
+
+Les quatre agents observés avant correction restent busy et retrouvent leur
+projet Parix après le passage. Pendant le passage, neuf identités subissent
+origin_worker_unavailable : elles ont toutes un projet dans l’annuaire au
+contrôle suivant, sans recréation ni prompt métier. Les propriétaires des
+commandes réellement affectées ont reçu les avis avant/après avec information :
+six reçus stored_without_wakeup pour chaque avis. Le résultat native lu après
+reconnexion et le retour des lectures d’annuaire attestent le bus courant.
+
+La publication v0.8.43 contient six fichiers téléchargés anonymement et
+vérifiés. Sources exécutables poussées :03fc0d0b8e9d20632239052879ded3de21c15e9f.
+Empreinte Mac/M1 :214a03c7bc445f178e6160e4b6278d30e1d0a73c786d71805f629f4a70ac8525.
+Empreinte Linux :0e3d84092cc5177f352ce41874e21baddf1d998531f65a0985618d94a0d9c0b2.
+Empreinte APK :27c4097cb57cd29aeee4d71e862c8dfec95f56ac01ec6dcdc58d09697025bd0a.
+
+Ménage gardé :4,17Gio logiques d’intermédiaires Mac,1097611645octets
+d’exports277/278 et37408288octets d’une ancienne image retirés dans ce passage.
+Avec les4,66Gio déjà retirés par277, le cumul Mac est proche de9,9Gio logiques.
+Le dernier relevé donne63788982272octets disponibles, environ59,4Gio. Ces tailles
+logiques ne sont pas assimilées à un gain physique exact sur APFS.
+KS retire une ancienne image45279032octets et90446824octets d’exports ;
+M1 retire deux anciennes images74882256octets et74948176octets d’exports.
+Les images actives278 et de retour277 sont conservées, ainsi que les images
+plus anciennes réellement utilisées par les wrappers ou la façade montée.
+
+Le cache de compilation SYS, placé sur le volume externe, et certaines copies
+Cartae restent conservés : la lecture native des processus ne certifie pas
+leurs descripteurs (SYS PID4014515/FD7 ; Cartae PID1782653/FD185 puis191).
+Sur SYS, FD7 est absent lors de trois inspections ciblées suivantes ; sa nature
+pendant le relevé global reste non attestée. Aucun élargissement du lecteur,
+arrêt de mission ni contournement du contrôle n’est effectué pour supprimer.
+La source runtime cumulative et les preuves restent disponibles. Le dépôt ne
+contient qu’un checkout et la branche main ; aucun retrait forcé n’est requis.
+Le ménage SpecKit gardé retire0octet supplémentaire et ne relève aucun échec.
