@@ -1934,6 +1934,9 @@ struct LinkWorker {
     /// est envoyé au daemon, qui décide seul de sa cohérence.
     project_context: Option<(Option<String>, Option<String>)>,
     last_key: String,
+    /// Un tour observé occupé ne peut que différer une lecture inutile.
+    /// Toute remise conserve sa propre lecture fraîche avant dispatch.
+    observed_busy: bool,
     /// Clé observée juste avant un dispatch qui a pu démarrer un nouveau tour.
     /// Tant que T3 la republie, le lien ne peut pas se déclarer drainé.
     awaiting_snapshot_change: Option<String>,
@@ -2064,6 +2067,10 @@ impl LinkWorker {
             title_refused_at: None,
             project_context: None,
             last_key: String::new(),
+            observed_busy: summary
+                .session
+                .as_ref()
+                .is_some_and(|s| s.active_turn_id.is_some()),
             awaiting_snapshot_change: None,
             detail_page_cap: None,
             turn_wait: turn_wait(),
@@ -2158,6 +2165,10 @@ impl LinkWorker {
     fn handle_event(&mut self, event: LinkEvent) {
         match event {
             LinkEvent::Tick(summary) => {
+                self.observed_busy = summary
+                    .session
+                    .as_ref()
+                    .is_some_and(|s| s.active_turn_id.is_some());
                 self.report_project_context(&summary);
                 send_wrapper_message(&self.writer, WrapperToDaemon::Heartbeat);
                 send_wrapper_message(
@@ -2888,6 +2899,25 @@ impl LinkWorker {
         if self.queue.is_empty() || !self.daemon_alive.load(Ordering::SeqCst) {
             return;
         }
+        // Un pair en file ne peut pas guider un tour occupé. Le relevé commun
+        // annoncera sa fin : inutile de relire tout l'inventaire toutes les
+        // 500 ms par file. Les contrôles et expirations ont déjà été traités.
+        // Une observation ancienne ne peut ici que retarder, jamais autoriser.
+        let guidance_pending = self.queue.iter().any(|(frame, _)| {
+            matches!(
+                delivery_message(frame).intent,
+                Some(
+                    bridget_core::MessageIntent::SteerCurrent
+                        | bridget_core::MessageIntent::InterruptAndStart
+                )
+            )
+        });
+        let head_can_guide = self.queue.front().is_some_and(|(frame, _)| {
+            groupable(delivery_message(frame)) && delivery_mid_turn_ok(frame)
+        });
+        if self.observed_busy && !guidance_pending && !head_can_guide {
+            return;
+        }
         let snapshot = match self.session.call(|client| client.snapshot()) {
             Ok(snapshot) => snapshot,
             Err(e) => {
@@ -2912,6 +2942,7 @@ impl LinkWorker {
             .session
             .as_ref()
             .is_some_and(|s| s.active_turn_id.is_some());
+        self.observed_busy = busy;
         let Some(index) = self.next_delivery_index(&summary) else {
             return;
         };

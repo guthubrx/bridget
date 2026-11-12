@@ -1,0 +1,279 @@
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -7,7 +7,7 @@
+ ]
+ 
+ [workspace.package]
+-version = "0.8.46"
++version = "0.8.47"
+ edition = "2024"
+ license = "MIT"
+ 
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -192,7 +192,7 @@
+ 
+ [[package]]
+ name = "bridget-core"
+-version = "0.8.46"
++version = "0.8.47"
+ dependencies = [
+  "serde",
+  "serde_json",
+@@ -201,7 +201,7 @@
+ 
+ [[package]]
+ name = "bridget-daemon"
+-version = "0.8.46"
++version = "0.8.47"
+ dependencies = [
+  "axum",
+  "base64",
+@@ -229,7 +229,7 @@
+ 
+ [[package]]
+ name = "bridget-transport"
+-version = "0.8.46"
++version = "0.8.47"
+ dependencies = [
+  "bridget-core",
+  "libc",
+--- a/crates/bridget-daemon/src/t3code.rs
++++ b/crates/bridget-daemon/src/t3code.rs
+@@ -1893,6 +1893,9 @@
+     /// est envoyé au daemon, qui décide seul de sa cohérence.
+     project_context: Option<(Option<String>, Option<String>)>,
+     last_key: String,
++    /// Un tour observé occupé ne peut que différer une lecture inutile.
++    /// Toute remise conserve sa propre lecture fraîche avant dispatch.
++    observed_busy: bool,
+     /// Clé observée juste avant un dispatch qui a pu démarrer un nouveau tour.
+     /// Tant que T3 la republie, le lien ne peut pas se déclarer drainé.
+     awaiting_snapshot_change: Option<String>,
+@@ -2016,6 +2019,10 @@
+             title_refused_at: None,
+             project_context: None,
+             last_key: String::new(),
++            observed_busy: summary
++                .session
++                .as_ref()
++                .is_some_and(|s| s.active_turn_id.is_some()),
+             awaiting_snapshot_change: None,
+             detail_page_cap: None,
+             turn_wait: turn_wait(),
+@@ -2110,6 +2117,7 @@
+     fn handle_event(&mut self, event: LinkEvent) {
+         match event {
+             LinkEvent::Tick(summary) => {
++                self.observed_busy = summary.session.as_ref().is_some_and(|s| s.active_turn_id.is_some());
+                 self.report_project_context(&summary);
+                 send_wrapper_message(&self.writer, WrapperToDaemon::Heartbeat);
+                 send_wrapper_message(&self.writer, WrapperToDaemon::TurnState {
+@@ -2694,6 +2702,25 @@
+         if self.queue.is_empty() || !self.daemon_alive.load(Ordering::SeqCst) {
+             return;
+         }
++        // Un pair en file ne peut pas guider un tour occupé. Le relevé commun
++        // annoncera sa fin : inutile de relire tout l'inventaire toutes les
++        // 500 ms par file. Les contrôles et expirations ont déjà été traités.
++        // Une observation ancienne ne peut ici que retarder, jamais autoriser.
++        let guidance_pending = self.queue.iter().any(|(frame, _)| {
++            matches!(
++                delivery_message(frame).intent,
++                Some(
++                    bridget_core::MessageIntent::SteerCurrent
++                        | bridget_core::MessageIntent::InterruptAndStart
++                )
++            )
++        });
++        let head_can_guide = self.queue.front().is_some_and(|(frame, _)| {
++            groupable(delivery_message(frame)) && delivery_mid_turn_ok(frame)
++        });
++        if self.observed_busy && !guidance_pending && !head_can_guide {
++            return;
++        }
+         let snapshot = match self.session.call(|client| client.snapshot()) {
+             Ok(snapshot) => snapshot,
+             Err(e) => {
+@@ -2718,6 +2745,7 @@
+             .session
+             .as_ref()
+             .is_some_and(|s| s.active_turn_id.is_some());
++        self.observed_busy = busy;
+         let Some(index) = self.next_delivery_index(&summary) else {
+             return;
+         };
+--- a/crates/bridget-daemon/src/t3code_tests.rs
++++ b/crates/bridget-daemon/src/t3code_tests.rs
+@@ -3990,3 +3990,171 @@
+     assert!(reason.contains("propriétaire") && reason.contains("autres travaux"));
+     assert!(saga_closed113(&frames, "d-budget279"));
+ }
++
++fn waiting_listener282(worker: &LinkWorker) -> std::net::TcpListener {
++    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
++    listener.set_nonblocking(true).unwrap();
++    worker.session.reset_runtime(ServerRuntime {
++        port: listener.local_addr().unwrap().port(),
++        pid: std::process::id(),
++    });
++    worker
++        .session
++        .inner
++        .lock()
++        .unwrap()
++        .client
++        .set_test_protocol(false);
++    listener
++}
++
++fn observe_busy282(worker: &mut LinkWorker, busy: bool) {
++    let mut observed = summary(None);
++    observed.session = Some(contract::SessionSummary {
++        provider_name: "codex".into(),
++        provider_instance_id: Some("codex".into()),
++        status: if busy { "running" } else { "ready" }.into(),
++        active_turn_id: busy.then(|| "active".into()),
++    });
++    worker.last_key = observed.change_key();
++    worker.handle_event(LinkEvent::Tick(Box::new(observed)));
++}
++
++#[test]
++fn spec282_waiting_peer_avoids_http_until_idle_then_requires_fresh_read() {
++    let (mut worker, _peer) = worker099();
++    observe_busy282(&mut worker, true);
++    worker.handle_frame(DaemonToWrapper::Deliver {
++        message: plain114("waiting-peer"),
++        mid_turn_ok: Some(false),
++    });
++    let listener = waiting_listener282(&worker);
++    let (_tx, inbox) = mpsc::channel();
++    worker.drive_queue(&inbox);
++    assert!(
++        matches!(listener.accept(), Err(e) if e.kind() == std::io::ErrorKind::WouldBlock),
++        "aucune lecture globale pendant l'attente"
++    );
++    assert_eq!(worker.queue.len(), 1);
++    observe_busy282(&mut worker, false);
++    let server = http_once099(&worker, 503, "unavailable".into());
++    worker.drive_queue(&inbox);
++    assert!(
++        server
++            .join()
++            .unwrap()
++            .starts_with("GET /api/orchestration/snapshot ")
++    );
++    assert_eq!(
++        worker.queue.len(),
++        1,
++        "la lecture 503 ne permet aucune remise"
++    );
++    worker.journal.stop();
++    worker.relay.shutdown();
++}
++
++#[test]
++fn spec282_guidance_and_authorized_midturn_keep_fresh_http() {
++    use bridget_core::MessageIntent::{InterruptAndStart, SteerCurrent};
++    for (intent, mid_turn_ok) in [
++        (Some(SteerCurrent), false),
++        (Some(InterruptAndStart), false),
++        (None, true),
++    ] {
++        let (mut worker, _peer) = worker099();
++        observe_busy282(&mut worker, true);
++        if intent.is_some() {
++            worker.handle_frame(DaemonToWrapper::Deliver {
++                message: plain114("blocked-head"),
++                mid_turn_ok: Some(false),
++            });
++        }
++        let mut message = plain114("eligible");
++        message.intent = intent;
++        worker.handle_frame(DaemonToWrapper::Deliver {
++            message,
++            mid_turn_ok: Some(mid_turn_ok),
++        });
++        let before = worker.queue.len();
++        let server = http_once099(&worker, 503, "unavailable".into());
++        let (_tx, inbox) = mpsc::channel();
++        worker.drive_queue(&inbox);
++        assert!(
++            server
++                .join()
++                .unwrap()
++                .starts_with("GET /api/orchestration/snapshot ")
++        );
++        assert_eq!(
++            worker.queue.len(),
++            before,
++            "aucun dispatch sans lecture réussie"
++        );
++        worker.journal.stop();
++        worker.relay.shutdown();
++    }
++}
++
++#[test]
++fn spec282_waiting_peer_still_expires_without_snapshot() {
++    let (mut worker, peer) = worker099();
++    observe_busy282(&mut worker, true);
++    let listener = waiting_listener282(&worker);
++    let mut message = plain114("expired");
++    message.reply = true;
++    message.deadline_at = Some(unix_now().saturating_sub(1));
++    worker.queue.push_back((
++        DaemonToWrapper::Deliver {
++            message,
++            mid_turn_ok: Some(false),
++        },
++        Instant::now(),
++    ));
++    worker.handle_frame(DaemonToWrapper::Deliver {
++        message: plain114("still-waiting"),
++        mid_turn_ok: Some(false),
++    });
++    let (_tx, inbox) = mpsc::channel();
++    worker.drive_queue(&inbox);
++    assert_eq!(worker.queue.len(), 1);
++    assert_eq!(delivery_message(&worker.queue[0].0).id, "still-waiting");
++    assert!(matches!(listener.accept(), Err(e) if e.kind() == std::io::ErrorKind::WouldBlock));
++    let frames = frames113(peer);
++    assert!(
++        rejection113(&frames, "expired")
++            .unwrap()
++            .contains("échéance de tour dépassée")
++    );
++    worker.journal.stop();
++    worker.relay.shutdown();
++}
++
++#[test]
++fn spec282_fresh_busy_read_defers_next_read_without_tick() {
++    let (mut worker, _peer) = worker099();
++    worker.handle_frame(DaemonToWrapper::Deliver {
++        message: plain114("waiting"),
++        mid_turn_ok: Some(false),
++    });
++    let body = serde_json::json!({"snapshotSequence":1,"projects":[],"threads":[{
++        "id":worker.thread_id,"projectId":"project","updatedAt":"date",
++        "session":{"providerName":"codex","status":"running","activeTurnId":"active"}
++    }]})
++    .to_string();
++    let server = http_once099(&worker, 200, body);
++    let (_tx, inbox) = mpsc::channel();
++    worker.drive_queue(&inbox);
++    assert!(
++        server
++            .join()
++            .unwrap()
++            .starts_with("GET /api/orchestration/snapshot ")
++    );
++    assert_eq!(worker.queue.len(), 1);
++    let listener = waiting_listener282(&worker);
++    worker.drive_queue(&inbox);
++    assert!(matches!(listener.accept(), Err(e) if e.kind() == std::io::ErrorKind::WouldBlock));
++    worker.journal.stop();
++    worker.relay.shutdown();
++}

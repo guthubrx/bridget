@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.8.47 - 2026-11-12
+
+- Une remise qui attend la fin du tour ne relit plus tout l’inventaire local toutes les 500 ms.
+- Le relevé commun permet la reprise ; toute remise garde sa lecture fraîche, les droits, les annulations et les expirations.
+
 ## 0.8.46 - 2026-11-12
 
 - L’entretien conserve les configurations MCP des fournisseurs ; le propriétaire garde son nettoyage à la fermeture.
