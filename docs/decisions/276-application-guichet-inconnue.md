@@ -1,6 +1,7 @@
 # 276 : application inconnue sans résultat métier
 
-Statut : correction en qualification.
+Statut : publiée en 0.8.41 et chargée par les services le 12 novembre 2026.
+Les façades MCP déjà montées restent anciennes tant qu’elles ne sont pas rechargées.
 
 Une lecture du guichet et une admission native appartiennent à deux registres.
 L’absence ou l’expiration d’une clé du premier n’atteste pas l’absence d’une
