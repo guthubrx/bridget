@@ -7,8 +7,9 @@ pourtant de l’action `catalogue`. Aucune commande n’a été transmise au dae
 - [x] Lire les arguments réels et le parseur.
 - [x] Nommer le type du champ version et réserver le conseil catalogue à cette action.
 - [x] Qualifier les refus et le chemin valide sur Mac et Linux.
-- [ ] Publier, activer les composants autorisés et vérifier le guidage réel.
-- [ ] Commit, push et ménage gardé.
+- [x] Publier et activer les services autorisés, vérifier les images et le lien natif.
+- [ ] Recharger le guidage des anciennes façades MCP : différé, T3 reste ouvert par décision utilisateur.
+- [x] Commit, push et ménage gardé, avec conservations documentées.
 
 Identité Git : absente du dépôt Parix KS et du worktree fe7321af. Le parent a
 committé les fichiers, l’arbre est propre. Aucune configuration user.name ou
