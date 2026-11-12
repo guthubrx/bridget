@@ -5992,10 +5992,10 @@ fn project_sender_and_prepare_refusals(task: &Task, view: &mut Value) {
         view["detail"]["preparation_capacity"] = json!({
             "scope":"this_task_on_its_worker","cause":"unobserved",
             "stage":"workspace_prepare","current_occupancy":"not_observed",
-            "verification":"Le reçu ne distingue pas une file de commandes pleine, un bootstrap retenu, la limite de préparations ou le stockage du worker.",
+            "verification":"Chercher bridget_prepare_capacity pour le task_id exact dans le journal du service worker à l’heure du refus : cause, held, prepared et prepared_limit. Sans cet événement, vérifier la file de commandes et le stockage ; leur cause reste non observée.",
         });
         view["error_message"] = json!(
-            "Faire lire par le responsable Bridget la file de commandes, les bootstraps retenus, les préparations et le stockage du worker de cette tâche. La préparation a refusé ResourceLimit, sans sous-cause conservée ; ce code ne prouve ni disque plein ni saturation du fournisseur. La tâche et sa clé restent enregistrées. Ce refus concerne cette préparation ; les autres travaux autorisés suivent leur propre état."
+            "Faire rechercher par le responsable Bridget l’événement bridget_prepare_capacity du task_id exact, à l’heure du refus, dans le journal du service worker de la machine cible. Lire cause, held, prepared et prepared_limit : held_bootstrap indique un démarrage encore retenu, prepared_slots le plafond de préparations. Ce reçu ResourceLimit ne conserve pas cette sous-cause ; en l’absence de l’événement, vérifier la file de commandes et le stockage sans en déduire une saturation. Un démarrage retenu peut refuser cette préparation même si prepared est inférieur au plafond ; retirer des anciens dossiers ne libère pas cette garde. Ce code ne prouve ni disque plein ni quota fournisseur. La tâche et sa clé restent enregistrées. Les autres travaux autorisés suivent leur propre état."
         );
         view["error_recovery"] = json!(
             "Conserver cette tâche et son dossier. Le propriétaire clôture CETTE tâche puis vérifie arrêt, nettoyage et rapport du dossier. Une nouvelle demande exige une cause corrigée et une nouvelle clé ; le rejeu de l'ancienne clé ne reprend pas la préparation. Aucun drainage global ni effacement d'un travail retenu."

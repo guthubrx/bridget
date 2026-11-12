@@ -27780,3 +27780,43 @@ fn spec267_remote_prepare_capacity_does_not_claim_hardware_saturation() {
             .contains("bridget_prepare_capacity")
     );
 }
+
+#[test]
+fn spec288_prepare_capacity_guidance_names_log_without_inventing_cause() {
+    let (state, config, mut task, _) = remote162_capture_fixture();
+    task.error = Some("remote_start_failed:remote_workspace_prepare:ResourceLimit".into());
+    task.state = "failed".into();
+    let before = serde_json::to_vec(&task).unwrap();
+    let view = task_view(&task, None, true);
+    assert_eq!(
+        view["detail"]["preparation_capacity"]["cause"],
+        "unobserved"
+    );
+    assert_eq!(
+        view["detail"]["preparation_capacity"]["current_occupancy"],
+        "not_observed"
+    );
+    let message = view["error_message"].as_str().unwrap();
+    for required in [
+        "bridget_prepare_capacity",
+        "task_id exact",
+        "held_bootstrap",
+        "prepared_slots",
+        "prepared_limit",
+        "retirer des anciens dossiers ne libère pas cette garde",
+    ] {
+        assert!(message.contains(required), "{required}: {message}");
+    }
+    assert!(
+        view["error_recovery"]
+            .as_str()
+            .unwrap()
+            .contains("Aucun drainage global")
+    );
+    assert_eq!(serde_json::to_vec(&task).unwrap(), before);
+    task.error = Some("remote_start_failed:remote_workspace_prepare:DiskFull".into());
+    let unrelated = task_view(&task, None, true);
+    assert!(unrelated["detail"]["preparation_capacity"].is_null());
+    drop(state);
+    cleanup(&config);
+}
