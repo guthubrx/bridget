@@ -25440,3 +25440,36 @@ fn native160_relance_remise_ordinaire_prepared_only() {
     drop(state);
     let _ = std::fs::remove_file(config.db_path);
 }
+
+#[test]
+fn spec277_project_resolution_log_is_scoped_and_discards_free_data() {
+    let owner = Some((
+        "27700000-0000-4000-8000-000000000001".into(),
+        "27700000-0000-4000-8000-000000000002".into(),
+    ));
+    for cause in [
+        "project_resolution_empty",
+        "project_authority_unestablished",
+        "origin_worker_unavailable",
+        "origin_proof_busy",
+        "origin_proof_unavailable",
+    ] {
+        let value = project_resolution_diagnostic277(&owner, true, false, cause);
+        assert_eq!(value["cause"], cause);
+        assert_eq!(value["agent_id"], owner.as_ref().unwrap().0);
+        assert_eq!(value["scope"], "this_connection");
+    }
+    assert_eq!(
+        project_resolution_diagnostic277(&owner, false, true, "private text")["cause"],
+        "connection_or_command_changed"
+    );
+    assert_eq!(
+        project_resolution_diagnostic277(&owner, true, true, "private text")["cause"],
+        "project_conflict"
+    );
+    let private = Some(("private-name".into(), "/private/path".into()));
+    let value = project_resolution_diagnostic277(&private, true, false, "private text");
+    assert!(value["agent_id"].is_null() && value["instance_id"].is_null());
+    assert_eq!(value["cause"], "origin_proof_unavailable");
+    assert!(!value.to_string().contains("private"));
+}

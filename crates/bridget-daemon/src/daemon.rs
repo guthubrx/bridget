@@ -10930,6 +10930,36 @@ fn agent_communication_project(
         .and_then(|fact| fact.0.clone())
 }
 
+fn project_resolution_diagnostic277(
+    owner: &Option<(String, String)>,
+    unchanged: bool,
+    conflicting: bool,
+    resolution: &str,
+) -> serde_json::Value {
+    let cause = if !unchanged {
+        "connection_or_command_changed"
+    } else if conflicting {
+        "project_conflict"
+    } else {
+        match resolution {
+            "project_resolution_empty"
+            | "project_authority_unestablished"
+            | "origin_worker_unavailable"
+            | "origin_proof_busy" => resolution,
+            _ => "origin_proof_unavailable",
+        }
+    };
+    // Jamais de chemin, nom libre, erreur RPC ou contenu de mission dans ce log.
+    let id = |index: usize| {
+        owner.as_ref().and_then(|pair| {
+            let value = if index == 0 { &pair.0 } else { &pair.1 };
+            Uuid::parse_str(value).ok().map(|_| value.as_str())
+        })
+    };
+    serde_json::json!({"version":1,"scope":"this_connection","agent_id":id(0),
+        "instance_id":id(1),"cause":cause})
+}
+
 fn announce_communication_project(
     state: &Arc<Mutex<DaemonState>>,
     conn_id: &str,
@@ -10988,18 +11018,19 @@ fn announce_communication_project(
             st.instance_id.clone(),
         )
     };
-    let (resolved, unavailable) = if local {
+    let (resolved, unavailable, resolution_cause) = if local {
         (
             crate::communication::resolve_communication_project(root, host, source, worktree),
             false,
+            "project_resolution_empty".to_owned(),
         )
     } else if foreign {
         match origin_proof::communication_project(state, &proof_host, root, source, worktree) {
-            Ok(project) => (project, false),
-            Err(_) => (None, true),
+            Ok(project) => (project, false, "project_resolution_empty".to_owned()),
+            Err(code) => (None, true, code),
         }
     } else {
-        (None, false)
+        (None, false, "project_authority_unestablished".to_owned())
     };
     let verified = resolved.is_some();
     let mut st = state.lock().recover_poison();
@@ -11045,7 +11076,10 @@ fn announce_communication_project(
         st.t3_thread_bindings.remove(conn_id);
     }
     invalidate_human_authority(&mut st);
+    drop(st);
     let warnings = if project.is_none() {
+        eprintln!("bridget_communication_project {}", project_resolution_diagnostic277(
+            &owner, unchanged, conflicting, &resolution_cause));
         crate::communication::project_scope(None, None, "", None).unwrap_or_default()
     } else {
         Vec::new()

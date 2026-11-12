@@ -529,6 +529,23 @@ def installed_links(namespace):
             continue
     return links
 
+def ssh_stderr_signature(exit_code, stderr):
+    # Étiquettes fermées seulement. Ni sortie libre, ni clé, ni hôte dans le reçu.
+    # Même 255 et stderr peuvent venir du distant. On conserve une signature
+    # textuelle, jamais la preuve de sa provenance ni la cause du refus.
+    # Un texte inconnu reste explicitement inconnu.
+    if exit_code != 255:
+        return "unobserved"
+    known = ((b"Host key verification failed", "host_key_verification_failed"),
+             (b"Permission denied (", "permission_denied"),
+             (b"Connection refused", "connection_refused"),
+             (b"Connection timed out", "connection_timed_out"),
+             (b"Could not resolve hostname", "name_resolution_failed"),
+             (b"kex_exchange_identification: Connection closed", "connection_closed"),
+             (b"kex_exchange_identification: read: Connection reset", "connection_reset"))
+    observed = {cause for text, cause in known if text in stderr[:65536]}
+    return observed.pop() if len(observed) == 1 else "unobserved"
+
 def ssh(link, request, operation, bundle=None):
     encoded = base64.b64encode(json.dumps(dict(request, operation=operation,
         registry=str(Path(link["remote_root"]) / "agents.json"))).encode()).decode()
@@ -550,7 +567,8 @@ def ssh(link, request, operation, bundle=None):
             raise Refused(code) from None
     if answer.returncode != 0:
         raise Refused("project_preparation_process_failed",
-                      dict(operation=operation, exit_code=answer.returncode))
+                      dict(operation=operation, exit_code=answer.returncode,
+                           stderr_signature=ssh_stderr_signature(answer.returncode, answer.stderr)))
     require(len(answer.stdout) <= MAX_JSON, "project_preparation_output_limit")
     result = json.loads(answer.stdout)
     require(result.get("ok") is True, result.get("error", "project_preparation_remote_failed"))

@@ -44,6 +44,53 @@ pub(crate) fn prepare_receipt_until(request: &Value, deadline: Instant) -> Resul
     prepare_script(request, SCRIPT, deadline)
 }
 
+fn process_diagnostic(request: &Value, answer: &Value) -> Option<Value> {
+    let detail = answer.get("detail")?.as_object()?;
+    if answer["error"] != "project_preparation_process_failed"
+        || !matches!(detail.len(), 2 | 3)
+        || !detail
+            .keys()
+            .all(|key| matches!(key.as_str(), "operation" | "exit_code" | "stderr_signature"))
+        || !matches!(
+            detail.get("operation")?.as_str(),
+            Some("inspect" | "prepare")
+        )
+        || !detail
+            .get("exit_code")?
+            .as_i64()
+            .is_some_and(|n| n != 0 && (-255..=255).contains(&n))
+    {
+        return None;
+    }
+    let signature = match detail.get("stderr_signature") {
+        None => "unobserved",
+        Some(value) => value.as_str()?,
+    };
+    if !matches!(
+        signature,
+        "unobserved"
+            | "host_key_verification_failed"
+            | "permission_denied"
+            | "connection_refused"
+            | "connection_timed_out"
+            | "name_resolution_failed"
+            | "connection_closed"
+            | "connection_reset"
+    ) {
+        return None;
+    }
+    if signature != "unobserved" && detail["exit_code"] != 255 {
+        return None;
+    }
+    let correlation = request
+        .get("correlation_id")
+        .and_then(Value::as_str)
+        .filter(|value| uuid::Uuid::parse_str(value).is_ok());
+    Some(serde_json::json!({"version":1,"scope":"this_request",
+        "code":"project_preparation_process_failed","correlation_id":correlation,
+        "operation":detail["operation"],"exit_code":detail["exit_code"],"cause":"unobserved","stderr_signature":signature}))
+}
+
 fn prepare_script(
     request: &Value,
     script_content: &str,
@@ -142,29 +189,10 @@ fn prepare_script(
         if code.len() > 128 || !code.bytes().all(|b| b.is_ascii_lowercase() || b == b'_') {
             return Err("project_preparation_failed".into());
         }
-        if code == "project_preparation_process_failed"
-            && let Some(detail) = answer.get("detail").and_then(Value::as_object)
-            && detail.len() == 2
-            && matches!(
-                detail.get("operation").and_then(Value::as_str),
-                Some("inspect" | "prepare")
-            )
-            && detail
-                .get("exit_code")
-                .and_then(Value::as_i64)
-                .is_some_and(|n| n != 0 && (-255..=255).contains(&n))
-        {
-            let correlation = request
-                .get("correlation_id")
-                .and_then(Value::as_str)
-                .filter(|value| uuid::Uuid::parse_str(value).is_ok());
+        if let Some(diagnostic) = process_diagnostic(request, &answer) {
             eprintln!(
                 "bridget_project_preparation {}",
-                serde_json::json!({
-                    "version":1,"scope":"this_request","code":code,
-                    "correlation_id":correlation,"operation":detail["operation"],
-                    "exit_code":detail["exit_code"],"cause":"unobserved"
-                })
+                diagnostic
             );
         }
         Err(code.to_owned())
@@ -186,6 +214,42 @@ fn prepare_script(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn spec277_preparation_diagnostic_is_closed_and_accepts_older_helpers() {
+        use serde_json::json;
+        let request = json!({"correlation_id":"27700000-0000-4000-8000-000000000001"});
+        let mut answer = json!({"error":"project_preparation_process_failed",
+                                        "detail":{"operation":"inspect","exit_code":255}});
+        assert_eq!(
+            process_diagnostic(&request, &answer).unwrap()["stderr_signature"],
+            "unobserved"
+        );
+        for cause in [
+            "host_key_verification_failed",
+            "permission_denied",
+            "connection_refused",
+            "connection_timed_out",
+            "name_resolution_failed",
+            "connection_closed",
+            "connection_reset",
+        ] {
+            answer["detail"]["stderr_signature"] = json!(cause);
+            let log = process_diagnostic(&request, &answer).unwrap();
+            assert_eq!(log["stderr_signature"], cause);
+            assert_eq!(log["cause"], "unobserved");
+            assert_eq!(log["correlation_id"], request["correlation_id"]);
+            assert_eq!(log["scope"], "this_request");
+        }
+        answer["detail"]["stderr_signature"] = json!("private stderr");
+        assert!(process_diagnostic(&request, &answer).is_none());
+        answer["detail"]["stderr_signature"] = json!("unobserved");
+        answer["detail"]["stderr"] = json!("private stderr");
+        assert!(process_diagnostic(&request, &answer).is_none());
+        answer["detail"].as_object_mut().unwrap().remove("stderr");
+        answer["detail"]["exit_code"] = json!(0);
+        assert!(process_diagnostic(&request, &answer).is_none());
+    }
+
     #[test]
     fn spec271_transport_diagnostic_preserves_legacy_wire_shape() {
         use bridget_transport::protocol::{OriginProofResponse, OriginProofResult, WorkerIdentity};

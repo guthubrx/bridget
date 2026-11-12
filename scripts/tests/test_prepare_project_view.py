@@ -20,7 +20,35 @@ class PremiereVue(unittest.TestCase):
             with self.assertRaises(prep.Refused) as refused:
                 prep.ssh(link, {}, 'inspect')
         self.assertEqual(str(refused.exception), 'project_preparation_process_failed')
-        self.assertEqual(refused.exception.detail, dict(operation='inspect', exit_code=255))
+        self.assertEqual(refused.exception.detail, dict(operation='inspect', exit_code=255, stderr_signature='unobserved'))
+        self.assertNotIn('private', repr(refused.exception.detail))
+
+    def test_spec277_ssh_failure_labels_are_closed_and_conservative(self):
+        cases = [(b'Host key verification failed.', 'host_key_verification_failed'),
+                 (b'fixture@private: Permission denied (publickey).', 'permission_denied'),
+                 (b'ssh: connect to host private port 22: Connection refused', 'connection_refused'),
+                 (b'ssh: connect to host private port 22: Connection timed out', 'connection_timed_out'),
+                 (b'ssh: Could not resolve hostname private: Name or service not known', 'name_resolution_failed'),
+                 (b'kex_exchange_identification: Connection closed by remote host', 'connection_closed'),
+                 (b'kex_exchange_identification: read: Connection reset by peer', 'connection_reset'),
+                 (b'private diagnostic not classified', 'unobserved')]
+        for raw, expected in cases:
+            with self.subTest(expected=expected):
+                self.assertEqual(prep.ssh_stderr_signature(255, raw), expected)
+                self.assertEqual(prep.ssh_stderr_signature(1, raw), 'unobserved')
+        self.assertEqual(prep.ssh_stderr_signature(255, cases[0][0] + cases[1][0]), 'unobserved')
+        self.assertEqual(prep.ssh_stderr_signature(255, b'x' * 65536 + cases[0][0]), 'unobserved')
+
+    def test_spec277_ssh_detail_retains_label_without_private_output(self):
+        link = dict(remote_root='/target', known_hosts='/known', identity='/identity',
+                    port='22', user='fixture', host='fixture.invalid')
+        result = subprocess.CompletedProcess([], 255, b'private output',
+                    b'kex_exchange_identification: Connection closed by remote host: private')
+        with patch.object(prep.subprocess, 'run', return_value=result):
+            with self.assertRaises(prep.Refused) as refused:
+                prep.ssh(link, {}, 'inspect')
+        self.assertEqual(refused.exception.detail,
+                         dict(operation='inspect', exit_code=255, stderr_signature='connection_closed'))
         self.assertNotIn('private', repr(refused.exception.detail))
 
     def test_sortie_trop_grande_est_distinguee_du_transport(self):

@@ -1,0 +1,745 @@
+--- a/scripts/prepare-project.py
++++ b/scripts/prepare-project.py
+@@ -529,6 +529,23 @@
+             continue
+     return links
+ 
++def ssh_stderr_signature(exit_code, stderr):
++    # Étiquettes fermées seulement. Ni sortie libre, ni clé, ni hôte dans le reçu.
++    # Même 255 et stderr peuvent venir du distant. On conserve une signature
++    # textuelle, jamais la preuve de sa provenance ni la cause du refus.
++    # Un texte inconnu reste explicitement inconnu.
++    if exit_code != 255:
++        return "unobserved"
++    known = ((b"Host key verification failed", "host_key_verification_failed"),
++             (b"Permission denied (", "permission_denied"),
++             (b"Connection refused", "connection_refused"),
++             (b"Connection timed out", "connection_timed_out"),
++             (b"Could not resolve hostname", "name_resolution_failed"),
++             (b"kex_exchange_identification: Connection closed", "connection_closed"),
++             (b"kex_exchange_identification: read: Connection reset", "connection_reset"))
++    observed = {cause for text, cause in known if text in stderr[:65536]}
++    return observed.pop() if len(observed) == 1 else "unobserved"
++
+ def ssh(link, request, operation, bundle=None):
+     encoded = base64.b64encode(json.dumps(dict(request, operation=operation,
+         registry=str(Path(link["remote_root"]) / "agents.json"))).encode()).decode()
+@@ -550,7 +567,8 @@
+             raise Refused(code) from None
+     if answer.returncode != 0:
+         raise Refused("project_preparation_process_failed",
+-                      dict(operation=operation, exit_code=answer.returncode))
++                      dict(operation=operation, exit_code=answer.returncode,
++                           stderr_signature=ssh_stderr_signature(answer.returncode, answer.stderr)))
+     require(len(answer.stdout) <= MAX_JSON, "project_preparation_output_limit")
+     result = json.loads(answer.stdout)
+     require(result.get("ok") is True, result.get("error", "project_preparation_remote_failed"))
+--- a/scripts/tests/test_prepare_project_view.py
++++ b/scripts/tests/test_prepare_project_view.py
+@@ -1,6 +1,8 @@
+ """Session 243 : première vue d'un projet neuf vers une autre machine."""
+ import importlib.util
+ import unittest
++from unittest.mock import patch
++import subprocess
+ from pathlib import Path
+ 
+ SCRIPT = Path(__file__).resolve().parents[1] / "prepare-project.py"
+@@ -10,6 +12,53 @@
+ 
+ 
+ class PremiereVue(unittest.TestCase):
++    def test_transport_refuse_conserve_operation_et_exit_sans_sortie_privee(self):
++        link = dict(remote_root='/target', known_hosts='/known', identity='/identity',
++                    port='22', user='fixture', host='fixture.invalid')
++        result = subprocess.CompletedProcess([], 255, b'private output', b'private stderr')
++        with patch.object(prep.subprocess, 'run', return_value=result):
++            with self.assertRaises(prep.Refused) as refused:
++                prep.ssh(link, {}, 'inspect')
++        self.assertEqual(str(refused.exception), 'project_preparation_process_failed')
++        self.assertEqual(refused.exception.detail, dict(operation='inspect', exit_code=255, stderr_signature='unobserved'))
++        self.assertNotIn('private', repr(refused.exception.detail))
++
++    def test_spec277_ssh_failure_labels_are_closed_and_conservative(self):
++        cases = [(b'Host key verification failed.', 'host_key_verification_failed'),
++                 (b'fixture@private: Permission denied (publickey).', 'permission_denied'),
++                 (b'ssh: connect to host private port 22: Connection refused', 'connection_refused'),
++                 (b'ssh: connect to host private port 22: Connection timed out', 'connection_timed_out'),
++                 (b'ssh: Could not resolve hostname private: Name or service not known', 'name_resolution_failed'),
++                 (b'kex_exchange_identification: Connection closed by remote host', 'connection_closed'),
++                 (b'kex_exchange_identification: read: Connection reset by peer', 'connection_reset'),
++                 (b'private diagnostic not classified', 'unobserved')]
++        for raw, expected in cases:
++            with self.subTest(expected=expected):
++                self.assertEqual(prep.ssh_stderr_signature(255, raw), expected)
++                self.assertEqual(prep.ssh_stderr_signature(1, raw), 'unobserved')
++        self.assertEqual(prep.ssh_stderr_signature(255, cases[0][0] + cases[1][0]), 'unobserved')
++        self.assertEqual(prep.ssh_stderr_signature(255, b'x' * 65536 + cases[0][0]), 'unobserved')
++
++    def test_spec277_ssh_detail_retains_label_without_private_output(self):
++        link = dict(remote_root='/target', known_hosts='/known', identity='/identity',
++                    port='22', user='fixture', host='fixture.invalid')
++        result = subprocess.CompletedProcess([], 255, b'private output',
++                    b'kex_exchange_identification: Connection closed by remote host: private')
++        with patch.object(prep.subprocess, 'run', return_value=result):
++            with self.assertRaises(prep.Refused) as refused:
++                prep.ssh(link, {}, 'inspect')
++        self.assertEqual(refused.exception.detail,
++                         dict(operation='inspect', exit_code=255, stderr_signature='connection_closed'))
++        self.assertNotIn('private', repr(refused.exception.detail))
++
++    def test_sortie_trop_grande_est_distinguee_du_transport(self):
++        link = dict(remote_root='/target', known_hosts='/known', identity='/identity',
++                    port='22', user='fixture', host='fixture.invalid')
++        result = subprocess.CompletedProcess([], 0, b'x' * 33, b'private stderr')
++        with patch.object(prep, 'MAX_JSON', 32), patch.object(prep.subprocess, 'run', return_value=result):
++            with self.assertRaisesRegex(prep.Refused, '^project_preparation_output_limit$'):
++                prep.ssh(link, {}, 'prepare')
++
+     def test_projet_neuf_distant_est_prepare_avant_la_vue(self):
+         request = {"machine_id": "cartae", "origin_host": "monordinateur"}
+         self.assertTrue(prep.first_view_prepares_project(True, "auto-x", {"mappings": {}}, request))
+--- a/crates/bridget-daemon/src/project_preparation.rs
++++ b/crates/bridget-daemon/src/project_preparation.rs
+@@ -42,6 +42,53 @@
+ 
+ pub(crate) fn prepare_receipt_until(request: &Value, deadline: Instant) -> Result<Value, String> {
+     prepare_script(request, SCRIPT, deadline)
++}
++
++fn process_diagnostic(request: &Value, answer: &Value) -> Option<Value> {
++    let detail = answer.get("detail")?.as_object()?;
++    if answer["error"] != "project_preparation_process_failed"
++        || !matches!(detail.len(), 2 | 3)
++        || !detail
++            .keys()
++            .all(|key| matches!(key.as_str(), "operation" | "exit_code" | "stderr_signature"))
++        || !matches!(
++            detail.get("operation")?.as_str(),
++            Some("inspect" | "prepare")
++        )
++        || !detail
++            .get("exit_code")?
++            .as_i64()
++            .is_some_and(|n| n != 0 && (-255..=255).contains(&n))
++    {
++        return None;
++    }
++    let signature = match detail.get("stderr_signature") {
++        None => "unobserved",
++        Some(value) => value.as_str()?,
++    };
++    if !matches!(
++        signature,
++        "unobserved"
++            | "host_key_verification_failed"
++            | "permission_denied"
++            | "connection_refused"
++            | "connection_timed_out"
++            | "name_resolution_failed"
++            | "connection_closed"
++            | "connection_reset"
++    ) {
++        return None;
++    }
++    if signature != "unobserved" && detail["exit_code"] != 255 {
++        return None;
++    }
++    let correlation = request
++        .get("correlation_id")
++        .and_then(Value::as_str)
++        .filter(|value| uuid::Uuid::parse_str(value).is_ok());
++    Some(serde_json::json!({"version":1,"scope":"this_request",
++        "code":"project_preparation_process_failed","correlation_id":correlation,
++        "operation":detail["operation"],"exit_code":detail["exit_code"],"cause":"unobserved","stderr_signature":signature}))
+ }
+ 
+ fn prepare_script(
+@@ -142,19 +189,11 @@
+         if code.len() > 128 || !code.bytes().all(|b| b.is_ascii_lowercase() || b == b'_') {
+             return Err("project_preparation_failed".into());
+         }
+-        if code == "project_preparation_process_failed"
+-            && let Some(detail) = answer.get("detail").and_then(Value::as_object)
+-            && detail.len() == 2
+-            && matches!(detail.get("operation").and_then(Value::as_str), Some("inspect" | "prepare"))
+-            && detail.get("exit_code").and_then(Value::as_i64).is_some_and(|n| n != 0 && (-255..=255).contains(&n))
+-        {
+-            let correlation = request.get("correlation_id").and_then(Value::as_str)
+-                .filter(|value| uuid::Uuid::parse_str(value).is_ok());
+-            eprintln!("bridget_project_preparation {}", serde_json::json!({
+-                "version":1,"scope":"this_request","code":code,
+-                "correlation_id":correlation,"operation":detail["operation"],
+-                "exit_code":detail["exit_code"],"cause":"unobserved"
+-            }));
++        if let Some(diagnostic) = process_diagnostic(request, &answer) {
++            eprintln!(
++                "bridget_project_preparation {}",
++                diagnostic
++            );
+         }
+         Err(code.to_owned())
+     })();
+@@ -175,6 +214,42 @@
+ #[cfg(test)]
+ mod tests {
+     use super::*;
++    #[test]
++    fn spec277_preparation_diagnostic_is_closed_and_accepts_older_helpers() {
++        use serde_json::json;
++        let request = json!({"correlation_id":"27700000-0000-4000-8000-000000000001"});
++        let mut answer = json!({"error":"project_preparation_process_failed",
++                                        "detail":{"operation":"inspect","exit_code":255}});
++        assert_eq!(
++            process_diagnostic(&request, &answer).unwrap()["stderr_signature"],
++            "unobserved"
++        );
++        for cause in [
++            "host_key_verification_failed",
++            "permission_denied",
++            "connection_refused",
++            "connection_timed_out",
++            "name_resolution_failed",
++            "connection_closed",
++            "connection_reset",
++        ] {
++            answer["detail"]["stderr_signature"] = json!(cause);
++            let log = process_diagnostic(&request, &answer).unwrap();
++            assert_eq!(log["stderr_signature"], cause);
++            assert_eq!(log["cause"], "unobserved");
++            assert_eq!(log["correlation_id"], request["correlation_id"]);
++            assert_eq!(log["scope"], "this_request");
++        }
++        answer["detail"]["stderr_signature"] = json!("private stderr");
++        assert!(process_diagnostic(&request, &answer).is_none());
++        answer["detail"]["stderr_signature"] = json!("unobserved");
++        answer["detail"]["stderr"] = json!("private stderr");
++        assert!(process_diagnostic(&request, &answer).is_none());
++        answer["detail"].as_object_mut().unwrap().remove("stderr");
++        answer["detail"]["exit_code"] = json!(0);
++        assert!(process_diagnostic(&request, &answer).is_none());
++    }
++
+     #[test]
+     fn spec271_transport_diagnostic_preserves_legacy_wire_shape() {
+         use bridget_transport::protocol::{OriginProofResponse, OriginProofResult, WorkerIdentity};
+--- a/crates/bridget-daemon/src/daemon.rs
++++ b/crates/bridget-daemon/src/daemon.rs
+@@ -10813,6 +10813,36 @@
+         .and_then(|fact| fact.0.clone())
+ }
+ 
++fn project_resolution_diagnostic277(
++    owner: &Option<(String, String)>,
++    unchanged: bool,
++    conflicting: bool,
++    resolution: &str,
++) -> serde_json::Value {
++    let cause = if !unchanged {
++        "connection_or_command_changed"
++    } else if conflicting {
++        "project_conflict"
++    } else {
++        match resolution {
++            "project_resolution_empty"
++            | "project_authority_unestablished"
++            | "origin_worker_unavailable"
++            | "origin_proof_busy" => resolution,
++            _ => "origin_proof_unavailable",
++        }
++    };
++    // Jamais de chemin, nom libre, erreur RPC ou contenu de mission dans ce log.
++    let id = |index: usize| {
++        owner.as_ref().and_then(|pair| {
++            let value = if index == 0 { &pair.0 } else { &pair.1 };
++            Uuid::parse_str(value).ok().map(|_| value.as_str())
++        })
++    };
++    serde_json::json!({"version":1,"scope":"this_connection","agent_id":id(0),
++        "instance_id":id(1),"cause":cause})
++}
++
+ fn announce_communication_project(
+     state: &Arc<Mutex<DaemonState>>,
+     conn_id: &str,
+@@ -10863,13 +10893,20 @@
+             st.instance_id.clone(),
+         )
+     };
+-    let (resolved, unavailable) = if local {
+-        (crate::communication::resolve_communication_project(root,host,source,worktree),false)
++    let (resolved, unavailable, resolution_cause) = if local {
++        (
++            crate::communication::resolve_communication_project(root, host, source, worktree),
++            false,
++            "project_resolution_empty".to_owned(),
++        )
+     } else if foreign {
+-        match origin_proof::communication_project(state,&proof_host,root,source,worktree) {
+-            Ok(project)=>(project,false),Err(_)=>(None,true),
+-        }
+-    } else {(None,false)};
++        match origin_proof::communication_project(state, &proof_host, root, source, worktree) {
++            Ok(project) => (project, false, "project_resolution_empty".to_owned()),
++            Err(code) => (None, true, code),
++        }
++    } else {
++        (None, false, "project_authority_unestablished".to_owned())
++    };
+     let verified=resolved.is_some();
+     let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+     let unchanged = generation == st.instance_id && live_connection_identity(&st, conn_id) == owner
+@@ -10899,7 +10936,10 @@
+         st.t3_thread_bindings.remove(conn_id);
+     }
+     invalidate_human_authority(&mut st);
++    drop(st);
+     let warnings = if project.is_none() {
++        eprintln!("bridget_communication_project {}", project_resolution_diagnostic277(
++            &owner, unchanged, conflicting, &resolution_cause));
+         crate::communication::project_scope(None, None, "", None).unwrap_or_default()
+     } else {
+         Vec::new()
+--- a/crates/bridget-daemon/src/daemon_presence_tests.rs
++++ b/crates/bridget-daemon/src/daemon_presence_tests.rs
+@@ -24609,3 +24609,36 @@
+     let _ = std::fs::remove_file(config.db_path);
+ }
+ 
++
++#[test]
++fn spec277_project_resolution_log_is_scoped_and_discards_free_data() {
++    let owner = Some((
++        "27700000-0000-4000-8000-000000000001".into(),
++        "27700000-0000-4000-8000-000000000002".into(),
++    ));
++    for cause in [
++        "project_resolution_empty",
++        "project_authority_unestablished",
++        "origin_worker_unavailable",
++        "origin_proof_busy",
++        "origin_proof_unavailable",
++    ] {
++        let value = project_resolution_diagnostic277(&owner, true, false, cause);
++        assert_eq!(value["cause"], cause);
++        assert_eq!(value["agent_id"], owner.as_ref().unwrap().0);
++        assert_eq!(value["scope"], "this_connection");
++    }
++    assert_eq!(
++        project_resolution_diagnostic277(&owner, false, true, "private text")["cause"],
++        "connection_or_command_changed"
++    );
++    assert_eq!(
++        project_resolution_diagnostic277(&owner, true, true, "private text")["cause"],
++        "project_conflict"
++    );
++    let private = Some(("private-name".into(), "/private/path".into()));
++    let value = project_resolution_diagnostic277(&private, true, false, "private text");
++    assert!(value["agent_id"].is_null() && value["instance_id"].is_null());
++    assert_eq!(value["cause"], "origin_proof_unavailable");
++    assert!(!value.to_string().contains("private"));
++}
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -7,7 +7,7 @@
+ ]
+ 
+ [workspace.package]
+-version = "0.8.41"
++version = "0.8.42"
+ edition = "2024"
+ license = "MIT"
+ 
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -192,7 +192,7 @@
+ 
+ [[package]]
+ name = "bridget-core"
+-version = "0.8.41"
++version = "0.8.42"
+ dependencies = [
+  "serde",
+  "serde_json",
+@@ -201,7 +201,7 @@
+ 
+ [[package]]
+ name = "bridget-daemon"
+-version = "0.8.41"
++version = "0.8.42"
+ dependencies = [
+  "axum",
+  "base64",
+@@ -229,7 +229,7 @@
+ 
+ [[package]]
+ name = "bridget-transport"
+-version = "0.8.41"
++version = "0.8.42"
+ dependencies = [
+  "bridget-core",
+  "libc",
+--- a/crates/bridget-daemon/src/communication.rs
++++ b/crates/bridget-daemon/src/communication.rs
+@@ -261,94 +261,104 @@
+ 
+     #[test]
+     fn spec138_git_environment_does_not_override_project() {
+-        const CHILD: &str = "BRIDGET_138_GIT_ENV_CHILD";
+-        if std::env::var_os(CHILD).is_some() {
+-            let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+-                .parent()
+-                .unwrap()
+-                .parent()
+-                .unwrap();
+-            assert!(
+-                resolve_communication_project(
+-                    root.to_str().unwrap(),
+-                    "test-host",
+-                    CommunicationProjectSource::Git,
+-                    None
+-                )
+-                .is_some()
+-            );
+-            return;
+-        }
+-        let output = std::process::Command::new(std::env::current_exe().unwrap())
+-            .args([
+-                "--exact",
+-                "communication::tests::spec138_git_environment_does_not_override_project",
+-                "--nocapture",
+-            ])
+-            .env(CHILD, "1")
+-            .env("GIT_DIR", "/nonexistent-bridget-138")
+-            .env("GIT_WORK_TREE", "/nonexistent-bridget-138-worktree")
+-            .env("GIT_COMMON_DIR", "/nonexistent-bridget-138-common")
+-            .output()
+-            .unwrap();
+-        assert!(
+-            output.status.success(),
+-            "{}",
+-            String::from_utf8_lossy(&output.stderr)
+-        );
+-    }
+-
+-    #[test]
+-    fn spec138_real_worktree_and_symlink_share_common_root() {
+-        let worktree = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+-            .parent()
+-            .unwrap()
+-            .parent()
+-            .unwrap();
+-        let repository = std::process::Command::new("git")
+-            .arg("-C")
+-            .arg(worktree)
+-            .args(["rev-parse", "--path-format=absolute", "--git-common-dir"])
+-            .output()
+-            .unwrap();
+-        let common = std::path::PathBuf::from(String::from_utf8(repository.stdout).unwrap().trim());
+-        let primary = common.parent().unwrap();
+-        let a = resolve_communication_project(
+-            worktree.to_str().unwrap(),
+-            "test-host",
+-            CommunicationProjectSource::Git,
+-            None,
+-        )
+-        .unwrap();
+-        let b = resolve_communication_project(
+-            primary.to_str().unwrap(),
+-            "test-host",
+-            CommunicationProjectSource::Git,
+-            None,
+-        )
+-        .unwrap();
+-        assert_eq!(a, b);
+-        let link =
+-            std::env::temp_dir().join(format!("b138-link-{}", uuid::Uuid::new_v4().simple()));
+-        std::os::unix::fs::symlink(worktree, &link).unwrap();
+-        let result = resolve_communication_project(
+-            link.to_str().unwrap(),
+-            "test-host",
+-            CommunicationProjectSource::Git,
+-            None,
+-        );
+-        std::fs::remove_file(&link).unwrap();
+-        assert_eq!(result, Some(a));
++    const CHILD: &str = "BRIDGET_138_GIT_ENV_CHILD";
++    if std::env::var_os(CHILD).is_some() {
++        use std::os::unix::fs::DirBuilderExt;
++        let root = std::env::temp_dir().join(format!("b138-env-{}", uuid::Uuid::new_v4().simple()));
++        std::fs::DirBuilder::new().mode(0o700).create(&root).unwrap();
++        assert!(std::process::Command::new("git").args(["init", "--quiet"])
++            .arg(&root).env_remove("GIT_DIR").env_remove("GIT_WORK_TREE")
++            .env_remove("GIT_COMMON_DIR").status().unwrap().success());
+         assert!(
+             resolve_communication_project(
+-                primary.to_str().unwrap(),
+-                "inconnu",
++                root.to_str().unwrap(),
++                "test-host",
+                 CommunicationProjectSource::Git,
+                 None
+             )
+-            .is_none()
+-        );
+-    }
++            .is_some()
++        );
++        std::fs::remove_dir_all(&root).unwrap();
++        return;
++    }
++    let output = std::process::Command::new(std::env::current_exe().unwrap())
++        .args([
++            "--exact",
++            "communication::tests::spec138_git_environment_does_not_override_project",
++            "--nocapture",
++        ])
++        .env(CHILD, "1")
++        .env("GIT_DIR", "/nonexistent-bridget-138")
++        .env("GIT_WORK_TREE", "/nonexistent-bridget-138-worktree")
++        .env("GIT_COMMON_DIR", "/nonexistent-bridget-138-common")
++        .output()
++        .unwrap();
++    assert!(
++        output.status.success(),
++        "{}",
++        String::from_utf8_lossy(&output.stderr)
++    );
++}
++
++    #[test]
++    fn spec138_real_worktree_and_symlink_share_common_root() {
++    use std::os::unix::fs::DirBuilderExt;
++    let fixture = std::env::temp_dir().join(format!("b138-common-{}", uuid::Uuid::new_v4().simple()));
++    std::fs::DirBuilder::new().mode(0o700).create(&fixture).unwrap();
++    let primary = fixture.join("primary");
++    let worktree = fixture.join("worktree");
++    assert!(std::process::Command::new("git").args(["init", "--quiet"])
++        .arg(&primary).env_remove("GIT_DIR").env_remove("GIT_WORK_TREE")
++        .env_remove("GIT_COMMON_DIR").status().unwrap().success());
++    // Git >= 2.44 : un worktree orphelin exerce common-dir sans commit ni identité.
++    assert!(std::process::Command::new("git").arg("-C").arg(&primary)
++        .args(["worktree", "add", "--quiet", "--orphan"]).arg(&worktree)
++        .env_remove("GIT_DIR").env_remove("GIT_WORK_TREE").env_remove("GIT_COMMON_DIR")
++        .status().unwrap().success());
++    let repository = std::process::Command::new("git")
++        .arg("-C")
++        .arg(&worktree)
++        .args(["rev-parse", "--path-format=absolute", "--git-common-dir"])
++        .output()
++        .unwrap();
++    let common = std::path::PathBuf::from(String::from_utf8(repository.stdout).unwrap().trim());
++    let primary = common.parent().unwrap();
++    let a = resolve_communication_project(
++        worktree.to_str().unwrap(),
++        "test-host",
++        CommunicationProjectSource::Git,
++        None,
++    )
++    .unwrap();
++    let b = resolve_communication_project(
++        primary.to_str().unwrap(),
++        "test-host",
++        CommunicationProjectSource::Git,
++        None,
++    )
++    .unwrap();
++    assert_eq!(a, b);
++    let link = std::env::temp_dir().join(format!("b138-link-{}", uuid::Uuid::new_v4().simple()));
++    std::os::unix::fs::symlink(worktree, &link).unwrap();
++    let result = resolve_communication_project(
++        link.to_str().unwrap(),
++        "test-host",
++        CommunicationProjectSource::Git,
++        None,
++    );
++    std::fs::remove_file(&link).unwrap();
++    assert_eq!(result, Some(a));
++    assert!(
++        resolve_communication_project(
++            primary.to_str().unwrap(),
++            "inconnu",
++            CommunicationProjectSource::Git,
++            None
++        )
++        .is_none()
++    );
++    std::fs::remove_dir_all(&fixture).unwrap();
++}
+ 
+     #[test]
+     fn spec138_same_basename_repositories_remain_other_projects() {
+--- a/crates/bridget-daemon/src/daemon_spec099_classic_delivery_tests.rs
++++ b/crates/bridget-daemon/src/daemon_spec099_classic_delivery_tests.rs
+@@ -251,91 +251,87 @@
+ 
+     #[test]
+     fn spec138_project_announcement_recovers_absence_but_not_conflict_and_aux_inherits() {
+-        use bridget_transport::protocol::{
+-            CommunicationDirectoryScope, CommunicationProjectSource,
+-        };
+-        let (state, root, _peers) = fixture();
+-        let _cleanup = FixtureRoot(root.clone());
+-        state.lock().unwrap().host = "audit".into();
+-        let report = |root: String| WrapperToDaemon::CommunicationProjectFact {
+-            root,
+-            source: CommunicationProjectSource::Git,
+-            host: "audit".into(),
+-            worktree_root: None,
+-        };
+-        assert!(matches!(
+-            handle_wrapper_message("sender", report(String::new()), &state),
+-            Some(DaemonToWrapper::ProjectContextResult { project: None, .. })
+-        ));
+-        let workspace = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+-            .parent()
++    use bridget_transport::protocol::{CommunicationDirectoryScope, CommunicationProjectSource};
++    let (state, root, _peers) = fixture();
++    let _cleanup = FixtureRoot(root.clone());
++    state.lock().unwrap().host = "audit".into();
++    let report = |root: String| WrapperToDaemon::CommunicationProjectFact {
++        root,
++        source: CommunicationProjectSource::Git,
++        host: "audit".into(),
++        worktree_root: None,
++    };
++    assert!(matches!(
++        handle_wrapper_message("sender", report(String::new()), &state),
++        Some(DaemonToWrapper::ProjectContextResult { project: None, .. })
++    ));
++    let workspace = root.join("repository");
++    assert!(std::process::Command::new("git").args(["init", "--quiet"])
++        .arg(&workspace).env_remove("GIT_DIR").env_remove("GIT_WORK_TREE")
++        .env_remove("GIT_COMMON_DIR").status().unwrap().success());
++    let workspace = workspace.to_string_lossy().into_owned();
++    assert!(matches!(
++        handle_wrapper_message("sender", report(workspace.clone()), &state),
++        Some(DaemonToWrapper::ProjectContextResult {
++            project: Some(_),
++            ..
++        })
++    ));
++    let registration = {
++        let st = state.lock().unwrap();
++        WrapperToDaemon::RegisterAuxiliary {
++            agent_id: SENDER.into(),
++            instance_id: st.conn_instances["sender"].clone(),
++            credential: st.identity_credentials["sender"].clone(),
++        }
++    };
++    assert!(matches!(
++        handle_wrapper_message("aux", registration, &state),
++        Some(DaemonToWrapper::Registered { .. })
++    ));
++    assert!(
++        matches!(handle_wrapper_message("aux", WrapperToDaemon::ClientHello {contract_version: CLIENT_CONTRACT_VERSION,issuer_scope:"scope138_auxiliary_namespace".into(),capabilities:vec![ClientCapability::CommunicationProjectsV1,ClientCapability::ExecutionControlV1]}, &state), Some(DaemonToWrapper::ClientWelcome {capabilities,..}) if capabilities == vec![ClientCapability::CommunicationProjectsV1])
++    );
++    assert!(matches!(
++        handle_wrapper_message(
++            "aux",
++            WrapperToDaemon::DirectoryScoped {
++                scope: CommunicationDirectoryScope::SameProject
++            },
++            &state
++        ),
++        Some(DaemonToWrapper::CommunicationDirectory {
++            project: Some(_),
++            ..
++        })
++    ));
++    assert!(matches!(
++        handle_wrapper_message("aux", report(workspace.clone()), &state),
++        Some(DaemonToWrapper::Nack { .. })
++    ));
++    let other = root.join("other-repository");
++    assert!(
++        std::process::Command::new("git")
++            .arg("init")
++            .arg(&other)
++            .output()
+             .unwrap()
+-            .parent()
+-            .unwrap()
+-            .to_string_lossy()
+-            .into_owned();
+-        assert!(matches!(
+-            handle_wrapper_message("sender", report(workspace.clone()), &state),
+-            Some(DaemonToWrapper::ProjectContextResult {
+-                project: Some(_),
+-                ..
+-            })
+-        ));
+-        let registration = {
+-            let st = state.lock().unwrap();
+-            WrapperToDaemon::RegisterAuxiliary {
+-                agent_id: SENDER.into(),
+-                instance_id: st.conn_instances["sender"].clone(),
+-                credential: st.identity_credentials["sender"].clone(),
+-            }
+-        };
+-        assert!(matches!(
+-            handle_wrapper_message("aux", registration, &state),
+-            Some(DaemonToWrapper::Registered { .. })
+-        ));
+-        assert!(
+-            matches!(handle_wrapper_message("aux", WrapperToDaemon::ClientHello {contract_version: CLIENT_CONTRACT_VERSION,issuer_scope:"scope138_auxiliary_namespace".into(),capabilities:vec![ClientCapability::CommunicationProjectsV1,ClientCapability::ExecutionControlV1]}, &state), Some(DaemonToWrapper::ClientWelcome {capabilities,..}) if capabilities == vec![ClientCapability::CommunicationProjectsV1])
+-        );
+-        assert!(matches!(
+-            handle_wrapper_message(
+-                "aux",
+-                WrapperToDaemon::DirectoryScoped {
+-                    scope: CommunicationDirectoryScope::SameProject
+-                },
+-                &state
+-            ),
+-            Some(DaemonToWrapper::CommunicationDirectory {
+-                project: Some(_),
+-                ..
+-            })
+-        ));
+-        assert!(matches!(
+-            handle_wrapper_message("aux", report(workspace.clone()), &state),
+-            Some(DaemonToWrapper::Nack { .. })
+-        ));
+-        let other = root.join("other-repository");
+-        assert!(
+-            std::process::Command::new("git")
+-                .arg("init")
+-                .arg(&other)
+-                .output()
+-                .unwrap()
+-                .status
+-                .success()
+-        );
+-        assert!(matches!(
+-            handle_wrapper_message(
+-                "sender",
+-                report(other.to_string_lossy().into_owned()),
+-                &state
+-            ),
+-            Some(DaemonToWrapper::ProjectContextResult { project: None, .. })
+-        ));
+-        assert!(matches!(
+-            handle_wrapper_message("sender", report(workspace), &state),
+-            Some(DaemonToWrapper::ProjectContextResult { project: None, .. })
+-        ));
+-    }
++            .status
++            .success()
++    );
++    assert!(matches!(
++        handle_wrapper_message(
++            "sender",
++            report(other.to_string_lossy().into_owned()),
++            &state
++        ),
++        Some(DaemonToWrapper::ProjectContextResult { project: None, .. })
++    ));
++    assert!(matches!(
++        handle_wrapper_message("sender", report(workspace), &state),
++        Some(DaemonToWrapper::ProjectContextResult { project: None, .. })
++    ));
++}
+ 
+     #[test]
+     fn spec138_reply_grant_and_warning_survive_replay_after_closed_request() {

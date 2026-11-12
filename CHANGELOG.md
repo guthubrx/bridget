@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.8.42 - 2026-11-12
+
+- Les échecs de préparation SSH conservent une signature de diagnostic fermée, sans sortie privée ni provenance supposée.
+- Les résolutions de projet vides laissent un diagnostic corrélé à la connexion, sans modifier les droits ni les missions.
+
 ## 0.8.41 - 2026-11-12
 
 - Sans résultat métier durable, le guichet indique une application inconnue au lieu de applied:false.
