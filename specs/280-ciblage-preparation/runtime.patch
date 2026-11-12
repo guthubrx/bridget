@@ -1,0 +1,162 @@
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -7,7 +7,7 @@
+ ]
+ 
+ [workspace.package]
+-version = "0.8.44"
++version = "0.8.45"
+ edition = "2024"
+ license = "MIT"
+ 
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -192,7 +192,7 @@
+ 
+ [[package]]
+ name = "bridget-core"
+-version = "0.8.44"
++version = "0.8.45"
+ dependencies = [
+  "serde",
+  "serde_json",
+@@ -201,7 +201,7 @@
+ 
+ [[package]]
+ name = "bridget-daemon"
+-version = "0.8.44"
++version = "0.8.45"
+ dependencies = [
+  "axum",
+  "base64",
+@@ -229,7 +229,7 @@
+ 
+ [[package]]
+ name = "bridget-transport"
+-version = "0.8.44"
++version = "0.8.45"
+ dependencies = [
+  "bridget-core",
+  "libc",
+--- a/scripts/prepare-project.py
++++ b/scripts/prepare-project.py
+@@ -708,13 +708,23 @@
+             publish_mapping(registry_path, request, result["project_id"], result["mapping"])
+             return result
+         matches = []
++        first_transport_failure = None
+         for link in installed_links(registry_path.parent):
+             try:
+                 result = ssh(link, request, "inspect")
+                 matches.append((link, result))
+             except Refused as error:
+-                if str(error) != "project_preparation_machine_mismatch":
+-                    raise
++                if str(error) == "project_preparation_machine_mismatch":
++                    continue
++                if str(error) in ("project_preparation_process_failed", "project_preparation_ssh_inspect_timeout"):
++                    # Une autre liaison ne prouve pas l'indisponibilité de la
++                    # cible. Seul un inspect attesté autorise sa préparation.
++                    if first_transport_failure is None:
++                        first_transport_failure = error
++                    continue
++                raise
++        if not matches and first_transport_failure is not None:
++            raise first_transport_failure
+         require(len(matches) == 1, "project_preparation_link_unavailable")
+         link, result = matches[0]
+         # Le maître et le worker doivent déjà partager toute correspondance explicite.
+--- /dev/null
++++ b/scripts/tests/test_prepare_project_routes.py
+@@ -0,0 +1,91 @@
++"""Une liaison indisponible ne masque pas une cible déjà attestée."""
++import contextlib
++import importlib.util
++from pathlib import Path
++import subprocess
++import unittest
++from unittest.mock import patch
++
++spec = importlib.util.spec_from_file_location('prepare_routes', Path(__file__).resolve().parents[1] / 'prepare-project.py')
++prep = importlib.util.module_from_spec(spec)
++spec.loader.exec_module(prep)
++
++
++class RoutesCiblees(unittest.TestCase):
++    def run_prepare(self, names, errors=None):
++        errors = errors or {}
++        mapping = {'source_host': 'source', 'source_root': '/source', 'remote_root': '/remote'}
++        authority = dict(worker_id='worker-target', provisioning_revision=7, credential_fingerprint='a' * 64)
++        selected = dict(enabled=True, mappings={'project': mapping}, **authority)
++        request = dict(registry='/registry/agents.json', source_root='/source', cwd='/source',
++                       origin_host='source', machine_id='target', commit='b' * 40)
++        result = dict(project_id='project', mapping=mapping, needs_bundle=False, have_commit=None)
++        calls = []
++
++        def ssh(link, actual, operation, bundle=None):
++            calls.append((link, operation))
++            self.assertEqual(actual['machine_id'], 'target')
++            self.assertEqual(actual['authority'], authority)
++            self.assertIsNone(bundle)
++            if link in errors:
++                self.assertEqual(operation, 'inspect')
++                raise errors[link]
++            return result.copy()
++
++        with contextlib.ExitStack() as stack:
++            for name, value in [('locked', contextlib.nullcontext()),
++                                ('registry_read', (b'{}', {'machines': {'target': selected}})),
++                                ('select_mapping', ('project', mapping)),
++                                ('mapping_for_origin', mapping), ('commit_present', True),
++                                ('git', subprocess.CompletedProcess([], 0, b'/source\n', b'')),
++                                ('installed_links', names)]:
++                stack.enter_context(patch.object(prep, name, return_value=value))
++            publisher = stack.enter_context(patch.object(prep, 'publish_mapping'))
++            stack.enter_context(patch.object(prep, 'ssh', side_effect=ssh))
++            try:
++                answer = prep.prepare(request)
++            except prep.Refused as error:
++                return None, error, calls, publisher.call_count
++            return answer, None, calls, publisher.call_count
++
++    def test_target_survives_unrelated_transport_before_or_after(self):
++        for names in [['offline', 'target-link'], ['target-link', 'offline']]:
++            for code in ['project_preparation_process_failed', 'project_preparation_ssh_inspect_timeout']:
++                with self.subTest(names=names, code=code):
++                    answer, error, calls, published = self.run_prepare(names, {'offline': prep.Refused(code)})
++                    self.assertIsNone(error)
++                    self.assertEqual(answer['project_id'], 'project')
++                    self.assertEqual([link for link, operation in calls if operation == 'prepare'], ['target-link'])
++                    self.assertEqual(published, 1)
++
++    def test_no_attested_target_preserves_original_failure(self):
++        original = prep.Refused('project_preparation_process_failed', dict(operation='inspect', exit_code=255, stderr_signature='unobserved'))
++        answer, error, calls, published = self.run_prepare(['offline', 'foreign'], {
++            'offline': original, 'foreign': prep.Refused('project_preparation_machine_mismatch')})
++        self.assertIsNone(answer)
++        self.assertIs(error, original)
++        self.assertEqual(error.detail['exit_code'], 255)
++        self.assertFalse(any(operation == 'prepare' for _, operation in calls))
++        self.assertEqual(published, 0)
++
++    def test_duplicate_attested_targets_stay_ambiguous(self):
++        answer, error, calls, published = self.run_prepare(['target-one', 'target-two', 'offline'], {
++            'offline': prep.Refused('project_preparation_process_failed')})
++        self.assertIsNone(answer)
++        self.assertEqual(str(error), 'project_preparation_link_unavailable')
++        self.assertFalse(any(operation == 'prepare' for _, operation in calls))
++        self.assertEqual(published, 0)
++
++    def test_policy_failure_is_not_hidden_by_success(self):
++        for names in [['refused', 'target-link'], ['target-link', 'refused']]:
++            with self.subTest(names=names):
++                answer, error, calls, published = self.run_prepare(names, {
++                    'refused': prep.Refused('project_preparation_path_protected')})
++                self.assertIsNone(answer)
++                self.assertEqual(str(error), 'project_preparation_path_protected')
++                self.assertFalse(any(operation == 'prepare' for _, operation in calls))
++                self.assertEqual(published, 0)
++
++
++if __name__ == '__main__':
++    unittest.main()

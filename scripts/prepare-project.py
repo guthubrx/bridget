@@ -708,13 +708,23 @@ def prepare(request):
             publish_mapping(registry_path, request, result["project_id"], result["mapping"])
             return result
         matches = []
+        first_transport_failure = None
         for link in installed_links(registry_path.parent):
             try:
                 result = ssh(link, request, "inspect")
                 matches.append((link, result))
             except Refused as error:
-                if str(error) != "project_preparation_machine_mismatch":
-                    raise
+                if str(error) == "project_preparation_machine_mismatch":
+                    continue
+                if str(error) in ("project_preparation_process_failed", "project_preparation_ssh_inspect_timeout"):
+                    # Une autre liaison ne prouve pas l'indisponibilité de la
+                    # cible. Seul un inspect attesté autorise sa préparation.
+                    if first_transport_failure is None:
+                        first_transport_failure = error
+                    continue
+                raise
+        if not matches and first_transport_failure is not None:
+            raise first_transport_failure
         require(len(matches) == 1, "project_preparation_link_unavailable")
         link, result = matches[0]
         # Le maître et le worker doivent déjà partager toute correspondance explicite.

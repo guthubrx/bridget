@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.8.45 - 2026-11-12
+
+- Une liaison SSH indisponible ne masque plus une cible unique attestée pendant la préparation.
+- Les refus d’ambiguïté et de politique restent bloquants ; sans cible attestée, l’erreur de transport originale est conservée.
+
 ## 0.8.44 - 2026-11-12
 
 - Les reçus des demandes suivies annoncent le délai de réponse, 60 secondes par défaut, et son inclusion de l’attente en file.
