@@ -124,7 +124,7 @@ pub(crate) fn tools(brief_schema: &Value) -> Vec<Value> {
         {"type":"object","properties":{"strategy":{"const":"worktree","description":"Dossier de travail isolé : seuls strategy et les chaînes facultatives base_ref et branch sont acceptés."},"base_ref":{"type":"string","description":"Référence Git disponible dans cwd sur la machine du parent. Pour une base figée, fournir le même SHA complet que expected_base_commit ; un nom de branche peut avancer. Un commit présent uniquement sur la destination doit d’abord être récupéré dans le dépôt source."},"branch":{"type":"string"}},"required":["strategy"],"additionalProperties":false}
     ]});
     let mut definitions = vec![
-        json!({"name":"bridget_specialists","description":"Catalogue des spécialistes. Fournir version:1 à chaque appel. Lecture : action search (role_id facultatif), list ou get (specialist_agent_id requis). Exemple : {version:1,action:search,role_id:mainteneur-bridget}. L’action catalogue n’existe pas. Le schéma expose les autres actions de profils, rôles et mémoire sourcée. Déclarer ses rôles ne donne aucun droit. request_role choisit un responsable unique et conserve sa clé ; request_status relit la demande sans réveil. Une activation durable ou un mandat permanent exige l'administration humaine. Budget Bridget sans plafond par défaut ; restrictions techniques et fournisseur restent distinctes.","inputSchema":specialists_schema222(),"annotations":{"readOnlyHint":false,"destructiveHint":false,"idempotentHint":true}}),
+        json!({"name":"bridget_specialists","description":"Catalogue des spécialistes. Fournir version:1 comme nombre JSON (sans guillemets) à chaque appel. Lecture : action search (role_id facultatif), list ou get (specialist_agent_id requis). Exemple : {version:1,action:search,role_id:mainteneur-bridget}. L’action catalogue n’existe pas. Le schéma expose les autres actions de profils, rôles et mémoire sourcée. Déclarer ses rôles ne donne aucun droit. request_role choisit un responsable unique et conserve sa clé ; request_status relit la demande sans réveil. Une activation durable ou un mandat permanent exige l'administration humaine. Budget Bridget sans plafond par défaut ; restrictions techniques et fournisseur restent distinctes.","inputSchema":specialists_schema222(),"annotations":{"readOnlyHint":false,"destructiveHint":false,"idempotentHint":true}}),
         json!({"name":"bridget_read_commit_file","description":"Rend disponible un fichier omis dans la vue privée du commit exact de sa tâche active. path est le chemin relatif indiqué dans la carte de la vue, sans ../ ni chemin absolu. Sans task_id, l'enfant lit sa propre tâche ; avec task_id, le parent doit en être propriétaire. Copie privée contrôlée, aucun changement du dépôt source, de la base, des comptes ou des droits. Un fichier existant divergent n'est jamais écrasé. Après succès, lire le chemin de données renvoyé. Une ancienne tâche clôturée ne redémarre pas par cette lecture.",
             "inputSchema":{"type":"object","properties":{"task_id":{"type":"string","minLength":1,"maxLength":128},
                 "path":{"type":"string","minLength":1,"maxLength":4096}},"required":["path"],"additionalProperties":false},
@@ -340,8 +340,20 @@ fn execute_with_proof(
             "Une vue de commit exige bridget_auto_delegate, posture=discovery et expected_base_commit avec le SHA exact. Cet appel n'a pas été envoyé. Conservez la clé et vérifiez toute tâche ou reçu antérieur avant de modifier les paramètres ; aucun remplacement d'issue inconnue.".into()));
     }
     let request = match name {
-        "bridget_specialists"=>NativeDelegationRequest::Specialists{request:serde_json::from_value(args.clone())
-            .map_err(|_|ClientError::InvalidParams(r#"Spécialistes : fournir version:1 et une action du schéma. Pour trouver le mainteneur : {"version":1,"action":"search","role_id":"mainteneur-bridget"}. L’action catalogue n’existe pas. Aucun appel envoyé ; conserver les opérations déjà connues."#.into()))?},
+        "bridget_specialists" => NativeDelegationRequest::Specialists {
+            request: serde_json::from_value(args.clone()).map_err(|_| {
+                let correction = if args.get("version").and_then(Value::as_u64).is_none() {
+                    r#"Fournissez version:1 comme nombre JSON, sans guillemets. Le champ version est absent ou n'est pas un entier positif ; une chaîne comme "1" n'est pas acceptée."#
+                } else if args.get("action").and_then(Value::as_str) == Some("catalogue") {
+                    "Utilisez une action du schéma, par exemple search. L’action catalogue n’existe pas."
+                } else {
+                    "Vérifiez les champs et leurs types dans le schéma de bridget_specialists ; la forme de cet appel est invalide."
+                };
+                ClientError::InvalidParams(format!(
+                    r#"{correction} Exemple de recherche : {{"version":1,"action":"search","role_id":"mainteneur-bridget"}}. Aucun appel envoyé : seul cet appel est refusé. Conservez les opérations déjà connues ; les autres travaux autorisés suivent leur propre état."#
+                ))
+            })?,
+        },
         "bridget_read_commit_file"=>{
             let path=string("path")?;
             if !bridget_transport::protocol::commit_view_file_path(&path) {

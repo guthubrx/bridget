@@ -1207,3 +1207,33 @@ fn native160_optin_absent_et_faux_deux_enveloppes() {
         "model_unavailable"
     );
 }
+
+#[test]
+fn spec285_specialists_version_type_names_real_refusal_without_connection() {
+    let identity = ResolvedIdentity {
+        name: "owner".into(),
+        instance_id: "instance".into(),
+        delegated_origin: None,
+    };
+    for version in [json!("1"), Value::Null, json!(true), json!(1.5), json!(-1)] {
+        let error = execute_with_proof(
+            &identity,
+            "bridget_specialists",
+            &json!({"version":version,"action":"search","role_id":"mainteneur-bridget"}),
+            Path::new("/missing/never-connected285.sock"),
+            None,
+        );
+        assert!(matches!(error, Err(ClientError::InvalidParams(message))
+            if message.contains("nombre JSON") && message.contains("Aucun appel envoyé")
+                && !message.contains("L’action catalogue n’existe pas")));
+    }
+    let valid = execute_with_proof(
+        &identity,
+        "bridget_specialists",
+        &json!({"version":1,"action":"search","role_id":"mainteneur-bridget"}),
+        Path::new("/missing/never-connected285.sock"),
+        None,
+    );
+    assert!(valid.is_err());
+    assert!(!matches!(valid, Err(ClientError::InvalidParams(_))));
+}

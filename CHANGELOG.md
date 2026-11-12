@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.8.49 - 2026-11-12
+
+- Le refus d’un appel au catalogue distingue un champ version mal typé de
+  l’action catalogue inexistante. Le type attendu est un nombre JSON, sans
+  conversion implicite ni élargissement de permissions.
+
 ## 0.8.48 - 2026-11-12
 
 - Le statut de continuation vérifie aussi la présence des enfants locaux avant de proposer une reprise.
