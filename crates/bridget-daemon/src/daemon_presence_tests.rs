@@ -17699,6 +17699,110 @@ fn remote162_worker_auth_epoch_et_contact_sans_presence_fournisseur() {
 }
 
 #[test]
+fn spec290_expired_t3_connection_closes_without_stopping_native_wrappers() {
+    for transport in ["t3code", "acp"] {
+        let (mut state, config) = state_with_registered_agent("heartbeat-expired290");
+        assert_eq!(state.next_conn_id(), "conn-1");
+        let shared = Arc::new(Mutex::new(state));
+        let agent_id = "89000000-0000-4000-8000-000000000290";
+        let register = WrapperToDaemon::Register {
+            identity_version: 2,
+            agent_type: "claude".into(),
+            agent_id: agent_id.into(),
+            host: Some("macbook".into()),
+            transport: Some(transport.into()),
+            channel: Some("unix".into()).into(),
+            mode: Some(PresenceMode::Cli),
+            location: None,
+            os: Some("macOS".into()),
+            instance_id: Some("instance-290".into()),
+            domain: None,
+            turn_in_progress: false,
+            journal_available: Some(true),
+            turn_attest: false,
+            queue_fallback: false,
+        };
+        // Reprendre la même identité après purge, retard seul, puis lien sain.
+        for (expired, purged) in [(true, true), (true, false), (false, false)] {
+            let (server, mut client) = UnixStream::pair().unwrap();
+            client
+                .set_read_timeout(Some(Duration::from_secs(10)))
+                .unwrap();
+            let connection_state = Arc::clone(&shared);
+            let connection = thread::spawn(move || {
+                handle_connection(server, connection_state).map_err(|e| e.to_string())
+            });
+            let mut reader = BufReader::new(client.try_clone().unwrap());
+            writeln!(client, "{}", encode(&register).unwrap()).unwrap();
+            let mut line = String::new();
+            reader.read_line(&mut line).unwrap();
+            assert!(
+                matches!(
+                    decode::<DaemonToWrapper>(line.trim()),
+                    Ok(DaemonToWrapper::Registered { .. })
+                ),
+                "{line}"
+            );
+            let aged = Instant::now()
+                .checked_sub(PRESENCE_RETENTION + Duration::from_secs(1))
+                .expect("horloge de la fixture");
+            if expired {
+                let mut state = shared.lock().unwrap();
+                state.presences.get_mut("instance-290").unwrap().link_seen = aged;
+                if purged {
+                    state.agent_infos();
+                    assert!(!state.presences.contains_key("instance-290"));
+                    assert!(state.router.get_agent(agent_id).is_none());
+                }
+            }
+            // Sérialiser avant l'envoi : write! écrirait plusieurs fragments.
+            // Une fermeture peut interrompre l'envoi ; la lecture tranche.
+            let frames = format!(
+                "{}\n{}\n",
+                encode(&WrapperToDaemon::Heartbeat).unwrap(),
+                encode(&WrapperToDaemon::DaemonIdentityRequest).unwrap()
+            );
+            let write_result = client.write_all(frames.as_bytes());
+            line.clear();
+            let response = reader.read_line(&mut line);
+            let refreshed = shared
+                .lock()
+                .unwrap()
+                .presences
+                .get("instance-290")
+                .is_some_and(|presence| presence.link_seen > aged);
+            let _ = client.shutdown(std::net::Shutdown::Both);
+            connection.join().unwrap().unwrap();
+            if purged && transport == "t3code" {
+                assert_eq!(
+                    response.unwrap(),
+                    0,
+                    "la liaison T3 périmée doit fermer : {line}"
+                );
+            } else {
+                write_result.expect("la socket conservée reçoit la sonde complète");
+                assert!(
+                    response.expect("réponse de la socket conservée sous 10 s") > 0,
+                    "une liaison saine ou native reste ouverte"
+                );
+                assert!(
+                    matches!(
+                        decode::<DaemonToWrapper>(line.trim()),
+                        Ok(DaemonToWrapper::DaemonIdentityReport { .. })
+                    ),
+                    "{line}"
+                );
+            }
+            if expired && !purged {
+                assert!(refreshed, "le battement rétablit la présence non purgée");
+            }
+        }
+        drop(shared);
+        let _ = std::fs::remove_file(config.db_path);
+    }
+}
+
+#[test]
 fn heartbeat_preserve_etat_metier() {
     let (mut state, config) = state_with_registered_agent("heartbeat-busy");
     state.set_turn_state("conn-1", true).unwrap();

@@ -7261,6 +7261,9 @@ fn handle_connection(
     info!("connexion {} établie", conn_id);
 
     let mut my_writer = BufWriter::new(stream);
+    // Ce fait appartient à la socket, même si le retain retire son identité.
+    // Il ne porte aucun droit et ne permet jamais de restaurer une présence.
+    let mut registered_t3_link = false;
 
     // Toute sortie, y compris un échec d'écriture de réponse, traverse le
     // nettoyage commun ci-dessous. Une capacité de service est strictement
@@ -7423,6 +7426,24 @@ fn handle_connection(
                 }
             };
 
+            if registered_t3_link
+                && matches!(&msg, WrapperToDaemon::Heartbeat)
+                && !state
+                    .lock()
+                    .recover_poison()
+                    .conn_instances
+                    .contains_key(&conn_id)
+            {
+                // L'EOF réarme la reprise existante du connecteur T3. Ne pas
+                // envoyer Disconnect aux wrappers natifs : ils peuvent avoir
+                // une mission vivante. Aucun état de tâche n'est modifié ici.
+                warn!(
+                    "t3_primary_registration_lost conn={conn_id} : liaison fermée pour réenregistrement automatique ; tâches conservées"
+                );
+                let _ = reader.get_ref().shutdown(std::net::Shutdown::Both);
+                break;
+            }
+
             // Le compteur couvre aussi la réponse et ses contrôles différés.
             let _update_activity = if update_exempt(&msg) {
                 None
@@ -7452,6 +7473,17 @@ fn handle_connection(
             let response =
                 handle_wrapper_message_with_peer(&conn_id, msg, &state, Some(reader.get_ref()));
             let registered_just_now = matches!(response, Some(DaemonToWrapper::Registered { .. }));
+            if registered_just_now {
+                // Capturer avant d'émettre Registered, séparément des contrôles
+                // différés qui s'exécutent seulement après la réponse.
+                let st = state.lock().recover_poison();
+                registered_t3_link = !st.auxiliary_connections.contains(&conn_id)
+                    && st
+                        .conn_instances
+                        .get(&conn_id)
+                        .and_then(|instance| st.presences.get(instance))
+                        .is_some_and(|presence| presence.transport == "t3code");
+            }
             if let Some(dtw) = response {
                 let watch_terminal = matches!(
                     &dtw,
