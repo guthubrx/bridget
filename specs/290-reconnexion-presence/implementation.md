@@ -29,4 +29,12 @@ L'activation n'est pas effectuée. Le parcours natif de mise à jour refuse les 
 Preuves locales : /Users/moi/.cache/bridget290-reconnexion.
 Qualification Linux : /mnt/data/moi/bridget290-reconnexion.
 
+## Rétablissement ponctuel autorisé à 20 h 13
+
+Après confirmation explicite de François pour cet arrêt, T3 a été quitté normalement puis relancé sans réinstallation. Le reçu confirme l'arrêt à 20 h 13 min 17 s, la fermeture des liens du pont, puis le nouveau serveur T3 à 20 h 13 min 19 s (PID 58886). Aucun arrêt forcé, changement de droits ou remplacement de mission n'est effectué.
+
+À 20 h 14, l'annuaire natif confirme les trois primaires réenregistrés : Devantures conn-57692, Territoire conn-57699, Production conn-57689, tous busy avec des battements de 1 à 2 secondes. Le pont est running avec 32 liens. Cette observation remplace le constat précédent de liens absents. Aucun fabricant n'est lancé pour tester ; le prochain appel autorisé depuis chaque fil doit encore confirmer son parcours complet. Un message de reprise est adressé au chef d'orchestre, avec conservation des clés et interdiction de dupliquer le travail déjà traité par repli. Son reçu mcp-76061-6af761b0-1 est in_flight : lecture non confirmée.
+
+Cette reprise ponctuelle ne charge pas le correctif 290. Le maître reste au build 288 ; l'activation durable demeure à faire. Reçus : restart-t3-receipt.json et restart-t3-verification.json dans le dossier local de preuves.
+
 Ménage du dépôt : le rapport du helper commun ne trouve aucun worktree ni branche à retirer. Les preuves locales occupent 1,7 Mio. La copie de qualification de main sur SYS est retirée après fin du test et contrôle des usages dans /proc : 127 Mio. La copie du runtime cumulatif (126 Mio) reste nécessaire à la préparation de l'activation. La vue native de revue reste sous conservation Bridget ; son reçu ne permet pas de la supprimer manuellement.

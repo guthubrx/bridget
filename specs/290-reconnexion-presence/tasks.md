@@ -9,4 +9,5 @@
 - [x] Recompiler la version finale sur la copie de main et réussir le test socket.
 - [x] Intégrer les sources validées et le bilan de qualification à main ; les journaux détaillés restent dans le dossier de preuves indiqué.
 - [ ] Activer par un parcours de maintenance admis, puis vérifier le retour des trois liaisons sans nouvelle mission.
+- [x] Après confirmation explicite de François, relancer T3 et constater le retour des trois primaires à 20 h 14 ; aucun test d'admission ni activation 290 prétendu.
 - [x] Retirer la copie de qualification de main après contrôle d'usage ; conserver la copie du runtime pour l'activation et les preuves utiles.
