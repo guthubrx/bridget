@@ -1933,6 +1933,7 @@ struct LinkWorker {
     /// Fait déjà annoncé sur cette connexion propriétaire. Un changement
     /// est envoyé au daemon, qui décide seul de sa cohérence.
     project_context: Option<(Option<String>, Option<String>)>,
+    project_retry_at: Option<Instant>,
     last_key: String,
     /// Un tour observé occupé ne peut que différer une lecture inutile.
     /// Toute remise conserve sa propre lecture fraîche avant dispatch.
@@ -2066,6 +2067,7 @@ impl LinkWorker {
             title,
             title_refused_at: None,
             project_context: None,
+            project_retry_at: None,
             last_key: String::new(),
             observed_busy: summary
                 .session
@@ -2101,9 +2103,12 @@ impl LinkWorker {
             summary.workspace_root.clone(),
             summary.worktree_path.clone(),
         );
-        if self.project_context.as_ref() == Some(&context) {
+        if self.project_context.as_ref() == Some(&context)
+            && self.project_retry_at.is_none_or(|at| Instant::now() < at)
+        {
             return;
         }
+        self.project_retry_at = None;
         send_wrapper_message(
             &self.writer,
             WrapperToDaemon::CommunicationProjectFact {
@@ -2442,7 +2447,14 @@ impl LinkWorker {
             }
             // Verdict de l'annonce propriétaire, pas une livraison ni une
             // réponse de mission. Aucun texte n'est injecté dans le fil.
-            DaemonToWrapper::ProjectContextResult { .. } => {}
+            DaemonToWrapper::ProjectContextResult { project, .. } => {
+                // Une annonce envoyée n'est pas une preuve de projet. Refaire
+                // le même contrôle après un échec, sans solliciter chaque Tick.
+                // Un changement de chemins reste annoncé immédiatement.
+                self.project_retry_at = project
+                    .is_none()
+                    .then(|| Instant::now() + Duration::from_secs(30));
+            }
             DaemonToWrapper::UserInputResult { result } => {
                 let item = &result["item"];
                 if item["origin"] == "t3"

@@ -1352,6 +1352,78 @@ fn spec138_t3_owner_announces_unknown_project_instead_of_using_adapter_cwd() {
 }
 
 #[test]
+fn spec291_failed_project_is_reannounced_with_binding_until_confirmed() {
+    let (mut worker, peer) = worker099();
+    peer.set_nonblocking(true).unwrap();
+    let mut reader = BufReader::new(peer);
+    let drain = |reader: &mut BufReader<UnixStream>| {
+        let mut frames = Vec::new();
+        loop {
+            let mut line = String::new();
+            match reader.read_line(&mut line) {
+                Ok(0) => break,
+                Ok(_) => frames.push(serde_json::from_str::<serde_json::Value>(&line).unwrap()),
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
+                Err(e) => panic!("lecture annonce: {e}"),
+            }
+        }
+        frames
+    };
+    drain(&mut reader);
+    let mut current = summary(None);
+    current.workspace_root = Some("/volume/project".into());
+    worker.report_project_context(&current);
+    drain(&mut reader);
+    worker.handle_frame(DaemonToWrapper::ProjectContextResult {
+        project: None,
+        project_warnings: Vec::new(),
+    });
+    for _ in 0..3 {
+        worker.report_project_context(&current);
+    }
+    assert!(drain(&mut reader).is_empty(), "pas de boucle immédiate");
+    assert!(
+        worker.project_retry_at.is_some(),
+        "le refus doit armer la reprise"
+    );
+    worker.project_retry_at = Some(Instant::now());
+    worker.report_project_context(&current);
+    let frames = drain(&mut reader);
+    assert_eq!(frames.len(), 2);
+    assert_eq!(frames[0]["type"], "CommunicationProjectFact");
+    assert_eq!(frames[0]["root"], "/volume/project");
+    assert_eq!(frames[1]["type"], "T3ThreadBindingFact");
+    assert_eq!(frames[1]["t3_thread_id"], current.id);
+    worker.handle_frame(DaemonToWrapper::ProjectContextResult {
+        project: Some(bridget_transport::protocol::CommunicationProject {
+            host: crate::wrapper::host_name(),
+            root: "/volume/project/.git".into(),
+        }),
+        project_warnings: Vec::new(),
+    });
+    assert!(worker.project_retry_at.is_none());
+    worker.report_project_context(&current);
+    assert!(drain(&mut reader).is_empty());
+    worker.handle_frame(DaemonToWrapper::ProjectContextResult {
+        project: None,
+        project_warnings: Vec::new(),
+    });
+    current.workspace_root = Some("/volume/other".into());
+    worker.report_project_context(&current);
+    let frames = drain(&mut reader);
+    assert_eq!(
+        frames.len(),
+        2,
+        "un nouveau contexte n'attend pas 30 secondes"
+    );
+    assert_eq!(frames[0]["root"], "/volume/other");
+    assert!(worker.queue.is_empty());
+    assert!(worker.state.pending.is_empty());
+    worker.relay.shutdown();
+    worker.journal.stop();
+}
+
+#[test]
 fn spec145_t3_binding_follows_each_changed_project_fact() {
     let (mut worker, peer) = worker099();
     let mut changed = summary(None);
