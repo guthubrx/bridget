@@ -17,3 +17,11 @@ Quatre tests ciblés réussissent sur Mac : spec291, deux spec138 de projet et s
 Le binaire Mac 291-reprise-projet-r1 est compilé et installé hors staging : /Users/moi/.local/lib/bridget-communication/291-reprise-projet-r1/bin/bridget. SHA-256 713fe0d7037797cb94fc9eabc8d34a242540578432db935cd020c57bffbaded5. Les lecteurs de formats sont compatibles dans les deux sens avec l’image active 288, vérifiés par les commandes natives formats et leur validateur. Le lien actif n’a pas changé.
 
 Activation préparée pour le connecteur Mac uniquement. Le maître et les workers n’ont pas de modification dans ce lot. Le parcours local exige T3 arrêté avec confirmation fraîche, puis un état récent waiting/threads=0 du connecteur avant son remplacement. Il ne libère ni ne réécrit les anciennes tâches ou admissions qui retiennent la maintenance globale. Aucun arrêt n’est encore exécuté.
+
+## Activation différée par décision utilisateur
+
+Le 14 novembre 2026, François choisit « Garder T3 ouvert pour le moment » à la demande de confirmation spécifique. La procédure préparée n’est pas exécutée. Le lien actif et les services restent inchangés ; aucune réparation réelle du fil n’est prétendue. Les sources du correctif sont poussées au commit f6fb14f7752724c8625d47b5ca7886a620f44a4c.
+
+Le contrôle natif des versions des clients locaux réussit, verdict compatible. Le binaire installé et son retour sont compatibles avec les formats conservés. Le script build.py installed a retiré 1,37 Gio d’intermédiaires, sans compilation en cours. La copie de qualification (121 Mio), le binaire candidat (36 Mio) et les preuves sont conservés pour la future activation. La vue native de revue reste sous conservation Bridget.
+
+Reprise : une nouvelle confirmation explicite est nécessaire avant tout arrêt de T3. Vérifier à nouveau le binaire actif, les formats, les processus et les passages de maintenance avant d’exécuter la procédure locale. Après chargement, vérifier le projet du fil dans l’annuaire puis un appel natif depuis ce fil. La livraison reste incomplète jusqu’à cette preuve.

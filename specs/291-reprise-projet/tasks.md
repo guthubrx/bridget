@@ -7,3 +7,5 @@
 - [ ] Compiler, installer et charger le connecteur corrigé par un parcours autorisé.
 - [ ] Vérifier le projet du fil et un appel natif de son propriétaire.
 - [ ] Pousser les sources et terminer le ménage du lot.
+
+Activation différée : François demande de garder T3 ouvert. Aucun arrêt exécuté. Sources poussées, binaire installé mais non chargé. Nettoyage des intermédiaires terminé ; copie de qualification, candidat et preuves gardés pour la reprise.
