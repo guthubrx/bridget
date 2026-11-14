@@ -11572,7 +11572,7 @@ fn guidance_facts(
         .zip(agent_communication_project(st, target))
         .is_some_and(|(from, to)| from != to)
         && !conn.is_some_and(|conn| {
-            native_delegation::admitted_task_communication248(st, conn, target, None)
+            native_delegation::admitted_task_communication248(st, conn, target, None, false)
         });
     let control =
         crate::referent_control::read(st.store.connection()).map_err(|e| e.to_string())?;
@@ -12315,6 +12315,7 @@ fn prepare_dispatch(
             conn_id,
             &routing_to,
             Some(&message.id),
+            message.intent == Some(bridget_core::MessageIntent::StoreOnly),
         ) {
         Vec::new()
     } else {

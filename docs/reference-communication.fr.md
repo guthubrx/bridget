@@ -1235,9 +1235,18 @@ réponse perdue. `Lookup accepted` signifie acceptation durable ; l'effet dépen
 de l'intention initiale, jamais de cette seule étiquette.
 
 L'information se consulte avec `bridget_ledger` (search/read) ou `bridget ledger`.
+
 Elle n'est pas injectée au prochain tour. La rétention habituelle s'applique.
 Un dormant connecté ou un agent DND peut recevoir ce dépôt sans changer d'état.
 Un destinataire absent conserve le refus de routage habituel.
+
+Après le résultat d'une ronde native, un parent et son enfant encore gardé
+peuvent conserver une information sans réveil, même si leurs dépôts sont sur
+des machines différentes. La garde doit rester ouverte et non expirée, et les
+deux instances doivent être présentes. Ce dépôt n'ouvre aucune nouvelle ronde
+et n'atteste pas une lecture. Pour demander du travail, utiliser
+`bridget_task_continue` après vérification du statut. Si la garde est close,
+conserver le résultat et faire arbitrer la suite par son propriétaire.
 `reply`, `reply_timeout` et `in_reply_to` sont incompatibles avec information.
 Les résultats natifs restent publiés par leur worker et lus par leur task_id.
 

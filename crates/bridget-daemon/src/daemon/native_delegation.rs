@@ -12664,6 +12664,7 @@ pub(super) fn admitted_task_communication248(
     conn: &str,
     target: &str,
     message_id: Option<&str>,
+    store_only: bool,
 ) -> bool {
     let Some((sender, instance)) = live_connection_identity(st, conn) else {
         return false;
@@ -12683,7 +12684,15 @@ pub(super) fn admitted_task_communication248(
             task
         }
     };
-    if task.terminal()
+    // Un dépôt sans réveil conserve la relation tant que la garde de résultat
+    // est ouverte. Cela n'autorise ni guidage ni nouvelle ronde.
+    let kept_information = store_only
+        && task.guarded
+        && task.continuation_guard_open()
+        && task
+            .idle_deadline_at
+            .is_some_and(|deadline| deadline > unix_timestamp());
+    if (task.terminal() && !kept_information)
         || task.state == "cancelling"
         || task.cleanup_done
         || task.guard_released

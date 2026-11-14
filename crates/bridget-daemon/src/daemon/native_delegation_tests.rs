@@ -14570,7 +14570,8 @@ fn native151_boite_phases_absentes_orphelines_et_accusees() {
     let mut task = tache_151(&mut st, "box");
     task.state = "failed".into();
     for (phase, sent, acked, expected) in [
-        (None, false, false, "pending"),
+        (None,
+        false, false, "pending"),
         (None, true, false, "claimed"),
         (Some("dispatching"), false, false, "claimed"),
         (Some("indeterminate"), true, false, "claimed"),
@@ -21577,6 +21578,135 @@ fn spec263_steer_after_result_names_the_existing_round_instead_of_a_foreign_proj
 }
 
 #[test]
+fn spec292_information_after_result_keeps_only_the_open_native_relation() {
+    let mut request = request("information292");
+    let NativeDelegationRequest::Delegate {
+        keep_alive_secs, ..
+    } = &mut request
+    else {
+        panic!("délégation attendue")
+    };
+    *keep_alive_secs = Some(3600);
+    let (shared, config, task_id, _, _) = parent_en_cours_avec_projets_174(request, 0, true);
+    let mut st = shared.lock().unwrap();
+    let mut task = st.delegation_store.get(&task_id).unwrap().unwrap();
+    task.state = "result_available".into();
+    assert!(task.guarded, "garde réservée dès l’admission");
+    task.result_sent = true;
+    task.cleanup_done = false;
+    task.guard_released = false;
+    task.idle_deadline_at = Some(unix_timestamp() + 3600);
+    st.delegation_store.save(&task).unwrap();
+    let before = serde_json::to_vec(&st.delegation_store.get(&task_id).unwrap().unwrap()).unwrap();
+    let mut information =
+        bridget_core::BridgetMessage::new(&task.owner, &task.child, "preuve conservée");
+    information.intent = Some(bridget_core::MessageIntent::StoreOnly);
+    let prepared = prepare_dispatch(
+        &mut st,
+        &mut information,
+        "conn-1",
+        task.owner.clone(),
+        "information292".into(),
+        "information292".into(),
+        false,
+    );
+    assert!(prepared.is_ok(), "{:?}", prepared.as_ref().err());
+    assert!(prepared.unwrap().project_warnings.is_empty());
+    assert!(information.cross_project_reason.is_none());
+    assert_eq!(
+        serde_json::to_vec(&st.delegation_store.get(&task_id).unwrap().unwrap()).unwrap(),
+        before
+    );
+
+    // Une information n'ouvre pas le guidage d'une ronde déjà rendue.
+    for intent in [
+        None,
+        Some(bridget_core::MessageIntent::QueueOnly),
+        Some(bridget_core::MessageIntent::SteerCurrent),
+    ] {
+        let mut message = information.clone();
+        message.intent = intent;
+        let refusal = prepare_dispatch(
+            &mut st,
+            &mut message,
+            "conn-1",
+            task.owner.clone(),
+            "travail292".into(),
+            "travail292".into(),
+            false,
+        )
+        .err()
+        .unwrap();
+        assert_eq!(refusal.0, "intent_not_permitted");
+    }
+    assert!(!admitted_task_communication248(
+        &st,
+        "conn-1",
+        &task.child,
+        None,
+        false
+    ));
+    assert!(!admitted_task_communication248(
+        &st,
+        "conn-1",
+        &task.child,
+        Some(&task.mission),
+        true
+    ));
+    let identity = st
+        .conn_instances
+        .insert("conn-1".into(), "autre-instance".into())
+        .unwrap();
+    assert!(!admitted_task_communication248(
+        &st,
+        "conn-1",
+        &task.child,
+        None,
+        true
+    ));
+    st.conn_instances.insert("conn-1".into(), identity);
+
+    for case in ["expired", "cleanup", "cancelled", "failed", "released"] {
+        let mut closed = task.clone();
+        match case {
+            "released" => closed.guard_released = true,
+            "expired" => closed.idle_deadline_at = Some(unix_timestamp() - 1),
+            "cleanup" => closed.cleanup_done = true,
+            state => closed.state = state.into(),
+        }
+        st.delegation_store.save(&closed).unwrap();
+        assert!(
+            !admitted_task_communication248(&st, "conn-1", &task.child, None, true),
+            "{case}"
+        );
+    }
+    drop(st);
+    cleanup(&config);
+}
+
+#[test]
+fn spec292_information_without_admitted_guard_keeps_project_check() {
+    let (shared, config, task_id, _, _) =
+        parent_en_cours_avec_projets_174(request("unguarded292"), 0, true);
+    let st = shared.lock().unwrap();
+    let mut task = st.delegation_store.get(&task_id).unwrap().unwrap();
+    assert!(!task.guarded);
+    task.state = "result_available".into();
+    task.result_sent = true;
+    task.idle_deadline_at = Some(unix_timestamp() + 3600);
+    st.delegation_store.save(&task).unwrap();
+    assert!(!admitted_task_communication248(
+        &st,
+        "conn-1",
+        &task.child,
+        None,
+        true
+    ));
+    drop(st);
+    cleanup(&config);
+}
+
+#[test]
 fn spec247_parent_coordonne_enfant_distant_sans_faux_autre_projet() {
     let (shared, config, task_id, _, _) =
         parent_en_cours_avec_projets_174(request("coord247"), 0, true);
@@ -21590,7 +21720,8 @@ fn spec247_parent_coordonne_enfant_distant_sans_faux_autre_projet() {
         &st,
         "conn-1",
         &task.child,
-        Some(&message.id)
+        Some(&message.id),
+        false,
     ));
     let prepared = prepare_dispatch(
         &mut st,
@@ -21664,7 +21795,8 @@ fn spec248_enfant_distant_peut_informer_parent_sans_devenir_pilote() {
         &st,
         "child-conn",
         &task.owner,
-        Some("rapport248")
+        Some("rapport248"),
+        false,
     ));
     let facts = guidance_facts(
         &st,
@@ -21694,7 +21826,8 @@ fn spec248_enfant_distant_peut_informer_parent_sans_devenir_pilote() {
         &st,
         "child-conn",
         "agent-etranger",
-        None
+        None,
+        false,
     ));
     drop(st);
     cleanup(&config);
@@ -21710,13 +21843,15 @@ fn spec247_relation_ne_passe_ni_instance_etrangere_ni_mission_ni_cloture() {
         &st,
         "conn-1",
         &task.child,
-        Some(&task.mission)
+        Some(&task.mission),
+        false,
     ));
     assert!(admitted_task_communication248(
         &st,
         "child-conn",
         &task.owner,
-        None
+        None,
+        false,
     ));
     let instance = st
         .conn_instances
@@ -21726,7 +21861,8 @@ fn spec247_relation_ne_passe_ni_instance_etrangere_ni_mission_ni_cloture() {
         &st,
         "conn-1",
         &task.child,
-        None
+        None,
+        false,
     ));
     st.conn_instances.insert("conn-1".into(), instance);
     st.delegation_store
@@ -21741,7 +21877,8 @@ fn spec247_relation_ne_passe_ni_instance_etrangere_ni_mission_ni_cloture() {
         &st,
         "conn-1",
         &task.child,
-        None
+        None,
+        false,
     ));
     st.delegation_store
         .grant(
@@ -21755,7 +21892,8 @@ fn spec247_relation_ne_passe_ni_instance_etrangere_ni_mission_ni_cloture() {
         &st,
         "conn-1",
         &task.child,
-        None
+        None,
+        false,
     ));
     task.state = "cancelled".into();
     st.delegation_store.save(&task).unwrap();
@@ -21763,7 +21901,8 @@ fn spec247_relation_ne_passe_ni_instance_etrangere_ni_mission_ni_cloture() {
         &st,
         "conn-1",
         &task.child,
-        None
+        None,
+        false,
     ));
     drop(st);
     cleanup(&config);
