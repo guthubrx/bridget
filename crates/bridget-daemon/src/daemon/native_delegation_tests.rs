@@ -22607,31 +22607,39 @@ fn native174_delai_transport_statut_failed_guide_sans_reouvrir() {
     let mut task = tache_soldee_150(&mut st, "guide174");
     let saved_state = task.state.clone();
     task.state = "failed".into();
-    task.error = Some("échéance Claude dépassée".into());
-    task.cleanup_done = false;
-    let waiting = task_view(&task, None, true);
-    assert!(
-        waiting["error_recovery"]
-            .as_str()
-            .unwrap()
-            .contains("Attendez")
-    );
-    task.cleanup_done = true;
-    task.workspace_report_mission = Some(task.mission.clone());
-    let closed = task_view(&task, None, true);
-    let advice = closed["error_recovery"].as_str().unwrap();
-    assert!(advice.contains("nouvelle request_id") && advice.contains("réutiliser ces sorties"));
-    assert_eq!(closed["status"], "failed");
-    assert_eq!(closed["continuable"], false);
-    assert_eq!(
-        st.delegation_store
-            .get(&task.task_id)
-            .unwrap()
-            .unwrap()
-            .state,
-        saved_state,
-        "la projection ne modifie aucune tâche"
-    );
+    for error in [
+        "mission_reply_timeout",
+        "échéance Claude dépassée",
+        "échéance du tour dépassée",
+    ] {
+        task.error = Some(error.into());
+        task.cleanup_done = false;
+        let waiting = task_view(&task, None, true);
+        assert!(
+            waiting["error_recovery"]
+                .as_str()
+                .unwrap()
+                .contains("Attendez")
+        );
+        task.cleanup_done = true;
+        task.workspace_report_mission = Some(task.mission.clone());
+        let closed = task_view(&task, None, true);
+        let advice = closed["error_recovery"].as_str().unwrap();
+        assert!(
+            advice.contains("nouvelle request_id") && advice.contains("réutiliser ces sorties")
+        );
+        assert_eq!(closed["status"], "failed");
+        assert_eq!(closed["continuable"], false);
+        assert_eq!(
+            st.delegation_store
+                .get(&task.task_id)
+                .unwrap()
+                .unwrap()
+                .state,
+            saved_state,
+            "la projection ne modifie aucune tâche"
+        );
+    }
     cleanup(&config);
 }
 

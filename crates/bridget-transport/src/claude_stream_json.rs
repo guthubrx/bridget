@@ -1275,7 +1275,7 @@ fn spawn_worker(
                     receiver
                         .recv_timeout(remaining)
                         .unwrap_or(ManagedTerminal::Failed {
-                            detail: "échéance Claude dépassée".to_string(),
+                            detail: "échéance du tour dépassée".to_string(),
                         })
                 }
                 Err(error) => ManagedTerminal::Failed {

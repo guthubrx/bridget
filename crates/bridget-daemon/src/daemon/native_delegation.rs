@@ -6351,7 +6351,7 @@ fn task_view(task: &Task, phase: Option<&str>, full: bool) -> Value {
     if task.state == "failed"
         && matches!(
             task.error.as_deref(),
-            Some("mission_reply_timeout" | "échéance Claude dépassée")
+            Some("mission_reply_timeout" | "échéance Claude dépassée" | "échéance du tour dépassée")
         )
     {
         let duration = task.reply_timeout.unwrap_or(MISSION_REPLY_LIMIT_SECS);

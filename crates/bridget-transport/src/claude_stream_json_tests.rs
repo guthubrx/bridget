@@ -142,7 +142,7 @@ fn spec174_claude_fond_conserve_annulation_echec_et_echeance() {
                 matches!(terminal, ManagedTerminal::Failed { detail } if detail == "api_error")
             ),
             _ => assert!(
-                matches!(terminal, ManagedTerminal::Failed { detail } if detail == "échéance Claude dépassée")
+                matches!(terminal, ManagedTerminal::Failed { detail } if detail == "échéance du tour dépassée")
             ),
         }
         transport.stop();
