@@ -174,6 +174,22 @@ Les anciennes commandes rendent [] pour les warnings de projet. Interrupt sans
 message suit désormais la garde de droits156 décrite ci-dessous.
 ### Guidage, interruption et lecture de file (156)
 
+Pour coordonner des rôles persistants, utiliser `bridget_send intent="queue"`
+ou un fil partagé `bridget_thread`. Un titre de chef d'orchestre ou un mandat
+de coordination ne crée pas le lien parent-enfant requis pour `steer` et
+`interrupt`. Le refus `intent_not_permitted`, motif `not_parent`, concerne
+ce guidage, pas les communications ordinaires ni les missions en cours.
+
+Une demande directe qui attend une réponse peut utiliser `queue` avec
+`reply=true`. La remise peut attendre la fin du tour du destinataire ;
+`reply_timeout` inclut cette attente. Un reçu `in_flight` ne prouve pas la
+lecture. Conserver sa clé et son enveloppe pour relire son sort, sans doubler
+le même arbitrage sur un autre canal. Pour un historique sans sollicitation,
+utiliser un fil avec `notify:[]` ou `intent="information"` si disponible.
+Si une intervention pendant le tour est indispensable, demander à l'humain
+d'utiliser son parcours de contrôle autorisé. Ne pas créer de filiation,
+changer d'identité ni ouvrir une boucle pour contourner le refus.
+
 Les boucles264 choisissent leur mode à la création : `queue`, `steer` ou
 `interrupt`. La compétence Bridget Loop recueille ce choix auprès de l'humain.
 La CLI de Loop le demande en terminal ; un appel automatique sans choix refuse
