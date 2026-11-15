@@ -2566,6 +2566,51 @@ fn spec147_uuid_mcp_facade_ipc_and_business_replay_case() {
 }
 
 #[test]
+fn spec294_thread_ack_names_receipt_before_transport() {
+    let tool = tools()
+        .into_iter()
+        .find(|tool| tool["name"] == "bridget_thread")
+        .unwrap();
+    for (field, action) in [
+        ("receipt", "ack uniquement"),
+        ("ack_receipt", "post uniquement"),
+    ] {
+        assert!(
+            tool["inputSchema"]["properties"][field]["description"]
+                .as_str()
+                .unwrap()
+                .contains(action)
+        );
+    }
+    let receipt = "29400000-aaaa-4aaa-8aaa-000000000001";
+    let thread_id = "29400000-bbbb-4bbb-8bbb-000000000002";
+    let parsed: bridget_transport::protocol::ThreadAction =
+        serde_json::from_value(json!({"action":"ack","thread_id":thread_id,"receipt":receipt}))
+            .unwrap();
+    assert!(
+        matches!(parsed, bridget_transport::protocol::ThreadAction::Ack { receipt: value, .. } if value == receipt)
+    );
+    // Même avec receipt présent, le champ post ne doit ni être ignoré ni envoyé.
+    for args in [
+        json!({"action":"ack","thread_id":thread_id,"ack_receipt":receipt}),
+        json!({"action":"ack","thread_id":thread_id,"ack_receipt":receipt,"receipt":receipt}),
+    ] {
+        let error = execute_tool_at_with_scope(
+            "reader294",
+            "instance294",
+            "bridget_thread",
+            args.as_object().unwrap(),
+            Path::new("/absent-spec294/socket"),
+        )
+        .unwrap_err();
+        assert!(matches!(error, ToolError::InvalidParams(message)
+            if message.contains("thread_id et receipt")
+                && message.contains("réservé à action=post")
+                && message.contains("Aucun appel envoyé")));
+    }
+}
+
+#[test]
 fn spec147_thread_catalogue_explains_ack_then_same_read() {
     let tool = tools()
         .into_iter()

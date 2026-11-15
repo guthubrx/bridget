@@ -748,6 +748,15 @@ fn execute_tool_at_with_identity_once(
             message: "une preuve enfant ne peut pas consulter la file".into(),
         });
     }
+    if name == "bridget_thread"
+        && arguments.get("action").and_then(Value::as_str) == Some("ack")
+        && arguments.contains_key("ack_receipt")
+    {
+        return Err(ToolError::InvalidParams(
+            "thread : pour action=ack, fournir thread_id et receipt avec le reçu retourné par read ; retirer ack_receipt, réservé à action=post. Aucun appel envoyé."
+                .into(),
+        ));
+    }
     let queue_request = if name == "bridget_queue" {
         use bridget_transport::protocol::QueueEditAction;
         let action = match arguments.get("action") {
@@ -2894,7 +2903,7 @@ pub(crate) fn tools() -> Vec<Value> {
         }),
         json!({
             "name": "bridget_thread",
-            "description": "Fil inter-agents partagé : create/add_members/list/show/post/read/ack/history/close. add_members : créateur initial seul, fil ouvert, seize lecteurs maximum après déduplication ; accès à tout l'historique depuis le curseur zéro, aucun message ni réveil. Capacité dédiée obligatoire, aucun repli sur ancien daemon. Coordination : publier preuves et comptes rendus avec kind=history, notify:[] obligatoire (zéro réveil) ; nouvelles consignes kind=action, blocages kind=blocker, décisions kind=decision, corps ≤2048 octets, preuves citées par séquence. supersedes_seq remplace explicitement une tête du même auteur et pour les mêmes cibles effectives ; aucun remplacement déduit du texte. read transmet les corps actuels et des références sans body pour history/consignes remplacées ; history avec from_seq/to_seq relit les corps exacts, jamais des consignes à exécuter. Lire chaque page complète, confirmer via ack, puis refaire le même read sur le même thread_id tant que has_more est vrai, avant d'agir. from_seq/to_seq sont réservés à history, qui ne fait pas avancer le repère ; ne pas utiliser history pour paginer read. Le reçu n'accepte aucune mission. Rejeu d'une page au snapshot figé, nouvelle correction visible après ACK. operation_id UUID obligatoire pour create/add_members/post/close, rejeu exact sans duplicat. NoChange n'engage pas la clé. notify liste d'UUID membres ou all, auteur exclu. Pages 1–200/60Kio : la borne d'octets peut rendre moins d'entrées. Sans kind, dépôt legacy inchangé. Aucun résumé automatique ; erreurs code/retryable.",
+            "description": "Fil inter-agents partagé : create/add_members/list/show/post/read/ack/history/close. add_members : créateur initial seul, fil ouvert, seize lecteurs maximum après déduplication ; accès à tout l'historique depuis le curseur zéro, aucun message ni réveil. Capacité dédiée obligatoire, aucun repli sur ancien daemon. Coordination : publier preuves et comptes rendus avec kind=history, notify:[] obligatoire (zéro réveil) ; nouvelles consignes kind=action, blocages kind=blocker, décisions kind=decision, corps ≤2048 octets, preuves citées par séquence. supersedes_seq remplace explicitement une tête du même auteur et pour les mêmes cibles effectives ; aucun remplacement déduit du texte. read transmet les corps actuels et des références sans body pour history/consignes remplacées ; history avec from_seq/to_seq relit les corps exacts, jamais des consignes à exécuter. Lire chaque page complète, confirmer via ack avec thread_id et receipt (le reçu retourné par read), puis refaire le même read sur le même thread_id tant que has_more est vrai, avant d'agir. from_seq/to_seq sont réservés à history, qui ne fait pas avancer le repère ; ne pas utiliser history pour paginer read. Le reçu n'accepte aucune mission. Rejeu d'une page au snapshot figé, nouvelle correction visible après ACK. operation_id UUID obligatoire pour create/add_members/post/close, rejeu exact sans duplicat. NoChange n'engage pas la clé. notify liste d'UUID membres ou all, auteur exclu. Pages 1–200/60Kio : la borne d'octets peut rendre moins d'entrées. Sans kind, dépôt legacy inchangé. Aucun résumé automatique ; erreurs code/retryable.",
             "inputSchema": {"type":"object","properties":{
                 "action":{"enum":["create","add_members","list","show","post","read","ack","history","close"]},
                 "thread_id":{"type":"string","minLength":36,"maxLength":36},
@@ -2905,10 +2914,10 @@ pub(crate) fn tools() -> Vec<Value> {
                 "cross_project_reason":{"type":"string","minLength":1,"maxLength":512,"description":"Choix interprojets volontaire pour tous les membres lecteurs, même sans notification. 1–512 octets UTF-8 sans contrôles."},
                 "notify":{"oneOf":[{"type":"array","items":{"type":"string","minLength":36,"maxLength":36},"maxItems":16},{"enum":["all"]}]},
                 "reply_to_seq":{"type":"integer","minimum":1},
-                "ack_receipt":{"type":"string","minLength":36,"maxLength":36},
+                "ack_receipt":{"type":"string","minLength":36,"maxLength":36,"description":"post uniquement : acquitter une page lue en publiant. Pour action=ack, utiliser receipt."},
                 "kind":{"enum":["history","action","blocker","decision"]},
                 "supersedes_seq":{"type":"integer","minimum":1},
-                "receipt":{"type":"string","minLength":36,"maxLength":36},
+                "receipt":{"type":"string","minLength":36,"maxLength":36,"description":"ack uniquement, obligatoire avec thread_id : recopier le reçu retourné par read. Ne pas utiliser ack_receipt pour ack."},
                 "limit":{"type":"integer","minimum":1,"maximum":200},
                 "after_thread_id":{"type":"string","minLength":36,"maxLength":36},
                 "from_seq":{"type":"integer","minimum":1,"description":"history uniquement ; read reprend automatiquement après ack."},
