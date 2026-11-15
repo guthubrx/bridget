@@ -232,6 +232,11 @@ fn updates179_human_activation_blocks_delivery_and_sql_unknown_is_closed() {
     assert!(
         matches!(handle("human",MobileAdministrationRequest::Updates{request:Q::Prepare{token:Uuid::new_v4().to_string()}},&state),DaemonToWrapper::MobileAdministrationResult{result:MobileAdministrationResult::Error{code}} if code=="update_activity_unknown")
     );
+    assert!(
+        matches!(handle("human",MobileAdministrationRequest::Updates{request:Q::Status},&state),
+        DaemonToWrapper::MobileAdministrationResult{result:MobileAdministrationResult::Updates{value}}
+            if value["activation"]["status"]=="unknown" && value["activation"]["code"]=="update_activity_unknown")
+    );
     drop(state);
     std::fs::remove_dir_all(root).unwrap();
 }

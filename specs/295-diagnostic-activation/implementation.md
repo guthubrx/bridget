@@ -1,0 +1,17 @@
+# Diagnostic natif de l'activation
+
+Demande du 15 novembre 2026 : résoudre les états qui bloquent la mise à jour et adapter les outils nécessaires, puis demander une confirmation fraîche avant l'arrêt de T3.
+
+Le refus `update_missions_active_or_unconfirmed` confondait missions actives, conservations incomplètes et admissions anciennes. Le port local authentifié `bridget updates status` expose maintenant `activation` : compteurs, seize références au plus par catégorie, propriétaire et action native. Aucun canon, chemin ou contenu de mission n'est projeté. Le statut mobile fédéré ne reçoit pas ces détails.
+
+Le même calcul est utilisé par `prepare`, sous le verrou du maître. Aucun blocage n'est supprimé. Une lecture impossible donne `unknown` et refuse la préparation. Une observation libre ne réserve pas le bail. Le contrôle des opérations en cours et du bail reste assuré par `Gate::prepare`.
+
+La contre-revue native a trouvé une borne de taille insuffisante. La réponse complète est désormais sérialisée et mesurée avant transport : au-delà de la limite du client (64 Kio, saut de ligne compris), refus `update_status_too_large`. La première fixture de dépassement excédait déjà le plafond de lecture du fichier de politique ; corrigée à 63 Kio pour exercer le dépassement de la réponse agrégée.
+
+Qualification : les cinq tests des corrections 290, 291, 292 et 294 passent sur main. Les sept tests updates179 passent, dont le bail exclusif, la lecture SQL impossible et les droits mobiles. Clippy strict bibliothèque et tests passe avant la correction de taille ; requalification finale consignée dans les preuves privées. La revue a été rendue, acquittée et close par le parcours propriétaire ; sa vue reste conservée.
+
+État opérationnel : le maître et le connecteur actifs étaient encore en 288 au début de cette reprise. Trois admissions anciennes et onze tâches historiques nécessitaient une réconciliation distincte ; les missions nouvelles restent protégées. Ce correctif de diagnostic ne prétend pas clôturer ces tâches. Le chargement du connecteur cumulé est préparé séparément, avec vérification des formats dans les deux sens et du retour arrière. L'activation et la clôture complète restent à attester ; aucune ligne SQL métier n'est forcée.
+
+Le test final spec295 passe avec une fixture privée isolée. Une première version du test employait le parent du fichier de base de la fixture commune pour écrire sa politique et tenter son nettoyage ; ce parent était le dossier temporaire système. Ce nettoyage était trop large. Le test construit désormais un namespace privé UUID et ne retire que celui-ci. Le seul fichier de politique exact créé par ce test dans le dossier commun a été identifié puis retiré. Aucun magasin de production n'a été utilisé par le test. L'étendue des retraits éventuellement effectués par la tentative initiale de nettoyage temporaire n'est pas tracée.
+
+Point de diagnostic supplémentaire : certaines vues ont été publiées sans jamais recevoir de commande fournisseur. Leur conservation exige pourtant un reçu de commande ou un fence exact. Le cas 6f134 a bien son rapport d'espace, mais reste bloqué au contrôle worker ; une correction ne peut pas se limiter à modifier cleanup_done dans le maître. Les cas sans reçu de préparation ont également besoin d'une clôture persistante qui interdise une préparation tardive. Ce parcours reste à qualifier, sans déduire un arrêt depuis une simple absence de reçu.

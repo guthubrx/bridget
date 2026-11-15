@@ -25595,3 +25595,159 @@ fn spec281_maintenance_keeps_provider_configuration_before_registration() {
     drop(state);
     let _ = std::fs::remove_file(config.db_path);
 }
+
+#[test]
+fn spec295_update_status_names_blockers_without_mutation_or_business_content() {
+    use bridget_transport::protocol::{
+        MobileAdministrationRequest as A, MobileAdministrationResult as R, UpdateRequest as Q,
+    };
+    let (template, template_config, mut tasks) = control158_state_with_tasks("update295-template");
+    drop(template);
+    let _ = std::fs::remove_file(template_config.db_path);
+    let root = std::env::temp_dir().join(format!("bridget295-{}", Uuid::new_v4()));
+    crate::environment::ensure_private_directory(&root).unwrap();
+    let (st, config) = state_with_registered_agent_configured("update295", |config| {
+        config.db_path = root.join("state.db");
+        config.socket_path = root.join("socket");
+        config.log_path = root.join("log");
+    });
+    for task in &tasks {
+        st.delegation_store
+            .insert(
+                task,
+                &format!("fixture295-{}", task.task_id),
+                &serde_json::to_vec(&task.request).unwrap(),
+            )
+            .unwrap();
+    }
+    let state = Arc::new(Mutex::new(st));
+    let before;
+    {
+        let mut st = state.lock().unwrap();
+        tasks[1].state = "failed".into();
+        tasks[1].cleanup_done = false;
+        st.delegation_store.save(&tasks[1]).unwrap();
+        st.connection_roles
+            .insert("update295".into(), ConnectionRole::Client);
+        st.peer_uids.insert(
+            "update295".into(),
+            bridget_transport::fsutil::effective_uid(),
+        );
+        st.client_negotiations.insert(
+            "update295".into(),
+            NegotiatedClient {
+                version: CLIENT_CONTRACT_VERSION,
+                issuer_scope: crate::communication::issuer_scope("bridget-mobile-admin"),
+                capabilities: vec![ClientCapability::MobileAdministrationV1],
+            },
+        );
+        let receipt = crate::delegation::AutoAdmissionReceipt {
+            owner: tasks[1].owner.clone(),
+            request_id: "admission295".into(),
+            canonical: b"{\"private\":\"secret295\"}".to_vec(),
+            metadata: b"{}".to_vec(),
+            metadata_version: 1,
+            state: crate::delegation::AutoAdmissionState::Pending,
+            coordinator_epoch: st.coordinator_epoch,
+            revision: 0,
+            policy_revision: 1,
+            policy_digest: "a".repeat(64),
+            candidate_id: None,
+            delegate_canonical: None,
+            mode: None,
+            reason: None,
+            task_id: None,
+            refusal_code: None,
+            created_at: 1,
+            updated_at: 1,
+        };
+        st.delegation_store
+            .insert_auto_admission_receipt(&receipt)
+            .unwrap();
+        before = serde_json::to_value(st.delegation_store.tasks().unwrap()).unwrap();
+    }
+    assert!(
+        matches!(mobile_admin::handle("absent", A::Updates {request:Q::Status}, &state),
+        DaemonToWrapper::MobileAdministrationResult {result:R::Error {code}} if code=="human_principal_required")
+    );
+    let DaemonToWrapper::MobileAdministrationResult {
+        result: R::Updates { value },
+    } = mobile_admin::handle("update295", A::Updates { request: Q::Status }, &state)
+    else {
+        panic!("diagnostic attendu")
+    };
+    let activity = &value["activation"];
+    assert_eq!(activity["status"], "blocked");
+    let blocks = activity["blockers"].as_array().unwrap();
+    let pending = blocks
+        .iter()
+        .find(|b| b["code"] == "native_tasks_pending")
+        .unwrap();
+    assert_eq!(pending["count"], 3);
+    let rows = pending["tasks"].as_array().unwrap();
+    assert!(!rows.iter().any(|t| t["task_id"] == tasks[0].task_id));
+    assert_eq!(
+        rows.iter()
+            .find(|t| t["task_id"] == tasks[1].task_id)
+            .unwrap()["state"],
+        "failed"
+    );
+    assert!(rows.iter().any(|t| t["state"] == "queued"));
+    let admission = blocks
+        .iter()
+        .find(|b| b["code"] == "admissions_pending")
+        .unwrap();
+    assert_eq!(admission["count"], 1);
+    assert_eq!(admission["admissions"][0]["request_id"], "admission295");
+    assert!(
+        admission["next_action"]
+            .as_str()
+            .unwrap()
+            .contains("kind=admission")
+    );
+    let text = value.to_string();
+    for private in [
+        "secret295",
+        "mission privée158",
+        "fixture-control158",
+        "canonical",
+        "metadata",
+    ] {
+        assert!(!text.contains(private), "{private}");
+    }
+    assert!(
+        matches!(mobile_admin::handle("update295", A::Updates {request:Q::Prepare {token:Uuid::new_v4().to_string()}}, &state),
+        DaemonToWrapper::MobileAdministrationResult {result:R::Error {code}} if code=="update_missions_active_or_unconfirmed")
+    );
+    let st = state.lock().unwrap();
+    assert_eq!(
+        serde_json::to_value(st.delegation_store.tasks().unwrap()).unwrap(),
+        before
+    );
+    assert_eq!(
+        st.delegation_store
+            .auto_admission_receipt(&tasks[1].owner, "admission295")
+            .unwrap()
+            .unwrap()
+            .state,
+        crate::delegation::AutoAdmissionState::Pending
+    );
+    drop(st);
+    let policy_path = config.db_path.parent().unwrap().join("updates.json");
+    std::fs::write(
+        &policy_path,
+        serde_json::to_vec(&serde_json::json!({
+            "hosts":{"fixture":{"installed":"0.8.52", "detail":"x".repeat(63*1024)}}
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&policy_path, std::fs::Permissions::from_mode(0o600)).unwrap();
+    assert!(
+        matches!(mobile_admin::handle("update295", A::Updates {request:Q::Status}, &state),
+        DaemonToWrapper::MobileAdministrationResult {result:R::Error {code}} if code=="update_status_too_large")
+    );
+    drop(state);
+    std::fs::remove_dir_all(&root).unwrap();
+}

@@ -81,3 +81,29 @@ de première installation ; il ne peut pas remplacer un contrôleur récent.
 Ce contrôle ne vérifie ni les comptes fournisseurs ni l'accès aux modèles.
 
 Un lecteur installé sans le port de validation bloque cette installation manuelle. Employer la mise à jour native pour qualifier le lecteur initial ; ne pas remplacer le programme à la main. Le cache de sources de l’installateur peut déjà avoir été téléchargé ; aucun fournisseur, profil ou réglage de service n’a encore changé au refus de formats.
+
+## Refus d'activation et clôtures anciennes
+
+`bridget updates status` expose `activation` sur le port local d'administration.
+Ce relevé distingue les tâches encore actives, les tâches terminales dont le
+nettoyage n'est pas confirmé, les admissions en attente et les opérations en vol.
+Les compteurs sont complets ; les listes de tâches et admissions sont limitées
+à seize éléments chacune (`truncated` indique les éléments supplémentaires).
+Les détails ne sont pas ajoutés à la projection mobile fédérée.
+
+Pour une admission abandonnée avant création de tâche, son propriétaire utilise
+`bridget_cancel` avec `kind="admission"` et `id=request_id`. Si une tâche existe,
+le reçu rend son identifiant : utiliser le parcours de cette tâche. Pour une
+clôture non confirmée, vérifier le reçu worker, l'arrêt physique et la conservation
+avant de régulariser. Ne pas modifier directement la base ni déduire l'arrêt
+d'une absence de route. Une mission encore active reste protégée.
+
+`idle_observed` est une observation, pas une autorisation de bascule. La commande
+`prepare` reprend les mêmes contrôles sous le verrou du maître et réserve le bail.
+`unknown` signifie que la lecture des états a échoué ; ce n'est pas un état libre.
+Le contrôle du connecteur T3 et son autorisation d'arrêt restent distincts.
+
+Si la réponse complète dépasse 64 Kio, `update_status_too_large` refuse la
+projection avant son transport. Faire inspecter les rapports d'hôtes par le
+mainteneur et corriger leur volume ; ce code n'autorise ni suppression de tâches,
+ni activation forcée. Les données conservées restent inchangées.
