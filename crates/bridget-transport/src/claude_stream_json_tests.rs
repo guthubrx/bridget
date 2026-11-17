@@ -2409,3 +2409,71 @@ fn spec168_objets_json_sont_bornes_avant_leur_decodage_detaille() {
         Err(ClaudeIsolatedDecisionError::OutputTooLarge)
     );
 }
+
+#[test]
+fn spec296_warning_does_not_complete_or_restart_turn() {
+    let (sender, receiver) = mpsc::channel();
+    let terminal = wait_for_turn(&receiver, Duration::from_secs(1), Duration::ZERO, || {
+        // Le canal est encore ouvert. Le même tour peut finir après l’avis.
+        sender.send(ManagedTerminal::Completed).unwrap();
+    })
+    .unwrap();
+    assert!(matches!(terminal, ManagedTerminal::Completed));
+    let (sender, receiver) = mpsc::channel();
+    sender.send(ManagedTerminal::Cancelled).unwrap();
+    assert!(matches!(
+        wait_for_turn(
+            &receiver,
+            Duration::from_secs(1),
+            Duration::ZERO,
+            || panic!("aucun avertissement après une fin déjà reçue")
+        ),
+        Ok(ManagedTerminal::Cancelled)
+    ));
+    drop(sender);
+    assert!(matches!(
+        wait_for_turn(
+            &receiver,
+            Duration::from_secs(1),
+            Duration::ZERO,
+            || panic!("une déconnexion n’est pas une attente")
+        ),
+        Err(mpsc::RecvTimeoutError::Disconnected)
+    ));
+}
+
+#[test]
+fn spec296_silent_client_timeout_is_not_business_progress() {
+    let mut configured = options();
+    configured.args[1] = "IFS= read -r line; IFS= read -r line".into();
+    configured.notify_timeout_secs = 1;
+    let mut transport = ClaudeStreamJsonTransport::spawn(configured).unwrap();
+    transport.deliver(&message("silent296")).unwrap();
+    let until = Instant::now() + Duration::from_secs(5);
+    let mut dispatched = false;
+    loop {
+        let mut failure = None;
+        for event in transport.drain_events() {
+            match event.kind {
+                ManagedEventKind::PromptDispatched { .. } => dispatched = true,
+                ManagedEventKind::DeliveryRejected { reason, .. } => failure = Some(reason),
+                ManagedEventKind::TurnFinished { .. } => panic!("aucun résultat reçu"),
+                _ => {}
+            }
+        }
+        if let Some(reason) = failure {
+            assert!(dispatched);
+            assert_eq!(
+                reason,
+                "échéance du tour dépassée:provider_output_unobserved"
+            );
+            break;
+        }
+        assert!(
+            Instant::now() < until,
+            "échéance du client silencieux perdue"
+        );
+        thread::sleep(Duration::from_millis(10));
+    }
+    transport.stop();
+}

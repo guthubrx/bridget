@@ -162,6 +162,8 @@ impl BackgroundTasks {
 }
 
 struct ActiveTurn {
+    /// Une trame JSON du client, pas une preuve de travail ou de réponse métier.
+    client_frame_observed: bool,
     message_id: String,
     completion: mpsc::Sender<ManagedTerminal>,
     response: String,
@@ -1216,6 +1218,7 @@ fn spawn_worker(
             }
             let (completion, receiver) = mpsc::channel();
             queue.0.lock().recover_poison().active = Some(ActiveTurn {
+                client_frame_observed: false,
                 message_id: message.id.clone(),
                 completion,
                 response: String::new(),
@@ -1272,11 +1275,24 @@ fn spawn_worker(
                     let remaining = deadline
                         .duration_since(SystemTime::now())
                         .unwrap_or(Duration::ZERO);
-                    receiver
-                        .recv_timeout(remaining)
-                        .unwrap_or(ManagedTerminal::Failed {
-                            detail: "échéance du tour dépassée".to_string(),
-                        })
+                    wait_for_turn(&receiver, remaining, Duration::from_secs(30), || {
+                        let silent = queue.0.lock().recover_poison().active.as_ref()
+                            .is_some_and(|active| !active.client_frame_observed);
+                        if silent {
+                            record_or_terminal(&journal, &events, "diagnostic", Some(&message.id),
+                                json!({"code":"provider_output_unobserved", "stage":"stdin_written",
+                                    "message":"Aucune trame JSON du programme observée après 30 secondes. La consigne est écrite dans son entrée locale ; sa réception par le fournisseur et le début du travail ne sont pas attestés.",
+                                    "action":"Consultez le diagnostic du lanceur et du client pour cette exécution. La mission reste en attente jusqu’à son échéance ; ne créez pas de doublon et ne déduisez pas un quota."}));
+                        }
+                    }).unwrap_or_else(|error| {
+                        let silent = queue.0.lock().recover_poison().active.as_ref()
+                            .is_some_and(|active| !active.client_frame_observed);
+                        ManagedTerminal::Failed { detail: match error {
+                            mpsc::RecvTimeoutError::Disconnected => "canal de fin du tour fermé sans résultat".into(),
+                            mpsc::RecvTimeoutError::Timeout if silent => "échéance du tour dépassée:provider_output_unobserved".into(),
+                            mpsc::RecvTimeoutError::Timeout => "échéance du tour dépassée".into(),
+                        }}
+                    })
                 }
                 Err(error) => ManagedTerminal::Failed {
                     detail: error.to_string(),
@@ -1334,6 +1350,23 @@ fn spawn_worker(
             busy.store(false, Ordering::SeqCst);
         }
     })
+}
+
+/// Un seul avertissement, sans changer l’échéance ni produire de fin de tour.
+fn wait_for_turn(
+    receiver: &mpsc::Receiver<ManagedTerminal>,
+    remaining: Duration,
+    warning_after: Duration,
+    warn: impl FnOnce(),
+) -> Result<ManagedTerminal, mpsc::RecvTimeoutError> {
+    let started = Instant::now();
+    match receiver.recv_timeout(remaining.min(warning_after)) {
+        Err(mpsc::RecvTimeoutError::Timeout) if remaining > warning_after => {
+            warn();
+            receiver.recv_timeout(remaining.saturating_sub(started.elapsed()))
+        }
+        result => result,
+    }
 }
 
 fn private_prompt(instructions: Option<&str>, body: &str) -> String {
@@ -1669,6 +1702,26 @@ fn spawn_reader(
                     continue;
                 }
             };
+            let first_frame_message = {
+                let mut state = queue.0.lock().recover_poison();
+                state.active.as_mut().and_then(|active| {
+                    if active.client_frame_observed {
+                        return None;
+                    }
+                    active.client_frame_observed = true;
+                    Some(active.message_id.clone())
+                })
+            };
+            if let Some(message_id) = first_frame_message {
+                record_or_terminal(
+                    &journal,
+                    &events,
+                    "diagnostic",
+                    Some(&message_id),
+                    json!({"code":"client_frame_observed", "stage":"client_output",
+                        "message":"Première trame JSON du client observée pendant ce tour. Ce fait ne prouve ni lecture de document ni résultat métier."}),
+                );
+            }
             if value.get("type").and_then(Value::as_str) == Some("system") {
                 let mode = value
                     .get("permissionMode")

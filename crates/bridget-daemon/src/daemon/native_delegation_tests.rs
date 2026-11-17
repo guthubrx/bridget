@@ -27078,6 +27078,21 @@ fn spec207_timeout_reports_effective_duration_without_changing_task() {
         );
         assert_eq!(before, serde_json::to_vec(&task).unwrap());
     }
+    task.error = Some("échéance du tour dépassée:provider_output_unobserved".into());
+    let view = task_view(&task, None, true);
+    assert!(
+        view["error_message"]
+            .as_str()
+            .unwrap()
+            .contains("sans aucune trame")
+    );
+    assert!(
+        view["error_diagnostic"]
+            .as_str()
+            .unwrap()
+            .contains("Augmenter le délai seul")
+    );
+    assert_eq!(view["mission_reply_timeout_secs"], 14400);
     cleanup(&config);
 }
 
@@ -27115,16 +27130,28 @@ fn spec221_continuable_status_uses_only_fresh_correlated_worker_read() {
             before,
             serde_json::to_vec(&st.delegation_store.get(&task.task_id).unwrap().unwrap()).unwrap()
         );
+        let mut failed = task.clone();
+        failed.state = "failed".into();
+        failed.error = Some("remote_start_failed".into());
+        failed.mission_issued_at = None;
+        st.delegation_store.save(&failed).unwrap();
         drop(st);
+        let failed_view = status_with_worker_observation("conn-1", &request, None, None, None, &state).unwrap();
+        assert_eq!(failed_view["startup_check"]["reason"], "unknown_execution");
+        assert_eq!(failed_view["startup_check"]["stage"], "command_identity");
+        assert!(!failed_view["continuable"].as_bool().unwrap());
         drop(state);
         cleanup(&config);
     }
-    for (capable, phase, change_epoch) in [
-        (false, WorkerCommandPhase::Terminal, false),
-        (true, WorkerCommandPhase::Terminal, false),
-        (true, WorkerCommandPhase::Refused, false),
-        (true, WorkerCommandPhase::Released, false),
-        (true, WorkerCommandPhase::Released, true),
+    for (capable, phase, change_epoch, startup_failed) in [
+        (false, WorkerCommandPhase::Terminal, false, false),
+        (true, WorkerCommandPhase::Terminal, false, false),
+        (true, WorkerCommandPhase::Refused, false, false),
+        (true, WorkerCommandPhase::Released, false, false),
+        (true, WorkerCommandPhase::Released, true, false),
+        (true, WorkerCommandPhase::Terminal, false, true),
+        (true, WorkerCommandPhase::Terminal, true, true),
+        (false, WorkerCommandPhase::Terminal, false, true),
     ] {
         let (mut st, config, mut task, _) = remote162_capture_fixture_guarded(true);
         let root = st.fixture_root.as_ref().unwrap().0.clone();
@@ -27135,14 +27162,26 @@ fn spec221_continuable_status_uses_only_fresh_correlated_worker_read() {
             }}})).unwrap()).unwrap();
         std::fs::set_permissions(&registry, std::fs::Permissions::from_mode(0o600)).unwrap();
         st.registry = AgentRegistry::load_from_path(registry).unwrap();
-        task.state = "result_available".into();
+        task.state = if startup_failed {
+            "failed"
+        } else {
+            "result_available"
+        }
+        .into();
+        if startup_failed {
+            task.error = Some("remote_start_failed".into());
+            task.mission_issued_at = None;
+            st.managed_terminal_instances
+                .insert(task.child_instance.clone().unwrap());
+        }
         task.guarded = true;
         task.result_sent = true;
         task.guard_released = false;
         task.idle_deadline_at = Some(unix_timestamp() + 120);
         st.delegation_store.save(&task).unwrap();
         let task = st.delegation_store.get(&task.task_id).unwrap().unwrap();
-        assert!(task.guarded && task.continuable_at(unix_timestamp()));
+        assert!(task.guarded);
+        assert_eq!(task.continuable_at(unix_timestamp()), !startup_failed);
         let before = serde_json::to_vec(&task).unwrap();
         let worker = remote_worker_identity(task.remote_placement.as_ref().unwrap());
         let (socket, peer) = std::os::unix::net::UnixStream::pair().unwrap();
@@ -27204,7 +27243,8 @@ fn spec221_continuable_status_uses_only_fresh_correlated_worker_read() {
                 reply
                     .send(WorkerResponseOperation::Observation {
                         observation: WorkerObservation {
-                            startup_failure: None,
+                            startup_failure: startup_failed
+                                .then_some(WorkerStartupFailure::NegotiationFailed),
                             workspace: None,
                             permission_digest: None,
                             phase,
@@ -27225,7 +27265,20 @@ fn spec221_continuable_status_uses_only_fresh_correlated_worker_read() {
             listener.join().unwrap();
         }
         assert_eq!(view["continuable"], false);
-        if change_epoch {
+        if startup_failed {
+            assert_eq!(view["status"], "failed");
+            if change_epoch {
+                assert_eq!(view["startup_check"]["reason"], "observation_changed");
+            } else if !capable {
+                assert_eq!(view["startup_check"]["reason"], "capability_required");
+            } else {
+                assert_eq!(
+                    view["startup_check"]["startup_failure"],
+                    "negotiation_failed"
+                );
+                assert_eq!(view["startup_check"]["phase"], "terminal");
+            }
+        } else if change_epoch {
             assert!(view["continuation"]["worker_check"].is_null());
         } else if !capable {
             assert_eq!(

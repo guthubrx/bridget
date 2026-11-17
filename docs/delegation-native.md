@@ -1425,3 +1425,23 @@ Sans `kind`, ou avec `kind="message"`, le comportement historique reste celui
 d’une demande de message suivie. Aucun aiguillage automatique entre ces portées.
 L’opération d’admission exige `admission_cancel_v1` ; un ancien maître est refusé
 avant transmission. Ni le rejeu d’une admission ni une clé neuve ne l’annulent.
+
+### Diagnostic d’un tour silencieux et d’un démarrage refusé (296)
+
+`prompt_dispatched` atteste une écriture dans l’entrée locale du programme, pas
+une réception par le fournisseur ni le début de l’analyse. Dans le transport
+stream-json, `diagnostic/client_frame_observed` marque la première trame JSON
+pendant le tour. Après 30 secondes sans trame, le diagnostic
+`provider_output_unobserved` indique l’attente sans arrêter la mission. Le délai
+initial reste inchangé. Une échéance sans trame conserve ce suffixe dans l’erreur
+et le statut explique le contrôle du lanceur et du client. Augmenter le délai seul
+ne résout pas une absence de retour dont la cause n’est pas établie.
+
+Après `failed/remote_start_failed` avant remise de mission, le propriétaire peut
+relire `bridget_task_status` avec le même task_id. Le contrôle natif
+`ExecutionStatus` relit le reçu de la même commande, instance et génération.
+`startup_check` expose le constat fermé ou le refus du contrôle. Ce contrôle
+ne démarre aucun fournisseur et ne rend pas la tâche continuable.
+`negotiation_failed` ne nomme pas l’étape exacte : le responsable doit consulter
+le stderr de cette identité pour distinguer, par exemple, un délai sur
+`thread/start`. Un changement d’époque pendant la lecture invalide l’observation.

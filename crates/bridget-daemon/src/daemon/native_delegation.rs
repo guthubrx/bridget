@@ -4878,6 +4878,21 @@ mod incident240_tests {
             assert!(!message.contains("a refusé les droits"));
         }
         assert!(remote_start_error_message("remote_start_failed:unknown with secret").is_none());
+        assert!(
+            remote_start_error_message("remote_start_failed")
+                .unwrap()
+                .contains("startup_check")
+        );
+        assert!(
+            remote_start_error_message("remote_start_failed:negotiation_failed:exit=1")
+                .unwrap()
+                .contains("thread/start")
+        );
+        assert!(
+            remote_start_error_message("remote_start_failed:negotiation_failed:exit=secret")
+                .is_none()
+        );
+
         let explicit = failure("origin_proof_rejected:permissions_changed");
         assert_eq!(
             explicit["code"],
@@ -5847,6 +5862,23 @@ fn remote_spawn_quota_limit(error: &str) -> Option<usize> {
 }
 
 fn remote_start_error_message(error: &str) -> Option<&'static str> {
+    if error == "remote_start_failed" {
+        return Some(
+            "Relisez le statut de cette même tâche pour obtenir startup_check. La commande a échoué avant la remise de mission ; son diagnostic worker n’a pas encore été confirmé. Conservez tâche, clé et fichiers. Cette lecture ne relance rien ; les autres travaux autorisés suivent leur propre état.",
+        );
+    }
+    if let Some(detail) = error.strip_prefix("remote_start_failed:") {
+        let code = match detail.split_once(":exit=") {
+            Some((code, exit)) if exit.parse::<i32>().is_ok() => code,
+            None => detail,
+            _ => "",
+        };
+        if code == "negotiation_failed" {
+            return Some(
+                "Faites lire le diagnostic de démarrage du worker corrélé à cette tâche, commande, instance et génération. La négociation du client a échoué avant la disponibilité native ; le détail exact, notamment une éventuelle échéance thread/start, reste à vérifier dans ce diagnostic. Ce constat ne prouve ni quota ni manque de capacité. Conservez tâche, clé et fichiers ; aucun remplacement avant confirmation de l’arrêt. Les autres travaux autorisés suivent leur propre état.",
+            );
+        }
+    }
     if remote_spawn_quota_limit(error).is_some() {
         return Some("La limite interne du nombre d’agents de la flotte a refusé ce lancement avant tout démarrage. Ce refus ne mesure ni le CPU ni la mémoire de la machine cible.");
     }
@@ -6351,7 +6383,12 @@ fn task_view(task: &Task, phase: Option<&str>, full: bool) -> Value {
     if task.state == "failed"
         && matches!(
             task.error.as_deref(),
-            Some("mission_reply_timeout" | "échéance Claude dépassée" | "échéance du tour dépassée")
+            Some(
+                "mission_reply_timeout"
+                    | "échéance Claude dépassée"
+                    | "échéance du tour dépassée"
+                    | "échéance du tour dépassée:provider_output_unobserved"
+            )
         )
     {
         let duration = task.reply_timeout.unwrap_or(MISSION_REPLY_LIMIT_SECS);
@@ -6359,9 +6396,22 @@ fn task_view(task: &Task, phase: Option<&str>, full: bool) -> Value {
         view["error_message"] = json!(format!(
             "La durée maximale de cette mission ({duration} secondes) est dépassée. La tâche est terminée ; ses effets et ses fichiers sont conservés."
         ));
+        if task.error.as_deref() == Some("échéance du tour dépassée:provider_output_unobserved") {
+            view["error_message"] = json!(
+                "La durée de cette mission est dépassée sans aucune trame JSON du programme observée pendant le tour. La consigne a été écrite localement ; sa réception par le fournisseur et le début du travail ne sont pas attestés."
+            );
+            view["error_diagnostic"] = json!(
+                "Corrélez tâche, mission, instance et génération avec les diagnostics du lanceur et du client. La cause reste inconnue : lancement bloqué, initialisation du client et attente fournisseur ne sont pas distingués par cette absence. Augmenter le délai seul ne corrige pas ce défaut. Les autres tâches suivent leur propre état."
+            );
+        }
         view["future_mission_duration"] = json!(
             "Pour une future admission longue, fixer reply_timeout avant le premier appel, par exemple 14400 pour 4 h (maximum 86400, sous la limite du parent). Le défaut est 3600, y compris development. Ne pas modifier la clé ou l’enveloppe de cette tâche terminée ; suivre les contrôles d’arrêt et de dossier indiqués ci-dessous."
         );
+        if task.error.as_deref() == Some("échéance du tour dépassée:provider_output_unobserved") {
+            view["future_mission_duration"] = json!(
+                "Diagnostiquez d’abord l’absence de retour du programme pour cette exécution. Une durée plus longue n’établit pas que le fournisseur reçoit la consigne ; ne relancez pas cette mission pour tester le lien."
+            );
+        }
         view["error_recovery"] = if task.cleanup_done && workspace_report_ready(task) {
             json!(
                 "bridget_task_continue ne reprend pas une tâche failed ; rejouer sa request_id ne la redémarre pas. Conservez les commits, le worktree et les sorties. Vérifiez aussi l’arrêt des calculs métier détachés. Une nouvelle mission de reprise, avec une nouvelle request_id, doit réutiliser ces sorties et ne faire que le travail restant."
@@ -7617,6 +7667,13 @@ fn foreign_catalogue177(
     Ok(Some(result))
 }
 
+fn needs_startup_diagnostic(task: &Task) -> bool {
+    task.state == "failed"
+        && task.error.as_deref() == Some("remote_start_failed")
+        && task.mission_issued_at.is_none()
+        && task.remote_placement.is_some()
+}
+
 fn status_with_worker_observation(
     conn: &str,
     request: &NativeDelegationRequest,
@@ -7638,18 +7695,27 @@ fn status_with_worker_observation(
             .delegation_store
             .get(task_id)?
             .ok_or("task_unavailable")?;
-        if !task.continuable_at(unix_timestamp())
-            || task.remote_placement.is_none()
-            || task
-                .child_instance
-                .as_ref()
-                .is_some_and(|id| st.managed_terminal_instances.contains(id))
+        // Une clôture logique peut précéder l’observation terminale du worker.
+        // Relire son reçu par ExecutionStatus, jamais par Start/Reconcile/Continue.
+        if !needs_startup_diagnostic(&task)
+            && (!task.continuable_at(unix_timestamp())
+                || task.remote_placement.is_none()
+                || task
+                    .child_instance
+                    .as_ref()
+                    .is_some_and(|id| st.managed_terminal_instances.contains(id)))
         {
             return Ok(initial);
         }
         let command = match remote_command_identity(&st, &task) {
             Ok(v) => v,
             Err(reason) => {
+                if needs_startup_diagnostic(&task) {
+                    initial["startup_check"] = json!({"status":"unavailable",
+                        "stage":"command_identity", "reason":reason,
+                        "next_action":"Faites vérifier le reçu et l’identité de commande de cette tâche. Aucun échange worker n’a été envoyé ; conservez tâche, clé et fichiers sans relancer la mission."});
+                    return Ok(initial);
+                }
                 initial["continuation"]["worker_check"] = json!({"status":"unavailable",
                     "stage":"command_identity","reason":reason});
                 initial["continuation"]["next_action"] = json!(
@@ -7690,6 +7756,27 @@ fn status_with_worker_observation(
             .map(|v| v.epoch.clone())
             != epoch
     {
+        if needs_startup_diagnostic(&task) {
+            view["startup_check"] = json!({"status":"unavailable","reason":"observation_changed",
+                "next_action":"L’identité ou la liaison a changé pendant la lecture. Le diagnostic reçu n’est pas applicable ; conservez la tâche et relisez son statut après stabilisation du lien, sans nouvelle mission."});
+        }
+        return Ok(view);
+    }
+    if needs_startup_diagnostic(&task) {
+        // L’autorité, le tour, l’instance et l’époque viennent d’être revérifiés.
+        // Le statut reste failed, sans réouverture ni nouveau lancement.
+        view["startup_check"] = match result {
+            Ok(WorkerResponseOperation::Observation { observation }) => {
+                json!({"status":"observed", "phase":observation.phase,
+                    "startup_failure":observation.startup_failure, "exit_code":observation.exit_code,
+                    "command_id":command.command_id,"instance_id":command.instance_id,
+                    "generation":command.generation,"observed_at":observation.observed_at,
+                    "next_action":"Conservez cette tâche et sa clé. Transmettez cette identité au responsable pour lire le diagnostic de démarrage corrélé du worker. negotiation_failed indique un échec avant la disponibilité native ; son étape précise, par exemple thread/start, doit être vérifiée dans ce diagnostic. Ne déduisez ni quota ni capacité fournisseur. Aucun remplacement avant confirmation de l’arrêt et conservation des fichiers."})
+            }
+            Err(reason) => json!({"status":"unavailable","reason":reason,
+                "next_action":"Le diagnostic worker de cette tâche reste indisponible. Conservez tâche et clé ; faites vérifier la liaison ou la capacité execution_status_v1. Ne relancez pas la mission pour obtenir une preuve."}),
+            _ => json!({"status":"unavailable","reason":"unexpected_response"}),
+        };
         return Ok(view);
     }
     match result {
