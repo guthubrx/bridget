@@ -318,8 +318,22 @@ fn execute_with_proof(
         "bridget_task_ack" => &["task_ids"],
         _ => return Err(ClientError::InvalidParams("outil natif inconnu".into())),
     };
-    if object.keys().any(|key| !allowed.contains(&key.as_str())) {
-        return Err(ClientError::InvalidParams("champ inconnu".into()));
+    if let Some(key) = object.keys().find(|key| !allowed.contains(&key.as_str())) {
+        // Nom technique borné uniquement, jamais la valeur ni un contenu libre.
+        let field = if !key.is_empty()
+            && key.len() <= 64
+            && key
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+        {
+            format!("`{key}`")
+        } else {
+            "(nom non affiché : attendu un identifiant technique de 1 à 64 caractères)".into()
+        };
+        return Err(ClientError::InvalidParams(format!(
+            "Corrigez le champ inconnu {field} pour {name}. Champs acceptés par ce client : {}. Cet appel n'a pas été envoyé. Conservez la clé et l'enveloppe ; vérifiez le sort de toute demande antérieure avant de modifier ses paramètres. Si le schéma chargé annonce ce champ, faites vérifier la version du client et son schéma par le mainteneur Bridget. Les autres travaux autorisés suivent leur propre état.",
+            allowed.join(", ")
+        )));
     }
     let string = |key: &str| -> Result<String, ClientError> {
         args.get(key)

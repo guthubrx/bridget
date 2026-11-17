@@ -1445,3 +1445,13 @@ ne démarre aucun fournisseur et ne rend pas la tâche continuable.
 `negotiation_failed` ne nomme pas l’étape exacte : le responsable doit consulter
 le stderr de cette identité pour distinguer, par exemple, un délai sur
 `thread/start`. Un changement d’époque pendant la lecture invalide l’observation.
+
+### Champ inconnu dans une demande native
+
+Le client refuse les propriétés hors schéma avant connexion. Le diagnostic nomme
+le premier champ technique rejeté et liste les champs acceptés par cette version,
+sans reproduire leurs valeurs. Les noms longs ou contenant des caractères de
+texte libre ne sont pas affichés. Conserver localement l’enveloppe et le refus.
+Vérifier toute demande antérieure avec la même clé avant de corriger les paramètres.
+Si le champ est annoncé par le schéma chargé, faire vérifier ce schéma et la
+version du client par le mainteneur ; ne pas changer de route ni de droits.

@@ -1,6 +1,93 @@
 use super::*;
 
 #[test]
+fn spec297_unknown_field_names_the_refusal_without_values() {
+    let identity = ResolvedIdentity {
+        name: "owner".into(),
+        instance_id: "instance".into(),
+        delegated_origin: None,
+    };
+    for key in ["timeout".to_owned(), "x".repeat(1000), "bad\nfield".into()] {
+        let mut args = json!({"request_id":"same297","task":"lecture","cwd":"/source"});
+        args[&key] = json!("private-value-never-echo");
+        let error = execute_with_proof(
+            &identity,
+            "bridget_auto_delegate",
+            &args,
+            Path::new("/missing/never-connected297.sock"),
+            None,
+        );
+        let Err(ClientError::InvalidParams(message)) = error else {
+            panic!("refus local attendu : {error:?}");
+        };
+        assert!(message.contains("champ inconnu"));
+        assert!(message.contains("bridget_auto_delegate"));
+        assert!(message.contains("reply_timeout"));
+        assert!(message.contains("Cet appel n'a pas été envoyé"));
+        assert!(message.contains("demande antérieure"));
+        assert!(!message.contains("private-value-never-echo"));
+        assert!(message.len() < 2048);
+        if key == "timeout" {
+            assert!(message.contains("`timeout`"));
+        } else {
+            assert!(!message.contains(&key));
+            assert!(message.contains("nom non affiché"));
+        }
+    }
+}
+
+#[test]
+fn spec297_published_auto_fields_reach_transport() {
+    let catalogue = crate::mcp::tools();
+    let schema = &catalogue
+        .iter()
+        .find(|t| t["name"] == "bridget_auto_delegate")
+        .unwrap()["inputSchema"];
+    let properties = schema["properties"].as_object().unwrap();
+    let mut args = json!({
+        "request_id":"same297", "task":"lecture", "cwd":"/source",
+        "quota_fallback_authorized":false, "machine_id":"fixture", "project_id":"fixture",
+        "engine":"codex", "connection_id":"fixture", "model":"fixture", "effort":"medium",
+        "workload":"general", "expected_base_commit":"a".repeat(40), "posture":"discovery",
+        "reply_timeout":600, "workspace":{"strategy":"shared"}, "child_requests":"deny",
+        "keep_alive_secs":60, "brief":{"objective":"lecture", "summary":"contexte"},
+        "urgent":false, "deliverable":"rapport"
+    });
+    if properties.contains_key("service_tier") {
+        args["service_tier"] = json!("fixture");
+    }
+    assert_eq!(
+        properties.keys().collect::<std::collections::BTreeSet<_>>(),
+        args.as_object()
+            .unwrap()
+            .keys()
+            .collect::<std::collections::BTreeSet<_>>()
+    );
+    let identity = ResolvedIdentity {
+        name: "owner".into(),
+        instance_id: "instance".into(),
+        delegated_origin: None,
+    };
+    let result = execute_with_proof(
+        &identity,
+        "bridget_auto_delegate",
+        &args,
+        Path::new("/missing/never-connected297.sock"),
+        None,
+    );
+    assert!(
+        matches!(
+            result,
+            Err(ClientError::Technical {
+                code: "daemon_unreachable",
+                ..
+            })
+        ),
+        "{result:?}"
+    );
+}
+
+#[test]
 fn spec246_quota_accord_mcp_explicite_et_sans_null() {
     let catalogue = tools(&json!({}));
     for name in ["bridget_auto_delegate", "bridget_delegate"] {
