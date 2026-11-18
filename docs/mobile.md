@@ -37,6 +37,11 @@ action. Read the receipt and current task state. A recorded answer is distinct
 from the agent acknowledging that answer. Missing history and disconnected
 machines remain visible; cached observations are not live state.
 
+In a conversation, one compact row shows answerable questions or answers that
+need checking. It opens **Needs attention**. Sent answers and unavailable
+questions remain in a collapsed section instead of taking space below messages.
+A reply sent as a regular message does not automatically close a structured form.
+
 ## Notifications and quiet hours
 
 Notifications are optional. Enable them in Android settings and accept the Android

@@ -264,6 +264,10 @@
  <string name="queue_changed">The message changed. Refresh the queue before trying again.</string>
  <string name="queue_interrupt_unavailable">The engine cannot accept this message now. It remains queued.</string>
     <string name="user_input_count">Questions (%1$d)</string>
+    <string name="user_input_awaiting_count">Questions to answer (%1$d)</string>
+    <string name="user_input_verify_count">Answers to check (%1$d)</string>
+    <string name="user_input_show_history">Answers and unavailable questions (%1$d)</string>
+    <string name="user_input_hide_history">Hide answers and unavailable questions (%1$d)</string>
     <string name="user_input_expand">Expand</string>
     <string name="user_input_position">Question %1$d of %2$d</string>
     <string name="user_input_free">Your answer or an additional note</string>

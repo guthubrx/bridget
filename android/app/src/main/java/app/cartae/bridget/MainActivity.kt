@@ -143,7 +143,8 @@ private fun MobileApp(vm: MobileViewModel, scanned: String?, onScan: () -> Unit,
         val id=vm.requestedQuestion
         if(id!=null && !vm.busy) {
             val source=vm.userInputs.firstOrNull {it.optString("request_id")==id}?.optJSONObject("source_agent")
-            if(source!=null) {vm.select(source);tab=0} else tab=1
+            if(source!=null) vm.select(source)
+            tab=1
             vm.questionOpened()
         }
     }
@@ -207,7 +208,8 @@ private fun MobileApp(vm: MobileViewModel, scanned: String?, onScan: () -> Unit,
                     !vm.associated -> Welcome(vm, onScan) { forget = true }
                     tab == 0 && vm.selected == null -> AgentDirectory(vm)
                     tab == 0 -> conversations.SaveableStateProvider(vm.selected!!.getString("agent_id")) {
-                        Conversation(vm,onPick,onPickPhoto,onExport,drawer.currentValue==DrawerValue.Closed && drawer.targetValue==DrawerValue.Closed) {scope.launch {drawer.open()}}
+                        Conversation(vm,onPick,onPickPhoto,onExport,drawer.currentValue==DrawerValue.Closed && drawer.targetValue==DrawerValue.Closed,
+                            onOpenQuestions={vm.readQuestions();tab=1}) {scope.launch {drawer.open()}}
                     }
                     tab == 1 -> Questions(vm)
                     tab == 2 -> Outbox(vm)
@@ -369,7 +371,7 @@ private fun ProjectAvatar(project: JSONObject?) {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun Conversation(vm: MobileViewModel, onPick: () -> Unit, onPickPhoto: () -> Unit, onExport: (JSONObject) -> Unit, exposed: Boolean, onOpenDrawer: () -> Unit) {
+private fun Conversation(vm: MobileViewModel, onPick: () -> Unit, onPickPhoto: () -> Unit, onExport: (JSONObject) -> Unit, exposed: Boolean, onOpenQuestions: () -> Unit, onOpenDrawer: () -> Unit) {
     val agent = vm.selected!!
     val dormant=agent.optJSONObject("tracking")?.optBoolean("dormant")==true
     val synchronize=agent.optJSONObject("tracking")?.optBoolean("synchronize",true) ?: true
@@ -530,7 +532,14 @@ private fun Conversation(vm: MobileViewModel, onPick: () -> Unit, onPickPhoto: (
                         Text("↓  " + stringResource(R.string.latest_messages))
                     }
                 }
-                vm.userInputs.filter {it.optString("owner")==id && it.optString("state") in setOf("pending","submitted","unknown")}.take(2).forEach {item -> UserInputCard(vm,item) {shown -> cover("question:"+item.getString("request_id"),shown)}}
+                val agentQuestions=vm.userInputs.filter {it.optString("owner")==id}
+                val awaiting=agentQuestions.count {inputNeedsAnswer(it.optString("state"),it.optBoolean("can_respond"),vm.userInputCommandState(it))}
+                val verifying=agentQuestions.count {inputNeedsVerification(it.optString("state"),vm.userInputCommandState(it))}
+                if(awaiting+verifying>0) TextButton(onClick=onOpenQuestions,modifier=Modifier.fillMaxWidth()) {
+                    Text(stringResource(if(awaiting>0) R.string.user_input_awaiting_count else R.string.user_input_verify_count,
+                        if(awaiting>0) awaiting else verifying),modifier=Modifier.weight(1f),maxLines=1,overflow=TextOverflow.Ellipsis)
+                    Text("›")
+                }
                 MessageQueue(vm,id,localEntries) {shown -> cover("queue-editor",shown)}
                 val prepared=localEntries.filter {it.optBoolean("compose_attachment")}
                 if(prepared.isNotEmpty()) Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),horizontalArrangement=Arrangement.spacedBy(8.dp)) {
@@ -765,13 +774,25 @@ private fun TaskPanel(vm: MobileViewModel, onInstruction: () -> Unit) {
 @Composable
 private fun Questions(vm: MobileViewModel) {
     var answer by remember { mutableStateOf<Pair<JSONObject, String>?>(null) }
+    var showHistory by rememberSaveable {mutableStateOf(false)}
+    val (active,history)=vm.userInputs.partition {
+        val command=vm.userInputCommandState(it)
+        inputNeedsAnswer(it.optString("state"),it.optBoolean("can_respond"),command) || inputNeedsVerification(it.optString("state"),command)
+    }
+    LaunchedEffect(vm.focusedQuestion,history.size) {
+        if(history.any {it.optString("request_id")==vm.focusedQuestion}) showHistory=true
+    }
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Text(stringResource(R.string.questions), style = MaterialTheme.typography.headlineSmall)
         Text(stringResource(R.string.question_semantics), style = MaterialTheme.typography.bodySmall)
         if(vm.userInputCapability=="unavailable") Text(stringResource(R.string.user_input_update_required),color=MaterialTheme.colorScheme.error)
         TextButton(onClick = { vm.readQuestions() }, enabled = !vm.busy) { Text(stringResource(R.string.refresh)) }
         LazyColumn(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            items(vm.userInputs,key={"input:"+it.getString("request_id")}) {item->UserInputCard(vm,item)}
+            items(active,key={"input:"+it.getString("request_id")}) {item->UserInputCard(vm,item)}
+            if(history.isNotEmpty()) item {TextButton(onClick={showHistory=!showHistory}) {
+                Text(stringResource(if(showHistory) R.string.user_input_hide_history else R.string.user_input_show_history,history.size))
+            }}
+            if(showHistory) items(history,key={"input:"+it.getString("request_id")}) {item->UserInputCard(vm,item)}
             if(vm.userInputCursor!=null) item {TextButton(onClick={vm.readUserInputs(true)},enabled=!vm.busy) {Text(stringResource(R.string.more))}}
             items(vm.questions, key = { it.getString("item_id") }) { item ->
                 Card(Modifier.fillMaxWidth()) {

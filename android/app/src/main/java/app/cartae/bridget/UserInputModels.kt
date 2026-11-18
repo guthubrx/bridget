@@ -5,6 +5,11 @@ data class InputOption(val label: String, val description: String = "", val valu
 data class InputQuestion(val id: String, val header: String, val question: String, val options: List<InputOption>,
     val multiple: Boolean = false, val custom: Boolean = true, val initial: String = "", val required: Boolean = true)
 data class InputAnswer(val selected: List<String> = emptyList(), val text: String = "")
+// Une réponse conservée/en cours d'envoi ne demande pas une seconde réponse.
+fun inputNeedsAnswer(state: String, canRespond: Boolean, commandState: String?): Boolean =
+    state == "pending" && canRespond && commandState !in setOf("local", "accepted", "outcome_unknown", "applied")
+fun inputNeedsVerification(state: String, commandState: String?): Boolean =
+    state == "unknown" || (state == "pending" && commandState == "outcome_unknown")
 fun inputAnswerValid(question: InputQuestion, answer: InputAnswer): Boolean {
     if (answer.text.toByteArray(Charsets.UTF_8).size > 10_000 || (!question.custom && answer.text.isNotEmpty())) return false
     if (question.required && answer.selected.isEmpty() && answer.text.isBlank()) return false

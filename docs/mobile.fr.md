@@ -39,6 +39,12 @@ confirmée. Lisez son reçu et l'état de la tâche. Une réponse enregistrée d
 de son acquittement par l'agent. Les lacunes d'historique et les machines déconnectées
 restent visibles. Une observation en cache n'est pas un état actuel.
 
+Dans une conversation, une seule ligne signale les questions encore répondables
+ou les réponses à vérifier. Elle ouvre **À traiter**. Les réponses déjà envoyées
+et les questions devenues indisponibles sont regroupées dans une section repliée.
+Elles ne prennent plus de place sous les messages. Une réponse à une question
+dans un message libre ne ferme pas automatiquement le formulaire structuré.
+
 ## Notifications et période silencieuse
 
 Les notifications sont facultatives. Activez-les dans les réglages et acceptez

@@ -264,6 +264,10 @@
  <string name="queue_changed">Le message a changé. Actualisez la file avant de réessayer.</string>
  <string name="queue_interrupt_unavailable">Le moteur ne peut pas prendre ce message maintenant. Il reste dans la file.</string>
     <string name="user_input_count">Questions (%1$d)</string>
+    <string name="user_input_awaiting_count">Questions à répondre (%1$d)</string>
+    <string name="user_input_verify_count">Réponses à vérifier (%1$d)</string>
+    <string name="user_input_show_history">Réponses et questions indisponibles (%1$d)</string>
+    <string name="user_input_hide_history">Masquer les réponses et questions indisponibles (%1$d)</string>
     <string name="user_input_expand">Agrandir</string>
     <string name="user_input_position">Question %1$d sur %2$d</string>
     <string name="user_input_free">Votre réponse ou un complément</string>

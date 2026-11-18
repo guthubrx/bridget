@@ -2,6 +2,22 @@ package app.cartae.bridget
 import org.junit.Assert.*
 import org.junit.Test
 class UserInputTest {
+    @Test fun onlyAnswerableUnsentQuestionsStayInTheConversation() {
+        assertTrue(inputNeedsAnswer("pending",true,null))
+        assertTrue(inputNeedsAnswer("pending",true,"rejected"))
+        assertFalse(inputNeedsAnswer("pending",false,null))
+        for(state in listOf("submitted","applied","resolved_elsewhere","expired","cancelled","closed","unknown"))
+            assertFalse(inputNeedsAnswer(state,true,null))
+        for(command in listOf("local","accepted","outcome_unknown","applied"))
+            assertFalse(inputNeedsAnswer("pending",true,command))
+    }
+    @Test fun unknownOutcomeStillNeedsVerificationWithoutResending() {
+        assertTrue(inputNeedsVerification("unknown",null))
+        assertTrue(inputNeedsVerification("pending","outcome_unknown"))
+        assertFalse(inputNeedsVerification("submitted","accepted"))
+        assertFalse(inputNeedsVerification("applied","outcome_unknown"))
+        assertFalse(inputNeedsVerification("resolved_elsewhere",null))
+    }
     private val question=InputQuestion("q","Choix","Lequel ?",listOf(InputOption("A","Premier"),InputOption("B","Second")))
     @Test fun singleMultipleFreeAndComplementStayDistinct() {
         assertFalse(inputAnswerValid(question,InputAnswer()))
