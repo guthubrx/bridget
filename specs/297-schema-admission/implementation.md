@@ -17,3 +17,24 @@ Activation : le blocage natif documenté du lot 296 subsiste à ce stade. Ne pas
 Qualification finale : six tests ciblés passent sur Mac et Linux. Release Mac et Debian 12 compilées ; le binaire Linux exige glibc 2.34 (plafond 2.36). Candidats 297-schema-admission-r1 copiés et hachages vérifiés sur monordinateur, sysle2 et cartae. Formats aller/retour compatibles sur les trois hôtes. Le tools/list du candidat Mac est lui aussi identique au schéma actif ; aucune modification du contrat de champs. Commit exécutable poussé : 642d8f4bdc3c1885a1bcd757597968b0024b62ba. Activation non effectuée, le blocage de maintenance natif reste ouvert.
 
 Ménage : aucun worktree ni branche ajouté. Le script installed a contrôlé le cache Mac, et retiré 4,90 Gio de debug inutilisé sur SYS. Le reste du nettoyage SYS a été conservé après process_record_unverifiable sur le processus 109486, descripteur 7 ; aucun processus arrêté. Les images candidates restent conservées jusqu’à l’activation et à la qualification du retour. Aucun dossier métier ni preuve historique supprimé.
+
+## Complément du 18 novembre : aide de recherche du ledger
+
+Signalement mcp-6033-6afda080-8 : `action=search` sans `query` est refusé avant
+transport, alors que la définition commune des trois actions laisse le champ
+facultatif. `LedgerSearchRequest.query` est une chaîne obligatoire sans valeur
+par défaut. La description de l’outil et celle du champ précisent désormais
+« obligatoire pour action=search », y compris avec `peer`, `since` ou `cursor`.
+Les actions `recent` et `read` conservent leur contrat. Aucun changement de
+validation, de droits ou de comportement de recherche.
+
+Vérification ciblée : extraction et analyse JSON de la définition avant/après ;
+seules les deux descriptions diffèrent, toutes les propriétés et contraintes
+restent identiques. `git diff --check` passe. Aucun nouveau test applicatif ni
+build pour ces deux textes. Le contrôle rustfmt direct signale des écarts
+préexistants hors des deux lignes changées, dont les blocs des sessions 276 et
+279 ; aucun reformatage global inclus dans ce complément.
+
+Ce complément n’est pas dans les candidats 297 déjà compilés. Sa compilation
+et son chargement restent à effectuer avec la prochaine livraison exécutable.
+Aucun arrêt de T3, aucune mission et aucune configuration modifiés.

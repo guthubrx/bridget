@@ -3055,7 +3055,7 @@ pub(crate) fn tools() -> Vec<Value> {
         }),
         json!({
             "name": "bridget_ledger",
-            "description": "Lire les messages et demandes Bridget récents (action absente ou recent), chercher dans ses propres échanges ou dans un fil dont on est membre (action=search : page bornée, reprise par cursor), ou relire un message exact par id+target (action=read : fragments de 16 Kio, empreinte SHA-256). answered atteste une réponse conservée, pas son injection dans un tour actif : un message ordinaire reste en file. Lire cette réponse par search/read si le travail en dépend ; tout guidage exige son contrôle explicite et ses droits habituels. La recherche est partielle et reprenable : arrêter sur has_more=false ou annoncer une recherche partielle ; ne pas parcourir automatiquement toute l'archive.",
+            "description": "Lire les messages et demandes Bridget récents (action absente ou recent), chercher dans ses propres échanges ou dans un fil dont on est membre (action=search : query obligatoire, même avec peer ou since ; page bornée, reprise par cursor), ou relire un message exact par id+target (action=read : fragments de 16 Kio, empreinte SHA-256). answered atteste une réponse conservée, pas son injection dans un tour actif : un message ordinaire reste en file. Lire cette réponse par search/read si le travail en dépend ; tout guidage exige son contrôle explicite et ses droits habituels. La recherche est partielle et reprenable : arrêter sur has_more=false ou annoncer une recherche partielle ; ne pas parcourir automatiquement toute l'archive.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -3068,7 +3068,7 @@ pub(crate) fn tools() -> Vec<Value> {
                         "description": "recent seulement. mine = demandes où l'appelant est participant (défaut) ; all = toutes les demandes ouvertes."
                     },
                     "source": { "enum": ["messages", "thread"], "default": "messages", "description": "search : messages de l'appelant ou fil 102 (thread_id requis)." },
-                    "query": { "type": "string", "minLength": 1, "maxLength": 256, "description": "search : 1 à 8 termes, tous requis (sous-chaînes, casse et accents précomposés repliés, guillemets littéraux)." },
+                    "query": { "type": "string", "minLength": 1, "maxLength": 256, "description": "Obligatoire pour action=search, même avec peer, since ou cursor. Fournir une chaîne non vide de 1 à 8 termes, tous recherchés (sous-chaînes, casse et accents précomposés repliés, guillemets littéraux). Ne pas fournir pour recent ou read." },
                     "author": { "type": "string", "description": "search : UUID de l'auteur." },
                     "peer": { "type": "string", "description": "search, source=messages : UUID du correspondant." },
                     "since": { "type": "integer", "minimum": 0, "description": "search : borne Unix inclusive (secondes)." },
