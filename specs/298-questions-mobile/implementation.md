@@ -48,3 +48,31 @@ numéro commun et a confirmé que la version 0.8.52 est déjà publique. Aucun a
 Android accessible pour installer ou vérifier la conservation de l’association.
 Le responsable de publication reçoit le commit et les contrôles ; l’activation et
 les preuves visuelles restent ouvertes. Aucun redémarrage de T3 ni de service.
+
+## Réservation de publication commune, 18 novembre 2026
+
+Version suivante réservée : **0.8.53**, code Android **8053**. Le contrôle du
+distant ne trouve ni tag v0.8.53 ni publication ultérieure à v0.8.52. Cette
+réservation dans le suivi ne constitue ni un tag, ni une publication, ni une
+activation. Le numéro des sources reste 0.8.52 jusqu'à la préparation du lot.
+
+Le mainteneur Bridget porte le numéro commun, les builds serveur, la signature,
+la publication et la coordination d'activation. Le responsable mobile298 garde
+la propriété des fichiers Android et de leur vérification visuelle. Base intégrée
+du mobile : 50cfb57b, comprenant aa6cb8ed. Le lot commun reprend main avec les
+corrections serveur en attente, dont 296, 297 et le complément ledger 3dd52a95.
+
+Parcours : figer le commit commun ; porter Cargo.toml et les trois paquets
+Bridget de Cargo.lock à 0.8.53 ; reconstruire Android depuis cette source avec
+Firebase et la lignée de signature existants, puis vérifier le code8053 contre
+l'APK officiel0.8.52. Le candidat8052 reste une preuve de contrôle, jamais un
+paquet à renommer en8053. Qualifier les binaires serveur issus du même commit
+par le script de build et le parcours natif de maintenance. Publier les actifs
+cohérents de v0.8.53 avec le garde Android, puis vérifier leurs téléchargements.
+Ne pas écraser les actifs0.8.52 et ne pas contourner les clôtures non confirmées.
+
+L'activation téléphone exige un appareil accessible, l'installation réelle et
+le contrôle du parcours questions avec preuves visuelles. Elle n'est pas attestée
+par les41tests JVM ni par la signature. Un arrêt de T3 reste soumis à une nouvelle
+confirmation de François. Aucun build ni envoi concurrent n'est lancé par cette
+réservation ; les blocages d'activation serveur et téléphone restent explicites.
