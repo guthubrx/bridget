@@ -21,4 +21,30 @@ Preuves incomplètes : avant fourni par l’utilisateur ; device_list ne trouve 
 appareil Android et indique un émulateur absent du SDK actif. Aucun après visuel
 ni installation sur le téléphone revendiqué. APK de contrôle non signé construit
 sous /home/moi/.cache/bridget-mobile298-build ; il n’est pas un paquet publié.
-La publication signée et l’activation restent à terminer par le parcours mobile.
+Les contrôles finaux testReleaseUnitTest et lintRelease réussissent aussi (23s),
+avec 41 tests release, zéro échec. Le build final conserve la configuration Firebase.
+
+Revue indépendante 8877e43f-b7aa-4a02-887d-8182324b4f1e lue et acquittée.
+Le cas local (réponse sauvegardée mais non envoyée) reste à vérifier dans le
+bandeau et la liste active. Le filtre submitted reste replié : cet état atteste
+l’enregistrement serveur, même si une commande locale avait une issue inconnue.
+Le callback de visibilité devenu inutile est retiré. Le focus de notification fait
+défiler la liste jusqu’à la question avant d’ouvrir le formulaire. La proposition
+de traiter les formulaires malformés est hors du correctif : le serveur valide
+déjà 1 à 16 questions et les champs requis ; aucune malformation observée ici.
+Les comportements de récupération de notification générique et de focus persistant
+préexistants restent hors lot, sans suppression de brouillon ni réponse.
+
+Un candidat privé a été aligné, signé avec la lignée existante et contrôlé par
+publish-android.py sans publication. Certificat de production inchangé, V3/API28.
+SHA256 : 586457c5861a86997ee290d953ab681057fab0b0c2d5f5e6ed36df93a49e89cb.
+Taille : 3 971 644 octets. Candidat conservé :
+/Users/moi/.cache/bridget-mobile298/bridget-android-298-candidate.apk.
+
+Publication et activation incomplètes : le mainteneur garde la coordination du
+numéro commun et a confirmé que la version 0.8.52 est déjà publique. Aucun actif
+0.8.52 n’a été remplacé. Le lot doit intégrer la prochaine publication ; le candidat
+8052 ne sera pas proposé comme mise à jour automatique de 8052. Aucun appareil
+Android accessible pour installer ou vérifier la conservation de l’association.
+Le responsable de publication reçoit le commit et les contrôles ; l’activation et
+les preuves visuelles restent ouvertes. Aucun redémarrage de T3 ni de service.

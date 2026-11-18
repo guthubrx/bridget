@@ -14,6 +14,8 @@ class UserInputTest {
     @Test fun unknownOutcomeStillNeedsVerificationWithoutResending() {
         assertTrue(inputNeedsVerification("unknown",null))
         assertTrue(inputNeedsVerification("pending","outcome_unknown"))
+        assertTrue(inputNeedsVerification("pending","local"))
+        assertFalse(inputNeedsVerification("submitted","outcome_unknown"))
         assertFalse(inputNeedsVerification("submitted","accepted"))
         assertFalse(inputNeedsVerification("applied","outcome_unknown"))
         assertFalse(inputNeedsVerification("resolved_elsewhere",null))

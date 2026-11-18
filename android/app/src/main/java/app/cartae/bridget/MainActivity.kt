@@ -775,6 +775,7 @@ private fun TaskPanel(vm: MobileViewModel, onInstruction: () -> Unit) {
 private fun Questions(vm: MobileViewModel) {
     var answer by remember { mutableStateOf<Pair<JSONObject, String>?>(null) }
     var showHistory by rememberSaveable {mutableStateOf(false)}
+    val questionList=rememberLazyListState()
     val (active,history)=vm.userInputs.partition {
         val command=vm.userInputCommandState(it)
         inputNeedsAnswer(it.optString("state"),it.optBoolean("can_respond"),command) || inputNeedsVerification(it.optString("state"),command)
@@ -782,12 +783,19 @@ private fun Questions(vm: MobileViewModel) {
     LaunchedEffect(vm.focusedQuestion,history.size) {
         if(history.any {it.optString("request_id")==vm.focusedQuestion}) showHistory=true
     }
+    LaunchedEffect(vm.focusedQuestion,active,history,showHistory) {
+        val focused=vm.focusedQuestion ?: return@LaunchedEffect
+        val activeIndex=active.indexOfFirst {it.optString("request_id")==focused}
+        val historyIndex=history.indexOfFirst {it.optString("request_id")==focused}
+        if(activeIndex>=0) questionList.scrollToItem(activeIndex)
+        else if(showHistory && historyIndex>=0) questionList.scrollToItem(active.size+1+historyIndex)
+    }
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Text(stringResource(R.string.questions), style = MaterialTheme.typography.headlineSmall)
         Text(stringResource(R.string.question_semantics), style = MaterialTheme.typography.bodySmall)
         if(vm.userInputCapability=="unavailable") Text(stringResource(R.string.user_input_update_required),color=MaterialTheme.colorScheme.error)
         TextButton(onClick = { vm.readQuestions() }, enabled = !vm.busy) { Text(stringResource(R.string.refresh)) }
-        LazyColumn(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        LazyColumn(state=questionList,verticalArrangement = Arrangement.spacedBy(12.dp)) {
             items(active,key={"input:"+it.getString("request_id")}) {item->UserInputCard(vm,item)}
             if(history.isNotEmpty()) item {TextButton(onClick={showHistory=!showHistory}) {
                 Text(stringResource(if(showHistory) R.string.user_input_hide_history else R.string.user_input_show_history,history.size))

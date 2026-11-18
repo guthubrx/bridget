@@ -9,7 +9,7 @@ data class InputAnswer(val selected: List<String> = emptyList(), val text: Strin
 fun inputNeedsAnswer(state: String, canRespond: Boolean, commandState: String?): Boolean =
     state == "pending" && canRespond && commandState !in setOf("local", "accepted", "outcome_unknown", "applied")
 fun inputNeedsVerification(state: String, commandState: String?): Boolean =
-    state == "unknown" || (state == "pending" && commandState == "outcome_unknown")
+    state == "unknown" || (state == "pending" && commandState in setOf("local", "outcome_unknown"))
 fun inputAnswerValid(question: InputQuestion, answer: InputAnswer): Boolean {
     if (answer.text.toByteArray(Charsets.UTF_8).size > 10_000 || (!question.custom && answer.text.isNotEmpty())) return false
     if (question.required && answer.selected.isEmpty() && answer.text.isBlank()) return false
