@@ -229,3 +229,24 @@ Quand le producteur fournit un événement structurel correspondant au tour cour
 l’en-tête affiche **Compactage du contexte…**. La fin de l’item ou du tour ferme ce
 texte. La perte de suivi ou le changement de fil le ferme aussi. Un ancien début
 mis en cache n’invente pas une activité en cours. Aucun pourcentage n’est estimé.
+
+
+## Retrouver ses conversations et leurs délégués (299)
+
+L’onglet Agents ouvre **Mes échanges** : les favoris précèdent les conversations
+ouvertes récemment sur ce téléphone. Cette liste mémorise jusqu’à 50 contacts
+récents dans les préférences chiffrées de l’association. Elle ne prétend pas
+recenser tous les échanges effectués depuis le bureau. À la première ouverture,
+la conversation déjà sélectionnée et les favoris restent retrouvables.
+
+**Tous** permet de choisir un autre interlocuteur. La recherche porte sur les
+noms, projets et machines chargés ; **Plus** charge la suite de l’annuaire.
+Les filtres de projet, de machine et d’activité se déplient avec **Filtres**.
+Un filtre appliqué reste signalé quand ce panneau est replié.
+
+**Délégués** sous un interlocuteur lit ses tâches natives et conserve seulement
+les relations parent-enfant attestées. Le titre du travail et son état servent
+à reconnaître chaque délégué. **Résultat** lit le résultat conservé, **Ouvrir**
+cherche sa conversation actuelle. Une route disparue n’efface pas le résultat.
+La filiation n’est jamais déduite d’un nom ou de l’absence d’un parent.
+Aucune de ces lectures ne lance, ne reprend ni n’annule une tâche.

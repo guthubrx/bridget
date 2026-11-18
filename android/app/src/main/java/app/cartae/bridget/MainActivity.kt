@@ -250,60 +250,69 @@ private fun Welcome(vm: MobileViewModel, onScan: () -> Unit, onForget: () -> Uni
 
 @Composable
 private fun AgentDirectory(vm: MobileViewModel, onSelected: () -> Unit = {}) {
-    var search by rememberSaveable {mutableStateOf("")}
+    var search by rememberSaveable { mutableStateOf("") }
+    var conversationsOnly by rememberSaveable { mutableStateOf(true) }
+    var filters by rememberSaveable { mutableStateOf(false) }
     var machineMenu by remember { mutableStateOf(false) }
     var projectMenu by remember { mutableStateOf(false) }
-    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-            Box {
-                OutlinedButton(onClick = { machineMenu = true }, enabled = !vm.busy) {
-                    Text(vm.machine.ifEmpty { stringResource(R.string.federation) })
-                }
-                DropdownMenu(expanded = machineMenu, onDismissRequest = { machineMenu = false }) {
-                    DropdownMenuItem(text = { Text(stringResource(R.string.federation)) },
-                        onClick = { machineMenu = false; vm.filter("") })
-                    vm.machines.forEach { machine -> DropdownMenuItem(
-                        text = { Text(machine.getString("machine") + " · " + stateText(machine.optString("availability"))) },
-                        onClick = { machineMenu = false; vm.filter(machine.getString("machine")) }) }
-                }
-            }
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Text(stringResource(R.string.directory_title), Modifier.weight(1f), style = MaterialTheme.typography.titleMedium)
             TextButton(onClick = { vm.refresh() }, enabled = !vm.busy) { Text(stringResource(R.string.refresh)) }
         }
-        Box {
-            OutlinedButton(onClick = { projectMenu = true }, enabled = !vm.busy, modifier = Modifier.fillMaxWidth()) {
-                Text(vm.project?.optString("root")?.let(::projectTitle) ?: stringResource(R.string.all_projects), maxLines = 1, overflow=TextOverflow.Ellipsis)
+        OutlinedTextField(value = search, onValueChange = { search = it.take(200) }, singleLine = true,
+            modifier = Modifier.fillMaxWidth(), label = { Text(stringResource(R.string.agents_search)) })
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+            FilterChip(selected = conversationsOnly, onClick = { conversationsOnly = true }, label = { Text(stringResource(R.string.my_conversations)) })
+            FilterChip(selected = !conversationsOnly, onClick = { conversationsOnly = false }, label = { Text(stringResource(R.string.agents_all)) })
+            TextButton(onClick = { filters = !filters }) { Text(stringResource(R.string.directory_filters)) }
+        }
+        Text(stringResource(if (conversationsOnly) R.string.recent_device_hint else R.string.directory_loaded_hint),
+            style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        if (filters) {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Box(Modifier.weight(1f)) {
+                    OutlinedButton(onClick = { projectMenu = true }, enabled = !vm.busy) {
+                        Text(vm.project?.optString("root")?.let(::projectTitle) ?: stringResource(R.string.all_projects), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    }
+                    DropdownMenu(expanded = projectMenu, onDismissRequest = { projectMenu = false }, modifier = Modifier.heightIn(max = 360.dp)) {
+                        DropdownMenuItem(text = { Text(stringResource(R.string.all_projects)) }, onClick = { projectMenu = false; vm.filter(vm.machine) })
+                        vm.projects.forEach { project -> DropdownMenuItem(text = { ProjectLabel(project, vm.projects) }, onClick = { projectMenu = false; vm.filter(vm.machine, project) }) }
+                    }
+                }
+                Box(Modifier.weight(1f)) {
+                    OutlinedButton(onClick = { machineMenu = true }, enabled = !vm.busy) { Text(vm.machine.ifEmpty { stringResource(R.string.federation) }, maxLines = 1) }
+                    DropdownMenu(expanded = machineMenu, onDismissRequest = { machineMenu = false }) {
+                        DropdownMenuItem(text = { Text(stringResource(R.string.federation)) }, onClick = { machineMenu = false; vm.filter("") })
+                        vm.machines.forEach { machine -> DropdownMenuItem(text = { Text(machine.getString("machine")) }, onClick = { machineMenu = false; vm.filter(machine.getString("machine")) }) }
+                    }
+                }
             }
-            DropdownMenu(expanded = projectMenu, onDismissRequest = { projectMenu = false }, modifier = Modifier.heightIn(max = 360.dp)) {
-                DropdownMenuItem(text = { Text(stringResource(R.string.all_projects)) },
-                    onClick = { projectMenu = false; vm.filter(vm.machine) })
-                vm.projects.forEach { project -> DropdownMenuItem(text = { ProjectLabel(project,vm.projects) },
-                    onClick = { projectMenu = false; vm.filter(vm.machine, project) }) }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                listOf("active" to R.string.agents_active, "dormant" to R.string.agents_dormant, "all" to R.string.agents_all).forEach { (value, label) ->
+                    FilterChip(selected = vm.agentVisibility == value, onClick = { vm.showAgents(value) }, label = { Text(stringResource(label)) })
+                }
             }
+        } else if (vm.machine.isNotBlank() || vm.project != null || vm.agentVisibility != "active") {
+            TextButton(onClick = { filters = true }) { Text(listOfNotNull(vm.machine.takeIf { it.isNotBlank() }, vm.project?.optString("root")?.let(::projectTitle), stringResource(R.string.directory_filters_active)).joinToString(" · "), maxLines = 1) }
         }
-        OutlinedTextField(value=search,onValueChange={search=it.take(200)},singleLine=true,modifier=Modifier.fillMaxWidth(),
-            label={Text(stringResource(R.string.agents_search))})
-        Row(horizontalArrangement=Arrangement.spacedBy(8.dp)) {
-            FilterChip(selected=!vm.favoritesOnly,onClick={if(vm.favoritesOnly) vm.toggleFavorites()},label={Text(stringResource(R.string.agents_all))})
-            FilterChip(selected=vm.favoritesOnly,onClick={if(!vm.favoritesOnly) vm.toggleFavorites()},label={Text(stringResource(R.string.favorites))})
-        }
-        Row(horizontalArrangement=Arrangement.spacedBy(8.dp)) {
-            FilterChip(selected=vm.agentVisibility=="active",onClick={vm.showAgents("active")},label={Text(stringResource(R.string.agents_active))})
-            FilterChip(selected=vm.agentVisibility=="dormant",onClick={vm.showAgents("dormant")},label={Text(stringResource(R.string.agents_dormant))})
-            FilterChip(selected=vm.agentVisibility=="all",onClick={vm.showAgents("all")},label={Text(stringResource(R.string.agents_all))})
-        }
-        if(!vm.fresh) Text(stringResource(R.string.attention_stale),style=MaterialTheme.typography.labelSmall)
-        val agents=vm.visibleAgents().filter {search.isBlank() || listOf(it.optString("display_name"),it.optString("machine"),it.optJSONObject("project")?.optString("root").orEmpty()).any {v->v.contains(search.trim(),ignoreCase=true)}}
+        if (!vm.fresh) Text(stringResource(R.string.attention_stale), style = MaterialTheme.typography.labelSmall)
+        val agents = vm.directoryAgents(conversationsOnly, search)
         val favoriteIds=remember(vm.favorites) {vm.favorites.map {it.getString("agent_id")}.toSet()}
         val projectPeers=remember(vm.projects) {vm.projects.map {ProjectIdentity(it.optString("host"),it.getString("root"))}}
         // O(p²) une fois par observation, p<=256 projets ; chaque ligne d'agent lit ensuite O(1).
         val qualifiers=remember(projectPeers) {projectPeers.associateWith {projectQualifier(it,projectPeers)}}
 
-        LazyColumn {
-            if (agents.isEmpty()) item { Text(stringResource(if(search.isNotBlank()) R.string.agents_search_empty else R.string.no_agents)) }
+        LazyColumn(Modifier.weight(1f)) {
+            if (agents.isEmpty()) item {
+                Text(stringResource(if (search.isNotBlank()) R.string.agents_search_empty else if (conversationsOnly) R.string.no_conversations_yet else R.string.no_agents))
+                if (conversationsOnly) TextButton(onClick = { conversationsOnly = false }) { Text(stringResource(R.string.browse_agents)) }
+            }
             items(agents, key = { it.getString("agent_id") }) { agent ->
                 val project=agent.optJSONObject("project")
                 val chosen=agent.getString("agent_id") in favoriteIds
                 val favoriteLabel=stringResource(if(chosen) R.string.unfavorite else R.string.favorite)
+                Column {
                 ListItem(
                     modifier=Modifier.fillMaxWidth().clickable(enabled=!vm.busy) { vm.select(agent); onSelected() },
                     headlineContent={ Text(agent.getString("display_name"),maxLines=1,overflow=TextOverflow.Ellipsis,style=MaterialTheme.typography.titleSmall) },
@@ -332,13 +341,51 @@ private fun AgentDirectory(vm: MobileViewModel, onSelected: () -> Unit = {}) {
                     } },
                     colors=ListItemDefaults.colors(containerColor=Color.Transparent),
                 )
-
+                TextButton(onClick = { vm.openDelegates(agent) }, enabled = !vm.busy, modifier = Modifier.padding(start = 56.dp)) {
+                    Text(stringResource(R.string.directory_delegates))
+                }
+                }
             }
-            if (!vm.favoritesOnly && vm.nextCursor != null) item {
+            if (!conversationsOnly && vm.nextCursor != null) item {
                 TextButton(onClick = { vm.refresh(true) }, enabled = !vm.busy) { Text(stringResource(R.string.more)) }
             }
         }
     }
+    vm.delegateOwner?.let { owner -> DelegateDirectory(vm, owner, onSelected) }
+}
+
+@Composable
+private fun DelegateDirectory(vm: MobileViewModel, owner: JSONObject, onSelected: () -> Unit) {
+    AlertDialog(onDismissRequest = { vm.closeDelegates() },
+        title = { Text(stringResource(R.string.delegates_of, owner.optString("display_name"))) },
+        text = {
+            LazyColumn(Modifier.fillMaxWidth().heightIn(max = 480.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                vm.error?.let { code -> item {
+                    Text(stringResource(errorText(code)), color = MaterialTheme.colorScheme.error)
+                    Text(stringResource(recoveryText(code)), style = MaterialTheme.typography.bodySmall)
+                } }
+                if (!vm.delegatesLoaded) item {
+                    Text(stringResource(if (vm.busy) R.string.delegates_loading else R.string.delegates_unavailable))
+                    if (!vm.busy) TextButton(onClick = { vm.readDelegates() }) { Text(stringResource(R.string.refresh)) }
+                } else if (vm.directoryDelegates.isEmpty()) item { Text(stringResource(if (vm.delegateCursor == null) R.string.no_delegates else R.string.no_delegates_page)) }
+                items(vm.directoryDelegates, key = { it.getString("task_id") }) { task ->
+                    Column {
+                        Text(task.optString("title"), style = MaterialTheme.typography.titleSmall)
+                        Text(stateText(task.optString("status")), style = MaterialTheme.typography.bodySmall)
+                        Row {
+                            TextButton(onClick = { vm.openDelegateConversation(task, onSelected) }, enabled = !vm.busy) { Text(stringResource(R.string.open_conversation)) }
+                            TextButton(onClick = { vm.showTask(task.getString("task_id")) }, enabled = !vm.busy) { Text(stringResource(R.string.delegate_result)) }
+                        }
+                        if (vm.taskDetail?.optString("task_id") == task.optString("task_id")) {
+                            SelectionContainer { Text(vm.taskResult.ifEmpty { stringResource(R.string.no_result) }) }
+                            if (vm.resultOffset != null) TextButton(onClick = { vm.showTask(task.getString("task_id"), true) }, enabled = !vm.busy) { Text(stringResource(R.string.more_result)) }
+                        }
+                    }
+                }
+                if (vm.delegateCursor != null) item { TextButton(onClick = { vm.readDelegates(true) }, enabled = !vm.busy) { Text(stringResource(R.string.more)) } }
+            }
+        },
+        confirmButton = { TextButton(onClick = { vm.closeDelegates() }) { Text(stringResource(R.string.dismiss)) } })
 }
 
 @Composable

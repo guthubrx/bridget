@@ -425,4 +425,20 @@
     <string name="sentinel_project_reason">Project preparation needs verification.</string>
     <string name="sentinel_message_reason">Reply delivery still needs confirmation.</string>
     <string name="sentinel_unknown_reason">The result of this check still needs confirmation.</string>
+    <string name="directory_title">Find a conversation</string>
+    <string name="my_conversations">My conversations</string>
+    <string name="directory_filters">Filters</string>
+    <string name="directory_filters_active">Filters active</string>
+    <string name="recent_device_hint">Favorites, then conversations recently opened on this phone.</string>
+    <string name="directory_loaded_hint">Search loaded agents. More expands the list.</string>
+    <string name="no_conversations_yet">Open a conversation from All. It will stay here with your favorites.</string>
+    <string name="browse_agents">Browse all agents</string>
+    <string name="directory_delegates">Delegates ›</string>
+    <string name="delegates_of">Delegates of %1$s</string>
+    <string name="delegates_loading">Reading tasks…</string>
+    <string name="delegates_unavailable">Lineage not read. Refresh to check delegates.</string>
+    <string name="no_delegates">No direct delegate in the returned tasks.</string>
+    <string name="no_delegates_page">No direct delegate on this page. Load more.</string>
+    <string name="open_conversation">Open</string>
+    <string name="delegate_result">Result</string>
 </resources>

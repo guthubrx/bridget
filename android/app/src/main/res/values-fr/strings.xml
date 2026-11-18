@@ -425,4 +425,20 @@
     <string name="sentinel_project_reason">La préparation de ce projet reste à vérifier.</string>
     <string name="sentinel_message_reason">La remise de la réponse reste à confirmer.</string>
     <string name="sentinel_unknown_reason">Le résultat de ce contrôle reste à confirmer.</string>
+    <string name="directory_title">Retrouver une conversation</string>
+    <string name="my_conversations">Mes échanges</string>
+    <string name="directory_filters">Filtres</string>
+    <string name="directory_filters_active">Filtres actifs</string>
+    <string name="recent_device_hint">Favoris, puis conversations ouvertes récemment sur ce téléphone.</string>
+    <string name="directory_loaded_hint">Recherche parmi les agents chargés. Plus élargit la liste.</string>
+    <string name="no_conversations_yet">Ouvrez une conversation depuis Tous. Elle restera ici avec vos favoris.</string>
+    <string name="browse_agents">Parcourir tous les agents</string>
+    <string name="directory_delegates">Délégués ›</string>
+    <string name="delegates_of">Délégués de %1$s</string>
+    <string name="delegates_loading">Lecture des tâches…</string>
+    <string name="delegates_unavailable">Filiation non lue. Actualisez pour vérifier les délégués.</string>
+    <string name="no_delegates">Aucun délégué direct dans les tâches retournées.</string>
+    <string name="no_delegates_page">Aucun délégué direct sur cette page. Chargez la suite.</string>
+    <string name="open_conversation">Ouvrir</string>
+    <string name="delegate_result">Résultat</string>
 </resources>

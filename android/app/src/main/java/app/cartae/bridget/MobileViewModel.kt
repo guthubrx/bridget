@@ -139,7 +139,13 @@ class MobileViewModel(app: Application) : AndroidViewModel(app) {
     var agents by mutableStateOf<List<JSONObject>>(emptyList()); private set
     var nextCursor by mutableStateOf<String?>(null); private set
     var favorites by mutableStateOf<List<JSONObject>>(emptyList()); private set
-    var favoritesOnly by mutableStateOf(false); private set
+    var recentConversations by mutableStateOf<List<String>>(emptyList()); private set
+    var conversationAgents by mutableStateOf<List<JSONObject>>(emptyList()); private set
+    var delegateOwner by mutableStateOf<JSONObject?>(null); private set
+    var directoryDelegates by mutableStateOf<List<JSONObject>>(emptyList()); private set
+    var delegatesLoaded by mutableStateOf(false); private set
+    var delegateCursor by mutableStateOf<String?>(null); private set
+    private var delegatePages: List<JSONObject> = emptyList()
     var agentVisibility by mutableStateOf("active"); private set
     var selected by mutableStateOf<JSONObject?>(null); private set
     var draft by mutableStateOf(""); private set
@@ -241,10 +247,14 @@ class MobileViewModel(app: Application) : AndroidViewModel(app) {
         freshUserInputIds=emptySet();userInputs=emptyList()
         machine = value.optString("machine")
         project = value.optJSONObject("project")
-        favoritesOnly = value.optBoolean("favorites_only")
         favorites = value.optJSONArray("favorites")?.let(::objects).orEmpty()
         attentionPending=value.optJSONArray("attention_pending")?.let { a -> (0 until a.length()).map(a::getString).toSet() }.orEmpty()
         selected = value.optJSONObject("selected")
+        recentConversations = value.optJSONArray("recent_conversations")?.let { a ->
+            (0 until a.length()).map(a::getString).distinct().take(50)
+        }.orEmpty().ifEmpty { selected?.optString("agent_id")?.let(::listOf).orEmpty() }
+        conversationAgents = emptyList()
+        closeDelegates()
         selected?.let { restoreConversation(it.getString("agent_id")) }
     }
     fun checkForUpdates() {
@@ -333,6 +343,7 @@ class MobileViewModel(app: Application) : AndroidViewModel(app) {
             val filter = if (machine.isNotEmpty()) "&machine=" + BridgetClient.encode(machine) else ""
             projects = allPages("/v1/projects?limit=50$filter")
         }
+        if (!next) refreshConversationAgents()
         val filter = directoryFilter()
         val afterSuffix = if (next && nextCursor != null) "&after=" + BridgetClient.encode(nextCursor!!) else ""
         val page = client.read("/v1/agents?limit=50$filter$afterSuffix")
@@ -346,9 +357,59 @@ class MobileViewModel(app: Application) : AndroidViewModel(app) {
     }
     private fun directoryFilter(): String = buildString {
         append("&visibility="+agentVisibility)
-        if(favoritesOnly) append("&ids="+BridgetClient.encode(favorites.joinToString(",") {it.getString("agent_id")}))
         if(machine.isNotEmpty()) append("&machine="+BridgetClient.encode(machine))
         project?.let {append("&project_host="+BridgetClient.encode(it.getString("host"))+"&project_root="+BridgetClient.encode(it.getString("root")))}
+    }
+    private suspend fun refreshConversationAgents() {
+        val origin = store.preferencesKey()
+        val filter = directoryFilter()
+        val ids = (favorites.map { it.getString("agent_id") } + recentConversations).distinct()
+        val rows = mutableListOf<JSONObject>()
+        for (batch in ids.chunked(50)) {
+            val page = client.read("/v1/agents?limit=50$filter&ids=" + BridgetClient.encode(batch.joinToString(",")))
+            rows += objects(page.getJSONArray("items"))
+        }
+        if (store.preferencesKey() == origin && directoryFilter() == filter) conversationAgents = rows
+    }
+    fun directoryAgents(conversationsOnly: Boolean, query: String): List<JSONObject> {
+        val rows = (agents + conversationAgents).filter(::matchesVisibility).distinctBy { it.getString("agent_id") }
+        val index = rows.associateBy { it.getString("agent_id") }
+        val contacts = rows.map { DirectoryContact(it.getString("agent_id"), it.optString("display_name"),
+            it.optJSONObject("project")?.optString("root").orEmpty(), it.optString("machine")) }
+        return orderedContacts(contacts, recentConversations, favorites.map { it.getString("agent_id") }.toSet(),
+            conversationsOnly, query).mapNotNull(index::get)
+    }
+    fun openDelegates(agent: JSONObject) {
+        if (busy) return
+        delegateOwner = agent; directoryDelegates = emptyList(); delegatePages = emptyList()
+        delegateCursor = null; delegatesLoaded = false; taskDetail = null; taskResult = ""
+        readDelegates()
+    }
+    fun closeDelegates() {
+        delegateOwner = null; directoryDelegates = emptyList(); delegatePages = emptyList()
+        delegateCursor = null; delegatesLoaded = false
+    }
+    fun readDelegates(next: Boolean = false) = act {
+        val owner = delegateOwner?.getString("agent_id") ?: return@act
+        val origin = store.preferencesKey()
+        val after = if (next) delegateCursor?.let { "&after=" + BridgetClient.encode(it) }.orEmpty() else ""
+        val page = client.read("/v1/tasks?agent_id=" + BridgetClient.encode(owner) + "&limit=50$after")
+        if (store.preferencesKey() != origin || delegateOwner?.optString("agent_id") != owner) return@act
+        delegatePages = bounded(if (next) delegatePages + objects(page.getJSONArray("tasks")) else objects(page.getJSONArray("tasks")))
+        val direct = directDelegates(owner, delegatePages.map { DelegateContact(it.getString("task_id"),
+            it.optString("parent_agent_id"), it.optString("child_agent_id"), it.optString("title")) }).map { it.taskId }.toSet()
+        directoryDelegates = delegatePages.filter { it.getString("task_id") in direct }.distinctBy { it.getString("task_id") }
+        delegateCursor = cursor(page); delegatesLoaded = true
+    }
+    fun openDelegateConversation(task: JSONObject, onOpened: () -> Unit) = act {
+        val owner = delegateOwner?.optString("agent_id") ?: return@act
+        val id = task.optString("child_agent_id").takeIf { it.isNotBlank() && it != "null" }
+            ?: throw MobileFailure("recipient_unavailable")
+        val page = client.read("/v1/agents?limit=1&visibility=all&agent_id=" + BridgetClient.encode(id))
+        val agent = objects(page.getJSONArray("items")).firstOrNull { it.optString("agent_id") == id }
+            ?: throw MobileFailure("recipient_unavailable")
+        if (delegateOwner?.optString("agent_id") != owner) return@act
+        closeDelegates(); selectConversation(agent); onOpened()
     }
     private fun setAttention(ids: Set<String>) {
         if(ids==attentionPending) return
@@ -371,6 +432,7 @@ class MobileViewModel(app: Application) : AndroidViewModel(app) {
     private suspend fun refreshDirectoryQuietly() {
         val origin=store.preferencesKey(); val filter=directoryFilter()
         try {
+            refreshConversationAgents()
             var page=client.read("/v1/agents?limit=50"+filter)
             val items=objects(page.getJSONArray("items")).toMutableList()
             val window=agents.size.coerceIn(50,1000)
@@ -434,7 +496,7 @@ class MobileViewModel(app: Application) : AndroidViewModel(app) {
         try {
             updatePreferences { it.put("machine", value).put("project", selectedProject ?: JSONObject.NULL) }
             machine = value; project = selectedProject
-            agents = emptyList(); nextCursor = null; fresh = false
+            agents = emptyList(); conversationAgents = emptyList(); nextCursor = null; fresh = false
             refresh()
         } catch (_: Exception) { error = "device_storage_unavailable" }
     }
@@ -450,13 +512,6 @@ class MobileViewModel(app: Application) : AndroidViewModel(app) {
         } catch (e: MobileFailure) { error = e.code }
         catch (_: Exception) { error = "device_storage_limit" }
     }
-    fun toggleFavorites() {
-        try {
-            updatePreferences { it.put("favorites_only", !favoritesOnly) }
-            favoritesOnly = !favoritesOnly
-            refresh()
-        } catch (_: Exception) { error = "device_storage_unavailable" }
-    }
     fun visibleAgents(): List<JSONObject> {
         return agents.filter {matchesVisibility(it)}
     }
@@ -464,7 +519,7 @@ class MobileViewModel(app: Application) : AndroidViewModel(app) {
         (row.optJSONObject("tracking")?.optBoolean("dormant")==true)==(agentVisibility=="dormant")
     fun showAgents(value:String) {
         if(busy || value==agentVisibility || value !in listOf("active","dormant","all")) return
-        agentVisibility=value; agents=emptyList(); nextCursor=null; fresh=false; refresh()
+        agentVisibility=value; agents=emptyList(); conversationAgents=emptyList(); nextCursor=null; fresh=false; refresh()
     }
     fun changeTracking(dormant:Boolean, synchronize:Boolean?=null) = act {
         val agent=selected ?: return@act
@@ -502,10 +557,14 @@ class MobileViewModel(app: Application) : AndroidViewModel(app) {
         updatePreferences {it.put("tracking_receipt",response);it.remove("tracking_pending");it.put("selected",selected);it.put("favorites",JSONArray(favorites))}
     }
     fun select(agent: JSONObject?) {
-        if (busy) return
+        if (!busy) selectConversation(agent)
+    }
+    private fun selectConversation(agent: JSONObject?) {
         followJob?.cancel(); followJob = null
         try {
-            updatePreferences { it.put("selected", agent ?: JSONObject.NULL) }
+            val recent = agent?.getString("agent_id")?.let { rememberConversation(recentConversations, it) } ?: recentConversations
+            updatePreferences { it.put("selected", agent ?: JSONObject.NULL).put("recent_conversations", JSONArray(recent)) }
+            recentConversations = recent
             previewContent=null; previewTitle=""; previewMediaType=""
             selected = agent
             tailPending = true; olderBefore = null
@@ -1043,7 +1102,7 @@ class MobileViewModel(app: Application) : AndroidViewModel(app) {
     fun forgetAuthorization() = act {
         followJob?.cancel(); followJob = null
         store.forgetAuthorization()
-        associated = false; endpoint = ""; agents = emptyList(); selected = null
+        associated = false; endpoint = ""; agents = emptyList(); conversationAgents = emptyList(); recentConversations = emptyList(); closeDelegates(); selected = null
         userInputs = emptyList(); questions = emptyList(); devices = emptyList(); events = emptyList(); draft = ""
         favorites = emptyList(); projects = emptyList(); machines = emptyList(); fresh = false
     }
@@ -1052,7 +1111,7 @@ class MobileViewModel(app: Application) : AndroidViewModel(app) {
         client.revokeDevice(id)
         if (own) {
             followJob?.cancel(); followJob = null
-            associated = false; endpoint = ""; selected = null; agents = emptyList(); events = emptyList(); fresh = false
+            associated = false; endpoint = ""; selected = null; agents = emptyList(); conversationAgents = emptyList(); recentConversations = emptyList(); closeDelegates(); events = emptyList(); fresh = false
         } else {
             val page = client.read("/v1/devices")
             devices = objects(page.getJSONArray("items")); deviceCursor = cursor(page)
@@ -1061,7 +1120,7 @@ class MobileViewModel(app: Application) : AndroidViewModel(app) {
     fun renew() = act { client.renew() }
     fun revoke() = act {
         followJob?.cancel(); followJob = null
-        client.revokeSelf(); associated = false; endpoint = ""; agents = emptyList(); selected = null
+        client.revokeSelf(); associated = false; endpoint = ""; agents = emptyList(); conversationAgents = emptyList(); recentConversations = emptyList(); closeDelegates(); selected = null
         userInputs = emptyList(); questions = emptyList(); devices = emptyList(); events = emptyList(); draft = ""; fresh = false
     }
     override fun onCleared() { questionJob?.cancel(); followJob?.cancel(); receiptJob?.cancel(); store.close() }
