@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.8.53 - 2026-11-18
+
+- Android : retrouver les favoris et conversations récentes depuis Mes échanges ;
+  consulter les délégués sous leur responsable et ouvrir leur résultat conservé.
+- Android : remplacer les grandes cartes de questions par un bandeau compact ;
+  garder les réponses envoyées repliées et les issues inconnues visibles.
+- Préciser les diagnostics de démarrage sans retour, les champs d’admission et
+  la recherche dans le journal, sans relancer de mission ni changer les droits.
+
 ## 0.8.49 - 2026-11-12
 
 - Le refus d’un appel au catalogue distingue un champ version mal typé de

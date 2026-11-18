@@ -512,9 +512,6 @@ class MobileViewModel(app: Application) : AndroidViewModel(app) {
         } catch (e: MobileFailure) { error = e.code }
         catch (_: Exception) { error = "device_storage_limit" }
     }
-    fun visibleAgents(): List<JSONObject> {
-        return agents.filter {matchesVisibility(it)}
-    }
     private fun matchesVisibility(row:JSONObject):Boolean = agentVisibility=="all" ||
         (row.optJSONObject("tracking")?.optBoolean("dormant")==true)==(agentVisibility=="dormant")
     fun showAgents(value:String) {

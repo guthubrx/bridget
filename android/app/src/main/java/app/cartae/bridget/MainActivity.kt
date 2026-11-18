@@ -220,6 +220,7 @@ private fun MobileApp(vm: MobileViewModel, scanned: String?, onScan: () -> Unit,
         }
     }
     }
+    vm.delegateOwner?.let { owner -> DelegateDirectory(vm, owner) { tab = 0; scope.launch { drawer.close() } } }
     if (scanned != null) AlertDialog(onDismissRequest = onDismiss,
         title = { Text(stringResource(R.string.confirm_pairing)) },
         text = { Text(runCatching { JSONObject(scanned).getString("endpoint") }.getOrDefault("")) },
@@ -351,7 +352,6 @@ private fun AgentDirectory(vm: MobileViewModel, onSelected: () -> Unit = {}) {
             }
         }
     }
-    vm.delegateOwner?.let { owner -> DelegateDirectory(vm, owner, onSelected) }
 }
 
 @Composable
