@@ -4,5 +4,6 @@
 - [x] T002 Implémenter récents, favoris, liste et filiation native.
 - [x] T003 Tester le modèle de tri/filtres/filiation ; compiler et contrôler le lint (parcours réseau non exécuté).
 - [x] T004 Revue indépendante et corrections utiles.
-- [ ] T005 Signer, pousser les sources et publier l'APK, vérifier le téléchargement.
-- [ ] T006 Installation et parcours visuel sur Android accessible, ménage.
+- [x] T005 Signer, pousser les sources et publier l'APK, vérifier le téléchargement.
+- [x] T006 Ménage gardé, sources sur main et push vérifiés.
+- [ ] T007 Installation et parcours visuel : aucun appareil Android accessible ; APK publié pour installation sur le téléphone.

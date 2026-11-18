@@ -76,3 +76,14 @@ le contrôle du parcours questions avec preuves visuelles. Elle n'est pas attest
 par les41tests JVM ni par la signature. Un arrêt de T3 reste soumis à une nouvelle
 confirmation de François. Aucun build ni envoi concurrent n'est lancé par cette
 réservation ; les blocages d'activation serveur et téléphone restent explicites.
+
+
+## Publication avec le lot 299
+
+Le 18 novembre, l’APK final 0.8.53/8053 incluant ce correctif est publié et
+retéléchargé depuis la release officielle v0.8.53. Certificat inchangé et SHA-256
+7b122559c2202f70314be47c01292cea942f69678158a6cc377066ab2c4dab06 vérifiés.
+La réservation est donc réalisée pour Android. L’installation et le contrôle
+visuel sur téléphone restent non attestés, aucun appareil n’étant accessible.
+Voir specs/299-conversations-mobile/implementation.md pour les preuves de
+publication et les limites d’activation des composants serveur.
