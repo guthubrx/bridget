@@ -298,7 +298,8 @@ private fun AgentDirectory(vm: MobileViewModel, onSelected: () -> Unit = {}) {
             TextButton(onClick = { filters = true }) { Text(listOfNotNull(vm.machine.takeIf { it.isNotBlank() }, vm.project?.optString("root")?.let(::projectTitle), stringResource(R.string.directory_filters_active)).joinToString(" · "), maxLines = 1) }
         }
         if (!vm.fresh) Text(stringResource(R.string.attention_stale), style = MaterialTheme.typography.labelSmall)
-        val agents = vm.directoryAgents(conversationsOnly, search)
+        val agents = remember(vm.agents, vm.conversationAgents, vm.recentConversations, vm.favorites,
+            vm.agentVisibility, conversationsOnly, search) { vm.directoryAgents(conversationsOnly, search) }
         val favoriteIds=remember(vm.favorites) {vm.favorites.map {it.getString("agent_id")}.toSet()}
         val projectPeers=remember(vm.projects) {vm.projects.map {ProjectIdentity(it.optString("host"),it.getString("root"))}}
         // O(p²) une fois par observation, p<=256 projets ; chaque ligne d'agent lit ensuite O(1).
@@ -362,11 +363,11 @@ private fun DelegateDirectory(vm: MobileViewModel, owner: JSONObject, onSelected
             LazyColumn(Modifier.fillMaxWidth().heightIn(max = 480.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 vm.error?.let { code -> item {
                     Text(stringResource(errorText(code)), color = MaterialTheme.colorScheme.error)
-                    Text(stringResource(recoveryText(code)), style = MaterialTheme.typography.bodySmall)
+                    Text(stringResource(if (code == "resync_required") R.string.delegates_resync else recoveryText(code)), style = MaterialTheme.typography.bodySmall)
                 } }
+                item { TextButton(onClick = { vm.readDelegates() }, enabled = !vm.busy) { Text(stringResource(R.string.refresh)) } }
                 if (!vm.delegatesLoaded) item {
                     Text(stringResource(if (vm.busy) R.string.delegates_loading else R.string.delegates_unavailable))
-                    if (!vm.busy) TextButton(onClick = { vm.readDelegates() }) { Text(stringResource(R.string.refresh)) }
                 } else if (vm.directoryDelegates.isEmpty()) item { Text(stringResource(if (vm.delegateCursor == null) R.string.no_delegates else R.string.no_delegates_page)) }
                 items(vm.directoryDelegates, key = { it.getString("task_id") }) { task ->
                     Column {

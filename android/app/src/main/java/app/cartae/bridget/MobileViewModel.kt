@@ -393,7 +393,14 @@ class MobileViewModel(app: Application) : AndroidViewModel(app) {
         val owner = delegateOwner?.getString("agent_id") ?: return@act
         val origin = store.preferencesKey()
         val after = if (next) delegateCursor?.let { "&after=" + BridgetClient.encode(it) }.orEmpty() else ""
-        val page = client.read("/v1/tasks?agent_id=" + BridgetClient.encode(owner) + "&limit=50$after")
+        val page = try {
+            client.read("/v1/tasks?agent_id=" + BridgetClient.encode(owner) + "&limit=50$after")
+        } catch (failure: MobileFailure) {
+            if (failure.code == "resync_required" && store.preferencesKey() == origin && delegateOwner?.optString("agent_id") == owner) {
+                delegateCursor = null; delegatePages = emptyList(); directoryDelegates = emptyList(); delegatesLoaded = false
+            }
+            throw failure
+        }
         if (store.preferencesKey() != origin || delegateOwner?.optString("agent_id") != owner) return@act
         delegatePages = bounded(if (next) delegatePages + objects(page.getJSONArray("tasks")) else objects(page.getJSONArray("tasks")))
         val direct = directDelegates(owner, delegatePages.map { DelegateContact(it.getString("task_id"),

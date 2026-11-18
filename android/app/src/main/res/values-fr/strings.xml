@@ -441,4 +441,5 @@
     <string name="no_delegates_page">Aucun délégué direct sur cette page. Chargez la suite.</string>
     <string name="open_conversation">Ouvrir</string>
     <string name="delegate_result">Résultat</string>
+    <string name="delegates_resync">Les tâches ont changé. Actualisez cette liste depuis sa première page.</string>
 </resources>
