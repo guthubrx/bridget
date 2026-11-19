@@ -12446,3 +12446,173 @@ fn spec283_candidate_phases_follow_real_cache_and_early_refusal() {
     operation.finish().unwrap();
     assert!(runtime.store.commands().unwrap().is_empty());
 }
+
+#[test]
+fn incident300_observations_do_not_scan_unrelated_workspace_archive() {
+    let fixture = Fixture::new();
+    let store = fixture.open();
+    reserve(&store);
+    let reserved = slot(300);
+    store.reserve_result_slot(&reserved, 101).unwrap();
+    // Une archive indépendante illisible ne doit pas masquer les reçus de
+    // commande. L'admission et la collecte gardent le contrôle global.
+    write_private_file_atomic(&store.root.join("workspaces/unrelated.json"), b"invalid").unwrap();
+    assert_eq!(store.commands().unwrap().len(), 1);
+    assert!(store.pending_results(102).unwrap().is_empty());
+    assert!(store.inventory().is_err());
+    assert!(store.collect(102).is_err());
+    let mut another = command();
+    another.command_id = "another-command".into();
+    assert!(
+        store
+            .reserve_command(&another, &"d".repeat(64), &placement(), 1000, 102)
+            .is_err()
+    );
+    // Le parcours léger garde la validation des reçus qu'il utilise.
+    write_private_file_atomic(
+        &store
+            .slot_dir(&reserved.identity)
+            .unwrap()
+            .join("receipt.json"),
+        b"invalid",
+    )
+    .unwrap();
+    assert!(store.pending_results(102).is_err());
+    write_private_file_atomic(&store.command_path(&command()), b"invalid").unwrap();
+    assert!(store.commands().is_err());
+}
+
+#[test]
+fn incident300_tick_keeps_observation_cadence_and_periodic_full_validation() {
+    let fixture = Fixture::new();
+    let mut runtime = runtime_fixture(&fixture);
+    write_private_file_atomic(
+        &runtime.store.root.join("workspaces/unrelated.json"),
+        b"invalid",
+    )
+    .unwrap();
+    runtime
+        .cancel_signal_issued
+        .insert("retained-cancellation".into());
+    runtime.last_collection = Instant::now();
+    runtime.last_maintenance = Instant::now() - Duration::from_secs(1);
+    runtime.tick().unwrap();
+    runtime.last_collection = Instant::now() - Duration::from_secs(10);
+    assert!(runtime.tick().is_err());
+}
+
+#[test]
+#[ignore = "mesure explicite du coût des lectures, sans charge sur un worker vivant"]
+fn incident300_measure_archive_observation_cost() {
+    let fixture = Fixture::new();
+    let store = fixture.open();
+    reserve(&store);
+    store.reserve_result_slot(&slot(300), 101).unwrap();
+    for index in 0..1000 {
+        let mut identity = command();
+        identity.command_id = format!("archive-{index}");
+        identity.task_id = format!("archive-task-{index}");
+        identity.instance_id.clear();
+        identity.generation = 0;
+        let receipt = WorkspacePreparationReceipt {
+            version: STORE_VERSION,
+            worker: worker(),
+            command: identity,
+            prepare_digest: "a".repeat(64),
+            fenced_previous: None,
+            record: None,
+            commit_view: None,
+        };
+        store
+            .persist(&store.workspace_path(&receipt.command), &receipt)
+            .unwrap();
+    }
+    // Volume de reçus observé sur SYS, sans données ni tâche réelle.
+    let template = store.command(&command()).unwrap();
+    for index in 1..359 {
+        let mut receipt = template.clone();
+        receipt.identity.command_id = format!("history-command-{index}");
+        receipt.identity.task_id = format!("history-task-{index}");
+        store
+            .persist(&store.command_path(&receipt.identity), &receipt)
+            .unwrap();
+    }
+    let template = store.read_slot(&slot(300).identity).unwrap().unwrap();
+    for index in 1..651 {
+        let mut receipt = template.clone();
+        receipt.slot.identity.mission_id = format!("history-mission-{index}");
+        receipt.slot.identity.execution_id = format!("history-execution-{index}");
+        let directory = store.slot_dir(&receipt.slot.identity).unwrap();
+        private_dir(&directory).unwrap();
+        private_dir(&directory.join("payload")).unwrap();
+        write_private_file_atomic(&directory.join("payload/publish.lock"), b"").unwrap();
+        store
+            .persist(&directory.join("receipt.json"), &receipt)
+            .unwrap();
+    }
+    store.inventory().unwrap();
+    let start = Instant::now();
+    for _ in 0..10 {
+        // Ancien cycle de relais : deux inventaires globaux.
+        assert_eq!(store.inventory().unwrap().0.len(), 359);
+        assert_eq!(store.inventory().unwrap().1.len(), 651);
+    }
+    let before = start.elapsed();
+    let start = Instant::now();
+    for _ in 0..10 {
+        assert_eq!(store.commands().unwrap().len(), 359);
+        assert!(store.pending_results(102).unwrap().is_empty());
+    }
+    let after = start.elapsed();
+    eprintln!(
+        "incident300: 1000 préparations, 359 commandes, 651 slots, 10 relais : avant={before:?}, après={after:?}"
+    );
+}
+
+#[test]
+fn incident300_scoped_result_read_rejects_symlink_payload_even_without_blob() {
+    let fixture = Fixture::new();
+    let store = fixture.open();
+    reserve(&store);
+    let reserved = slot(300);
+    store.reserve_result_slot(&reserved, 101).unwrap();
+    let payload = store.slot_dir(&reserved.identity).unwrap().join("payload");
+    let outside = fixture.0.join("outside-payload");
+    fs::rename(&payload, &outside).unwrap();
+    symlink(&outside, &payload).unwrap();
+    assert!(store.pending_results(102).is_err());
+    assert!(
+        !store
+            .read_slot(&reserved.identity)
+            .unwrap()
+            .unwrap()
+            .producer_terminal
+    );
+}
+
+#[test]
+fn incident300_terminal_slots_close_without_scanning_unrelated_archive() {
+    let fixture = Fixture::new();
+    let runtime = runtime_fixture(&fixture);
+    reserve(&runtime.store);
+    let reserved = slot(300);
+    runtime.store.reserve_result_slot(&reserved, 101).unwrap();
+    write_private_file_atomic(
+        &runtime.store.root.join("workspaces/unrelated.json"),
+        b"invalid",
+    )
+    .unwrap();
+    runtime.finish_command(&command()).unwrap();
+    let receipt = runtime
+        .store
+        .read_slot(&reserved.identity)
+        .unwrap()
+        .unwrap();
+    assert!(receipt.producer_terminal);
+    assert_eq!(receipt.closed, Some(WorkerSlotClosureProof::Cancelled));
+    assert_eq!(
+        runtime.store.command(&command()).unwrap().phase,
+        WorkerCommandPhase::Terminal
+    );
+    assert!(runtime.store.inventory().is_err());
+}

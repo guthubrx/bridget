@@ -1205,7 +1205,7 @@ impl WorkerStore {
             .lock()
             .map_err(|_| WorkerStoreError::Quarantined)?;
         self.health()?;
-        Ok(self.inventory()?.0)
+        self.command_receipts()
     }
 
     fn bind_launch(
@@ -1583,7 +1583,7 @@ impl WorkerStore {
             .lock()
             .map_err(|_| WorkerStoreError::Quarantined)?;
         self.health()?;
-        let (_, slots, _, _) = self.inventory()?;
+        let slots = self.slot_receipts()?;
         let mut results = Vec::new();
         for slot in slots {
             if slot.disposition.as_ref().is_some_and(|record| {
@@ -1922,19 +1922,14 @@ impl WorkerStore {
         Ok(())
     }
 
-    /// Chaque payload actif réserve 2 Mio, temporaire de publication inclus.
-    /// Les reçus en cours gardent 64 Kio pour leur croissance ; les reçus
-    /// soldés comptent leurs octets réels. Deux remplacements de métadonnées
-    /// sont réservés globalement, car les transitions sont sérialisées.
-    /// Les fichiers orphelins comptent leurs octets, jamais zéro.
-    fn inventory(
-        &self,
-    ) -> Result<(Vec<WorkerCommandReceipt>, Vec<SlotReceipt>, u64, usize), WorkerStoreError> {
+    // Lectures bornées des seules preuves utilisées pour le suivi. Le quota
+    // global reste contrôlé à l'ouverture, aux admissions et à la collecte.
+    fn command_receipts(&self) -> Result<Vec<WorkerCommandReceipt>, WorkerStoreError> {
         let mut commands = Vec::new();
-        let mut slots = Vec::new();
-        let mut used =
-            private_tree_bytes(&self.root)?.saturating_add(2 * MAX_METADATA_BYTES as u64);
-        for entry in fs::read_dir(self.root.join("commands"))? {
+        for (index, entry) in fs::read_dir(self.root.join("commands"))?.enumerate() {
+            if index >= MAX_WORKER_STORE_ENTRIES {
+                return Err(WorkerStoreError::Quota);
+            }
             let path = entry?.path();
             if path.extension().is_none_or(|ext| ext != "json") {
                 continue;
@@ -1947,20 +1942,20 @@ impl WorkerStore {
             let command = self
                 .read_command(&command.identity)?
                 .ok_or(WorkerStoreError::Quarantined)?;
-            // Terminal/Refused ne peut plus recevoir de préparation ni de permis.
-            // Les 4 Kio gardent la preuve de drainage et les détails de sortie tardifs.
-            used = used.saturating_add(DRAIN_PROOF_RESERVATION);
-            if !matches!(
-                command.phase,
-                WorkerCommandPhase::Terminal | WorkerCommandPhase::Refused
-            ) {
-                used = used.saturating_add(MAX_METADATA_BYTES as u64);
-            }
             commands.push(command);
         }
-        for entry in fs::read_dir(self.root.join("slots"))? {
+        Ok(commands)
+    }
+
+    fn slot_receipts(&self) -> Result<Vec<SlotReceipt>, WorkerStoreError> {
+        let mut slots = Vec::new();
+        for (index, entry) in fs::read_dir(self.root.join("slots"))?.enumerate() {
+            if index >= MAX_WORKER_STORE_ENTRIES {
+                return Err(WorkerStoreError::Quota);
+            }
             let path = entry?.path();
             check_private(&path, true)?;
+            check_private(&path.join("payload"), true)?;
             let slot: SlotReceipt = read_optional(&path.join("receipt.json"), MAX_METADATA_BYTES)?
                 .ok_or(WorkerStoreError::Quarantined)?;
             if self.slot_dir(&slot.slot.identity)? != path
@@ -1969,6 +1964,35 @@ impl WorkerStore {
                 return Err(WorkerStoreError::Quarantined);
             }
             self.read_slot(&slot.slot.identity)?;
+            slots.push(slot);
+        }
+        Ok(slots)
+    }
+
+    /// Chaque payload actif réserve 2 Mio, temporaire de publication inclus.
+    /// Les reçus en cours gardent 64 Kio pour leur croissance ; les reçus
+    /// soldés comptent leurs octets réels. Deux remplacements de métadonnées
+    /// sont réservés globalement, car les transitions sont sérialisées.
+    /// Les fichiers orphelins comptent leurs octets, jamais zéro.
+    fn inventory(
+        &self,
+    ) -> Result<(Vec<WorkerCommandReceipt>, Vec<SlotReceipt>, u64, usize), WorkerStoreError> {
+        let mut used =
+            private_tree_bytes(&self.root)?.saturating_add(2 * MAX_METADATA_BYTES as u64);
+        let commands = self.command_receipts()?;
+        let slots = self.slot_receipts()?;
+        for command in &commands {
+            // Les 4 Kio gardent la preuve de drainage et les détails de sortie tardifs.
+            used = used.saturating_add(DRAIN_PROOF_RESERVATION);
+            if !matches!(
+                command.phase,
+                WorkerCommandPhase::Terminal | WorkerCommandPhase::Refused
+            ) {
+                used = used.saturating_add(MAX_METADATA_BYTES as u64);
+            }
+        }
+        for slot in &slots {
+            let path = self.slot_dir(&slot.slot.identity)?;
             let payload_bytes = private_tree_bytes(&path.join("payload"))?;
             let final_disposition = slot
                 .disposition
@@ -1981,11 +2005,10 @@ impl WorkerStore {
             }
             let settled = slot.closed.is_some()
                 && slot.producer_terminal
-                && (final_disposition || self.read_blob(&slot)?.is_none());
+                && (final_disposition || self.read_blob(slot)?.is_none());
             if !settled {
                 used = used.saturating_add(MAX_METADATA_BYTES as u64);
             }
-            slots.push(slot);
         }
         let mut workspaces = 0;
         let mut view_keys = BTreeSet::new();
@@ -4923,6 +4946,7 @@ struct WorkerRuntime {
     view_files: BTreeMap<String, PendingViewFile>,
     view_file_audits: BTreeMap<String, ViewFileAudit>,
     last_maintenance: Instant,
+    last_collection: Instant,
     cancelled: Arc<Mutex<BTreeSet<String>>>,
     cancel_signal_issued: BTreeSet<String>,
     host_resources: crate::host_resources::HostResourceCollector,
@@ -7276,6 +7300,7 @@ impl WorkerRuntime {
             view_files: BTreeMap::new(),
             view_file_audits: BTreeMap::new(),
             last_maintenance: Instant::now() - Duration::from_secs(1),
+            last_collection: Instant::now() - Duration::from_secs(10),
             cancelled: Arc::new(Mutex::new(BTreeSet::new())),
             cancel_signal_issued: BTreeSet::new(),
             host_resources: crate::host_resources::HostResourceCollector::default(),
@@ -8865,7 +8890,12 @@ impl WorkerRuntime {
     /// O(s) pour les slots bornés du store. L'arrêt attesté interdit toute
     /// nouvelle publication, mais les blobs restent relayés jusqu'à disposition.
     fn finish_result_slots(&self, command: &WorkerCommandIdentity) -> Result<(), WorkerRefusal> {
-        for slot in self.store.inventory().map_err(refuse)?.1 {
+        let slots = {
+            let _guard = self.store.transition.lock().map_err(unavailable)?;
+            self.store.health().map_err(refuse)?;
+            self.store.slot_receipts().map_err(refuse)?
+        };
+        for slot in slots {
             if slot.slot.identity.command == *command {
                 self.finish_result_slot(&slot)?;
             }
@@ -8886,13 +8916,16 @@ impl WorkerRuntime {
         Ok(())
     }
     fn reconcile_all(&mut self) -> Result<(), WorkerRefusal> {
-        // Un seul inventaire pour les commandes terminales conservées sept jours.
+        // Une lecture des reçus de commandes et slots conservés sept jours.
         // Index en O(c log c), jointure en O(s log c), aucune relecture globale
         // par commande terminale. Les transitions actives gardent leur preuve fraîche.
-        let (commands, slots, _, _) = {
+        let (commands, slots) = {
             let _guard = self.store.transition.lock().map_err(unavailable)?;
             self.store.health().map_err(refuse)?;
-            self.store.inventory().map_err(refuse)?
+            (
+                self.store.command_receipts().map_err(refuse)?,
+                self.store.slot_receipts().map_err(refuse)?,
+            )
         };
         let terminal: BTreeMap<_, _> = commands
             .iter()
@@ -8913,32 +8946,6 @@ impl WorkerRuntime {
             }
         }
         drop(terminal);
-        let mut retained_commands = commands
-            .iter()
-            .map(|command| json_digest(&command.identity))
-            .collect::<Result<BTreeSet<_>, _>>()
-            .map_err(unavailable)?;
-        for receipt in self.store.view_receipts(None).map_err(refuse)? {
-            let view = receipt.commit_view.as_ref().unwrap();
-            retained_commands.insert(format!("view-source-{}", view.key));
-            if let Some(operation) = &view.materialization {
-                let binding = crate::workspace_git::ViewBinding {
-                    worker: self.identity.clone(),
-                    command: receipt.command.clone(),
-                    prepare_digest: receipt.prepare_digest.clone(),
-                };
-                let identity = operation
-                    .request
-                    .identity_for_binding(&binding)
-                    .map_err(|_| WorkerRefusal::CommandMismatch)?;
-                retained_commands.insert(format!(
-                    "view-source-{}-file-{}",
-                    view.key, identity.command_id
-                ));
-            }
-        }
-        self.cancel_signal_issued
-            .retain(|key| retained_commands.contains(key));
         for command in commands {
             if matches!(
                 command.phase,
@@ -9048,8 +9055,42 @@ impl WorkerRuntime {
         }
         if self.last_maintenance.elapsed() >= Duration::from_secs(1) {
             self.reconcile_all()?;
-            self.store.collect(worker_now()).map_err(refuse)?;
             self.last_maintenance = Instant::now();
+        }
+        // Les preuves restent conservées ; seul le nettoyage peut attendre dix
+        // secondes. Le suivi des processus conserve sa cadence d'une seconde.
+        if self.last_collection.elapsed() >= Duration::from_secs(10) {
+            self.store.collect(worker_now()).map_err(refuse)?;
+            if !self.cancel_signal_issued.is_empty() {
+                let commands = self.store.commands().map_err(refuse)?;
+                let mut retained_commands = commands
+                    .iter()
+                    .map(|command| json_digest(&command.identity))
+                    .collect::<Result<BTreeSet<_>, _>>()
+                    .map_err(unavailable)?;
+                for receipt in self.store.view_receipts(None).map_err(refuse)? {
+                    let view = receipt.commit_view.as_ref().unwrap();
+                    retained_commands.insert(format!("view-source-{}", view.key));
+                    if let Some(operation) = &view.materialization {
+                        let binding = crate::workspace_git::ViewBinding {
+                            worker: self.identity.clone(),
+                            command: receipt.command.clone(),
+                            prepare_digest: receipt.prepare_digest.clone(),
+                        };
+                        let identity = operation
+                            .request
+                            .identity_for_binding(&binding)
+                            .map_err(|_| WorkerRefusal::CommandMismatch)?;
+                        retained_commands.insert(format!(
+                            "view-source-{}-file-{}",
+                            view.key, identity.command_id
+                        ));
+                    }
+                }
+                self.cancel_signal_issued
+                    .retain(|key| retained_commands.contains(key));
+            }
+            self.last_collection = Instant::now();
         }
         if self.last_resource_refresh.elapsed() >= Duration::from_secs(10) {
             let capacity = self
