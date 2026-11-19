@@ -711,8 +711,8 @@ fn project_probe_constraints(result: &mut Value, reasons: &[Value]) {
                 "Réattestez le parent, puis vérifiez si ses restrictions peuvent être conservées par le moteur demandé. Ce motif seul ne prouve pas qu'un droit a changé. Consultez detail.permission_projection.",
                 "Si une restriction n'est pas traduisible, demandez à l'utilisateur la décision sur cette restriction ou sur le moteur ; ne retirez aucune protection pour essayer."),
             Some(CandidateProbeRefusal::WorkspaceUnavailable) => (
-                "Vérifiez l'existence, l'accès et l'état Git du dossier prévu sur cette machine. Ce motif ne prouve ni disque plein ni chemin absent ; le contrôle précis manque.",
-                "Si le dossier ne peut pas être contrôlé dans votre mandat, demandez à l'utilisateur l'accès de diagnostic nécessaire ; ne déplacez pas un dossier vivant."),
+                "Faites corréler bridget_probe_refusal côté maître et bridget_worker_probe172 côté worker par admission_id et correlation_id, à l'heure du refus. Examinez le diagnostic Git associé, notamment bridget_workspace_git_timeout : il donne la commande, le budget et l'arrêt observé. La cause précise n'est pas transmise dans ce reçu ; ni le nombre de worktrees ni un fichier non suivi ne prouvent la cause.",
+                "Le mainteneur vérifie les journaux avant tout nettoyage. Si leur accès manque, demandez cet accès ciblé au responsable ou à l'utilisateur. Ne supprimez aucun fichier ni worktree sans preuve et accord de son propriétaire. Avant un nouvel essai autorisé, vérifier la cause, detail.admission et l'absence de mission de remplacement déjà admise ; conserver la clé pour un rejeu strict."),
             Some(CandidateProbeRefusal::WorkspaceLimit) => (
                 "Inventoriez les worktrees enregistrés du projet, y compris ceux qui sont conservés ou imbriqués. Vérifiez leurs propriétaires et leurs usages avant tout rangement autorisé.",
                 "Si aucun worktree ne peut être retiré dans votre mandat, demandez à l'utilisateur d'arbitrer leur conservation ; ne retirez pas un travail actif."),

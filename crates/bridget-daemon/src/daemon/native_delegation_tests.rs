@@ -28082,3 +28082,29 @@ fn spec288_prepare_capacity_guidance_names_log_without_inventing_cause() {
     drop(state);
     cleanup(&config);
 }
+
+#[test]
+fn incident301_probe_refusal_workspace_unknown_guides_correlated_diagnosis_without_inventing_cause() {
+    let encoded = json!([{"kind":"candidate","code":"workspace_unavailable","candidates":1}]);
+    let result = failure(&format!("routing_candidate_unavailable:{encoded}"));
+    let check = &result["detail"]["probe_checks"][0];
+    assert_eq!(check["underlying_cause"], "unobserved");
+    let next = check["next_action"].as_str().unwrap();
+    for expected in [
+        "admission_id",
+        "correlation_id",
+        "bridget_workspace_git_timeout",
+        "n'est pas transmise",
+    ] {
+        assert!(next.contains(expected), "{next}");
+    }
+    let human = check["human_action"].as_str().unwrap();
+    for expected in [
+        "propriétaire",
+        "detail.admission",
+        "remplacement déjà admise",
+        "rejeu strict",
+    ] {
+        assert!(human.contains(expected), "{human}");
+    }
+}
