@@ -26093,6 +26093,68 @@ fn spec191_owned_eof_status_exposes_only_correlated_command_reference() {
     cleanup(&config);
 }
 #[test]
+fn spec296_generic_codex_failure_keeps_owner_diagnostic_and_unknown_cause() {
+    let (st, config, mut task, _) = remote162_capture_fixture();
+    let command = remote_command_identity(&st, &task).unwrap();
+    task.state = "failed".into();
+    task.error = Some("terminal Codex: failed".into());
+    st.delegation_store.save(&task).unwrap();
+    let before =
+        serde_json::to_value(st.delegation_store.get(&task.task_id).unwrap().unwrap()).unwrap();
+    let state = Arc::new(Mutex::new(st));
+    let DaemonToWrapper::NativeDelegationResult { result } = handle(
+        "conn-1",
+        NativeDelegationRequest::Status {
+            task_id: task.task_id.clone(),
+        },
+        &state,
+    ) else {
+        panic!("statut propriétaire")
+    };
+    let context = &result["detail"]["provider_failure"];
+    assert_eq!(context["task_id"], task.task_id);
+    assert_eq!(context["machine_id"], "cartae");
+    assert_eq!(context["instance_id"], command.instance_id);
+    assert_eq!(context["command_id"], command.command_id);
+    assert_eq!(context["generation"], command.generation);
+    assert_eq!(context["round"], task.round);
+    assert_eq!(context["mission_id"], task.mission);
+    assert_eq!(context["cause"], "unobserved");
+    assert!(context["http_status"].is_null());
+    assert_eq!(result["error"], "terminal Codex: failed");
+    assert!(
+        result["error_recovery"]
+            .as_str()
+            .unwrap()
+            .contains("detail.provider_failure")
+    );
+    let DaemonToWrapper::NativeDelegationResult { result: foreign } = handle(
+        "foreign296",
+        NativeDelegationRequest::Status {
+            task_id: task.task_id.clone(),
+        },
+        &state,
+    ) else {
+        panic!("refus étranger")
+    };
+    assert!(foreign["detail"]["provider_failure"].is_null());
+    let st = state.lock().unwrap();
+    assert!(current_task_view(&st, &task, false).unwrap()["detail"]["provider_failure"].is_null());
+    assert_eq!(
+        serde_json::to_value(st.delegation_store.get(&task.task_id).unwrap().unwrap()).unwrap(),
+        before
+    );
+    task.remote_placement = None;
+    let local = current_task_view(&st, &task, true).unwrap();
+    assert_eq!(local["detail"]["provider_failure"]["daemon_host"], st.host);
+    assert!(local["detail"]["provider_failure"]["machine_id"].is_null());
+    assert!(local["detail"]["provider_failure"]["command_id"].is_null());
+    drop(st);
+    drop(state);
+    cleanup(&config);
+}
+
+#[test]
 fn spec191_missing_command_reference_is_not_guessed_from_old_slot() {
     let (st, config, mut task, _) = remote162_capture_fixture();
     task.state = "failed".into();

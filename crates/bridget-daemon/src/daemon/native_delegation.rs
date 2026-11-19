@@ -6349,6 +6349,14 @@ fn task_view(task: &Task, phase: Option<&str>, full: bool) -> Value {
             "Demandez à l’utilisateur de reconnecter le compte Claude existant sur la machine indiquée. Gardez le même compte et modèle ; n’essayez ni autre connexion ni rejeu de cette tâche failed sans une suite autorisée."
         );
     }
+    if task.projected_error() == Some("terminal Codex: failed") {
+        view["error_message"] = json!(
+            "Faites vérifier le diagnostic de cette tâche avec les références du statut complet. Le tour Codex a échoué ; ce code seul ne prouve ni quota épuisé, ni disque plein, ni refus du modèle."
+        );
+        view["error_recovery"] = json!(
+            "Depuis le parent propriétaire, transmettez detail.provider_failure au responsable Bridget : machine ou hôte, tâche, ronde, mission, instance et commande lorsqu’elle est confirmée. Il faut le reçu et le diagnostic fournisseur corrélés à ce tour ; sans cette preuve, la cause reste inconnue. Conservez clé, résultat et fichiers. Cette tâche ne reprend pas par Continue ni par rejeu de la clé initiale. Confirmez l’arrêt natif et le rapport du dossier avant toute suite distincte autorisée. Les autres travaux autorisés suivent leur propre état."
+        );
+    }
     if task.projected_error() == Some("api_error") {
         view["error_message"] = json!(
             "Le fournisseur a refusé ce tour avec api_error. Ce code seul ne prouve ni quota épuisé, ni compte invalide, ni durée excessive."
@@ -6872,6 +6880,7 @@ fn current_task_view(st: &DaemonState, task: &Task, full: bool) -> Result<Value,
             task.projected_error(),
             Some(
                 "stdout Codex fermé pendant le tour"
+                    | "terminal Codex: failed"
                     | "api_error"
                     | "api_error:oauth_session_expired"
                     | "terminal Codex: failed:cause=model_not_found"
@@ -6903,6 +6912,10 @@ fn current_task_view(st: &DaemonState, task: &Task, full: bool) -> Result<Value,
             "command_identity_confirmed":command.is_some(),
             "cause":match task.projected_error(){Some("terminal Codex: failed:cause=model_not_found")=>"model_not_found",Some("api_error:oauth_session_expired")=>"oauth_session_expired",_=>"unobserved"},
             "verification":"Transmettez cette référence au responsable de la machine : retrouver le reçu natif lié à task_id, vérifier instance et génération, puis lire seulement le stderr de cette identité. Si command_identity_confirmed=false, la référence de commande reste à vérifier ; ne choisissez pas un journal par approximation ni un ancien slot. Ces identifiants n’autorisent aucune reprise et ne prouvent pas un état courant du fournisseur."});
+    }
+    if full && task.projected_error() == Some("terminal Codex: failed") {
+        view["detail"]["provider_failure"]["round"] = json!(task.round);
+        view["detail"]["provider_failure"]["mission_id"] = json!(task.mission);
     }
     if full && task.projected_error() == Some("api_error:oauth_session_expired") {
         view["detail"]["provider_failure"]["provider_code"] = json!("api_error");

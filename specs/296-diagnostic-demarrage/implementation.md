@@ -25,3 +25,42 @@ Candidats 296-diagnostic-demarrage-r1 installés et hachages vérifiés sur mono
 Activation incomplète : le maître actif est toujours 288. Le contrôle durable à 1794892916 recensait quatorze tâches bloquantes (six cancelled, une failed, une mission_pending, une queued, trois starting et deux working) et trois admissions chosen. Un état terminal logique ne suffit pas : sept tâches terminales restent dans le prédicat natif pending. Ces états demandent une vérification et une clôture par leur propriétaire, pas une suppression en base. Le refus natif a été conservé ; aucune garde ni mission métier n’a été forcée. T3 n’a pas été arrêté.
 
 Ménage : aucun worktree ni branche créé. Le passage installed Mac a réussi. Sur SYS, installed a conservé les intermédiaires parce que l’inventaire du processus 109486, descripteur 7, était incomplet (process_record_unverifiable). Le processus était Bridget ; aucun arrêt ni nettoyage manuel n’a été tenté. Le cache mesuré par le dernier build restait à 4,15 Gio, sous le budget. La vue de revue et les images actives/retour restent conservées.
+
+## Complément du 19 novembre : échec terminal sans référence
+
+Signalement Parix `mcp-69813-6afe5ae2-7d`, tâche
+`28e95960-4e88-4edc-ad54-e8301307cac9` : échec générique et machine non
+visible dans le statut rapporté. La cause fournisseur de cette tâche n'est pas
+établie ; l'espace disque déclaré ne permet pas de la déduire.
+
+Défaut reproduit : `current_task_view` ajoutait `detail.provider_failure` pour
+plusieurs erreurs précises mais excluait `terminal Codex: failed`. Le nouveau
+test via le statut propriétaire échoue avant correction parce que le contexte
+est absent. Le cas générique utilise maintenant la même projection autorisée,
+avec machine distante ou hôte local, références d'exécution, ronde et mission.
+La cause reste `unobserved`, sans code HTTP inventé. Le guidage demande le
+diagnostic corrélé, conserve les fichiers et interdit une reprise implicite.
+Aucun changement de routage, de lancement, de droits ou d'état durable.
+
+Test ciblé vert après correction : propriétaire, refus étranger, projection
+abrégée sans détail, placement local et distant, conservation du store. La
+première comparaison de non-mutation utilisait l'objet avant normalisation de
+`save` ; elle compare désormais le store avant et après, comme le test voisin.
+Le nettoyage automatique a retiré 10,39 Gio d'intermédiaires après ce test.
+
+État observé à 03 h 13 Paris : maître Cartae toujours
+`288-preparation-guidage-r1`. Le statut natif des mises à jour donne Cartae,
+ksstore et sysle2 en `waiting_idle` pour 0.8.53. Ce complément n'est pas inclus
+dans les paquets 0.8.53 déjà publiés et ne doit pas être présenté comme actif.
+
+Qualification du complément : test ciblé, Clippy strict bibliothèque/tests et
+compilation release Mac réussis. Image `296-diagnostic-generique-r2` installée
+hors staging sans changer le lien actif, SHA-256
+`d4a677cc75e2d42cfd1137ec4aa0994f6d9de41aa5022970ea545b2d7b69eac5`.
+La revue indépendante native `01e3c488-83e8-469d-9764-fecb76adec29`
+(clé `bridget-296-generic-codex-review-20261119-r1`) n'a pas démarré :
+`remote_start_failed:remote_workspace_prepare:WorkerUnavailable`, SYS.
+Annulation propriétaire demandée ; reçu `cancelling`, conservation non confirmée.
+Aucune revue réussie ni fin physique n'est prétendue, aucun remplacement lancé.
+La livraison serveur reste incomplète : garde de maintenance, pas de bascule
+forcée, aucun arrêt de T3. L'image Mac seule ne qualifie pas le binaire Linux.
