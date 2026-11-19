@@ -64,3 +64,11 @@ Annulation propriétaire demandée ; reçu `cancelling`, conservation non confir
 Aucune revue réussie ni fin physique n'est prétendue, aucun remplacement lancé.
 La livraison serveur reste incomplète : garde de maintenance, pas de bascule
 forcée, aucun arrêt de T3. L'image Mac seule ne qualifie pas le binaire Linux.
+
+Relecture finale : revue `cancelled`, conservation native `confirmed` ; aucun
+rapport n'autorise la suppression de sa préparation. Après cette clôture, une
+tentative unique `updates prepare` sur Cartae refuse encore
+`update_missions_active_or_unconfirmed`, sans bail obtenu ni service arrêté.
+Le correctif source est poussé dans `89453b87`. Aucun nouveau worktree ou
+branche ; le passage `installed` garde 1,37 Gio de caches, sous le budget.
+Les images actives, de retour et les preuves sont conservées.
