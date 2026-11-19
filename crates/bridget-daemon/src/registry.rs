@@ -1279,6 +1279,32 @@ impl AgentRegistry {
         &self.source
     }
 
+    /// Une garde conserve son catalogue admis si le registre a seulement ajouté
+    /// des modèles. Aucun retrait ni changement d'une capacité déjà admise n'est
+    /// toléré. La comparaison finale garde tous les autres champs et le digest.
+    /// O(n log m), n modèles admis, m modèles actuellement déclarés.
+    pub(crate) fn retain_admitted_model_catalog(
+        mut self,
+        agent_type: &str,
+        admitted: &ResolvedAgentDefinition,
+    ) -> Result<Self, String> {
+        let definition = self
+            .agents
+            .get_mut(agent_type)
+            .ok_or("provider_unavailable")?;
+        let previous = &admitted.capabilities.models;
+        if previous.iter().any(|(model, capabilities)| {
+            definition.capabilities.models.get(model) != Some(capabilities)
+        }) {
+            return Err("definition_changed".into());
+        }
+        definition.capabilities.models = previous.clone();
+        if resolved_definition(definition)? != *admitted {
+            return Err("definition_changed".into());
+        }
+        Ok(self)
+    }
+
     /// Sélection native exacte, bornée par le catalogue et la posture.
     /// Le registre global et ses autres fournisseurs restent inchangés.
     pub(crate) fn for_delegation(

@@ -725,13 +725,12 @@ impl WorkerReadView<'_> {
                 WorkerRefusal::DefinitionChanged
             })?;
         trace.at("definition_identity");
-        if scoped
-            .resolved_definition(&prepared.request.agent_type)
-            .map_err(|_| WorkerRefusal::DefinitionChanged)?
-            != prepared.prepared.definition
-        {
-            return Err(WorkerRefusal::DefinitionChanged);
-        }
+        let scoped = scoped
+            .retain_admitted_model_catalog(
+                &prepared.request.agent_type,
+                &prepared.prepared.definition,
+            )
+            .map_err(|_| WorkerRefusal::DefinitionChanged)?;
         trace.at("launch_preflight");
         crate::lifecycle::launch_preflight(&scoped, &prepared.request.agent_type, self.source)
             .map_err(|_| WorkerRefusal::DefinitionChanged)?;

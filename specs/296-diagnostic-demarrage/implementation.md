@@ -72,3 +72,54 @@ tentative unique `updates prepare` sur Cartae refuse encore
 Le correctif source est poussé dans `89453b87`. Aucun nouveau worktree ou
 branche ; le passage `installed` garde 1,37 Gio de caches, sous le budget.
 Les images actives, de retour et les preuves sont conservées.
+
+## Complément du 19 novembre : catalogues ajoutés et gardes existantes
+
+Le diagnostic natif SYS du 19 novembre vers 15 h 31 Paris confirme une
+régression de configuration : la tâche 45e24100-69c9-467d-a821-f50b221aa703
+(génération 3751) refuse `DefinitionChanged` à `definition_identity`, tandis
+que 3e31758d-1116-4405-afc7-24c9361c3e11 (génération 3778) passe le contrôle.
+Le profil commun a reçu deux modèles après la première admission. Restaurer
+ce profil global casserait la seconde garde ; aucun reçu n'a été réécrit.
+
+Le recontrôle worker conserve désormais le catalogue figé de chaque admission
+si le registre courant l'inclut exactement. Les ajouts seuls sont acceptés ;
+retraits, efforts, niveaux de service, programme, compte, arguments et droits
+restent soumis à l'égalité complète de la définition et de son digest. Le
+registre réduit est éphémère, propre au contrôle ; le registre global et les
+reçus persistés restent intacts. Le coût comprend O(n log m) pour l'inclusion,
+O(n) pour la copie et O(B) pour la sérialisation canonique de la définition.
+
+Deux tests ciblés passent : catalogues ancien/nouveau et huit mutations
+refusées ; parcours worker de préparation et de continuation. Sur Mac, le
+second exige TMPDIR=/tmp car le chemin de socket de la fixture dépasse la
+limite Unix sous le répertoire temporaire par défaut. Clippy strict
+bibliothèque/tests et compilation release Mac passent. Le wrapper build.py
+ne prend pas en charge fmt ; rustfmt a été utilisé sans compilation directe.
+
+Revue indépendante native d6aeb0fe-1189-4354-a831-322fdaa7df6f : aucun défaut
+prouvé sur la continuation distante visée. Résultat lu, acquitté et garde
+clôturée ; vue conservée review_required. La revue relève séparément une
+attribution de compte local sensible à l'égalité du catalogue (daemon.rs) et
+une question sur les clés de quota par digest. Ces chemins ne sont pas la
+cause des deux gardes SYS et restent à traiter séparément, sans prétendre les
+avoir corrigés ici.
+
+Activation non effectuée : `updates prepare` sur le maître refuse encore
+`update_missions_active_or_unconfirmed`. Aucun bail, aucun arrêt de service,
+aucune nouvelle ronde métier. Le profil SYS courant est conservé pour la
+tâche 6.2. La correction compilée ne prouve pas le chargement par le worker.
+
+Qualification Linux : release compilée sur Debian 12, mêmes quatre sources
+que le Mac (hachages comparés). Le diagnostic en lecture seule sur les deux
+reçus réels franchit désormais definition_identity ; il refuse ensuite
+launch_preflight pour les deux. La preuve existante du programme porte le
+contrat a5c30e57..., alors que le candidat exige 4585e506... : cette preuve
+devra être renouvelée par le collecteur natif du nouveau worker lors d'une
+activation autorisée. La preuve de l'ancien worker n'a pas été remplacée.
+Le binaire actif conserve son refus pour l'ancienne garde et son succès pour
+la nouvelle. Aucun succès complet de continuation avec le candidat n'est
+affirmé. Preuves privées :
+/Users/moi/.cache/bridget-models-20261119/guards-before.json,
+/Users/moi/.cache/bridget-models-20261119/guards-candidate.json et
+/Users/moi/.cache/bridget-models-20261119/program-contract-sys.json.

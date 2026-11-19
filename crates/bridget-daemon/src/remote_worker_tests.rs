@@ -3075,6 +3075,21 @@ fn spec221_c05_worker_keeps_the_choice_through_readiness_and_release_recheck() {
         serde_json::from_slice(&serde_json::to_vec(&request).unwrap()).unwrap();
     assert_eq!(persisted.service_tier.as_deref(), Some("priority"));
     assert!(runtime.store.commands().unwrap().is_empty());
+    // Un ajout au catalogue ne change ni la définition ni les droits de cette
+    // garde, avant la remise comme lors d'une continuation déjà libérée.
+    value["agents"]["codex"]["capabilities"]["models"]["fixture-next"] =
+        serde_json::json!({"efforts":["high"]});
+    write_json(&runtime.config.registry_path, &value).unwrap();
+    for before_release in [true, false] {
+        assert_eq!(
+            runtime
+                .recheck_at(&prepared, before_release)
+                .unwrap()
+                .resolved_definition("codex")
+                .unwrap(),
+            readiness.definition
+        );
+    }
     value["agents"]["codex"]["capabilities"]["models"]["fixture"]["service_tiers"] =
         serde_json::json!(["default"]);
     write_json(&runtime.config.registry_path, &value).unwrap();

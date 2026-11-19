@@ -1,6 +1,102 @@
 use super::*;
 
 #[test]
+fn spec296_model_additions_preserve_both_admitted_definitions_without_new_rights() {
+    let initial = AgentRegistry::from_json("{}", "/tmp/registry-model-additions.json").unwrap();
+    let old = initial.resolved_definition("codex").unwrap();
+    let mut expanded = initial.clone();
+    expanded
+        .agents
+        .get_mut("codex")
+        .unwrap()
+        .capabilities
+        .models
+        .insert(
+            "fixture-next".into(),
+            ModelCapabilities {
+                efforts: vec!["high".into()],
+                service_tiers: vec![],
+            },
+        );
+    let newer = expanded
+        .clone()
+        .pin_delegation_model("codex", "fixture-next", Some("high"))
+        .unwrap();
+    let new = newer.resolved_definition("codex").unwrap();
+    for (current, admitted) in [(expanded.clone(), &old), (newer.clone(), &new)] {
+        assert_eq!(
+            current
+                .retain_admitted_model_catalog("codex", admitted)
+                .unwrap()
+                .resolved_definition("codex")
+                .unwrap(),
+            *admitted
+        );
+    }
+    assert!(
+        expanded
+            .get("codex")
+            .unwrap()
+            .capabilities
+            .models
+            .contains_key("fixture-next")
+    );
+    assert_eq!(initial.resolved_definition("codex").unwrap(), old);
+    assert!(
+        initial
+            .clone()
+            .retain_admitted_model_catalog("codex", &new)
+            .is_err()
+    );
+
+    // Le modèle sélectionné et toutes les autres sources d'autorité restent
+    // stricts, même en présence d'un ajout indépendant au catalogue.
+    for mutation in 0..8 {
+        let mut changed = expanded.clone();
+        let def = changed.agents.get_mut("codex").unwrap();
+        let selected = old.capabilities.models.keys().next().unwrap();
+        match mutation {
+            0 => {
+                def.capabilities.models.remove(selected);
+            }
+            1 => def
+                .capabilities
+                .models
+                .get_mut(selected)
+                .unwrap()
+                .efforts
+                .push("high".into()),
+            2 => def
+                .capabilities
+                .models
+                .get_mut(selected)
+                .unwrap()
+                .service_tiers
+                .push("priority".into()),
+            3 => def.command.push_str("-other"),
+            4 => def.permissions = "deny".into(),
+            5 => def.codex_home = Some("/other-account".into()),
+            6 => def.args.push("--other".into()),
+            7 => def.capabilities.execution_paths.push("other".into()),
+            _ => unreachable!(),
+        }
+        assert!(
+            changed
+                .retain_admitted_model_catalog("codex", &old)
+                .is_err(),
+            "mutation {mutation}"
+        );
+    }
+    let mut forged = old.clone();
+    forged.digest = "0".repeat(64);
+    assert!(
+        expanded
+            .retain_admitted_model_catalog("codex", &forged)
+            .is_err()
+    );
+}
+
+#[test]
 fn spec_091_development_is_scoped_and_denies_extension() {
     use bridget_transport::protocol::SpawnPosture;
     let registry = AgentRegistry::from_json(r#"{"agents":{}}"#, "/tmp/registry-091.json").unwrap();
