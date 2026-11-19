@@ -5674,3 +5674,20 @@ for line in sys.stdin:
     assert!(!rpc.contains("\"method\":\"turn/start\""));
     std::fs::remove_dir_all(root).unwrap();
 }
+
+#[test]
+fn incident303_codex_terminal_keeps_structured_usage_limit() {
+    let mut frame = json!({"params":{"turn":{"error":{
+        "codexErrorInfo":"usageLimitExceeded",
+        "message":"PRIVATE_PROVIDER_MESSAGE"
+    }}}});
+    assert!(matches!(
+        codex_turn_terminal(&frame, "failed"),
+        ManagedTerminal::Failed { detail } if detail == "usage_limit"
+    ));
+    assert_eq!(codex_turn_stop_reason(&frame, "failed"), "usage_limit");
+    assert_eq!(codex_turn_stop_reason(&frame, "completed"), "completed");
+    frame["params"]["turn"]["error"]["codexErrorInfo"] = json!("other");
+    frame["params"]["turn"]["error"]["message"] = json!("usage_limit_exceeded");
+    assert_eq!(codex_turn_stop_reason(&frame, "failed"), "failed");
+}

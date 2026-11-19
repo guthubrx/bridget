@@ -4759,17 +4759,19 @@ fn project_request_id(request_id: &Value) -> String {
 }
 // Project only an attested protocol code; keep unknown interactive stop reasons unchanged.
 fn codex_turn_stop_reason<'a>(value: &Value, status: &'a str) -> &'a str {
-    if status == "failed"
-        && value
-            .pointer("/params/turn/error/codexErrorInfo")
-            .and_then(Value::as_str)
-            == Some("serverOverloaded")
+    if status != "failed" {
+        return status;
+    }
+    match value
+        .pointer("/params/turn/error/codexErrorInfo")
+        .and_then(Value::as_str)
     {
-        "terminal Codex: failed:cause=server_overloaded"
-    } else if status == "failed" && codex_model_not_found217(value) {
-        "terminal Codex: failed:cause=model_not_found"
-    } else {
-        status
+        Some("usageLimitExceeded") => "usage_limit",
+        Some("serverOverloaded") => "terminal Codex: failed:cause=server_overloaded",
+        Some("other") if codex_model_not_found217(value) => {
+            "terminal Codex: failed:cause=model_not_found"
+        }
+        _ => status,
     }
 }
 

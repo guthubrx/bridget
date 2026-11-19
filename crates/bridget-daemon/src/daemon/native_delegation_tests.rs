@@ -28335,3 +28335,85 @@ fn incident302_catalogue_child_uses_placement_not_display_hostname() {
         cleanup(&config);
     }
 }
+
+#[test]
+fn incident303_reports_model_excluded_by_machine_placement() {
+    let (state, config, rx, _reader, mut request, _root) = routing168_fixture(1);
+    {
+        let mut st = state.lock().unwrap();
+        st.host = "coordinator303".into();
+        st.presences.get_mut("instance-1").unwrap().host = "coordinator303".into();
+    }
+    request.machine_id = Some("worker-host303".into());
+    routing168_update(&state, |value| {
+        value["routing_policy"]["connections"][0]["machine_id"] = json!("worker-host303");
+        value["routing_policy"]["machine_policies"]["worker-host303"] = json!({"enabled":true});
+        value["machines"] = json!({"worker-host303":{
+            "enabled":true,"worker_id":"worker303","provisioning_revision":1,
+            "credential_fingerprint":format!("{:x}",sha2::Sha256::digest(b"worker303")),
+            "allowed_agent_types":[],"mappings":{}
+        }});
+    });
+    let DaemonToWrapper::NativeDelegationResult { result } = handle(
+        "conn-1",
+        NativeDelegationRequest::AutoDelegateV2(request),
+        &state,
+    ) else {
+        panic!("refus natif attendu");
+    };
+    assert_eq!(result["code"], "routing_candidate_unavailable");
+    assert_eq!(result["detail"]["cause"], "machine_agent_type_not_allowed");
+    assert_eq!(result["detail"]["admission"]["state"], "not_recorded");
+    assert!(rx.try_recv().is_err());
+    drop(state);
+    cleanup(&config);
+}
+
+#[test]
+fn incident303_usage_limit_reports_scoped_reset_without_scheduling_resume() {
+    for scope in ["none", "other_instance", "current_instance"] {
+        let (state, config, task, _parent, _child) = native160_mission(false);
+        let reset = unix_timestamp() + 7 * 86400;
+        if scope == "current_instance" {
+            native160_quota(&state, &task, reset);
+            transition_wrapper_152(&state, &task, "failed");
+        } else if scope == "other_instance" {
+            let NativeDelegationRequest::Delegate { agent_type, .. } = &task.request else {
+                panic!("mission attendue");
+            };
+            state.lock().unwrap().provider_limits.record_scoped(
+                agent_type,
+                "other-instance303",
+                bridget_transport::protocol::RateLimitFact {
+                    credits: None,
+                    window: "weekly".into(),
+                    status: "rate_limit_reached".into(),
+                    resets_at: Some(reset),
+                    used_percent: Some(100),
+                },
+                bridget_transport::protocol::RateLimitSource::CodexAppServer,
+                unix_timestamp(),
+            );
+        }
+        let rejection = WrapperToDaemon::DeliveryRejected {
+            id: task.mission.clone(),
+            reason: "usage_limit".into(),
+            execution_id: Some(format!("execution-{}", task.mission)),
+            generation: Some(1),
+        };
+        assert!(handle_wrapper_message("child-conn", rejection, &state).is_none());
+        let st = state.lock().unwrap();
+        let saved = st.delegation_store.get(&task.task_id).unwrap().unwrap();
+        let view = task_view(&saved, None, true);
+        assert_eq!(view["status"], "failed");
+        assert_eq!(view["error"], "usage_limit");
+        assert_eq!(
+            view["detail"]["limit_reset_at"],
+            json!((scope == "current_instance").then_some(reset))
+        );
+        assert_eq!(view["quota_wait"], Value::Null);
+        drop(st);
+        drop(state);
+        cleanup(&config);
+    }
+}

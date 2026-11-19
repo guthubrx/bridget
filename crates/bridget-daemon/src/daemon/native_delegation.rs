@@ -1531,6 +1531,7 @@ fn observe_routing_candidates_for_project(
     let mut local_tool_refusals = Vec::new();
     let mut local_profile_refusals = Vec::new();
     let mut mapping_refusals = BTreeMap::new();
+    let mut disallowed_agent_types = 0;
     let mut option_accounts = HashMap::new();
     let mut option_refusals = Vec::new();
     let (parent, mut observations, batches, host) = {
@@ -1722,6 +1723,7 @@ fn observe_routing_candidates_for_project(
                 continue;
             };
             if !provision.permits_agent_type(&candidate.agent_type) {
+                disallowed_agent_types += 1;
                 continue;
             }
             let resolved = mappings
@@ -2012,6 +2014,8 @@ fn observe_routing_candidates_for_project(
             }
         }
     }
+    let all_agent_types_disallowed =
+        disallowed_agent_types != 0 && disallowed_agent_types == plan.candidates.len();
     let mut candidates = Vec::with_capacity(plan.candidates.len());
     let mut facts = Vec::with_capacity(plan.candidates.len());
     for (index, candidate) in plan.candidates.drain(..).enumerate() {
@@ -2037,7 +2041,9 @@ fn observe_routing_candidates_for_project(
         }
     }
     if plan.candidates.is_empty() {
-        return Err(if !option_refusals.is_empty() {
+        return Err(if all_agent_types_disallowed {
+            "routing_candidate_unavailable:machine_agent_type_not_allowed".into()
+        } else if !option_refusals.is_empty() {
             if option_refusals
                 .iter()
                 .all(|code| code == "model_options_not_announced")
@@ -5169,6 +5175,14 @@ fn failure(code: &str) -> Value {
                 "human_action":"Si la combinaison autorisée manque, demandez au responsable Bridget de vérifier sa déclaration, son activation et sa qualification sur la machine prévue. Si une contrainte doit changer, demandez à l’utilisateur laquelle ; ne changez pas de compte, de modèle, de droits ou de machine automatiquement. Conservez request_id et tous les paramètres tant que le sort de la demande n’est pas établi."}});
     }
 
+    if code == "routing_candidate_unavailable:machine_agent_type_not_allowed" {
+        let message = "Faites vérifier les types d’agents autorisés sur la machine demandée. La politique de placement exclut tous les profils qui correspondent à cette demande.";
+        return json!({"status":"refused","code":"routing_candidate_unavailable","message":message,
+            "detail":{"message":message,"stage":"candidate_placement",
+                "cause":"machine_agent_type_not_allowed","scope":"this_admission",
+                "recovery":"Conservez la clé et les contraintes. Demandez au responsable Bridget de vérifier allowed_agent_types pour ce profil et cette machine. Après correction, rejouez la même enveloppe uniquement si detail.admission confirme not_recorded et que tout appel concurrent est terminé. Les autres travaux autorisés suivent leur propre état.",
+                "human_action":"Si le profil doit être ajouté, demandez au responsable de valider l’autorisation de placement exacte. Aucun autre compte ou modèle n’est choisi par ce refus."}});
+    }
     if let Some(encoded) = code.strip_prefix("routing_candidate_unavailable:") {
         // O(R), R <=128. Refuser le contenu libre avant toute projection MCP.
         use bridget_transport::protocol::{CandidateProbeRefusal, WorkerRefusal};
@@ -6496,9 +6510,18 @@ fn task_view(task: &Task, phase: Option<&str>, full: bool) -> Value {
         && let Some(reset_at) = encoded.get("limit_reset_at").and_then(Value::as_i64)
     {
         view["error"] = json!("usage_limit");
-        if let Some(detail) = view["detail"].as_object_mut() {
-            detail.insert("limit_reset_at".into(), json!(reset_at));
+        if !view["detail"].is_object() {
+            view["detail"] = json!({});
         }
+        view["detail"]["limit_reset_at"] = json!(reset_at);
+    }
+    if task.projected_error() == Some("usage_limit") {
+        view["error_message"] = json!(
+            "Le fournisseur a signalé une limite d’usage pour cette tâche. Si detail.limit_reset_at est renseigné, il donne la date de réinitialisation de la fenêtre observée sur cette instance ; sinon l’échéance reste inconnue."
+        );
+        view["error_recovery"] = json!(
+            "Conservez la tâche, sa clé et ses fichiers. Vérifiez l’arrêt natif et le rapport du dossier avant de poursuivre le travail restant. La reprise automatique exige un opt-in de cette mission et un retour attesté dans les six heures. Les autres travaux autorisés suivent leur propre état."
+        );
     }
     view["substitution"] = json!(task.substitution);
     if let Some(workspace) = &task.workspace {
@@ -13378,6 +13401,21 @@ pub(super) fn rejected(
             && pause_covers(st, &snapshot.execution_id, true)?
         {
             return Ok(NativeRejection::PauseInterruption);
+        }
+        if reason == "usage_limit" {
+            let now = unix_timestamp();
+            task.error = Some(match qualify_quota(&task, now, &st.provider_limits) {
+                Qualification::Wait { reset_at }
+                | Qualification::TooFar { reset_at }
+                | Qualification::Past { reset_at }
+                | Qualification::RoundsDone { reset_at } => {
+                    json!({"code":"usage_limit","limit_reset_at":reset_at}).to_string()
+                }
+                Qualification::NoFact => reason.into(),
+            });
+            task.state = "failed".into();
+            st.delegation_store.save(&task)?;
+            return Ok(NativeRejection::NativeFailed);
         }
         task.state = "failed".into();
         task.error = Some(reason.chars().take(1024).collect());
