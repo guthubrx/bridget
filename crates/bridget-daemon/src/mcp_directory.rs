@@ -6,6 +6,16 @@ use bridget_transport::protocol::{CommunicationDirectoryScope, ScopedAgentInfo};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 pub(super) const MAX_PAGE: usize = 24 * 1024;
+pub(super) const MIN_LIMIT: u64 = 1;
+pub(super) const MAX_LIMIT: u64 = 100;
+pub(super) const DEFAULT_LIMIT: u64 = 20;
+
+#[derive(Debug)]
+pub(super) enum InvalidOption {
+    Limit,
+    Other(&'static str),
+}
+
 #[derive(Debug)]
 pub(super) struct Options {
     limit: usize,
@@ -16,25 +26,24 @@ fn invalid(s: &str) -> ToolError {
     ToolError::InvalidParams(s.into())
 }
 impl Options {
-    pub(super) fn parse(a: &serde_json::Map<String, Value>) -> Result<Self, ToolError> {
+    pub(super) fn parse(a: &serde_json::Map<String, Value>) -> Result<Self, InvalidOption> {
         let limit = match a.get("limit") {
-            None => 20,
+            None => DEFAULT_LIMIT,
             Some(v) => v
                 .as_u64()
-                .filter(|v| (1..=100).contains(v))
-                .ok_or_else(|| invalid("limit doit être un entier de 1 à 100"))?
-                as usize,
-        };
+                .filter(|v| (MIN_LIMIT..=MAX_LIMIT).contains(v))
+                .ok_or(InvalidOption::Limit)?,
+        } as usize;
         let stopped = match a.get("include_stopped") {
             None => false,
             Some(Value::Bool(v)) => *v,
-            _ => return Err(invalid("include_stopped doit être un booléen")),
+            _ => return Err(InvalidOption::Other("include_stopped doit être un booléen")),
         };
         let cursor = match a.get("cursor") {
             None => None,
             Some(Value::String(s)) if !s.is_empty() && s.len() <= 1024 => Some(s.clone()),
             _ => {
-                return Err(invalid(
+                return Err(InvalidOption::Other(
                     "cursor doit être le next_cursor reçu, au plus 1024 octets",
                 ));
             }
@@ -42,7 +51,7 @@ impl Options {
         if let Some(Value::String(s)) = a.get("domain")
             && (s.len() > 256 || s.chars().any(char::is_control))
         {
-            return Err(invalid(
+            return Err(InvalidOption::Other(
                 "domain doit rester borné à 256 octets sans contrôle",
             ));
         }

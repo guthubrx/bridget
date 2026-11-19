@@ -7206,3 +7206,51 @@ fn spec279_send_receipt_names_default_and_explicit_reply_budget_without_changing
         );
     }
 }
+
+#[test]
+fn incident304_who_limit_refusal_is_a_structured_tool_result() {
+    let mut session = Session {
+        initialize_seen: true,
+        initialized: true,
+    };
+    let resolve = || {
+        Ok(crate::mcp_identity::ResolvedIdentity {
+            name: "caller304".into(),
+            instance_id: "instance304".into(),
+            delegated_origin: None,
+        })
+    };
+    for limit in [json!(200), json!(0), json!("100"), Value::Null] {
+        let request = json!({
+            "jsonrpc":"2.0","id":304,"method":"tools/call",
+            "params":{"name":"bridget_who","arguments":{"scope":"same_project","limit":limit}}
+        });
+        let response = dispatch_with_executor(
+            &request,
+            &mut session,
+            &resolve,
+            &|identity, name, arguments| {
+                assert_eq!(name, "bridget_who");
+                execute_who(
+                    &identity.name,
+                    &identity.instance_id,
+                    arguments.as_object().unwrap(),
+                    Path::new("/absent304/socket"),
+                )
+            },
+        )
+        .unwrap();
+        let result = &response["result"];
+        let refusal = &result["structuredContent"];
+        assert_eq!(result["isError"], true, "{response}");
+        assert_eq!(refusal["status"], "error");
+        assert_eq!(refusal["code"], "who_limit_invalid");
+        assert_eq!(refusal["field"], "limit");
+        assert_eq!(refusal["minimum"], 1);
+        assert_eq!(refusal["maximum"], 100);
+        assert_eq!(
+            serde_json::from_str::<Value>(result["content"][0]["text"].as_str().unwrap()).unwrap(),
+            *refusal
+        );
+    }
+}

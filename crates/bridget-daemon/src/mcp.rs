@@ -1864,7 +1864,26 @@ fn execute_who(
         arguments,
         &["domain", "scope", "limit", "cursor", "include_stopped"],
     )?;
-    let options = directory::Options::parse(arguments)?;
+    let options = match directory::Options::parse(arguments) {
+        Ok(options) => options,
+        Err(directory::InvalidOption::Limit) => {
+            return Ok(json!({
+                "status": "error",
+                "code": "who_limit_invalid",
+                "field": "limit",
+                "minimum": directory::MIN_LIMIT,
+                "maximum": directory::MAX_LIMIT,
+                "retryable": false,
+                "detail": format!(
+                    "Choisissez un entier de {} à {} pour limit. Pour la page suivante, recopiez next_cursor avec les mêmes filtres.",
+                    directory::MIN_LIMIT, directory::MAX_LIMIT
+                )
+            }));
+        }
+        Err(directory::InvalidOption::Other(message)) => {
+            return Err(ToolError::InvalidParams(message.into()));
+        }
+    };
     let scope = match arguments.get("scope") {
         None => bridget_transport::protocol::CommunicationDirectoryScope::SameProject,
         Some(Value::String(scope)) if scope == "same_project" => {
@@ -3046,10 +3065,11 @@ pub(crate) fn tools() -> Vec<Value> {
         }),
         json!({
             "name": "bridget_who",
-            "description": "Annuaire par pages de 24 Kio au plus, 20 agents par défaut. Les présences arrêtées sont masquées sauf include_stopped=true. Recopier next_cursor avec les mêmes filtres ; annuaire vivant, sans snapshot. scope=global affiche volontairement les autres projets sans autoriser un envoi extérieur. Projet inconnu : aucun candidat local.",
+            "description": format!("Annuaire par pages de 24 Kio au plus. limit accepte un entier de {} à {}, {} par défaut. Une valeur invalide renvoie who_limit_invalid. Les présences arrêtées sont masquées sauf include_stopped=true. Recopier next_cursor avec les mêmes filtres ; annuaire vivant, sans snapshot. scope=global affiche volontairement les autres projets sans autoriser un envoi extérieur. Projet inconnu : aucun candidat local.",
+                directory::MIN_LIMIT, directory::MAX_LIMIT, directory::DEFAULT_LIMIT),
             "inputSchema": {
                 "type": "object",
-                "properties": { "domain": { "type": "string", "maxLength":256 }, "scope": {"enum":["same_project","global"],"default":"same_project"}, "limit":{"type":"integer","minimum":1,"maximum":100,"default":20}, "cursor":{"type":"string","minLength":1,"maxLength":1024,"description":"next_cursor reçu, mêmes scope/domain/include_stopped ; limit peut changer."}, "include_stopped":{"type":"boolean","default":false} },
+                "properties": { "domain": { "type": "string", "maxLength":256 }, "scope": {"enum":["same_project","global"],"default":"same_project"}, "limit":{"type":"integer","minimum":directory::MIN_LIMIT,"maximum":directory::MAX_LIMIT,"default":directory::DEFAULT_LIMIT,"description":"Entier de 1 à 100. La limite de 24 Kio peut réduire le nombre de lignes renvoyées."}, "cursor":{"type":"string","minLength":1,"maxLength":1024,"description":"next_cursor reçu, mêmes scope/domain/include_stopped ; limit peut changer."}, "include_stopped":{"type":"boolean","default":false} },
                 "additionalProperties": false
             }
         }),
