@@ -81,6 +81,7 @@ fn cwd_outside_parent(operation: &OriginProofOperation) -> bool {
 fn exchange(
     state: &Arc<Mutex<DaemonState>>,
     host: &str,
+    expected_worker: Option<&WorkerIdentity>,
     mut operation: OriginProofOperation,
     budget: Duration,
 ) -> Result<OriginProofResult, String> {
@@ -95,6 +96,9 @@ fn exchange(
             .remote_workers
             .get(host)
             .ok_or("origin_worker_unavailable")?;
+        if expected_worker.is_some_and(|expected| expected != &worker.identity) {
+            return Err("origin_worker_unavailable".into());
+        }
         if let OriginProofOperation::PrepareProject { return_context, .. } = &mut operation {
             *return_context = worker
                 .capabilities
@@ -405,6 +409,7 @@ pub(super) fn communication_project(
     let result = exchange(
         state,
         host,
+        None,
         OriginProofOperation::CommunicationProject {
             root: root.to_owned(),
             source,
@@ -491,6 +496,7 @@ pub(super) fn reattest(
             let result = exchange(
                 state,
                 host,
+                None,
                 OriginProofOperation::Attest {
                     expected_thread: binding.3.clone(),
                     proof: proof.clone(),
@@ -578,7 +584,7 @@ pub(super) fn sources(
         };
         // L'hôte vient de la Task attestée. Aucune route de tour, ni credential,
         // n'est nécessaire pour relire les mêmes fichiers sur cet hôte provisionné.
-        let response = exchange(state, &host, operation, Duration::from_secs(30))?;
+        let response = exchange(state, &host, None, operation, Duration::from_secs(30))?;
         let st = state.lock().recover_poison();
         let current = st
             .delegation_store
@@ -743,9 +749,12 @@ fn parent_operation(
 ) -> Result<Option<OriginProofResult>, String> {
     let binding = {
         let st = state.lock().recover_poison();
-        let Some(host) = foreign_host(&st, owner)? else {
+        // Le placement natif est une identité de worker ; le nom affiché
+        // par le système peut être différent (par exemple backup / sysle2).
+        let host = host_for_owner(&st, owner)?;
+        if host == st.host {
             return Ok(None);
-        };
+        }
         let route = st
             .router
             .get_agent(owner)
@@ -755,7 +764,16 @@ fn parent_operation(
             .get(&route.connection_id)
             .cloned()
             .ok_or("origin_binding_unavailable")?;
-        (host, route.connection_id.clone(), instance)
+        let worker = st
+            .delegation_store
+            .for_child(owner)?
+            .and_then(|task| task.remote_placement)
+            .map(|placement| WorkerIdentity {
+                machine_id: placement.machine_id,
+                worker_id: placement.worker_id,
+                provisioning_revision: placement.provisioning_revision,
+            });
+        (host, route.connection_id.clone(), instance, worker)
     };
     let expected_kind = match &operation {
         OriginProofOperation::Sources { .. } => 0,
@@ -763,16 +781,35 @@ fn parent_operation(
         OriginProofOperation::Catalogue { .. } => 2,
         _ => return Err("origin_proof_unavailable".into()),
     };
-    let result = exchange(state, &binding.0, operation, budget)?;
+    let result = exchange(state, &binding.0, binding.3.as_ref(), operation, budget)?;
     let st = state.lock().recover_poison();
+    let current_worker = st
+        .delegation_store
+        .for_child(owner)?
+        .and_then(|task| task.remote_placement)
+        .map(|placement| WorkerIdentity {
+            machine_id: placement.machine_id,
+            worker_id: placement.worker_id,
+            provisioning_revision: placement.provisioning_revision,
+        });
     if st
         .router
         .get_agent(owner)
         .is_none_or(|r| r.connection_id != binding.1)
         || st.conn_instances.get(&binding.1) != Some(&binding.2)
-        || foreign_host(&st, owner)?.as_deref() != Some(&binding.0)
+        || host_for_owner(&st, owner)? != binding.0
+        || current_worker != binding.3
     {
         return Err("origin_binding_unavailable".into());
+    }
+    if binding.3.as_ref().is_some_and(|expected| {
+        !worker_is_current(&st, &binding.0)
+            || st
+                .remote_workers
+                .get(&binding.0)
+                .is_none_or(|worker| &worker.identity != expected)
+    }) {
+        return Err("origin_worker_unavailable".into());
     }
     let permission_digest = match (&result, expected_kind) {
         (

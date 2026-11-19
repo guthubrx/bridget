@@ -4910,6 +4910,11 @@ mod incident240_tests {
 }
 
 fn failure(code: &str) -> Value {
+    if matches!(code, "origin_worker_unavailable" | "origin_proof_unavailable") {
+        let mut result = origin_attestation_refusal(code);
+        result["code"] = json!(code);
+        return result;
+    }
     if super::origin_proof::rejected_reason(code).is_some() {
         return origin_attestation_refusal(code);
     }
@@ -7620,7 +7625,7 @@ fn foreign_catalogue177(
         recheck_attested_thread(&st, conn, thread)?;
         let (owner, instance) =
             live_connection_identity(&st, conn).ok_or("identity_unavailable")?;
-        if super::origin_proof::foreign_host(&st, &owner)?.is_none() {
+        if super::origin_proof::host_for_owner(&st, &owner)? == st.host {
             return Ok(None);
         }
         let parent = parent_fact(&st, &owner, &instance, None, attested)?

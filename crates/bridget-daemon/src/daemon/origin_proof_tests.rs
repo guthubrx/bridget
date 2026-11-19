@@ -290,7 +290,7 @@ fn spec221_c19_origin_reader_never_receives_creation_source_or_prepare() {
         },
     ] {
         assert_eq!(
-            exchange(&shared, "origin177", operation, Duration::from_secs(1)),
+            exchange(&shared, "origin177", None, operation, Duration::from_secs(1)),
             Err(if crate::workspace_git::COMMIT_VIEW_LAUNCH_ENABLED {
                 "origin_commit_view_unsupported"
             } else {
@@ -635,6 +635,7 @@ fn mobile177_origin_real_wire_correlates_once_and_timeout_drops_pending() {
         exchange(
             &shared,
             "origin177",
+            None,
             operation.clone(),
             Duration::from_secs(2)
         ),
@@ -642,7 +643,7 @@ fn mobile177_origin_real_wire_correlates_once_and_timeout_drops_pending() {
     ));
     fake.join().unwrap();
     // Transport indisponible : aucune attente durable et aucune remise métier.
-    assert!(exchange(&shared, "origin177", operation, Duration::from_millis(20)).is_err());
+    assert!(exchange(&shared, "origin177", None, operation, Duration::from_millis(20)).is_err());
     assert!(shared.lock().unwrap().pending_origin_proofs.is_empty());
     assert!(
         shared
@@ -738,6 +739,7 @@ fn mobile177_origin_live_two_hosts_no_task_or_provider_launch() {
     let result = exchange(
         &shared,
         "origin177",
+        None,
         OriginProofOperation::Attest {
             expected_thread: expected.into(),
             proof: private.clone(),
@@ -766,6 +768,7 @@ fn mobile177_origin_live_two_hosts_no_task_or_provider_launch() {
     let result = exchange(
         &shared,
         "origin177",
+        None,
         OriginProofOperation::Sources {
             parent: parent.clone(),
             source: Some(source),
@@ -797,6 +800,7 @@ fn mobile177_origin_live_two_hosts_no_task_or_provider_launch() {
             let result = exchange(
                 &shared,
                 "origin177",
+                None,
                 prepare.clone(),
                 Duration::from_secs(300),
             )
@@ -817,6 +821,7 @@ fn mobile177_origin_live_two_hosts_no_task_or_provider_launch() {
         exchange(
             &shared,
             "origin177",
+            None,
             OriginProofOperation::Attest {
                 expected_thread: "other-thread177".into(),
                 proof: private

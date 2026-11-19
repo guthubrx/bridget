@@ -28108,3 +28108,230 @@ fn incident301_probe_refusal_workspace_unknown_guides_correlated_diagnosis_witho
         assert!(human.contains(expected), "{human}");
     }
 }
+
+#[test]
+fn incident302_catalogue_child_uses_placement_not_display_hostname() {
+    use bridget_transport::protocol::{
+        OriginProofOperation, OriginProofResponse, OriginProofResult, WorkerCapability,
+        WorkerHello, WorkerHelloWithCapabilities, WorkerIdentity,
+    };
+    use sha2::Digest;
+    for scenario in [
+        "nominal",
+        "worker_changed",
+        "revision_changed",
+        "instance_changed",
+        "placement_changed",
+        "permissions_changed",
+    ] {
+        let (state, config, mut task, _parent, _child) = native160_mission(false);
+        let worker = WorkerIdentity {
+            machine_id: "sys302".into(),
+            worker_id: "worker302".into(),
+            provisioning_revision: 1,
+        };
+        let (writer, peer) = UnixStream::pair().unwrap();
+        {
+            let mut st = state.lock().unwrap();
+            st.registry = AgentRegistry::from_json(
+                &json!({"machines":{"sys302":{
+            "enabled":true,"worker_id":"worker302","provisioning_revision":1,
+            "credential_fingerprint":format!("{:x}",sha2::Sha256::digest(b"key302")),
+            "allowed_agent_types":[],"mappings":{}}}})
+                .to_string(),
+                "/tmp/registry302.json",
+            )
+            .unwrap();
+            st.connection_roles
+                .insert("worker302".into(), super::super::ConnectionRole::Worker);
+            st.peer_uids.insert(
+                "worker302".into(),
+                bridget_transport::fsutil::effective_uid(),
+            );
+            st.connections.insert(
+                "worker302".into(),
+                Arc::new(Mutex::new(BufWriter::new(writer))),
+            );
+            task.remote_placement = Some(bridget_transport::protocol::RemotePlacement {
+                machine_id: worker.machine_id.clone(),
+                worker_id: worker.worker_id.clone(),
+                provisioning_revision: 1,
+                project_id: "project302".into(),
+                mapping_revision: 1,
+                origin_host: "parent302".into(),
+                origin_cwd: "/parent302".into(),
+                source_root_identity: "repo302".into(),
+                relative_cwd: ".".into(),
+                execution_cwd: task.cwd.clone(),
+                base_commit: None,
+                definition_digest: "a".repeat(64),
+                permission_digest: "b".repeat(64),
+            });
+            st.delegation_store.save(&task).unwrap();
+            st.presences
+                .get_mut(task.child_instance.as_ref().unwrap())
+                .unwrap()
+                .host = "backup302".into();
+        }
+        let accepted = super::super::handle_worker_message(
+            &state,
+            "worker302",
+            WrapperToDaemon::WorkerHelloWithCapabilities {
+                hello: WorkerHelloWithCapabilities {
+                    hello: WorkerHello {
+                        version: 1,
+                        identity: worker,
+                        credential: bridget_transport::protocol::IdentityCredential::new(
+                            "key302".into(),
+                        ),
+                        build: "fixture302".into(),
+                        capability: ClientCapability::RemoteWorkerV1,
+                    },
+                    capabilities: vec![WorkerCapability::OriginProofV1],
+                },
+            },
+        );
+        assert!(matches!(
+            accepted,
+            Some(DaemonToWrapper::WorkerAcceptedWithCapabilities { .. })
+        ));
+        let permissions = bridget_transport::protocol::ProviderPermissions {
+            version: 1,
+            source: "provider_turn".into(),
+            run_id: "run302".into(),
+            provider_session_id: "session302".into(),
+            provider_instance_id: "instance302".into(),
+            revision: 1,
+            driver: "codex_app_server".into(),
+            cwd: task.cwd.clone(),
+            runtime_mode: "full-access".into(),
+            interaction_mode: "default".into(),
+            provider_policy: json!({"kind":"codex","approval_policy":"never","approvals_reviewer":"user","sandbox_policy":{"type":"dangerFullAccess"}}),
+        };
+        if scenario == "worker_changed" || scenario == "revision_changed" {
+            let placement = task.remote_placement.as_mut().unwrap();
+            if scenario == "worker_changed" {
+                placement.worker_id = "previous-worker302".into();
+            } else {
+                placement.provisioning_revision = 2;
+            }
+            state.lock().unwrap().delegation_store.save(&task).unwrap();
+        }
+        let mut digest = format!(
+            "{:x}",
+            sha2::Sha256::digest(serde_json::to_vec(&permissions).unwrap())
+        );
+        if scenario == "permissions_changed" {
+            digest = "0".repeat(64);
+        }
+        let worker_state = state.clone();
+        let response_task = task.clone();
+        let fake = std::thread::spawn(move || {
+            peer.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
+            let mut reader = BufReader::new(peer);
+            let mut line = String::new();
+            if reader.read_line(&mut line).is_err() || line.is_empty() {
+                return false;
+            }
+            let DaemonToWrapper::OriginProofRequest { request } =
+                serde_json::from_str(&line).unwrap()
+            else {
+                panic!("origin request");
+            };
+            assert_eq!(request.worker.machine_id, "sys302");
+            assert!(matches!(
+                request.request,
+                OriginProofOperation::Catalogue { .. }
+            ));
+            let mut st = worker_state.lock().unwrap();
+            if scenario == "instance_changed" {
+                let conn = st
+                    .router
+                    .get_agent(&response_task.child)
+                    .unwrap()
+                    .connection_id
+                    .clone();
+                st.conn_instances.insert(conn, "changed-instance302".into());
+            } else if scenario == "placement_changed" {
+                let mut changed = response_task.clone();
+                changed
+                    .remote_placement
+                    .as_mut()
+                    .unwrap()
+                    .provisioning_revision += 1;
+                st.delegation_store.save(&changed).unwrap();
+            }
+            super::super::origin_proof::receive(
+                &mut st,
+                "worker302",
+                OriginProofResponse {
+                    version: 1,
+                    correlation_id: request.correlation_id,
+                    connection_epoch: request.connection_epoch,
+                    worker: request.worker,
+                    response: OriginProofResult::Catalogue {
+                        permission_digest: digest,
+                        entries: vec![],
+                    },
+                },
+            );
+            true
+        });
+        let result =
+            super::super::origin_proof::catalogue(&state, &task.child, &permissions, vec![]);
+        let routed = fake.join().unwrap();
+        let expected = match scenario {
+            "worker_changed" | "revision_changed" => Err("origin_worker_unavailable".into()),
+            "instance_changed" | "placement_changed" => Err("origin_binding_unavailable".into()),
+            "permissions_changed" => Err("remote_parent_proof_changed".into()),
+            _ => Ok(vec![]),
+        };
+        assert_eq!(result, expected, "{scenario}");
+        assert_eq!(
+            routed,
+            !matches!(scenario, "worker_changed" | "revision_changed")
+        );
+        if scenario != "nominal" {
+            drop(state);
+            cleanup(&config);
+            continue;
+        }
+        assert_eq!(
+            state
+                .lock()
+                .unwrap()
+                .delegation_store
+                .get(&task.task_id)
+                .unwrap()
+                .unwrap()
+                .remote_placement,
+            task.remote_placement
+        );
+        state
+            .lock()
+            .unwrap()
+            .remote_workers
+            .get_mut("sys302")
+            .unwrap()
+            .capabilities
+            .clear();
+        assert_eq!(
+            super::super::origin_proof::catalogue(&state, &task.child, &permissions, vec![]),
+            Err("origin_worker_unavailable".into())
+        );
+        for code in ["origin_worker_unavailable", "origin_proof_unavailable"] {
+            let refused = failure(code);
+            assert_eq!(refused["code"], code);
+            assert_eq!(refused["detail"]["scope"], "this_attestation");
+            assert_eq!(refused["detail"]["cause"], code);
+            assert!(
+                refused["detail"]["recovery"]
+                    .as_str()
+                    .unwrap()
+                    .contains("mission de remplacement")
+            );
+        }
+        drop(state);
+        cleanup(&config);
+    }
+}
