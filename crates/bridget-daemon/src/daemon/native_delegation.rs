@@ -7865,6 +7865,26 @@ fn handle_with_fact(
     if let (Some(request), DaemonToWrapper::NativeDelegationResult { result }) =
         (explicit, &mut response)
     {
+        if result["code"] == "cwd_unavailable"
+            && matches!(&request, NativeDelegationRequest::Delegate { machine_id: None, .. })
+        {
+            let st = state.lock().recover_poison();
+            if let Some((owner, _)) = live_connection_identity(&st, conn)
+                && super::origin_proof::host_for_owner(&st, &owner)
+                    .is_ok_and(|origin| origin != st.host)
+            {
+                let message = "Indiquez la machine où la tâche doit s’exécuter. Sans machine_id, cette demande directe a cherché le dossier sur le coordinateur Bridget, alors que la session appelante se trouve sur une autre machine.";
+                result["message"] = json!(message);
+                result["detail"] = json!({
+                    "scope": "this_admission",
+                    "stage": "cwd_resolution",
+                    "cause": "cwd_checked_on_coordinator",
+                    "message": message,
+                    "recovery": "Vérifiez le dossier sur l’hôte de la session et choisissez une cible autorisée. Pour une délégation distante directe, fournissez machine_id et le project_id correspondant. Avec bridget_auto_delegate, indiquez la machine et le commit source exact pour un dépôt Git. Gardez le cwd sur la machine source et le mode de travail demandé. Vérifiez l'absence de tâche avant toute nouvelle admission autorisée.",
+                    "human_action": "Si la machine ou le mapping du projet n’est pas défini dans votre mandat, faites-le vérifier par le responsable Bridget. Les autres travaux autorisés suivent leur propre état."
+                });
+            }
+        }
         let known = result["code"] == "provider_quota_exhausted"
             || (result["code"] == "fallback_exhausted"
                 && result["detail"]["tried"].as_array().is_some_and(|rows| {

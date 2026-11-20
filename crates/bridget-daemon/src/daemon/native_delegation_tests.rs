@@ -28417,3 +28417,56 @@ fn incident303_usage_limit_reports_scoped_reset_without_scheduling_resume() {
         cleanup(&config);
     }
 }
+
+#[test]
+fn incident305_direct_cwd_refusal_names_the_coordinator_for_foreign_parents() {
+    let (st, config, rx, _reader) = fixture("cwd305");
+    let cwd = st.fixture_root.as_ref().unwrap().0.join("absent305");
+    let local = st.host.clone();
+    let state = Arc::new(Mutex::new(st));
+    for (index, host) in [local.as_str(), "mac305"].into_iter().enumerate() {
+        state
+            .lock()
+            .unwrap()
+            .presences
+            .get_mut("instance-1")
+            .unwrap()
+            .host = host.into();
+        let mut request = request_delai_150(&format!("cwd305-{index}"), Some(120));
+        let NativeDelegationRequest::Delegate { cwd: source, .. } = &mut request else {
+            panic!("demande directe attendue");
+        };
+        *source = cwd.to_string_lossy().into_owned();
+        let DaemonToWrapper::NativeDelegationResult { result } = handle("conn-1", request, &state)
+        else {
+            panic!("refus attendu");
+        };
+        assert_eq!(result["code"], "cwd_unavailable", "{result}");
+        assert!(result["task_id"].is_null());
+        if index == 0 {
+            assert_ne!(result["detail"]["cause"], "cwd_checked_on_coordinator");
+        } else {
+            assert_eq!(result["detail"]["cause"], "cwd_checked_on_coordinator");
+            assert_eq!(result["detail"]["scope"], "this_admission");
+            assert!(
+                result["detail"]["recovery"]
+                    .as_str()
+                    .unwrap()
+                    .contains("machine_id")
+            );
+            assert!(!result.to_string().contains("absent305"));
+        }
+    }
+    assert!(rx.try_recv().is_err());
+    assert!(
+        state
+            .lock()
+            .unwrap()
+            .delegation_store
+            .tasks()
+            .unwrap()
+            .is_empty()
+    );
+    drop(state);
+    cleanup(&config);
+}
