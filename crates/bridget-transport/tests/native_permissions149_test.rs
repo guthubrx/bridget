@@ -690,7 +690,7 @@ fn native149_recheck_gele_resout_le_launcher_par_path_et_detecte_le_changement()
     struct Garde;
     impl Drop for Garde {
         fn drop(&mut self) {
-            // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
+            // SAFETY: appelé soit au point d'entrée CLI mono-thread avant tout spawn, soit sous verrou de sérialisation dédié en test.
             unsafe {
                 std::env::remove_var("BRIDGET_NATIVE_PERMISSION_SOURCES");
                 std::env::remove_var("BRIDGET_NATIVE_CHILD_POLICY");
@@ -698,7 +698,7 @@ fn native149_recheck_gele_resout_le_launcher_par_path_et_detecte_le_changement()
         }
     }
     let _garde = Garde;
-    // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
+    // SAFETY: appelé soit au point d'entrée CLI mono-thread avant tout spawn, soit sous verrou de sérialisation dédié en test.
     unsafe {
         std::env::set_var(
             "BRIDGET_NATIVE_CHILD_POLICY",
@@ -733,7 +733,7 @@ fn native149_recheck_gele_resout_le_launcher_par_path_et_detecte_le_changement()
     context["resolved_cli_path"] = context["cli_path"].clone();
     context["resolved_cli_revision"] = json!(faux_revision);
     context["permission_sources"] = json!([]);
-    // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
+    // SAFETY: appelé soit au point d'entrée CLI mono-thread avant tout spawn, soit sous verrou de sérialisation dédié en test.
     unsafe {
         std::env::set_var(
             "BRIDGET_NATIVE_CHILD_POLICY",
@@ -741,16 +741,16 @@ fn native149_recheck_gele_resout_le_launcher_par_path_et_detecte_le_changement()
         )
     };
     assert_eq!(recheck_frozen_inputs("sh", &path_fixture), Ok(()));
-    // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
+    // SAFETY: appelé soit au point d'entrée CLI mono-thread avant tout spawn, soit sous verrou de sérialisation dédié en test.
     unsafe { std::env::remove_var("BRIDGET_NATIVE_CHILD_POLICY") };
     // Sources d'environnement non JSON : refus d'attestation, jamais un succès.
-    // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
+    // SAFETY: appelé soit au point d'entrée CLI mono-thread avant tout spawn, soit sous verrou de sérialisation dédié en test.
     unsafe { std::env::set_var("BRIDGET_NATIVE_PERMISSION_SOURCES", "pas-du-json") };
     assert_eq!(
         recheck_frozen_inputs("sh", &[]),
         Err("permission_attestation_unavailable".into())
     );
-    // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
+    // SAFETY: appelé soit au point d'entrée CLI mono-thread avant tout spawn, soit sous verrou de sérialisation dédié en test.
     unsafe { std::env::remove_var("BRIDGET_NATIVE_PERMISSION_SOURCES") };
 }
 

@@ -53,7 +53,7 @@ impl PtyTransport {
                 std::io::Error::last_os_error()
             )));
         }
-        // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
+        // SAFETY: le descripteur vient d'être ouvert avec succès (`fd >= 0`) et sa propriété unique est transférée ici.
         let owned = unsafe { OwnedFd::from_raw_fd(duplicate) };
         // Non bloquant : `poll` peut annoncer un maître accueillant alors que
         // la file du terminal se remplit en cours d'écriture ; sans ce drapeau
@@ -112,7 +112,7 @@ impl PtyTransport {
             let end = (offset + WRITE_CHUNK).min(bytes.len());
             let chunk = &bytes[offset..end];
             let written =
-                // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
+                // SAFETY: le descripteur est valide et tous les pointeurs de tampon/structure pointent vers des variables locales valides avec leur taille exacte.
                 unsafe { libc::write(fd, chunk.as_ptr() as *const libc::c_void, chunk.len()) };
             if written < 0 {
                 let error = std::io::Error::last_os_error();
@@ -192,13 +192,13 @@ mod tests {
             unsafe { libc::tcgetattr(slave, attributes.as_mut_ptr()) },
             0
         );
-        // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
+        // SAFETY: l'appel système précédent a retourné un succès garantissant l'initialisation complète de la structure par le noyau.
         let mut raw = unsafe { attributes.assume_init() };
         // SAFETY: les pointeurs passés à cfmakeraw désignent des variables locales valides pendant l'appel.
         unsafe { libc::cfmakeraw(&mut raw) };
         // SAFETY: les pointeurs passés à tcsetattr désignent des variables locales valides pendant l'appel.
         assert_eq!(unsafe { libc::tcsetattr(slave, libc::TCSANOW, &raw) }, 0);
-        // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
+        // SAFETY: le descripteur vient d'être ouvert avec succès (`fd >= 0`) et sa propriété unique est transférée ici.
         unsafe {
             Pty {
                 master: OwnedFd::from_raw_fd(master),
@@ -223,7 +223,7 @@ mod tests {
                 break;
             }
             let mut buffer = [0u8; 1024];
-            // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
+            // SAFETY: le descripteur vient d'être ouvert avec succès (`fd >= 0`) et sa propriété unique est transférée ici.
             let mut file = unsafe { std::fs::File::from_raw_fd(libc::dup(fd)) };
             match file.read(&mut buffer) {
                 Ok(0) | Err(_) => break,

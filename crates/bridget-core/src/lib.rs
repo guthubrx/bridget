@@ -9,6 +9,7 @@ pub mod execution;
 pub mod host;
 pub mod message;
 pub mod router;
+pub mod secret_filter;
 pub mod text_guards;
 
 pub use circuit_breaker::CircuitBreaker;
@@ -23,4 +24,5 @@ pub use message::{
     AgentType, BridgetMessage, DelegatedOrigin, MessageIntent, MessageOrigin, ThreadNotice,
 };
 pub use router::{Router, RouterAction, RouterError};
+pub use secret_filter::{SecretFilterMode, SecretFilterOutcome, filter_secrets};
 pub use text_guards::{is_disallowed_control, is_format_character};

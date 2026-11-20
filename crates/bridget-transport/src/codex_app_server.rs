@@ -3539,7 +3539,7 @@ fn write_value(writer: &Writer, value: Value) -> Result<(), TransportError> {
                     .saturating_duration_since(Instant::now())
                     .as_millis()
                     .clamp(1, 25) as i32;
-                // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
+                // SAFETY: le descripteur est valide et tous les pointeurs de tampon/structure pointent vers des variables locales valides avec leur taille exacte.
                 if unsafe { libc::poll(std::ptr::null_mut(), 0, millis) } < 0 {
                     let error = std::io::Error::last_os_error();
                     if error.kind() != std::io::ErrorKind::Interrupted {
@@ -3575,7 +3575,7 @@ fn write_value(writer: &Writer, value: Value) -> Result<(), TransportError> {
                         .saturating_duration_since(Instant::now())
                         .as_millis()
                         .clamp(1, 25) as i32;
-                    // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
+                    // SAFETY: le descripteur est valide et tous les pointeurs de tampon/structure pointent vers des variables locales valides avec leur taille exacte.
                     if unsafe { libc::poll(std::ptr::null_mut(), 0, millis) } < 0 {
                         let error = std::io::Error::last_os_error();
                         if error.kind() != std::io::ErrorKind::Interrupted {

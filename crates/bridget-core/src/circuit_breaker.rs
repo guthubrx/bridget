@@ -50,12 +50,15 @@ impl CircuitBreaker {
     /// Variante à horloge injectée : sert aux oracles déterministes.
     pub fn check_at(&self, from: &str, to: &str, now: Instant) -> bool {
         let key = conv_key(from, to);
-        let cutoff = now - self.window;
+        let cutoff = now.checked_sub(self.window);
 
         match self.history.get(&key) {
             None => true,
             Some(entries) => {
-                let recent: usize = entries.iter().filter(|ts| **ts > cutoff).count();
+                let recent: usize = match cutoff {
+                    Some(c) => entries.iter().filter(|ts| **ts > c).count(),
+                    None => entries.len(),
+                };
                 recent < self.limit
             }
         }
@@ -63,29 +66,50 @@ impl CircuitBreaker {
 
     /// Enregistre un échange à un instant donné (tests et horloge contrôlée).
     pub fn record_at(&mut self, from: &str, to: &str, now: Instant) {
-        let key = conv_key(from, to);
-        let cutoff = now - self.window;
+        let cutoff = now.checked_sub(self.window);
+        // Purger les conversations inactives dont toutes les entrées ont expiré.
+        if let Some(c) = cutoff {
+            self.history.retain(|_, deque| {
+                while let Some(front) = deque.front() {
+                    if *front <= c {
+                        deque.pop_front();
+                    } else {
+                        break;
+                    }
+                }
+                !deque.is_empty()
+            });
+        }
 
+        let key = conv_key(from, to);
         let entries = self.history.entry(key).or_default();
         entries.push_back(now);
 
-        // Nettoyer les entrées expirées
-        while let Some(front) = entries.front() {
-            if *front <= cutoff {
-                entries.pop_front();
-            } else {
-                break;
+        if let Some(c) = cutoff {
+            while let Some(front) = entries.front() {
+                if *front <= c {
+                    entries.pop_front();
+                } else {
+                    break;
+                }
             }
         }
     }
 
     pub fn count_at(&self, from: &str, to: &str, now: Instant) -> usize {
         let key = conv_key(from, to);
-        let cutoff = now - self.window;
+        let cutoff = now.checked_sub(self.window);
         match self.history.get(&key) {
             None => 0,
-            Some(entries) => entries.iter().filter(|ts| **ts > cutoff).count(),
+            Some(entries) => match cutoff {
+                Some(c) => entries.iter().filter(|ts| **ts > c).count(),
+                None => entries.len(),
+            },
         }
+    }
+
+    pub fn tracked_conversations(&self) -> usize {
+        self.history.len()
     }
 
     /// Limte configurée.
@@ -146,5 +170,17 @@ mod tests {
         let after_window = t0 + Duration::from_secs(1) + Duration::from_millis(1);
         assert!(cb.check_at("a", "b", after_window));
         assert_eq!(cb.count_at("a", "b", after_window), 0);
+    }
+
+    #[test]
+    fn test_evicts_expired_ephemeral_conversations() {
+        let mut cb = CircuitBreaker::new(1, 2);
+        let t0 = Instant::now();
+        cb.record_at("ephemeral-1", "parent", t0);
+        cb.record_at("ephemeral-2", "parent", t0);
+        assert_eq!(cb.tracked_conversations(), 2);
+        let later = t0 + Duration::from_secs(2);
+        cb.record_at("ephemeral-3", "parent", later);
+        assert_eq!(cb.tracked_conversations(), 1);
     }
 }

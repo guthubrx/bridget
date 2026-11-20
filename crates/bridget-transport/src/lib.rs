@@ -16,6 +16,7 @@ pub mod journal;
 pub mod jsonl;
 pub mod managed_session;
 pub mod poison;
+pub mod posix;
 pub mod protocol;
 pub mod provider_catalogue;
 pub mod pty;

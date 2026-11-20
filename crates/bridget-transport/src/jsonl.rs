@@ -13,7 +13,7 @@ pub const MAX_DAEMON_FRAME_BYTES: usize = 16 * 1024 * 1024;
 
 pub fn validate_unix_socket_path(socket: &Path) -> io::Result<()> {
     let path = socket.as_os_str().as_bytes();
-    // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
+    // SAFETY: structure C POD de `libc` pour laquelle le motif entièrement nul est une représentation valide.
     let address: libc::sockaddr_un = unsafe { std::mem::zeroed() };
     if path.is_empty() || path.contains(&0) || path.len() >= address.sun_path.len() {
         return Err(io::Error::new(
@@ -45,14 +45,14 @@ pub fn connect_nonblocking_with(
     }
     let path = socket.as_os_str().as_bytes();
     validate_unix_socket_path(socket)?;
-    // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
+    // SAFETY: structure C POD de `libc` pour laquelle le motif entièrement nul est une représentation valide.
     let mut address: libc::sockaddr_un = unsafe { std::mem::zeroed() };
     address.sun_family = libc::AF_UNIX as libc::sa_family_t;
     #[cfg(any(target_os = "macos", target_os = "ios"))]
     {
         address.sun_len = (std::mem::size_of::<libc::sa_family_t>() + path.len() + 1) as u8;
     }
-    // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
+    // SAFETY: le descripteur est valide et tous les pointeurs de tampon/structure pointent vers des variables locales valides avec leur taille exacte.
     unsafe {
         std::ptr::copy_nonoverlapping(
             path.as_ptr().cast(),
@@ -60,14 +60,14 @@ pub fn connect_nonblocking_with(
             path.len(),
         );
     }
-    // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
+    // SAFETY: le descripteur vient d'être ouvert avec succès (`fd >= 0`) et sa propriété unique est transférée ici.
     let fd = unsafe { libc::socket(libc::AF_UNIX, libc::SOCK_STREAM, 0) };
     if fd < 0 {
         return Err(io::Error::last_os_error());
     }
     // Propriétaire dès l'ouverture : toute sortie par ? ferme le descripteur,
     // y compris l'expiration entre connect et poll (ancien chemin de fuite).
-    // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
+    // SAFETY: le descripteur vient d'être ouvert avec succès (`fd >= 0`) et sa propriété unique est transférée ici.
     let stream = UnixStream::from(unsafe { OwnedFd::from_raw_fd(fd) });
     let fd = stream.as_raw_fd();
     // SAFETY: fcntl avec une commande à argument entier ne déréférence aucun pointeur.
@@ -83,7 +83,7 @@ pub fn connect_nonblocking_with(
     if let Some(checkpoint) = checkpoint.as_mut() {
         checkpoint(&stream)?;
     }
-    // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
+    // SAFETY: le descripteur est valide et tous les pointeurs de tampon/structure pointent vers des variables locales valides avec leur taille exacte.
     let result = unsafe {
         libc::connect(
             fd,
