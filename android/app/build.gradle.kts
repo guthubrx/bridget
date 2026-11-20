@@ -83,6 +83,10 @@ configurations.configureEach {
     useVersion("18.3.0")
     because("CVE-2022-2390: keep test metadata and compilation on the patched runtime version")
    }
+   requested.group == "com.google.guava" && requested.name == "guava" -> {
+    useVersion("33.7.2-jre")
+    because("GHSA-xxph-c9ww-hj94: patch transitive Guava in unified test platform")
+   }
   }
  }
 }

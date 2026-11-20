@@ -92,6 +92,11 @@ out = pathlib.Path(args[args.index('-o') + 1])
 providers = {'https://claude.ai/install.sh':'claude', 'https://chatgpt.com/codex/install.sh':'codex', 'https://cursor.com/install':'cursor-agent'}
 if url in providers:
     shutil.copyfile(r / (providers[url] + '.installer'), out)
+elif url.endswith('.sig'):
+    sig = r / 'archive.sig'
+    if not sig.exists():
+        sys.exit(22)
+    shutil.copyfile(sig, out)
 else:
     shutil.copyfile(r / ('checksum' if url.endswith('.sha256') else 'archive'), out)
 ''')
@@ -673,6 +678,55 @@ else: print('1234567890abcdef1234567890abcdef12345678')
             # The installer now uses first's stable path on every invocation.
             build.register_staging(first, [])
             self.assertIn(target, list(build.owned_staging(first)))
+
+    def test306_detached_release_signature_verification(self):
+        import shutil
+        if not shutil.which("ssh-keygen"):
+            self.skipTest("ssh-keygen unavailable")
+        sign_script = SCRIPT.with_name("sign-release.sh")
+        key_good = self.root / "release_good"
+        key_other = self.root / "release_other"
+        for key in (key_good, key_other):
+            subprocess.run(
+                ["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", str(key)],
+                check=True,
+            )
+        allowed = self.root / "allowed_signers"
+        pub_good = Path(str(key_good) + ".pub").read_text().strip()
+        allowed.write_text(f"release@bridget.local {pub_good}\n")
+        self.env["BRIDGET_RELEASE_ALLOWED_SIGNERS"] = str(allowed)
+
+        # 1. Missing signature must fail before extraction.
+        res_missing = self.run_install(ok=False)
+        self.assertIn("Missing detached release signature", res_missing.stderr)
+        self.assertFalse(self.installed.exists())
+
+        # 2. Signature produced by an unknown key must fail.
+        subprocess.run(
+            ["sh", str(sign_script), "--key", str(key_other), str(self.root / "archive")],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        res_unknown = self.run_install(ok=False)
+        self.assertIn("Detached release signature verification failed", res_unknown.stderr)
+        self.assertFalse(self.installed.exists())
+
+        # 3. Corrupted signature must fail.
+        (self.root / "archive.sig").write_text("corrupted signature\n")
+        res_bad = self.run_install(ok=False)
+        self.assertIn("Detached release signature verification failed", res_bad.stderr)
+        self.assertFalse(self.installed.exists())
+
+        # 4. Valid signature produced by sign-release.sh must succeed.
+        subprocess.run(
+            ["sh", str(sign_script), "--key", str(key_good), str(self.root / "archive")],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        self.run_install(ok=True)
+        self.assertEqual(self.installed.read_bytes(), BINARY)
 
 
 if __name__ == "__main__":

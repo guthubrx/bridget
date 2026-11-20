@@ -12,6 +12,12 @@ jobs:
         with:
           persist-credentials: false
       - run: rustup show
+      - name: Guard against unaudited SAFETY placeholders
+        run: |
+          if grep -rn "invariant non établi par lecture locale" crates/; then
+            echo "ERROR: unaudited SAFETY placeholder found in crates/" >&2
+            exit 1
+          fi
       - run: cargo clippy --workspace --all-targets --locked --features bridget-daemon/test-support -- -D warnings
   format:
     runs-on: ubuntu-latest
@@ -23,7 +29,22 @@ jobs:
       - run: cargo fmt --all -- --check
   tests:
     runs-on: ubuntu-latest
-    continue-on-error: true   # bloquant après la décision D16 (T024)
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - run: rustup show
+      - name: Deterministic core, transport, mobile and spec306 test suites (blocking)
+        run: |
+          umask 077
+          export TMPDIR="$(mktemp -d /tmp/b.XXXX)"
+          cargo test -p bridget-core --locked
+          cargo test -p bridget-transport --lib --locked
+          cargo test -p bridget-daemon --lib --locked --features bridget-daemon/test-support -- spec306 mobile::store::tests mobile::http::tests sentinel::tests
+  tests-e2e-baseline:
+    runs-on: ubuntu-latest
+    # Suit les échecs E2E préexistants recensés dans specs/260-assainissement-code/validation/base-echecs.txt
+    continue-on-error: true
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -35,7 +56,6 @@ jobs:
           cargo test --workspace --locked --features bridget-daemon/test-support --no-fail-fast -- --test-threads=4
   scripts:
     runs-on: ubuntu-latest
-    continue-on-error: true   # observation : premier passage à lire avant de rendre bloquant
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -43,3 +63,30 @@ jobs:
       - run: pipx run ruff==0.14.13 check scripts
       - run: |
           for f in scripts/*.sh; do bash -n "$f" || exit 1; done
+      - run: python3 scripts/check-docs.py
+      - run: python3 -m unittest scripts/tests/test_install.py scripts/tests/test_sentinel.py scripts/tests/test_publish_android.py scripts/tests/test_linux_abi.py scripts/tests/test_updates.py scripts/tests/test_build_cleanup.py
+  caddy-go:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5
+        with:
+          go-version-file: deploy/caddy-security/go.mod
+      - name: Build Caddy security proxy
+        working-directory: deploy/caddy-security
+        run: go build -mod=readonly -trimpath -o /tmp/caddy-ci . && rm -f /tmp/caddy-ci
+  android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@c5195efecf7bdfc987ee8bae7a71cb8b11521c00 # v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Run Android unit tests
+        working-directory: android
+        run: ./gradlew testDebugUnitTest --no-daemon

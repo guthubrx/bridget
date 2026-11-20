@@ -13,6 +13,7 @@ buildscript {
     requested.group == "org.bitbucket.b_c" && requested.name == "jose4j" -> useVersion("0.9.6")
     requested.group == "io.netty" -> useVersion("4.1.139.Final")
     requested.group == "com.google.protobuf" && requested.name != "protobuf-javalite" -> useVersion("3.25.8")
+    requested.group == "com.google.guava" && requested.name == "guava" -> useVersion("33.7.2-jre")
    }
   }
  }

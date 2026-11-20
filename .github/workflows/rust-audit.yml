@@ -7,12 +7,13 @@ on:
     paths:
       - 'Cargo.lock'
       - '**/Cargo.toml'
+      - 'deploy/caddy-security/go.mod'
+      - 'android/**/gradle.lockfile'
 permissions:
   contents: read
 jobs:
   audit:
     runs-on: ubuntu-latest
-    continue-on-error: true   # premier passage : les alertes sont lues, pas bloquantes
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:

@@ -417,6 +417,20 @@ main() {
         expected=$(printf '%s' "$expected" | tr 'A-F' 'a-f')
         download "$repo/releases/download/$version/$archive" "$work/package.tar.gz"
         [ "$(digest "$work/package.tar.gz")" = "$expected" ] || fail 'SHA-256 mismatch. Installed Bridget was not changed.'
+        if [ -n "${BRIDGET_RELEASE_ALLOWED_SIGNERS:-}" ]; then
+            [ -f "$BRIDGET_RELEASE_ALLOWED_SIGNERS" ] && [ ! -L "$BRIDGET_RELEASE_ALLOWED_SIGNERS" ] || \
+                fail 'Invalid BRIDGET_RELEASE_ALLOWED_SIGNERS file. Installed Bridget was not changed.'
+            need ssh-keygen
+            download "$repo/releases/download/$version/$archive.sig" "$work/package.tar.gz.sig" || \
+                fail 'Missing detached release signature (.sig). Installed Bridget was not changed.'
+            signer_identity=${BRIDGET_RELEASE_SIGNER_IDENTITY:-release@bridget.local}
+            ssh-keygen -Y verify \
+                -f "$BRIDGET_RELEASE_ALLOWED_SIGNERS" \
+                -I "$signer_identity" \
+                -n bridget-release \
+                -s "$work/package.tar.gz.sig" < "$work/package.tar.gz" >/dev/null 2>&1 || \
+                fail 'Detached release signature verification failed. Installed Bridget was not changed.'
+        fi
         # Stream only the known member, never extract arbitrary archive paths or links.
         tar -xzOf "$work/package.tar.gz" "$stem/bridget" > "$candidate"
         identity=$version

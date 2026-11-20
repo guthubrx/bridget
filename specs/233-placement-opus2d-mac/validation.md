@@ -14,7 +14,7 @@ Linux /home/moi/.local/share/bridget/git/opus2d.git. Ce contrôle ne pouvait pas
 Aucune absence de programme, de compte ou d’identité humaine n’est déduite.
 
 Le remote cartae est le serveur
-ssh://moi@37.59.185.67:2222/home/moi/.local/share/bridget/git/opus2d.git.
+ssh://moi@198.51.100.10:2222/home/moi/.local/share/bridget/git/opus2d.git.
 Une lecture ls-remote a confirmé HEAD et refs/heads/main au commit demandé
 dcd7356f6ddd4d7a14e10165c4caea9f539e416a. Le Mac possède ce même commit,
 son HEAD est identique et son Git commun est dans la racine demandée.

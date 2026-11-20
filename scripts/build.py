@@ -35,10 +35,18 @@ def plain_dir(path):
     return path.is_dir() and not path.is_symlink() and path.absolute() == path.resolve()
 
 
+def git_ceiling_env(repo):
+    env = dict(os.environ, LC_ALL="C")
+    parent = str(Path(repo).resolve().parent)
+    existing = env.get("GIT_CEILING_DIRECTORIES")
+    env["GIT_CEILING_DIRECTORIES"] = f"{parent}:{existing}" if existing else parent
+    return env
+
+
 def worktrees(repo):
     result = subprocess.run(
         ["git", "-C", str(repo), "worktree", "list", "--porcelain", "-z"],
-        capture_output=True, check=False, timeout=10,
+        capture_output=True, check=False, timeout=10, env=git_ceiling_env(repo),
     )
     if result.returncode:
         return [repo]  # Paquet source sans Git : aucun autre projet à examiner.
@@ -49,7 +57,7 @@ def worktrees(repo):
 def owner_id(repo):
     result = subprocess.run(
         ["git", "-C", str(repo), "rev-parse", "--path-format=absolute", "--git-common-dir"],
-        text=True, capture_output=True, check=False, timeout=10,
+        text=True, capture_output=True, check=False, timeout=10, env=git_ceiling_env(repo),
     )
     return str(Path(result.stdout.strip()).resolve()) if result.returncode == 0 else str(repo)
 
@@ -385,7 +393,7 @@ class ObservationBudget:
         return max(0, self.deadline - time.monotonic())
 
 
-def observed_run(arguments, budget=None, timeout=15, limit=MAX_OBSERVATION_BYTES):
+def observed_run(arguments, budget=None, timeout=15, limit=MAX_OBSERVATION_BYTES, env=None):
     """Captures bornées ; aucune donnée partielle n'est interprétée comme complète."""
     budget = budget or ObservationBudget()
     end = min(budget.deadline, time.monotonic() + timeout)
@@ -396,7 +404,7 @@ def observed_run(arguments, budget=None, timeout=15, limit=MAX_OBSERVATION_BYTES
         if time.monotonic() >= end:
             raise TimeoutError
         child = subprocess.Popen(arguments, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                 start_new_session=True, env=dict(os.environ, LC_ALL="C"))
+                                 start_new_session=True, env=env if env is not None else dict(os.environ, LC_ALL="C"))
         with selectors.DefaultSelector() as selector:
             for index, stream in enumerate((child.stdout, child.stderr)):
                 os.set_blocking(stream.fileno(), False)
@@ -722,7 +730,7 @@ def git_ok(repo, *arguments, budget=None):
     budget = budget or ObservationBudget()
     budget.git_calls += 1
     return observed_run(["git", "-c", "core.fsmonitor=false", "-C", str(repo), *arguments],
-                        budget, timeout=15, limit=1024 * 1024)
+                        budget, timeout=15, limit=1024 * 1024, env=git_ceiling_env(repo))
 
 
 # Aligné sur MAX_WORKTREES dans crates/bridget-daemon/src/workspace_git.rs.
