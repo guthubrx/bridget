@@ -217,3 +217,9 @@ When a producer supplies a structural event for the current turn, the header sho
 **Compacting context…**. Item or turn completion closes it. Loss of follow or a
 conversation switch also closes it. Cached starts never invent current activity.
 No percentage is estimated.
+
+## History search, notification filters and opt-in actions (306)
+
+- `GET /v1/ledger/search?q=<query>&project=<project>&limit=<n>`: bounded search across authorized history without changing device scope.
+- `PUT /v1/notifications`: supports optional `projects` (allow-list) and `min_urgency` (`all`, `important`, `critical`) filter fields.
+- `POST /v1/agents/{id}/relaunch` and `POST /v1/specialists/{id}/launch`: disabled by default (403 `mobile_action_opt_in_disabled`), enabled only when explicitly opted in by the operator (`BRIDGET_MOBILE_ALLOW_AGENT_ACTIONS=1`).

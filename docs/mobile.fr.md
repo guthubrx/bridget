@@ -250,3 +250,9 @@ les relations parent-enfant attestées. Le titre du travail et son état servent
 cherche sa conversation actuelle. Une route disparue n’efface pas le résultat.
 La filiation n’est jamais déduite d’un nom ou de l’absence d’un parent.
 Aucune de ces lectures ne lance, ne reprend ni n’annule une tâche.
+
+## Recherche d'historique, filtres de notifications et actions opt-in (306)
+
+- `GET /v1/ledger/search?q=<requête>&project=<projet>&limit=<n>` : recherche bornée dans l'historique autorisé, dans le périmètre de l'appareil.
+- `PUT /v1/notifications` : accepte les filtres facultatifs `projects` (liste blanche) et `min_urgency` (`all`, `important`, `critical`).
+- `POST /v1/agents/{id}/relaunch` et `POST /v1/specialists/{id}/launch` : désactivés par défaut (403 `mobile_action_opt_in_disabled`), activables uniquement sur accord explicite de l'opérateur (`BRIDGET_MOBILE_ALLOW_AGENT_ACTIONS=1`).

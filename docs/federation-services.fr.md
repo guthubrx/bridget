@@ -194,3 +194,8 @@ pas une fédération. Ne pas recopier une sauvegarde SQLite sur une base ouverte
 
 L'ancienne session `rc1` n'a pas été arrêtée. Elle reste attachée à son ancien
 runtime ; seule une relance humaine via le nouveau binaire peut la faire basculer.
+
+## Inventaire des liens installés et signatures détachées
+
+- `bridget federation links [--json]` : retourne en lecture seule la liste des liens de fédération installés, sans exécuter de script externe.
+- Les archives de release peuvent être signées avec `scripts/sign-release.sh` (OpenSSH `ssh-keygen -Y sign`, espace de noms `bridget-release`). Lorsque `BRIDGET_RELEASE_ALLOWED_SIGNERS` est défini, `scripts/install.sh` vérifie la signature détachée `.sig` avant extraction.

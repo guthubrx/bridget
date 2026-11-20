@@ -1,0 +1,16 @@
+{
+  "spec": "306-plan-amelioration-audit-complet",
+  "date": "2026-11-20",
+  "protocol": "V15",
+  "critical": 0,
+  "high": 0,
+  "medium": 2,
+  "low": 1,
+  "decision": "ACCEPT_WITH_NOTES",
+  "release_blocked": false,
+  "notes": [
+    "3 transitive Go advisories on go-jose/v3 via caddy v2.11.9 -> smallstep/certificates v0.30.2 (0 vulnerabilities can be fixed upstream)",
+    "Android SDK unavailable locally on macOS; android/app/gradle.lockfile and testDebugUnitTest delegated to new CI android job",
+    "Adversarial multi-provider review skipped because Bridget delegation is blocked in this turn"
+  ]
+}

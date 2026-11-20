@@ -160,3 +160,8 @@ daemon restores a separate directory, not the federation.
 
 Keep the active binary, compatible rollback, source manifest and receipts.
 Remove only build/worktree resources confirmed unused by the operation.
+
+## Inspecting installed links and detached release signatures
+
+- `bridget federation links [--json]`: returns the read-only inventory of installed federation links without invoking shell hooks or Python scripts.
+- Release archives can be signed with `scripts/sign-release.sh` (OpenSSH `ssh-keygen -Y sign`, namespace `bridget-release`). When `BRIDGET_RELEASE_ALLOWED_SIGNERS` is configured, `scripts/install.sh` verifies the detached `.sig` file before extraction.

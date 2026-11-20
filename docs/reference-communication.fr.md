@@ -1278,3 +1278,12 @@ La racine cwd_root du catalogue décrit les droits d'accès, pas le projet de l'
 
 ### Préparation locale et noms système (254)
 Un dossier hors Git en general/shared peut être rattaché sur la machine source sans copie ni tunnelSSH vers soi-même. Les vérifications de droits et du dossier restent actives. Le nom système d’un sous-agent peut différer du nom de sa machine dans la flotte : le projet est alors résolu auprès du worker de son placement admis, sans changer son identité ni ses droits. Une vue commit_view reste en discovery avec expected_base_commit ; écrire exige shared ou worktree en development.
+
+### Diagnostic, sauvegardes, simulation et complétions shell (306)
+- `bridget status --metrics [--json]` : expose les métriques du daemon, les compteurs de connexions, la vue annuaire en lecture majoritaire et les quantiles de latence des ticks natifs (`p50`, `p95`, `p99`).
+- `bridget doctor [--json]` : exécute un contrôle de santé non destructif des namespaces, bases SQLite en mode WAL, permissions, disponibilité du socket et configuration.
+- `bridget backup [--output <dir>] [--json]` et `bridget restore <backup-dir> --verify [--json]` : produisent des instantanés SQLite à chaud (`VACUUM INTO`) accompagnés d'un manifeste SHA-256 et vérifient leur intégrité dans un bac à sable sans toucher à l'état actif.
+- `bridget delegate --dry-run ...` et `bridget auto-delegate --dry-run ...` : simulent une délégation sans aucun effet de bord.
+- `bridget completions <bash|zsh|fish>` : génère les scripts de complétion shell.
+- `BRIDGET_LOG_FORMAT=json` : active la journalisation JSON structurée du daemon et de la CLI.
+- `BRIDGET_SECRET_FILTER=off|redact|reject` : contrôle le filtrage de secrets avant persistance dans le ledger.

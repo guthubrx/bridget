@@ -359,3 +359,12 @@ A reply=false notification does not disable the final result path of an active n
 
 ### Local preparation and OS hostnames (254)
 A non-Git general/shared directory can be mapped on its source machine without copying or self-SSH. Permission and directory checks remain in force. A native child's OS hostname can differ from its fleet machine ID: project resolution uses its admitted placement worker without changing its identity or permissions. commit_view requires discovery and expected_base_commit; development uses shared or worktree.
+
+### Diagnostics, backups, dry-run and shell completions (306)
+- `bridget status --metrics [--json]`: exposes daemon metrics, connection counters, read-mostly directory counts and native tick latency quantiles (`p50`, `p95`, `p99`).
+- `bridget doctor [--json]`: runs a non-destructive health check across namespaces, SQLite WAL stores, permissions, socket reachability and configuration.
+- `bridget backup [--output <dir>] [--json]` and `bridget restore <backup-dir> --verify [--json]`: create hot SQLite snapshots (`VACUUM INTO`) with SHA-256 manifests and verify integrity in an isolated sandbox without overwriting active state.
+- `bridget delegate --dry-run ...` and `bridget auto-delegate --dry-run ...`: simulate delegation payloads and fleet metadata with zero side effects.
+- `bridget completions <bash|zsh|fish>`: generate shell completion scripts.
+- `BRIDGET_LOG_FORMAT=json`: emit structured JSON logs from the daemon and CLI.
+- `BRIDGET_SECRET_FILTER=off|redact|reject`: control outgoing secret filtering before ledger persistence.
