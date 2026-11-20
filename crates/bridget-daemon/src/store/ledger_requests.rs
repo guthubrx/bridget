@@ -459,11 +459,29 @@ impl Store {
         msg: &bridget_core::BridgetMessage,
         conversation_key: &str,
     ) -> Result<(), StoreError> {
+        let mut owned: Option<bridget_core::BridgetMessage> = None;
+        match bridget_core::filter_secrets(&msg.body, bridget_core::SecretFilterMode::from_env()) {
+            bridget_core::SecretFilterOutcome::Clean => {}
+            bridget_core::SecretFilterOutcome::Redacted { text, .. } => {
+                let mut cloned = msg.clone();
+                cloned.body = text;
+                owned = Some(cloned);
+            }
+            bridget_core::SecretFilterOutcome::Rejected { rule } => {
+                return Err(StoreError::Sqlite(rusqlite::Error::ToSqlConversionFailure(
+                    Box::new(std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,
+                        format!("secret_filter_rejected:{rule}"),
+                    )),
+                )));
+            }
+        }
+        let target_msg = owned.as_ref().unwrap_or(msg);
         let transaction = self
             .conn
             .unchecked_transaction()
             .map_err(StoreError::Sqlite)?;
-        record_message_in_transaction(&transaction, msg, conversation_key)
+        record_message_in_transaction(&transaction, target_msg, conversation_key)
             .map_err(StoreError::Sqlite)?;
         transaction.commit().map_err(StoreError::Sqlite)?;
         Ok(())

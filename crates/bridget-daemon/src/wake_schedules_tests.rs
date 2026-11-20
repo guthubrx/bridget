@@ -73,7 +73,7 @@ fn wake158B_groupe1_domaine_ferme_et_bornes() {
 fn wake158B_groupe2_calendrier_trou_fold_tz_et_date() {
     if let Ok(case) = std::env::var("BRIDGET_WAKE_CALENDAR158B_CASE") {
         if case == "zone_identity" {
-            // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
+            // SAFETY: structure C POD de `libc` pour laquelle le motif entièrement nul est une représentation valide.
             let mut winter: libc::tm = unsafe { std::mem::zeroed() };
             winter.tm_year = 126;
             winter.tm_mon = 0;
@@ -83,7 +83,7 @@ fn wake158B_groupe2_calendrier_trou_fold_tz_et_date() {
             println!("WAKE158B_FP={}", timezone_fingerprint(epoch).unwrap());
             return;
         }
-        // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
+        // SAFETY: structure C POD de `libc` pour laquelle le motif entièrement nul est une représentation valide.
         let mut day: libc::tm = unsafe { std::mem::zeroed() };
         let (year, month, day_number, hour, minute, expected) = match case.as_str() {
             "utc" => (2026, 10, 12, 9, 0, Some((2026, 10, 12, 9, 0))),
@@ -99,7 +99,7 @@ fn wake158B_groupe2_calendrier_trou_fold_tz_et_date() {
         let actual = first_civil_epoch(&day, hour, minute).unwrap();
         eprintln!("calendrier158B {case}: {:?}", before.elapsed());
         let expected = expected.map(|(y, m, d, h, min)| {
-            // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
+            // SAFETY: structure C POD de `libc` pour laquelle le motif entièrement nul est une représentation valide.
             let mut utc: libc::tm = unsafe { std::mem::zeroed() };
             utc.tm_year = y - 1900;
             utc.tm_mon = m - 1;
@@ -139,7 +139,7 @@ fn wake158B_groupe2_calendrier_trou_fold_tz_et_date() {
             assert!(first.next_at > now);
             s.previous_calendar_date = Some(day);
             assert_eq!(calculate_cadence(&s, now).unwrap().due_at, None);
-            // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
+            // SAFETY: structure C POD de `libc` pour laquelle le motif entièrement nul est une représentation valide.
             let mut midnight: libc::tm = unsafe { std::mem::zeroed() };
             midnight.tm_year = 126;
             midnight.tm_mon = 9;

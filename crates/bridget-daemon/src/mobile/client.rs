@@ -23,6 +23,8 @@ pub(super) struct DirectoryQuery {
     pub agent_id: Option<String>,
     pub visibility: Option<String>,
     pub ids: Option<String>,
+    pub q: Option<String>,
+    pub project: Option<String>,
 }
 
 impl DirectoryQuery {

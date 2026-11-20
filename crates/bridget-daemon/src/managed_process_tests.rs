@@ -160,11 +160,11 @@ fn spec221_drain_reaps_owned_foreign_uid_zombie_after_signal_refusal() {
     }
     let birth = process_birth(pid).unwrap();
     drop(child); // Barrière : aucun propriétaire Child ne peut encore wait ce PID.
-    // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
+    // SAFETY: appel système POSIX/Linux aux arguments entiers ou pointeur nul valide selon le contrat noyau.
     assert_eq!(unsafe { libc::setgroups(0, std::ptr::null()) }, 0);
-    // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
+    // SAFETY: appel système POSIX/Linux aux arguments entiers ou pointeur nul valide selon le contrat noyau.
     assert_eq!(unsafe { libc::setgid(65534) }, 0);
-    // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
+    // SAFETY: appel système POSIX/Linux aux arguments entiers ou pointeur nul valide selon le contrat noyau.
     assert_eq!(unsafe { libc::setuid(65534) }, 0);
     assert_eq!(process_birth(pid).unwrap(), birth);
     let signal = remote_drain::signal_pass();
@@ -331,7 +331,7 @@ fn bootstrap_child() {
     if std::env::var_os("B221_VIEW_TEST_NO_READY").is_some() {
         use std::os::unix::fs::OpenOptionsExt;
         let root = PathBuf::from(std::env::var_os("B221_VIEW_PROOFS").unwrap());
-        // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
+        // SAFETY: appel système POSIX sur des arguments entiers/descripteurs valides ou pointeurs de pile vivants pendant l'appel.
         unsafe {
             libc::signal(libc::SIGTERM, libc::SIG_IGN);
         }

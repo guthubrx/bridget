@@ -2388,6 +2388,10 @@ fn spec214_native_t3_codex_projection_preserves_ceiling_and_refuses_other_rules(
     assert!(project(&bad, &definition, SpawnPosture::Development).is_err());
     let mut unmapped = parent.clone();
     unmapped.cwd = "/outside214".into();
+    // Depuis 6807571d, un parent T3 full-access/bypassPermissions dispose d'une portée source libre ;
+    // un parent sans cette portée complète reste refusé hors mapping.
+    assert!(project(&unmapped, &definition, SpawnPosture::Development).is_ok());
+    unmapped.provider_policy["permission_mode"] = json!("default");
     assert!(project(&unmapped, &definition, SpawnPosture::Development).is_err());
     let mut unmounted = definition.clone();
     unmounted.mcp.interactive = "none".into();

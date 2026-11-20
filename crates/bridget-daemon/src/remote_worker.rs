@@ -271,47 +271,9 @@ fn map_probe_projection_failure171(
     WorkerRefusal::PermissionsChanged
 }
 
-#[derive(Debug)]
-pub enum WorkerStoreError {
-    Io(io::Error),
-    Invalid(WorkerRefusal),
-    Locked,
-    Quarantined,
-    Conflict,
-    Quota,
-    Unknown,
-    InvalidTransition,
-    Workspace(WorkerRefusal),
-}
-
-impl From<io::Error> for WorkerStoreError {
-    fn from(value: io::Error) -> Self {
-        Self::Io(value)
-    }
-}
-
-impl From<WorkerRefusal> for WorkerStoreError {
-    fn from(value: WorkerRefusal) -> Self {
-        Self::Invalid(value)
-    }
-}
-
-impl std::fmt::Display for WorkerStoreError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Io(_) => f.write_str("worker_store_io"),
-            Self::Invalid(_) => f.write_str("worker_store_invalid"),
-            Self::Locked => f.write_str("worker_store_locked"),
-            Self::Quarantined => f.write_str("worker_store_quarantined"),
-            Self::Conflict => f.write_str("worker_store_conflict"),
-            Self::Quota => f.write_str("worker_store_quota"),
-            Self::Unknown => f.write_str("worker_store_unknown"),
-            Self::InvalidTransition => f.write_str("worker_store_transition"),
-            Self::Workspace(_) => f.write_str("worker_workspace_failure"),
-        }
-    }
-}
-impl std::error::Error for WorkerStoreError {}
+#[path = "remote_worker_types.rs"]
+mod types;
+pub use self::types::WorkerStoreError;
 
 /// Sélection168 opaque conservée dans le reçu privé pour les rechecks frais.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -9547,7 +9509,7 @@ fn send_catalogue_frame(
             if Instant::now() >= deadline {
                 return Err("worker_connection_lost".into());
             }
-            // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
+            // SAFETY: le descripteur est valide et tous les pointeurs de tampon/structure pointent vers des variables locales valides avec leur taille exacte.
             let count = unsafe {
                 libc::send(
                     writer.as_raw_fd(),
@@ -10548,7 +10510,7 @@ mod catalogue220_tests {
         let (a, _peer) = UnixStream::pair().unwrap();
         let size: libc::c_int = 4096;
         assert_eq!(
-            // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
+            // SAFETY: le descripteur est valide et tous les pointeurs de tampon/structure pointent vers des variables locales valides avec leur taille exacte.
             unsafe {
                 libc::setsockopt(
                     a.as_raw_fd(),

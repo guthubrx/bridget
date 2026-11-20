@@ -337,7 +337,7 @@ fn make_fifo(path: &Path) {
     use std::ffi::CString;
     use std::os::unix::ffi::OsStrExt;
     let path = CString::new(path.as_os_str().as_bytes()).unwrap();
-    // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
+    // SAFETY: les descripteurs de répertoire sont ouverts et valides et les chaînes `CString` terminées par nul restent vivantes pendant l'appel.
     assert_eq!(unsafe { libc::mkfifo(path.as_ptr(), 0o600) }, 0);
 }
 

@@ -251,11 +251,21 @@ fn run(root: PathBuf, url: String, account: Account, receiver: mpsc::Receiver<()
                 }
             };
         }
+        let db_path = root.join("mobile-devices.db");
+        let Ok(store) = Store::open(&db_path) else {
+            previous = Some(Instant::now());
+            continue;
+        };
+        let current_targets = match store.notification_targets(super::http::unix_now()) {
+            Ok(rows) => rows,
+            Err(_) => {
+                previous = Some(Instant::now());
+                continue;
+            }
+        };
         for (device, token) in targets {
-            // Revalider juste avant Google ; une notification déjà remise reste une sonnette sans contenu.
-            let current = Store::open(&root.join("mobile-devices.db"))
-                .and_then(|s| s.notification_targets(super::http::unix_now()));
-            if !current.is_ok_and(|rows| rows.contains(&(device.clone(), token.clone()))) {
+            // Revalider juste avant Google avec le même magasin ouvert pour toute la rafale.
+            if !current_targets.contains(&(device.clone(), token.clone())) {
                 continue;
             }
             match deliver(
@@ -267,8 +277,7 @@ fn run(root: PathBuf, url: String, account: Account, receiver: mpsc::Receiver<()
             ) {
                 Ok(true) => {}
                 Ok(false) => {
-                    let _ = Store::open(&root.join("mobile-devices.db"))
-                        .and_then(|s| s.remove_notification_token(&device, &token));
+                    let _ = store.remove_notification_token(&device, &token);
                 }
                 Err(code) => {
                     log::warn!("mobile_push stage=delivery code={code}");

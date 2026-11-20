@@ -192,10 +192,7 @@ fn prepare_script(
             return Err("project_preparation_failed".into());
         }
         if let Some(diagnostic) = process_diagnostic(request, &answer) {
-            eprintln!(
-                "bridget_project_preparation {}",
-                diagnostic
-            );
+            eprintln!("bridget_project_preparation {}", diagnostic);
         }
         Err(code.to_owned())
     })();

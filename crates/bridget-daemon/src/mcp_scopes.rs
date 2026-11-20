@@ -409,4 +409,22 @@ mod tests {
         assert_eq!(tool["annotations"]["readOnlyHint"], false);
         assert_eq!(scope_of("bridget_journal", &Map::new()), Some(Scope::Reads));
     }
+
+    #[test]
+    fn spec306_mcp_tool_schemas_have_unique_names_descriptions_and_objects() {
+        let tools = crate::mcp::tools();
+        assert!(inventory_matches(&tools));
+        let mut seen = std::collections::HashSet::new();
+        for tool in &tools {
+            let name = tool["name"].as_str().expect("nom outil MCP requis");
+            assert!(seen.insert(name), "doublon outil MCP: {name}");
+            let desc = tool["description"].as_str().unwrap_or("");
+            assert!(!desc.trim().is_empty(), "description vide pour {name}");
+            assert_eq!(
+                tool["inputSchema"]["type"].as_str(),
+                Some("object"),
+                "inputSchema doit être un object pour {name}"
+            );
+        }
+    }
 }

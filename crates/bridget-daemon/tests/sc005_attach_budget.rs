@@ -896,7 +896,7 @@ fn command_output(program: &str, arguments: &[&str]) -> Option<String> {
 fn load_average() -> Option<f64> {
     let mut values = [0.0_f64; 3];
     // Valeur informative de rapport uniquement, jamais un seuil de ce test.
-    // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
+    // SAFETY: le descripteur est valide et tous les pointeurs de tampon/structure pointent vers des variables locales valides avec leur taille exacte.
     (unsafe { libc::getloadavg(values.as_mut_ptr(), 3) } > 0).then_some(values[0])
 }
 

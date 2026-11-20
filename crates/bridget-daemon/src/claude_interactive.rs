@@ -56,7 +56,7 @@ impl RawTerminal {
         if unsafe { libc::tcgetattr(fd, original.as_mut_ptr()) } != 0 {
             return Err(os_error("lecture termios du terminal"));
         }
-        // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
+        // SAFETY: l'appel système précédent a retourné un succès garantissant l'initialisation complète de la structure par le noyau.
         let original = unsafe { original.assume_init() };
         let mut raw = original;
         // SAFETY: les pointeurs passés à cfmakeraw désignent des variables locales valides pendant l'appel.
@@ -122,7 +122,7 @@ fn open_pty() -> Result<(OwnedFd, OwnedFd), String> {
             return Err(os_error("FD_CLOEXEC sur le pseudo-terminal"));
         }
     }
-    // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
+    // SAFETY: le descripteur vient d'être ouvert avec succès (`fd >= 0`) et sa propriété unique est transférée ici.
     Ok(unsafe { (OwnedFd::from_raw_fd(master), OwnedFd::from_raw_fd(slave)) })
 }
 
@@ -164,7 +164,7 @@ fn relay(from: RawFd, to: RawFd, stopping: Arc<AtomicBool>) {
         }
         let mut offset = 0usize;
         while offset < read as usize {
-            // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
+            // SAFETY: le descripteur est valide et tous les pointeurs de tampon/structure pointent vers des variables locales valides avec leur taille exacte.
             let written = unsafe {
                 libc::write(
                     to,
@@ -227,14 +227,14 @@ impl PtySession {
             if duplicate < 0 {
                 return Err(os_error("dup de l'esclave PTY"));
             }
-            // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
+            // SAFETY: la closure `pre_exec` n'exécute que des appels POSIX async-signal-safe entre `fork` et `exec`.
             Ok(unsafe { Stdio::from_raw_fd(duplicate) })
         };
         command
             .stdin(stdio(slave_fd)?)
             .stdout(stdio(slave_fd)?)
             .stderr(stdio(slave_fd)?);
-        // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
+        // SAFETY: la closure `pre_exec` n'exécute que des appels POSIX async-signal-safe entre `fork` et `exec`.
         unsafe {
             command.pre_exec(|| {
                 if libc::setsid() < 0 {

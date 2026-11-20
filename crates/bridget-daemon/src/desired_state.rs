@@ -634,7 +634,7 @@ mod tests {
 
         fn release_barrier(&self) {
             assert_eq!(
-                // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
+                // SAFETY: le descripteur est valide et tous les pointeurs de tampon/structure pointent vers des variables locales valides avec leur taille exacte.
                 unsafe { libc::write(self.release, [b'R'].as_ptr().cast(), 1) },
                 1
             );
@@ -676,7 +676,7 @@ mod tests {
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null());
-        // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
+        // SAFETY: la closure `pre_exec` n'exécute que des appels POSIX async-signal-safe entre `fork` et `exec`.
         unsafe {
             command.pre_exec(move || {
                 // Copier d'abord au-dessus des numéros cibles : une extrémité
@@ -1117,7 +1117,7 @@ mod tests {
     fn spec243_barriere_resiste_aux_numeros_cibles() {
         let mut fillers = Vec::new();
         loop {
-            // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
+            // SAFETY: les descripteurs de répertoire sont ouverts et valides et les chaînes `CString` terminées par nul restent vivantes pendant l'appel.
             let fd = unsafe { libc::open(c"/dev/null".as_ptr(), libc::O_RDONLY | libc::O_CLOEXEC) };
             assert!(fd >= 0);
             if fd >= 108 {
@@ -1152,7 +1152,7 @@ mod tests {
                     AtomicWritePhase::BeforeRename => b'B',
                     AtomicWritePhase::AfterRename => b'A',
                 };
-                // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
+                // SAFETY: le descripteur est valide et tous les pointeurs de tampon/structure pointent vers des variables locales valides avec leur taille exacte.
                 if unsafe { libc::write(BARRIER_READY_FD, (&signal as *const u8).cast(), 1) } != 1 {
                     return Err(io::Error::last_os_error());
                 }

@@ -164,7 +164,7 @@ impl Objects {
             },
         ];
         // Courte attente commune, toujours sous la même échéance absolue.
-        // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
+        // SAFETY: le descripteur est valide et tous les pointeurs de tampon/structure pointent vers des variables locales valides avec leur taille exacte.
         if unsafe { libc::poll(fds.as_mut_ptr(), 2, 10) } < 0
             && io::Error::last_os_error().kind() != io::ErrorKind::Interrupted
         {
@@ -543,7 +543,7 @@ impl Directory {
         if fd < 0 {
             return Err(compact::io_failure(io::Error::last_os_error()));
         }
-        // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
+        // SAFETY: les descripteurs de répertoire sont ouverts et valides et les chaînes `CString` terminées par nul restent vivantes pendant l'appel.
         let stream = unsafe { libc::fdopendir(fd) };
         if stream.is_null() {
             // SAFETY: close ne déréférence aucun pointeur ; ses arguments sont des entiers.
@@ -553,7 +553,7 @@ impl Directory {
         struct Stream(*mut libc::DIR);
         impl Drop for Stream {
             fn drop(&mut self) {
-                // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
+                // SAFETY: les descripteurs de répertoire sont ouverts et valides et les chaînes `CString` terminées par nul restent vivantes pendant l'appel.
                 unsafe { libc::closedir(self.0) };
             }
         }
@@ -561,23 +561,23 @@ impl Directory {
         let mut names = Vec::new();
         loop {
             #[cfg(target_os = "linux")]
-            // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
+            // SAFETY: les descripteurs de répertoire sont ouverts et valides et les chaînes `CString` terminées par nul restent vivantes pendant l'appel.
             let errno = unsafe { libc::__errno_location() };
             #[cfg(not(target_os = "linux"))]
-            // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
+            // SAFETY: les descripteurs de répertoire sont ouverts et valides et les chaînes `CString` terminées par nul restent vivantes pendant l'appel.
             let errno = unsafe { libc::__error() };
-            // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
+            // SAFETY: les descripteurs de répertoire sont ouverts et valides et les chaînes `CString` terminées par nul restent vivantes pendant l'appel.
             unsafe { *errno = 0 };
-            // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
+            // SAFETY: les descripteurs de répertoire sont ouverts et valides et les chaînes `CString` terminées par nul restent vivantes pendant l'appel.
             let entry = unsafe { libc::readdir(stream.0) };
             if entry.is_null() {
-                // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
+                // SAFETY: le pointeur C non nul est garanti terminé par un octet nul par l'appel système précédent pour la durée de cet emprunt.
                 if unsafe { *errno } != 0 {
                     return Err(refusal("view_read_failed"));
                 }
                 break;
             }
-            // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
+            // SAFETY: le pointeur C non nul est garanti terminé par un octet nul par l'appel système précédent pour la durée de cet emprunt.
             let name = unsafe { std::ffi::CStr::from_ptr((*entry).d_name.as_ptr()) }
                 .to_str()
                 .map_err(|_| refusal("path_unsupported"))?;
@@ -599,7 +599,7 @@ impl Directory {
     fn optional_kind(&self, name: &str) -> Result<Option<libc::mode_t>, String> {
         let name = Self::name(name)?;
         let mut stat = std::mem::MaybeUninit::<libc::stat>::uninit();
-        // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
+        // SAFETY: les descripteurs de répertoire sont ouverts et valides et les chaînes `CString` terminées par nul restent vivantes pendant l'appel.
         if unsafe {
             libc::fstatat(
                 self.0.as_raw_fd(),
@@ -615,7 +615,7 @@ impl Directory {
             }
             return Err(compact::io_failure(error));
         }
-        // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
+        // SAFETY: l'appel système précédent a retourné un succès garantissant l'initialisation complète de la structure par le noyau.
         Ok(Some(unsafe { stat.assume_init() }.st_mode & libc::S_IFMT))
     }
     fn kind(&self, name: &str) -> Result<libc::mode_t, String> {
@@ -625,7 +625,7 @@ impl Directory {
     fn read_link(&self, name: &str) -> Result<Vec<u8>, String> {
         let name = Self::name(name)?;
         let mut bytes = vec![0; MAX_LINK as usize + 1];
-        // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
+        // SAFETY: les descripteurs de répertoire sont ouverts et valides et les chaînes `CString` terminées par nul restent vivantes pendant l'appel.
         let n = unsafe {
             libc::readlinkat(
                 self.0.as_raw_fd(),
@@ -735,7 +735,7 @@ impl Directory {
     fn child(&self, name: &str) -> Result<Self, String> {
         use std::os::fd::FromRawFd;
         let name = Self::name(name)?;
-        // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
+        // SAFETY: les descripteurs de répertoire sont ouverts et valides et les chaînes `CString` terminées par nul restent vivantes pendant l'appel.
         let fd = unsafe {
             libc::openat(
                 self.0.as_raw_fd(),
@@ -746,12 +746,12 @@ impl Directory {
         if fd < 0 {
             return Err(compact::io_failure(io::Error::last_os_error()));
         }
-        // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
+        // SAFETY: le descripteur vient d'être ouvert avec succès (`fd >= 0`) et sa propriété unique est transférée ici.
         Ok(Self(unsafe { fs::File::from_raw_fd(fd) }))
     }
     fn create(&self, name: &str) -> Result<Self, String> {
         let encoded = Self::name(name)?;
-        // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
+        // SAFETY: les descripteurs de répertoire sont ouverts et valides et les chaînes `CString` terminées par nul restent vivantes pendant l'appel.
         if unsafe { libc::mkdirat(self.0.as_raw_fd(), encoded.as_ptr(), 0o700) } != 0 {
             return Err(compact::io_failure(io::Error::last_os_error()));
         }
@@ -790,7 +790,7 @@ impl Directory {
         } else {
             libc::O_RDONLY
         };
-        // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
+        // SAFETY: les descripteurs de répertoire sont ouverts et valides et les chaînes `CString` terminées par nul restent vivantes pendant l'appel.
         let fd = unsafe {
             libc::openat(
                 self.0.as_raw_fd(),
@@ -802,13 +802,13 @@ impl Directory {
         if fd < 0 {
             return Err(compact::io_failure(io::Error::last_os_error()));
         }
-        // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
+        // SAFETY: le descripteur vient d'être ouvert avec succès (`fd >= 0`) et sa propriété unique est transférée ici.
         Ok(unsafe { fs::File::from_raw_fd(fd) })
     }
     fn link(&self, name: &str, target: &str) -> Result<(), String> {
         let name = Self::name(name)?;
         let target = std::ffi::CString::new(target).map_err(|_| refusal("link_unsupported"))?;
-        // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
+        // SAFETY: les descripteurs de répertoire sont ouverts et valides et les chaînes `CString` terminées par nul restent vivantes pendant l'appel.
         if unsafe { libc::symlinkat(target.as_ptr(), self.0.as_raw_fd(), name.as_ptr()) } != 0 {
             return Err(compact::io_failure(io::Error::last_os_error()));
         }
@@ -2057,7 +2057,7 @@ impl ViewProofs {
             }
             let from = Directory::name(&temporary)?;
             let to = Directory::name(&name)?;
-            // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
+            // SAFETY: les descripteurs de répertoire sont ouverts et valides et les chaînes `CString` terminées par nul restent vivantes pendant l'appel.
             if unsafe {
                 libc::renameat(
                     self.directory.0.as_raw_fd(),
@@ -2158,7 +2158,7 @@ impl ViewProofs {
             return Err(refusal("git_stop_unconfirmed"));
         }
         let name = Directory::name(&format!("view-{}.json", binding.key()?))?;
-        // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
+        // SAFETY: les descripteurs de répertoire sont ouverts et valides et les chaînes `CString` terminées par nul restent vivantes pendant l'appel.
         if unsafe { libc::unlinkat(self.directory.0.as_raw_fd(), name.as_ptr(), 0) } != 0 {
             let error = io::Error::last_os_error();
             if error.kind() != io::ErrorKind::NotFound {

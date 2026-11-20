@@ -1103,7 +1103,7 @@ pub(super) fn available_space(directory: &fs::File) -> io::Result<(u128, u128)> 
     if unsafe { libc::fstatvfs(directory.as_raw_fd(), stat.as_mut_ptr()) } != 0 {
         return Err(io::Error::last_os_error());
     }
-    // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
+    // SAFETY: l'appel système précédent a retourné un succès garantissant l'initialisation complète de la structure par le noyau.
     let stat = unsafe { stat.assume_init() };
     let block = if stat.f_frsize > 0 {
         stat.f_frsize as u128

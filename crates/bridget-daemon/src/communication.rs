@@ -33,16 +33,40 @@ pub(crate) fn project_relation(
     }
 }
 
-pub(crate) fn project_scope(
+/// Erreur typée de vérification de périmètre inter-projets (programme 260, lot 8 / spec 306).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ProjectScopeError {
+    ReasonRequired(String),
+    InvalidReason(String),
+}
+
+impl ProjectScopeError {
+    pub(crate) fn category(&self) -> &'static str {
+        match self {
+            Self::ReasonRequired(_) => "cross_project_reason_required",
+            Self::InvalidReason(_) => "invalid_cross_project_reason",
+        }
+    }
+
+    pub(crate) fn into_message(self) -> String {
+        match self {
+            Self::ReasonRequired(msg) | Self::InvalidReason(msg) => msg,
+        }
+    }
+}
+
+pub(crate) fn project_scope_typed(
     sender: Option<&CommunicationProject>,
     recipient: Option<&CommunicationProject>,
     recipient_id: &str,
     reason: Option<&str>,
-) -> Result<Vec<ProjectWarning>, String> {
-    let reason = validate_cross_project_reason(reason)?;
+) -> Result<Vec<ProjectWarning>, ProjectScopeError> {
+    let reason = validate_cross_project_reason(reason).map_err(ProjectScopeError::InvalidReason)?;
     let relation = project_relation(sender, recipient);
     if relation == ProjectRelation::Other && reason.is_none() {
-        return Err("cross_project_reason_required : autre projet, préciser --cross-project-reason avec un motif volontaire. Ne modifiez pas le contenu d’un envoi déjà identifié sous la même clé. Si le reçu atteste un refus définitif sans remise, le motif corrigé appartient à une nouvelle demande avec sa propre clé. Une issue inconnue se relit avec la même clé et la même enveloppe.".into());
+        return Err(ProjectScopeError::ReasonRequired(
+            "cross_project_reason_required : autre projet, préciser --cross-project-reason avec un motif volontaire. Ne modifiez pas le contenu d’un envoi déjà identifié sous la même clé. Si le reçu atteste un refus définitif sans remise, le motif corrigé appartient à une nouvelle demande avec sa propre clé. Une issue inconnue se relit avec la même clé et la même enveloppe.".into(),
+        ));
     }
     if relation == ProjectRelation::Same {
         return Ok(Vec::new());
@@ -59,6 +83,16 @@ pub(crate) fn project_scope(
         recipient: recipient_id.into(),
         reason,
     }])
+}
+
+pub(crate) fn project_scope(
+    sender: Option<&CommunicationProject>,
+    recipient: Option<&CommunicationProject>,
+    recipient_id: &str,
+    reason: Option<&str>,
+) -> Result<Vec<ProjectWarning>, String> {
+    project_scope_typed(sender, recipient, recipient_id, reason)
+        .map_err(ProjectScopeError::into_message)
 }
 
 /// Git est résolu une seule fois, hors verrou daemon. Aucun nom de domaine

@@ -331,7 +331,7 @@ impl NativeTui {
         environment: &[(OsString, OsString)],
         alive: Arc<AtomicBool>,
     ) -> io::Result<Self> {
-        // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
+        // SAFETY: structure C POD de `libc` pour laquelle le motif entièrement nul est une représentation valide.
         let mut termios = unsafe { std::mem::zeroed() };
         // SAFETY: les pointeurs passés à tcgetattr désignent des variables locales valides pendant l'appel.
         if unsafe { libc::tcgetattr(libc::STDIN_FILENO, &mut termios) } != 0 {

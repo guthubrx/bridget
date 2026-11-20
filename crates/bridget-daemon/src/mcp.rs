@@ -1474,7 +1474,9 @@ fn execute_send(
     if reply {
         result["reply_timeout_secs"] = json!(reply_timeout.unwrap_or(60));
         result["reply_budget_includes_queue"] = json!(true);
-        result["reply_timeout_guidance"] = json!("Le délai de réponse commence à l'admission de cet envoi et inclut son attente en file. Il vaut 60 s si reply_timeout est omis. queue attend la fin du tour actif ; in_flight ne prouve ni lecture ni démarrage. Choisissez un délai adapté avant le premier envoi, sans modifier les paramètres d'une clé existante. L'expiration de cette demande n'arrête aucune autre mission.");
+        result["reply_timeout_guidance"] = json!(
+            "Le délai de réponse commence à l'admission de cet envoi et inclut son attente en file. Il vaut 60 s si reply_timeout est omis. queue attend la fin du tour actif ; in_flight ne prouve ni lecture ni démarrage. Choisissez un délai adapté avant le premier envoi, sans modifier les paramètres d'une clé existante. L'expiration de cette demande n'arrête aucune autre mission."
+        );
     }
     if let Some(intent) = requested_intent {
         result["intent"] = json!(intent);
@@ -2203,7 +2205,11 @@ fn execute_guichet_mutation(
             message,
         }) => {
             let mut result = guichet_result_value(
-                &request_id, Some(issued_at), &scope, "outcome_unknown", None,
+                &request_id,
+                Some(issued_at),
+                &scope,
+                "outcome_unknown",
+                None,
             )?;
             result["transport_error"] = json!(message);
             Ok(result)
@@ -2417,7 +2423,10 @@ fn guichet_result_value(
     let pending = matches!(issue, "queued" | "outcome_unknown");
     let terminal = match issue {
         "queued" | "outcome_unknown" => json!(false),
-        "idempotency_expired" | "canonical_bytes_mismatch" | "invalid_issued_at" | "claim_stale" => json!(true),
+        "idempotency_expired"
+        | "canonical_bytes_mismatch"
+        | "invalid_issued_at"
+        | "claim_stale" => json!(true),
         _ => Value::Null,
     };
     let (reason, recovery) = match issue {

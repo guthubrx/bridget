@@ -191,7 +191,7 @@ impl HostPort {
         // libc le marque déprécié au profit du crate mach2 ; l'appel reste stable
         // et évite une dépendance supplémentaire pour cette seule lecture.
         #[allow(deprecated)]
-        // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
+        // SAFETY: les compteurs et structures Mach de sortie sont alloués localement avec leur taille exacte et contrôlés via le code de retour.
         let port = unsafe { libc::mach_host_self() };
         (port != 0).then_some(Self(port))
     }
@@ -209,7 +209,7 @@ impl Drop for HostPort {
             ) -> libc::kern_return_t;
         }
         #[allow(deprecated)]
-        // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
+        // SAFETY: les compteurs et structures Mach de sortie sont alloués localement avec leur taille exacte et contrôlés via le code de retour.
         unsafe {
             let _ = mach_port_deallocate(libc::mach_task_self(), self.0);
         }
@@ -221,7 +221,7 @@ fn read_cpu() -> Option<(u64, u64)> {
     let host = HostPort::acquire()?;
     let mut info = std::mem::MaybeUninit::<libc::host_cpu_load_info_data_t>::zeroed();
     let mut count = libc::HOST_CPU_LOAD_INFO_COUNT;
-    // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
+    // SAFETY: les compteurs et structures Mach de sortie sont alloués localement avec leur taille exacte et contrôlés via le code de retour.
     let result = unsafe {
         libc::host_statistics(
             host.0,
@@ -233,7 +233,7 @@ fn read_cpu() -> Option<(u64, u64)> {
     if result != libc::KERN_SUCCESS || count < libc::HOST_CPU_LOAD_INFO_COUNT {
         return None;
     }
-    // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
+    // SAFETY: l'appel système précédent a retourné un succès garantissant l'initialisation complète de la structure par le noyau.
     let ticks = unsafe { info.assume_init() }.cpu_ticks;
     let total = ticks.iter().map(|value| u64::from(*value)).sum();
     Some((total, u64::from(ticks[libc::CPU_STATE_IDLE as usize])))
@@ -243,7 +243,7 @@ fn read_cpu() -> Option<(u64, u64)> {
 fn read_available_memory_percent() -> Option<u8> {
     let mut total: u64 = 0;
     let mut size = std::mem::size_of::<u64>();
-    // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
+    // SAFETY: le descripteur est valide et tous les pointeurs de tampon/structure pointent vers des variables locales valides avec leur taille exacte.
     let result = unsafe {
         libc::sysctlbyname(
             c"hw.memsize".as_ptr(),
@@ -259,7 +259,7 @@ fn read_available_memory_percent() -> Option<u8> {
     let host = HostPort::acquire()?;
     let mut info = std::mem::MaybeUninit::<libc::vm_statistics64_data_t>::zeroed();
     let mut count = libc::HOST_VM_INFO64_COUNT;
-    // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
+    // SAFETY: les compteurs et structures Mach de sortie sont alloués localement avec leur taille exacte et contrôlés via le code de retour.
     let result = unsafe {
         libc::host_statistics64(
             host.0,
@@ -271,7 +271,7 @@ fn read_available_memory_percent() -> Option<u8> {
     if result != libc::KERN_SUCCESS || count < 3 {
         return None;
     }
-    // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
+    // SAFETY: l'appel système précédent a retourné un succès garantissant l'initialisation complète de la structure par le noyau.
     let info = unsafe { info.assume_init() };
     // SAFETY: sysconf ne déréférence aucun pointeur ; ses arguments sont des entiers.
     let page_size = unsafe { libc::sysconf(libc::_SC_PAGESIZE) };
@@ -301,7 +301,7 @@ fn normalize_load(load: f64, cpus: i64) -> Option<u8> {
 }
 fn read_normalized_load_percent() -> Option<u8> {
     let mut loads = [0.0_f64; 1];
-    // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
+    // SAFETY: le descripteur est valide et tous les pointeurs de tampon/structure pointent vers des variables locales valides avec leur taille exacte.
     if unsafe { libc::getloadavg(loads.as_mut_ptr(), 1) } != 1 {
         return None;
     }

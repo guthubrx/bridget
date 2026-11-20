@@ -680,7 +680,7 @@ impl RawTerminal {
                 std::io::Error::last_os_error()
             ));
         }
-        // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
+        // SAFETY: l'appel système précédent a retourné un succès garantissant l'initialisation complète de la structure par le noyau.
         let original = unsafe { original.assume_init() };
         let mut raw = original;
         let disabled = (libc::ICANON | libc::ECHO | libc::ISIG) as libc::tcflag_t;
@@ -749,7 +749,7 @@ impl RawTerminal {
 fn write_terminal_control(fd: RawFd, bytes: &[u8]) -> Result<(), std::io::Error> {
     let mut written = 0;
     while written < bytes.len() {
-        // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
+        // SAFETY: le descripteur est valide et tous les pointeurs de tampon/structure pointent vers des variables locales valides avec leur taille exacte.
         let count = unsafe {
             libc::write(
                 fd,
@@ -3140,7 +3140,7 @@ pub(crate) fn terminal_geometry(fd: RawFd) -> Option<(usize, usize)> {
     if unsafe { libc::ioctl(fd, libc::TIOCGWINSZ, size.as_mut_ptr()) } != 0 {
         return None;
     }
-    // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
+    // SAFETY: l'appel système précédent a retourné un succès garantissant l'initialisation complète de la structure par le noyau.
     let size = unsafe { size.assume_init() };
     let columns = usize::from(size.ws_col);
     let rows = usize::from(size.ws_row);
@@ -3319,7 +3319,7 @@ fn drive_interactive(
             // perdre le dernier Send d'une saisie terminée par fermeture.
             loop {
                 let mut byte = 0_u8;
-                // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
+                // SAFETY: le descripteur est valide et tous les pointeurs de tampon/structure pointent vers des variables locales valides avec leur taille exacte.
                 let read = unsafe {
                     libc::read(input_fd, (&mut byte as *mut u8).cast::<libc::c_void>(), 1)
                 };
@@ -4187,7 +4187,7 @@ fn parse_utc_timestamp(timestamp: &str) -> Option<libc::time_t> {
         tm_mon: number(5..7)? - 1,
         tm_year: number(0..4)? - 1900,
         tm_isdst: 0,
-        // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
+        // SAFETY: structure C POD de `libc` pour laquelle le motif entièrement nul est une représentation valide.
         ..unsafe { std::mem::zeroed() }
     };
     // SAFETY: les pointeurs passés à timegm désignent des variables locales valides pendant l'appel.

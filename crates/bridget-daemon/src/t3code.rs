@@ -1142,7 +1142,7 @@ fn server_alive(ours: &ServerRuntime) -> bool {
 fn app_bundle(pid: u32) -> Option<String> {
     let mut buffer = vec![0u8; libc::PROC_PIDPATHINFO_MAXSIZE as usize];
     let length =
-        // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
+        // SAFETY: le tampon de sortie est valide en mémoire pour toute la taille en octets passée à l'appel noyau, et la longueur écrite est contrôlée au retour.
         unsafe { libc::proc_pidpath(pid as i32, buffer.as_mut_ptr().cast(), buffer.len() as u32) };
     if length <= 0 {
         return None;
@@ -2769,7 +2769,9 @@ impl LinkWorker {
             }
             Discard::Expired(which) if matches!(which, "de demande" | "de réponse") => format!(
                 "Relisez cette demande #{} dans bridget_ledger. Son échéance {which} est dépassée avant démarrage : ce pont ne l'a pas injectée. Le délai de réponse ({} s, 60 s par défaut) inclut l'attente en file. La même clé ne rouvre pas cette demande expirée. Si une suite dépasse votre mandat, demandez au propriétaire de décider d'un nouvel envoi avec un délai adapté. Les autres travaux autorisés suivent leur propre état.",
-                message.id, message.reply_timeout.unwrap_or(60)),
+                message.id,
+                message.reply_timeout.unwrap_or(60)
+            ),
             Discard::Expired(which) => format!("échéance {which} dépassée avant démarrage"),
             Discard::RequestClosed(state) => format!("demande {state} avant démarrage"),
             Discard::GuidanceUnavailable(reason) => reason.into(),

@@ -230,7 +230,6 @@ fn active(device: Device, now: i64) -> Result<Device, StoreError> {
 impl Store {
     /// O(profondeur du chemin), trois fichiers SQLite privés ; aucun parcours de namespace.
     pub fn open(path: &Path) -> Result<Self, StoreError> {
-        use std::os::unix::fs::OpenOptionsExt;
         let parent = path.parent().ok_or(StoreError::InvalidRequest)?;
         crate::environment::validate_private_directory_if_present(parent)
             .map_err(|_| StoreError::StorageUnavailable)?;
@@ -243,21 +242,16 @@ impl Store {
             crate::environment::validate_state_file(&sidecar, false)
                 .map_err(|_| StoreError::StorageUnavailable)?;
         }
-        std::fs::OpenOptions::new()
-            .create(true)
-            .read(true)
-            .write(true)
-            .truncate(false)
-            .mode(0o600)
-            .custom_flags(libc::O_NOFOLLOW)
-            .open(path)
+        let conn = crate::store_schema::open_private_wal(path)
             .map_err(|_| StoreError::StorageUnavailable)?;
-        Self::from_connection(Connection::open(path).map_err(storage)?)
+        Self::from_connection(conn)
     }
 
     fn from_connection(conn: Connection) -> Result<Self, StoreError> {
         conn.busy_timeout(std::time::Duration::from_secs(2))
             .map_err(storage)?;
+        let _ = conn.pragma_update(None, "journal_mode", "WAL");
+        let _ = conn.pragma_update(None, "synchronous", "NORMAL");
         conn.pragma_update(None, "foreign_keys", "ON")
             .map_err(storage)?;
         let version: i64 = conn

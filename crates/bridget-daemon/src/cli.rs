@@ -80,10 +80,17 @@ fn unknown_argument(command: &str, argument: &str) -> String {
 fn validate_zero_arity_command(command: &str, args: &[String]) -> Result<(), String> {
     if matches!(
         command,
-        "mcp" | "discover" | "status" | "version" | "--version" | "-v" | "help" | "--help" | "-h"
+        "mcp" | "discover" | "version" | "--version" | "-v" | "help" | "--help" | "-h"
     ) && let Some(argument) = args.first()
     {
         return Err(unknown_argument(command, argument));
+    }
+    if command == "status" {
+        for argument in args {
+            if !matches!(argument.as_str(), "--metrics" | "--json") {
+                return Err(unknown_argument(command, argument));
+            }
+        }
     }
     Ok(())
 }
@@ -121,6 +128,8 @@ fn command_initializes_namespace(command: &str) -> bool {
     !matches!(
         command,
         "federate"
+            | "federation"
+            | "completions"
             | "managed-bootstrap"
             | "version"
             | "--version"
@@ -138,6 +147,11 @@ fn command_requires_principal(command: &str) -> bool {
         command,
         "daemon"
             | "federate"
+            | "federation"
+            | "completions"
+            | "doctor"
+            | "backup"
+            | "restore"
             | "t3"
             | "managed-bootstrap"
             | "managed-wrapper"
@@ -378,7 +392,24 @@ fn run_with_args(args: Vec<String>) {
     // --- Sous-commandes daemon / client ---
     match cmd.as_str() {
         "daemon" => cmd_daemon(&args[2..]),
+        "doctor" => crate::doctor::run(&args[2..]),
+        "backup" => crate::backup::run_backup(&args[2..]),
+        "restore" => crate::backup::run_restore(&args[2..]),
+        "completions" => crate::completions::run(&args[2..]),
         "federate" => crate::federate::run(&args[2..]),
+        "federation" => match args.get(2).map(String::as_str) {
+            Some("links") => match crate::sentinel::run_federation_links(&args[3..]) {
+                Ok(value) => println!("{value}"),
+                Err(error) => {
+                    eprintln!("bridget {error}");
+                    crate::cli_table::exit(2);
+                }
+            },
+            _ => {
+                eprintln!("Usage : bridget federation links [--state <dossier>] [--json]");
+                crate::cli_table::exit(2);
+            }
+        },
         "mobile" => crate::mobile::run(&args[2..]),
         "updates" => crate::updates::run(&args[2..]),
         "clients" => crate::client_compatibility::run(&args[2..]),
@@ -449,7 +480,7 @@ fn run_with_args(args: Vec<String>) {
         "who" => cmd_who(&args[2..]),
         "agents" => cmd_agents(&args[2..]),
         "discover" => cmd_discover(),
-        "status" => cmd_status(),
+        "status" => cmd_status(&args[2..]),
         "sentinel" => match args.get(2).map(String::as_str) {
             Some("status") if args.len() == 3 => match crate::sentinel::read_remote(&socket_path())
             {
@@ -2734,6 +2765,29 @@ fn parse_auto_delegate_args(args: &[String]) -> Result<serde_json::Value, String
 
 /// Même parcours que l'outil MCP : identité, capacité maître et résultat
 /// durable sont tous traités par `delegation_mcp::execute`.
+/// Simulation sans effet de bord (`--dry-run`) pour `delegate` et `auto-delegate`.
+fn build_delegation_dry_run_plan(
+    command: &str,
+    payload: &serde_json::Value,
+    registry: Option<&crate::registry::AgentRegistry>,
+) -> serde_json::Value {
+    let machines: Vec<String> = registry
+        .map(|r| r.machines().keys().cloned().collect())
+        .unwrap_or_default();
+    let registry_agents = registry.map(|r| r.len()).unwrap_or(0);
+    serde_json::json!({
+        "status": "dry_run",
+        "command": command,
+        "would_spawn": false,
+        "side_effects": "none",
+        "payload": payload,
+        "fleet": {
+            "registry_agents": registry_agents,
+            "configured_machines": machines,
+        }
+    })
+}
+
 fn cmd_auto_delegate(args: &[String]) {
     if matches!(
         args.first().map(String::as_str),
@@ -2742,11 +2796,26 @@ fn cmd_auto_delegate(args: &[String]) {
         println!("{AUTO_DELEGATE_USAGE}");
         return;
     }
-    let payload = parse_auto_delegate_args(args).unwrap_or_else(|error| {
+    let dry_run = args.iter().any(|a| a == "--dry-run");
+    let filtered_args: Vec<String> = args
+        .iter()
+        .filter(|a| a.as_str() != "--dry-run")
+        .cloned()
+        .collect();
+    let payload = parse_auto_delegate_args(&filtered_args).unwrap_or_else(|error| {
         eprintln!("{AUTO_DELEGATE_USAGE}");
         eprintln!("erreur: {error}");
         crate::cli_table::exit(2);
     });
+    if dry_run {
+        let reg = crate::registry::AgentRegistry::load().ok();
+        let plan = build_delegation_dry_run_plan("auto-delegate", &payload, reg.as_ref());
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&plan).unwrap_or_default()
+        );
+        return;
+    }
     let identity = crate::mcp_identity::resolve_current_identity().unwrap_or_else(|error| {
         eprintln!(
             "bridget auto-delegate : {} : {}",
@@ -3290,14 +3359,29 @@ fn cmd_delegate(args: &[String]) {
         eprintln!("bridget delegate : dossier courant inaccessible : {error}");
         crate::cli_table::exit(1);
     });
-    let parsed = parse_delegate_args(args, &cwd, || uuid::Uuid::new_v4().to_string())
+    let dry_run = args.iter().any(|a| a == "--dry-run");
+    let filtered_args: Vec<String> = args
+        .iter()
+        .filter(|a| a.as_str() != "--dry-run")
+        .cloned()
+        .collect();
+    let parsed = parse_delegate_args(&filtered_args, &cwd, || uuid::Uuid::new_v4().to_string())
         .unwrap_or_else(|error| {
-            let json = args.iter().any(|argument| argument == "--json");
+            let json = filtered_args.iter().any(|argument| argument == "--json");
             if !json {
                 eprintln!("{DELEGATE_USAGE}");
             }
             exit_coordination_error("delegate", json, "invalid_arguments", &error, None, 2)
         });
+    if dry_run {
+        let reg = crate::registry::AgentRegistry::load().ok();
+        let plan = build_delegation_dry_run_plan("delegate", &parsed.payload, reg.as_ref());
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&plan).unwrap_or_default()
+        );
+        return;
+    }
     let call = ParsedNativeCli {
         tool: parsed.tool,
         payload: parsed.payload,
@@ -7875,7 +7959,7 @@ fn shorten_raw_window(name: &str) -> String {
 /// Heure locale ; date incluse si la réinitialisation est à plus d'un jour.
 fn format_local_reset(timestamp: i64) -> Option<String> {
     let seconds: libc::time_t = timestamp;
-    // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
+    // SAFETY: structure C POD de `libc` pour laquelle le motif entièrement nul est une représentation valide.
     let mut local: libc::tm = unsafe { std::mem::zeroed() };
     // SAFETY: les pointeurs passés à localtime_r désignent des variables locales valides pendant l'appel.
     if unsafe { libc::localtime_r(&seconds, &mut local) }.is_null() {
@@ -8076,9 +8160,30 @@ fn require_explicit_reaper_tmp(tmp_dir: Option<PathBuf>) -> Result<PathBuf, Stri
     tmp_dir.ok_or_else(|| "--tmp DIR est obligatoire : aucune racine TMPDIR implicite".to_string())
 }
 
-fn cmd_status() {
+fn cmd_status(args: &[String]) {
+    let show_metrics = args.iter().any(|a| a == "--metrics");
+    let as_json = args.iter().any(|a| a == "--json");
     let config = DaemonConfig::default();
     let status = daemon_status_or_exit("status", &config);
+    if as_json {
+        let mut payload = serde_json::json!({
+            "running": status.running,
+            "daemon_host": status.daemon_host,
+            "socket": config.socket_path,
+            "daemon_db_path": status.daemon_db_path,
+            "connected_agents": status.agents.len(),
+            "message_count": status.message_count,
+            "build_id": status.build_id,
+        });
+        if show_metrics {
+            payload["metrics"] = crate::daemon::get_metrics().snapshot_json();
+        }
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&payload).unwrap_or_default()
+        );
+        return;
+    }
     println!(
         "Daemon: {}",
         if status.running {
@@ -8109,6 +8214,12 @@ fn cmd_status() {
         "Build-id daemon: {}",
         status.build_id.as_deref().unwrap_or("inconnu")
     );
+    if show_metrics {
+        println!(
+            "Métriques: {}",
+            crate::daemon::get_metrics().snapshot_json()
+        );
+    }
     emit_stale_daemon_warning(status.build_id.as_deref(), status.daemon_host.as_deref());
     emit_disk_warning();
 }
@@ -9128,5 +9239,20 @@ mod message244_tests {
                 .unwrap_err()
                 .contains("octets")
         );
+    }
+
+    #[test]
+    fn spec306_dry_run_plan_has_no_side_effects() {
+        let payload = serde_json::json!({
+            "role": "reviewer",
+            "prompt": "Audit de sécurité"
+        });
+        let plan = super::build_delegation_dry_run_plan("delegate", &payload, None);
+        assert_eq!(plan["status"], "dry_run");
+        assert_eq!(plan["command"], "delegate");
+        assert_eq!(plan["would_spawn"], false);
+        assert_eq!(plan["side_effects"], "none");
+        assert_eq!(plan["payload"]["role"], "reviewer");
+        assert_eq!(plan["fleet"]["registry_agents"], 0);
     }
 }

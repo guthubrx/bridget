@@ -290,7 +290,13 @@ fn spec221_c19_origin_reader_never_receives_creation_source_or_prepare() {
         },
     ] {
         assert_eq!(
-            exchange(&shared, "origin177", None, operation, Duration::from_secs(1)),
+            exchange(
+                &shared,
+                "origin177",
+                None,
+                operation,
+                Duration::from_secs(1)
+            ),
             Err(if crate::workspace_git::COMMIT_VIEW_LAUNCH_ENABLED {
                 "origin_commit_view_unsupported"
             } else {
@@ -643,7 +649,16 @@ fn mobile177_origin_real_wire_correlates_once_and_timeout_drops_pending() {
     ));
     fake.join().unwrap();
     // Transport indisponible : aucune attente durable et aucune remise métier.
-    assert!(exchange(&shared, "origin177", None, operation, Duration::from_millis(20)).is_err());
+    assert!(
+        exchange(
+            &shared,
+            "origin177",
+            None,
+            operation,
+            Duration::from_millis(20)
+        )
+        .is_err()
+    );
     assert!(shared.lock().unwrap().pending_origin_proofs.is_empty());
     assert!(
         shared

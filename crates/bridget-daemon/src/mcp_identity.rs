@@ -380,7 +380,7 @@ impl ProcessTree for SystemProcessTree {
 pub(crate) fn process_parent(pid: u32) -> std::io::Result<u32> {
     let mut info = std::mem::MaybeUninit::<libc::proc_bsdinfo>::zeroed();
     let expected = std::mem::size_of::<libc::proc_bsdinfo>();
-    // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
+    // SAFETY: le tampon de sortie est valide en mémoire pour toute la taille en octets passée à l'appel noyau, et la longueur écrite est contrôlée au retour.
     let written = unsafe {
         libc::proc_pidinfo(
             pid as libc::c_int,
@@ -393,7 +393,7 @@ pub(crate) fn process_parent(pid: u32) -> std::io::Result<u32> {
     if written != expected as libc::c_int {
         return Err(std::io::Error::last_os_error());
     }
-    // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
+    // SAFETY: l'appel système précédent a retourné un succès garantissant l'initialisation complète de la structure par le noyau.
     Ok(unsafe { info.assume_init() }.pbi_ppid)
 }
 
@@ -811,7 +811,7 @@ fn read_marker_file(path: &Path, marker_name: &str) -> Result<AgentPidMarker, Ma
 
 fn local_hostname() -> Result<String, MarkerScanError> {
     let mut buffer = [0_u8; 256];
-    // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
+    // SAFETY: le tampon de sortie est valide en mémoire pour toute la taille en octets passée à l'appel noyau, et la longueur écrite est contrôlée au retour.
     if unsafe { libc::gethostname(buffer.as_mut_ptr().cast(), buffer.len()) } != 0 {
         return Err(MarkerScanError::HostUnavailable);
     }

@@ -339,14 +339,20 @@ fn frozen_start_routing(
         .ok_or("remote_placement_missing")?;
     // Prepare rematérialise le contexte des vues et worktrees : leurs chemins
     // et empreintes diffèrent légitimement de ceux de la sonde du dépôt source.
-    let isolated = matches!(&task.request, NativeDelegationRequest::Delegate {
-        workspace: Some(WorkspaceRequest::Worktree { .. } | WorkspaceRequest::CommitView {}), ..
-    });
+    let isolated = matches!(
+        &task.request,
+        NativeDelegationRequest::Delegate {
+            workspace: Some(WorkspaceRequest::Worktree { .. } | WorkspaceRequest::CommitView {}),
+            ..
+        }
+    );
     if isolated && !task.remote_prepared {
         return Err("start_recovery_prepared_changed".into());
     }
     let definition_valid = AgentRegistry::from_resolved(agent_type, &task.definition).is_ok();
-    let prepared_permissions_match = task.permission_snapshot.as_ref()
+    let prepared_permissions_match = task
+        .permission_snapshot
+        .as_ref()
         .and_then(|snapshot| serde_json::to_vec(&snapshot.child_policy).ok())
         .map(|bytes| format!("{:x}", sha2::Sha256::digest(bytes)))
         .is_some_and(|digest| digest == placement.permission_digest);
@@ -395,7 +401,8 @@ fn frozen_start_routing(
             (
                 "definition",
                 task.definition.digest != placement.definition_digest
-                    || !definition_valid || !initial_definition_matches,
+                    || !definition_valid
+                    || !initial_definition_matches,
             ),
             (
                 "permissions",

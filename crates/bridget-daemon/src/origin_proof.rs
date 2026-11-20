@@ -122,7 +122,7 @@ fn execute_with_context(
                     registry.ok_or(WorkerRefusal::Unauthorized)?.to_path_buf(),
                 )
                 .map_err(|_| WorkerRefusal::DefinitionChanged)?;
-                let entries = crate::daemon::catalogue_entries177(
+                let entries = crate::daemon::catalogue_entries(
                     &registry,
                     &crate::lifecycle::source_environment(),
                     &crate::provider_limits::ProviderLimits::default(),

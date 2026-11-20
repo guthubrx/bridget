@@ -63,13 +63,13 @@ fn spec265_other_failure_and_foreign_tracking_are_not_reclassified_as_timeout() 
     let mut st = state.lock().unwrap();
     task.state = "failed".into();
     task.error = Some("provider_failed".into());
-    assert!(!settle_terminal_tracked_request247(&mut st, &task).unwrap());
+    assert!(!settle_terminal_tracked_request(&mut st, &task).unwrap());
     task.error = Some("mission_reply_timeout".into());
     task.owner = "foreign-owner".into();
-    assert!(!settle_terminal_tracked_request247(&mut st, &task).unwrap());
+    assert!(!settle_terminal_tracked_request(&mut st, &task).unwrap());
     task.owner = st.store.get_request(&task.mission).unwrap().unwrap().sender;
     task.child = "foreign-child".into();
-    assert!(!settle_terminal_tracked_request247(&mut st, &task).unwrap());
+    assert!(!settle_terminal_tracked_request(&mut st, &task).unwrap());
     assert_eq!(
         st.store.get_request(&task.mission).unwrap().unwrap().state,
         "open"

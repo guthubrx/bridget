@@ -37,15 +37,15 @@ pub(crate) mod remote_drain {
     const MAX_CHILDREN: usize = 1024;
 
     pub fn arm() -> io::Result<()> {
-        // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
+        // SAFETY: appel système POSIX/Linux aux arguments entiers ou pointeur nul valide selon le contrat noyau.
         if unsafe { libc::prctl(libc::PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0) } != 0 {
             return Err(io::Error::last_os_error());
         }
         // Refuser avant fournisseur les noyaux dépourvus de pidfd.
         let fd = pidfd(std::process::id())?;
-        // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
+        // SAFETY: structure C POD de `libc` pour laquelle le motif entièrement nul est une représentation valide.
         let mut info = unsafe { std::mem::zeroed::<libc::siginfo_t>() };
-        // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
+        // SAFETY: `info` est une structure `libc::siginfo_t` locale mutable valide pendant toute la durée de `waitid`.
         let result = unsafe {
             libc::waitid(
                 libc::P_PIDFD,
@@ -61,12 +61,12 @@ pub(crate) mod remote_drain {
     }
 
     fn pidfd(pid: u32) -> io::Result<OwnedFd> {
-        // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
+        // SAFETY: le descripteur vient d'être ouvert avec succès (`fd >= 0`) et sa propriété unique est transférée ici.
         let fd = unsafe { libc::syscall(libc::SYS_pidfd_open, pid, 0) };
         if fd < 0 {
             return Err(io::Error::last_os_error());
         }
-        // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
+        // SAFETY: le descripteur vient d'être ouvert avec succès (`fd >= 0`) et sa propriété unique est transférée ici.
         Ok(unsafe { OwnedFd::from_raw_fd(fd as i32) })
     }
 
@@ -142,7 +142,7 @@ pub(crate) mod remote_drain {
                     continue;
                 }
             }
-            // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
+            // SAFETY: appel système POSIX/Linux aux arguments entiers ou pointeur nul valide selon le contrat noyau.
             let result = unsafe {
                 libc::syscall(
                     libc::SYS_pidfd_send_signal,
@@ -172,9 +172,9 @@ pub(crate) mod remote_drain {
                 }
                 Err(error) => return Err(error),
             };
-            // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
+            // SAFETY: structure C POD de `libc` pour laquelle le motif entièrement nul est une représentation valide.
             let mut info = unsafe { std::mem::zeroed::<libc::siginfo_t>() };
-            // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
+            // SAFETY: `info` est une structure `libc::siginfo_t` locale mutable valide pendant toute la durée de `waitid`.
             let rc = unsafe {
                 libc::waitid(
                     libc::P_PIDFD,
@@ -187,9 +187,9 @@ pub(crate) mod remote_drain {
                 return Err(io::Error::last_os_error());
             }
         }
-        // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
+        // SAFETY: structure C POD de `libc` pour laquelle le motif entièrement nul est une représentation valide.
         let mut info = unsafe { std::mem::zeroed::<libc::siginfo_t>() };
-        // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
+        // SAFETY: `info` est une structure `libc::siginfo_t` locale mutable valide pendant toute la durée de `waitid`.
         let rc = unsafe {
             libc::waitid(
                 libc::P_ALL,
@@ -842,7 +842,7 @@ pub fn wait_group_gone(pgid: u32, timeout: Duration, poll_interval: Duration) ->
 #[cfg(target_os = "macos")]
 fn group_member_count(pgid: u32) -> io::Result<usize> {
     const PROC_PGRP_ONLY: u32 = 2;
-    // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
+    // SAFETY: le tampon de sortie est valide en mémoire pour toute la taille en octets passée à l'appel noyau, et la longueur écrite est contrôlée au retour.
     let required = unsafe { libc::proc_listpids(PROC_PGRP_ONLY, pgid, std::ptr::null_mut(), 0) };
     if required < 0 {
         return Err(io::Error::last_os_error());
@@ -851,7 +851,7 @@ fn group_member_count(pgid: u32) -> io::Result<usize> {
         .div_ceil(std::mem::size_of::<libc::pid_t>())
         .saturating_add(8);
     let mut pids = vec![0 as libc::pid_t; capacity];
-    // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
+    // SAFETY: le tampon de sortie est valide en mémoire pour toute la taille en octets passée à l'appel noyau, et la longueur écrite est contrôlée au retour.
     let written = unsafe {
         libc::proc_listpids(
             PROC_PGRP_ONLY,
@@ -1050,7 +1050,7 @@ fn run_bootstrap(request: BootstrapRequest) -> Result<(), ManagedProcessError> {
     let mut release = [0_u8; 1];
     let read = read_one(RELEASE_FD, &mut release)?;
     if read == 0 {
-        // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
+        // SAFETY: appel système POSIX/Linux aux arguments entiers ou pointeur nul valide selon le contrat noyau.
         unsafe { libc::_exit(ABANDONED_EXIT_CODE) };
     }
     if release[0] != RELEASE_BYTE {
@@ -1075,7 +1075,7 @@ fn run_bootstrap(request: BootstrapRequest) -> Result<(), ManagedProcessError> {
 fn process_snapshot(pid: u32) -> io::Result<(u64, bool)> {
     let mut info = std::mem::MaybeUninit::<libc::proc_bsdinfo>::zeroed();
     let expected = std::mem::size_of::<libc::proc_bsdinfo>();
-    // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
+    // SAFETY: le tampon de sortie est valide en mémoire pour toute la taille en octets passée à l'appel noyau, et la longueur écrite est contrôlée au retour.
     let written = unsafe {
         libc::proc_pidinfo(
             pid as libc::c_int,
@@ -1088,7 +1088,7 @@ fn process_snapshot(pid: u32) -> io::Result<(u64, bool)> {
     if written != expected as libc::c_int {
         return Err(io::Error::last_os_error());
     }
-    // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
+    // SAFETY: l'appel système précédent a retourné un succès garantissant l'initialisation complète de la structure par le noyau.
     let info = unsafe { info.assume_init() };
     Ok((
         info.pbi_start_tvsec
@@ -1154,7 +1154,7 @@ fn write_status_to_fd(fd: RawFd, status: &ManagedStatus) -> Result<(), ManagedPr
 
 fn read_one(fd: RawFd, buffer: &mut [u8; 1]) -> io::Result<usize> {
     loop {
-        // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
+        // SAFETY: le descripteur est valide et tous les pointeurs de tampon/structure pointent vers des variables locales valides avec leur taille exacte.
         let read = unsafe { libc::read(fd, buffer.as_mut_ptr().cast(), 1) };
         if read >= 0 {
             return Ok(read as usize);

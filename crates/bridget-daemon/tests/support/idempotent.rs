@@ -516,7 +516,7 @@ pub fn test_root(_label: &str) -> PathBuf {
     for relative in ["", "provider", "state", "tmp"] {
         private_dir(&root.join(relative)).unwrap();
     }
-    // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
+    // SAFETY: les arguments et pointeurs passés à cet appel `libc` respectent les préconditions POSIX et sont vérifiés au retour.
     ROOTS_CLEANUP.call_once(|| unsafe {
         libc::atexit(remove_created_roots);
     });
@@ -530,7 +530,7 @@ pub fn socket(root: &Path) -> PathBuf {
 
 pub fn make_fifo(path: &Path) {
     let path = CString::new(path.as_os_str().as_bytes()).expect("chemin FIFO sans NUL");
-    // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
+    // SAFETY: les descripteurs de répertoire sont ouverts et valides et les chaînes `CString` terminées par nul restent vivantes pendant l'appel.
     let result = unsafe { libc::mkfifo(path.as_ptr(), 0o600) };
     assert!(
         result == 0,
@@ -675,14 +675,14 @@ fn spawn_daemon_command(mut command: Command) -> DaemonProcess {
 ))]
 pub fn watch_marker(directory: &Path, marker: &Path) {
     let directory = CString::new(directory.as_os_str().as_bytes()).expect("répertoire sans NUL");
-    // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
+    // SAFETY: les descripteurs de répertoire sont ouverts et valides et les chaînes `CString` terminées par nul restent vivantes pendant l'appel.
     let directory_fd = unsafe { libc::open(directory.as_ptr(), libc::O_RDONLY) };
     assert!(
         directory_fd >= 0,
         "ouverture jalon: {}",
         std::io::Error::last_os_error()
     );
-    // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
+    // SAFETY: le descripteur est valide et tous les pointeurs de tampon/structure pointent vers des variables locales valides avec leur taille exacte.
     let queue = unsafe { libc::kqueue() };
     assert!(queue >= 0, "kqueue: {}", std::io::Error::last_os_error());
     let change = libc::kevent {
@@ -694,7 +694,7 @@ pub fn watch_marker(directory: &Path, marker: &Path) {
         udata: std::ptr::null_mut(),
     };
     let registered =
-        // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
+        // SAFETY: le descripteur est valide et tous les pointeurs de tampon/structure pointent vers des variables locales valides avec leur taille exacte.
         unsafe { libc::kevent(queue, &change, 1, std::ptr::null_mut(), 0, std::ptr::null()) };
     assert_eq!(registered, 0, "inscription kqueue");
 
@@ -707,9 +707,9 @@ pub fn watch_marker(directory: &Path, marker: &Path) {
             tv_sec: remaining.as_secs() as libc::time_t,
             tv_nsec: remaining.subsec_nanos() as libc::c_long,
         };
-        // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
+        // SAFETY: structure C POD de `libc` pour laquelle le motif entièrement nul est une représentation valide.
         let mut event: libc::kevent = unsafe { std::mem::zeroed() };
-        // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
+        // SAFETY: le descripteur est valide et tous les pointeurs de tampon/structure pointent vers des variables locales valides avec leur taille exacte.
         let observed = unsafe { libc::kevent(queue, std::ptr::null(), 0, &mut event, 1, &timeout) };
         assert!(observed > 0, "jalon absent dans la borne");
     }

@@ -95,7 +95,7 @@ fn wake158b_cli_g7_formes_fermees_et_identifiant_retry() {
             .unwrap();
             let id = args.windows(2).find(|w| w[0] == "--id").unwrap()[1].clone();
             args[0] = thread_id.to_owned();
-            // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
+            // SAFETY: appelé soit au point d'entrée CLI mono-thread avant tout spawn, soit sous verrou de sérialisation dédié en test.
             unsafe {
                 std::env::set_var("BRIDGET_HOME", daemon_root);
                 std::env::set_var("BRIDGET_SOCKET", &socket);

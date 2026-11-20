@@ -475,9 +475,17 @@ fn spec138_project_announcement_recovers_absence_but_not_conflict_and_aux_inheri
         Some(DaemonToWrapper::ProjectContextResult { project: None, .. })
     ));
     let workspace = root.join("repository");
-    assert!(std::process::Command::new("git").args(["init", "--quiet"])
-        .arg(&workspace).env_remove("GIT_DIR").env_remove("GIT_WORK_TREE")
-        .env_remove("GIT_COMMON_DIR").status().unwrap().success());
+    assert!(
+        std::process::Command::new("git")
+            .args(["init", "--quiet"])
+            .arg(&workspace)
+            .env_remove("GIT_DIR")
+            .env_remove("GIT_WORK_TREE")
+            .env_remove("GIT_COMMON_DIR")
+            .status()
+            .unwrap()
+            .success()
+    );
     let workspace = workspace.to_string_lossy().into_owned();
     assert!(matches!(
         handle_wrapper_message("sender", report(workspace.clone()), &state),

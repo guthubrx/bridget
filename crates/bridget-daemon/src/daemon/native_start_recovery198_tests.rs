@@ -1702,7 +1702,10 @@ fn v2_receipt202(
     };
     auto.request_id = request_id.clone();
     auto.cwd = cwd.clone();
-    if let NativeDelegationRequest::Delegate { workspace, posture, .. } = &task.request {
+    if let NativeDelegationRequest::Delegate {
+        workspace, posture, ..
+    } = &task.request
+    {
         auto.workspace = workspace.clone();
         auto.posture = *posture;
     }
@@ -1933,52 +1936,112 @@ fn spec274_recovery_uses_prepared_context_after_worktree_materialization() {
             let (state, config, mut task, receipt, _) = fixture_guarded202(false, true);
             let original_task = task.clone();
             let shared_receipt = v2_receipt202(&task, receipt.clone(), distinct);
-            assert!(frozen_start_routing(&task, &shared_receipt).is_ok(), "shared inchangé reste admis");
-            if let NativeDelegationRequest::Delegate { workspace, posture, .. } = &mut task.request {
+            assert!(
+                frozen_start_routing(&task, &shared_receipt).is_ok(),
+                "shared inchangé reste admis"
+            );
+            if let NativeDelegationRequest::Delegate {
+                workspace, posture, ..
+            } = &mut task.request
+            {
                 *workspace = Some(if isolated == "worktree" {
-                    WorkspaceRequest::Worktree { base_ref: Some("a".repeat(40)), branch: Some("branch274".into()) }
-                } else { WorkspaceRequest::CommitView {} });
+                    WorkspaceRequest::Worktree {
+                        base_ref: Some("a".repeat(40)),
+                        branch: Some("branch274".into()),
+                    }
+                } else {
+                    WorkspaceRequest::CommitView {}
+                });
                 *posture = Some(bridget_transport::protocol::SpawnPosture::Discovery);
             }
             let receipt = v2_receipt202(&task, receipt, distinct);
             // Le reçu garde la sonde antérieure à la préparation du dossier.
             let mut definition = serde_json::to_value(&task.definition).unwrap();
             definition.as_object_mut().unwrap().remove("digest");
-            definition["args"].as_array_mut().unwrap().extend([json!("--add-dir"), json!("/tmp/prepared274")]);
+            definition["args"]
+                .as_array_mut()
+                .unwrap()
+                .extend([json!("--add-dir"), json!("/tmp/prepared274")]);
             task.definition = AgentRegistry::from_json(
                 &json!({"agents":{"native-test":definition}}).to_string(),
                 config.db_path.with_extension("registry274.json"),
-            ).unwrap().resolved_definition("native-test").unwrap();
-            task.permission_snapshot.as_mut().unwrap().child_policy["additional_directories"] = json!(["/tmp/prepared274"]);
+            )
+            .unwrap()
+            .resolved_definition("native-test")
+            .unwrap();
+            task.permission_snapshot.as_mut().unwrap().child_policy["additional_directories"] =
+                json!(["/tmp/prepared274"]);
             let placement = task.remote_placement.as_mut().unwrap();
             placement.definition_digest = task.definition.digest.clone();
-            placement.permission_digest = format!("{:x}", sha2::Sha256::digest(serde_json::to_vec(&task.permission_snapshot.as_ref().unwrap().child_policy).unwrap()));
+            placement.permission_digest = format!(
+                "{:x}",
+                sha2::Sha256::digest(
+                    serde_json::to_vec(&task.permission_snapshot.as_ref().unwrap().child_policy)
+                        .unwrap()
+                )
+            );
             let expected_definition = placement.definition_digest.clone();
             let expected_permission = placement.permission_digest.clone();
             let before = serde_json::to_value(&task).unwrap();
-            let selected = frozen_start_routing(&task, &receipt).expect("la préparation admise peut différer de la sonde").unwrap();
+            let selected = frozen_start_routing(&task, &receipt)
+                .expect("la préparation admise peut différer de la sonde")
+                .unwrap();
             assert_eq!(selected.expected_definition_digest, expected_definition);
             assert_eq!(selected.expected_permission_digest, expected_permission);
-            assert_eq!(serde_json::to_value(&task).unwrap(), before, "aucune réécriture de tâche");
+            assert_eq!(
+                serde_json::to_value(&task).unwrap(),
+                before,
+                "aucune réécriture de tâche"
+            );
             let mut misplaced = task.clone();
-            misplaced.remote_placement.as_mut().unwrap().definition_digest = "f".repeat(64);
-            assert_eq!(frozen_start_routing(&misplaced, &receipt).unwrap_err(), "routing_connection_changed:start_recovery:definition");
+            misplaced
+                .remote_placement
+                .as_mut()
+                .unwrap()
+                .definition_digest = "f".repeat(64);
+            assert_eq!(
+                frozen_start_routing(&misplaced, &receipt).unwrap_err(),
+                "routing_connection_changed:start_recovery:definition"
+            );
             let mut corrupted = task.clone();
-            corrupted.definition.args.push("--changed-after-prepare".into());
-            assert_eq!(frozen_start_routing(&corrupted, &receipt).unwrap_err(), "routing_connection_changed:start_recovery:definition");
+            corrupted
+                .definition
+                .args
+                .push("--changed-after-prepare".into());
+            assert_eq!(
+                frozen_start_routing(&corrupted, &receipt).unwrap_err(),
+                "routing_connection_changed:start_recovery:definition"
+            );
             let mut corrupted = task.clone();
-            corrupted.permission_snapshot.as_mut().unwrap().child_policy["additional_directories"] = json!(["/tmp/other274"]);
-            assert_eq!(frozen_start_routing(&corrupted, &receipt).unwrap_err(), "routing_connection_changed:start_recovery:permissions");
+            corrupted.permission_snapshot.as_mut().unwrap().child_policy["additional_directories"] =
+                json!(["/tmp/other274"]);
+            assert_eq!(
+                frozen_start_routing(&corrupted, &receipt).unwrap_err(),
+                "routing_connection_changed:start_recovery:permissions"
+            );
             let mut missing = task.clone();
             missing.permission_snapshot = None;
-            assert_eq!(frozen_start_routing(&missing, &receipt).unwrap_err(), "routing_connection_changed:start_recovery:permissions");
+            assert_eq!(
+                frozen_start_routing(&missing, &receipt).unwrap_err(),
+                "routing_connection_changed:start_recovery:permissions"
+            );
             let mut unprepared = task.clone();
             unprepared.remote_prepared = false;
-            assert_eq!(frozen_start_routing(&unprepared, &receipt).unwrap_err(), "start_recovery_prepared_changed");
+            assert_eq!(
+                frozen_start_routing(&unprepared, &receipt).unwrap_err(),
+                "start_recovery_prepared_changed"
+            );
             let mut shared = task.clone();
             shared.request = original_task.request.clone();
-            assert_eq!(frozen_start_routing(&shared, &shared_receipt).unwrap_err(), "routing_connection_changed:start_recovery:definition,permissions");
-            assert_eq!(saved(&state, &task.task_id), serde_json::to_value(&original_task).unwrap(), "projection sans mutation du store");
+            assert_eq!(
+                frozen_start_routing(&shared, &shared_receipt).unwrap_err(),
+                "routing_connection_changed:start_recovery:definition,permissions"
+            );
+            assert_eq!(
+                saved(&state, &task.task_id),
+                serde_json::to_value(&original_task).unwrap(),
+                "projection sans mutation du store"
+            );
             assert!(state.lock().unwrap().pending_worker_responses.is_empty());
             drop(state);
             cleanup(&config);

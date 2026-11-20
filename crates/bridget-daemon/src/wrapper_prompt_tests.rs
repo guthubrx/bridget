@@ -81,7 +81,13 @@ fn native148_mission_context_is_retained_until_success_and_preserves_envelope() 
     let mut projected = serde_json::to_value(&transport.delivered[1]).unwrap();
     let body = projected["body"].as_str().unwrap();
     assert!(body.starts_with("carte durable\n\nMission Bridget :\nmission originale\n\n"));
-    for required in ["Exécute la mission", "lecture seule", "simple acceptation", "résultat vérifié ou au blocage constaté", "sans fabriquer de succès ni élargir tes droits"] {
+    for required in [
+        "Exécute la mission",
+        "lecture seule",
+        "simple acceptation",
+        "résultat vérifié ou au blocage constaté",
+        "sans fabriquer de succès ni élargir tes droits",
+    ] {
         assert!(body.contains(required), "{required}");
     }
     projected["body"] = canonical["body"].clone();

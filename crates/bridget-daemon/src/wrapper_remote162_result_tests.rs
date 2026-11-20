@@ -3,20 +3,44 @@ use super::*;
 #[test]
 fn spec269_steer_rejete_pending_solde_sans_ack_ni_terminal_natif() {
     let fixture = Fixture::new();
-    let mut tracker = IdempotentDeliveryTracker::open_at(&fixture.root.join("receipts269"), "instance162").unwrap();
+    let mut tracker =
+        IdempotentDeliveryTracker::open_at(&fixture.root.join("receipts269"), "instance162")
+            .unwrap();
     tracker.requires_binding = true;
     let mut message = fixture.message();
     message.id = "steer269".into();
     message.reply = false;
     message.intent = Some(bridget_core::MessageIntent::SteerCurrent);
     let now = unix_now_secs();
-    assert!(matches!(tracker.receive("delivery269".into(), "instance162".into(), 1, now + 600, message.clone(), now), IdempotentDeliveryAction::Inject { .. }));
+    assert!(matches!(
+        tracker.receive(
+            "delivery269".into(),
+            "instance162".into(),
+            1,
+            now + 600,
+            message.clone(),
+            now
+        ),
+        IdempotentDeliveryAction::Inject { .. }
+    ));
     let (stream, peer) = UnixStream::pair().unwrap();
     let writer = Arc::new(Mutex::new(Some(BufWriter::new(stream))));
     let mut bindings = HashMap::from([("mission162".into(), fixture.binding())]);
-    let event = ManagedEvent::internal(bridget_transport::ManagedEventSource::ClaudeStreamJson, vec![],
-        ManagedEventKind::DeliveryRejected { message_id: message.id.clone(), reason: "pilotage Claude indisponible".into() });
-    assert!(!forward_managed_events(&writer, "child", vec![event], &mut tracker, &mut bindings));
+    let event = ManagedEvent::internal(
+        bridget_transport::ManagedEventSource::ClaudeStreamJson,
+        vec![],
+        ManagedEventKind::DeliveryRejected {
+            message_id: message.id.clone(),
+            reason: "pilotage Claude indisponible".into(),
+        },
+    );
+    assert!(!forward_managed_events(
+        &writer,
+        "child",
+        vec![event],
+        &mut tracker,
+        &mut bindings
+    ));
     peer.set_nonblocking(true).unwrap();
     let mut reader = std::io::BufReader::new(peer);
     let mut controls = Vec::new();
@@ -30,10 +54,25 @@ fn spec269_steer_rejete_pending_solde_sans_ack_ni_terminal_natif() {
         }
     }
     assert!(controls.iter().any(|control| matches!(control, WrapperToDaemon::DeliveryIndeterminate { delivery_id, .. } if delivery_id == "delivery269")));
-    assert!(!controls.iter().any(|control| matches!(control, WrapperToDaemon::DeliverAcked { .. } | WrapperToDaemon::ExecutionStateChanged { .. } | WrapperToDaemon::TurnState { .. })));
+    assert!(!controls.iter().any(|control| matches!(
+        control,
+        WrapperToDaemon::DeliverAcked { .. }
+            | WrapperToDaemon::ExecutionStateChanged { .. }
+            | WrapperToDaemon::TurnState { .. }
+    )));
     assert_eq!(bindings["mission162"].state, "running");
     assert!(!tracker.receipts.is_acknowledged("delivery269", now));
-    assert!(matches!(tracker.receive("delivery269".into(), "instance162".into(), 1, now + 600, message, now), IdempotentDeliveryAction::Report(WrapperToDaemon::DeliveryIndeterminate { .. })));
+    assert!(matches!(
+        tracker.receive(
+            "delivery269".into(),
+            "instance162".into(),
+            1,
+            now + 600,
+            message,
+            now
+        ),
+        IdempotentDeliveryAction::Report(WrapperToDaemon::DeliveryIndeterminate { .. })
+    ));
 }
 use crate::remote_worker::{WorkerResultReservation, WorkerStore};
 use bridget_transport::protocol::{

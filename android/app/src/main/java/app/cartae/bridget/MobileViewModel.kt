@@ -118,6 +118,9 @@ class MobileViewModel(app: Application) : AndroidViewModel(app) {
     private var conversationVisible = false
     var release by mutableStateOf<MobileRelease?>(null); private set
     var updateChecked by mutableStateOf(false); private set
+    var ledgerSearchQuery by mutableStateOf("")
+    var ledgerSearchResults by mutableStateOf<List<MobileLedgerSearchEntry>>(emptyList()); private set
+    var notificationFilters by mutableStateOf(NotificationFilterPreferences()); private set
     var hostUpdates by mutableStateOf(JSONObject()); private set
     var hostUpdatesPending by mutableStateOf(false); private set
     var sentinelReport by mutableStateOf(JSONObject()); private set
@@ -1120,6 +1123,23 @@ class MobileViewModel(app: Application) : AndroidViewModel(app) {
             val page = client.read("/v1/devices")
             devices = objects(page.getJSONArray("items")); deviceCursor = cursor(page)
         }
+    }
+    fun searchLedger(project: String? = null) = act {
+        val page = client.searchLedger(ledgerSearchQuery, project)
+        ledgerSearchResults = LedgerSearchController.parseSearchResponse(page)
+    }
+    fun updateNotificationFilters(next: NotificationFilterPreferences) = act {
+        notificationFilters = next
+        val token = store.get("notifications")?.optString("token")?.takeIf { it.isNotBlank() }
+        client.configureNotifications(true, token, next)
+    }
+    fun relaunchAgentOptIn(agentId: String, reason: String? = null) = act {
+        val commandId = java.util.UUID.randomUUID().toString()
+        client.relaunchAgent(agentId, commandId, reason)
+    }
+    fun launchSpecialistOptIn(specialistId: String, prompt: String? = null) = act {
+        val commandId = java.util.UUID.randomUUID().toString()
+        client.launchSpecialist(specialistId, commandId, prompt)
     }
     fun renew() = act { client.renew() }
     fun revoke() = act {

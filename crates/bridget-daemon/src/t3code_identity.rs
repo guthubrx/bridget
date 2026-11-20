@@ -994,7 +994,7 @@ fn complete_session_inventory(
 #[cfg(target_os = "macos")]
 fn process_ids() -> std::io::Result<Vec<u32>> {
     let mut pids = vec![0_i32; MAX_PROCESSES + 1];
-    // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
+    // SAFETY: le tampon de sortie est valide en mémoire pour toute la taille en octets passée à l'appel noyau, et la longueur écrite est contrôlée au retour.
     let bytes = unsafe {
         libc::proc_listpids(
             1,
@@ -1037,7 +1037,7 @@ fn process_arguments(pid: u32) -> Option<Vec<String>> {
     let mut mib = [libc::CTL_KERN, libc::KERN_PROCARGS2, pid as libc::c_int];
     let mut bytes = vec![0_u8; MAX_BYTES];
     let mut size = bytes.len();
-    // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
+    // SAFETY: le descripteur est valide et tous les pointeurs de tampon/structure pointent vers des variables locales valides avec leur taille exacte.
     if unsafe {
         libc::sysctl(
             mib.as_mut_ptr(),

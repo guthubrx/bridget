@@ -1,4 +1,7 @@
 //! Frontière HTTP humaine ; limites appliquées avant lecture et travail bloquant.
+#[path = "http_opt_in.rs"]
+mod opt_in;
+
 use super::{
     Config,
     store::{Device, Operation, Store, StoreError},
@@ -41,6 +44,7 @@ struct Gateway {
     followers: Arc<Mutex<BTreeMap<String, Arc<Semaphore>>>>,
     follow_slots: Arc<Semaphore>,
     uploads: Arc<Semaphore>,
+    auth_rev: tokio::sync::watch::Sender<u64>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -341,6 +345,7 @@ async fn dispatch(gateway: Gateway, request: Request) -> Response {
             | "/v1/tasks"
             | "/v1/questions"
             | "/v1/user-inputs"
+            | "/v1/ledger/search"
     ) || request.uri().path().starts_with("/v1/questions/")
         || (request.uri().path().starts_with("/v1/tasks/")
             && !request.uri().path().contains("/cancel/"))
@@ -606,7 +611,10 @@ fn execute(
             Err(r) => return r,
         };
         return match store.renew(key, &request.device_key, &request.request_id, now) {
-            Ok(device) => result(json!(device)),
+            Ok(device) => {
+                gateway.auth_rev.send_modify(|v| *v = v.wrapping_add(1));
+                result(json!(device))
+            }
             Err(error) => failure(error.code()),
         };
     }
@@ -641,6 +649,10 @@ fn execute(
             struct Subscription {
                 enabled: bool,
                 token: Option<String>,
+                #[serde(default)]
+                projects: Option<Vec<String>>,
+                #[serde(default)]
+                min_urgency: Option<String>,
             }
             let subscription: Subscription = match strict(bytes) {
                 Ok(v) => v,
@@ -656,12 +668,26 @@ fn execute(
             {
                 return failure(error.code());
             }
+            if subscription.projects.is_some() || subscription.min_urgency.is_some() {
+                let mut prefs = opt_in::load_notification_filters(root, &device.device_id);
+                if let Some(projects) = subscription.projects {
+                    prefs.projects = projects;
+                }
+                if let Some(min_urgency) = subscription.min_urgency {
+                    prefs.min_urgency = min_urgency;
+                }
+                if let Err(code) = opt_in::save_notification_filters(root, &device.device_id, prefs)
+                {
+                    return failure(code);
+                }
+            }
         }
         let enabled = match store.notification_targets(now) {
             Ok(rows) => rows.iter().any(|(id, _)| id == &device.device_id),
             Err(error) => return failure(error.code()),
         };
-        return result(json!({"configured":configured,"enabled":enabled}));
+        let filters = opt_in::load_notification_filters(root, &device.device_id);
+        return result(json!({"configured":configured,"enabled":enabled,"filters":filters}));
     }
     if method == Method::GET && path == "/v1/devices" {
         let devices = if full_management(&device) {
@@ -694,11 +720,93 @@ fn execute(
             return failure("forbidden_scope");
         }
         return match store.revoke(id, now) {
-            Ok(found) => result(json!({"device_id":id,"revoked":found})),
+            Ok(found) => {
+                if found {
+                    gateway.auth_rev.send_modify(|v| *v = v.wrapping_add(1));
+                }
+                result(json!({"device_id":id,"revoked":found}))
+            }
             Err(error) => failure(error.code()),
         };
     }
     drop(store);
+    if method == Method::GET && path == "/v1/ledger/search" {
+        if !device.scope.permits_federation(Operation::Read) {
+            return failure("forbidden_scope");
+        }
+        let term = query.q.as_deref().unwrap_or("");
+        return match opt_in::search_ledger(
+            &gateway.root,
+            term,
+            query.project.as_deref(),
+            query.limit.unwrap_or(20),
+        ) {
+            Ok(value) => result(value),
+            Err(code) => failure(code),
+        };
+    }
+    if method == Method::POST
+        && let Some(rest) = path.strip_prefix("/v1/agents/")
+        && let Some(agent_id) = rest.strip_suffix("/relaunch")
+    {
+        if !opt_in::opt_in_control_enabled() || !full_management(&device) {
+            return failure("forbidden_scope");
+        }
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct RelaunchBody {
+            command_id: String,
+            #[serde(default)]
+            reason: Option<String>,
+        }
+        let body: RelaunchBody = match strict(bytes) {
+            Ok(v) => v,
+            Err(r) => return r,
+        };
+        if agent_id.is_empty() || body.command_id.trim().is_empty() {
+            return failure("invalid_request");
+        }
+        return result(json!({
+            "status": "accepted",
+            "action": "relaunch",
+            "agent_id": agent_id,
+            "command_id": body.command_id,
+            "reason": body.reason,
+        }));
+    }
+    if method == Method::POST
+        && let Some(rest) = path.strip_prefix("/v1/specialists/")
+        && let Some(specialist_id) = rest.strip_suffix("/launch")
+    {
+        if !opt_in::opt_in_control_enabled() || !full_management(&device) {
+            return failure("forbidden_scope");
+        }
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct LaunchSpecialistBody {
+            command_id: String,
+            project: String,
+            brief: String,
+        }
+        let body: LaunchSpecialistBody = match strict(bytes) {
+            Ok(v) => v,
+            Err(r) => return r,
+        };
+        if specialist_id.is_empty()
+            || body.command_id.trim().is_empty()
+            || body.project.trim().is_empty()
+            || body.brief.trim().is_empty()
+        {
+            return failure("invalid_request");
+        }
+        return result(json!({
+            "status": "accepted",
+            "action": "specialist_launch",
+            "specialist_id": specialist_id,
+            "command_id": body.command_id,
+            "project": body.project,
+        }));
+    }
     if method == Method::POST && path == "/v1/agents/tracking" {
         let command: bridget_transport::agent_tracking::AgentTrackingRequest =
             match serde_json::from_slice(bytes) {
@@ -1102,10 +1210,12 @@ fn follow(
         let agent_state = page["agent_state"].clone();
         let mut received = None;
         let mut stop = None;
-        let mut timer = None;
+        let mut watch_handle: Option<tokio::task::JoinHandle<()>> = None;
         let store = gateway.store.clone();
         let credential = key.to_owned();
         let expected_device = device.device_id.clone();
+        let auth_rx = gateway.auth_rev.subscribe();
+        let rt_handle = tokio::runtime::Handle::try_current().ok();
         let native = crate::attach::lineage_journal_follow(
             &gateway.socket,
             agent,
@@ -1114,37 +1224,47 @@ fn follow(
             query.limit.unwrap_or(50) as u32,
             |socket| {
                 let socket = socket.try_clone().map_err(|_| E::JournalUnavailable)?;
-                let (done, receiver) = std::sync::mpsc::sync_channel(1);
+                let (done, receiver) = tokio::sync::oneshot::channel::<()>();
                 stop = Some(done);
                 let store = store.clone();
                 let key = credential.clone();
                 let expected = expected_device.clone();
-                timer = Some(std::thread::spawn(move || {
-                    loop {
-                        let remaining = deadline.saturating_duration_since(Instant::now());
-                        if remaining.is_zero() {
-                            break;
+                let mut auth_rx = auth_rx.clone();
+                if let Some(ref handle) = rt_handle {
+                    watch_handle = Some(handle.spawn(async move {
+                        let tokio_deadline = tokio::time::Instant::from_std(deadline);
+                        let mut done_rx = receiver;
+                        let is_authorized = || {
+                            store
+                                .lock()
+                                .ok()
+                                .and_then(|s| s.authenticate(&key, unix_now()).ok())
+                                .is_some_and(|d| {
+                                    d.device_id == expected
+                                        && d.scope.all_projects
+                                        && d.scope.all_machines
+                                        && d.scope.operations.contains(&Operation::Read)
+                                })
+                        };
+                        loop {
+                            tokio::select! {
+                                _ = &mut done_rx => return,
+                                _ = tokio::time::sleep_until(tokio_deadline) => break,
+                                changed = auth_rx.changed() => {
+                                    if changed.is_err() || !is_authorized() {
+                                        break;
+                                    }
+                                }
+                                _ = tokio::time::sleep(Duration::from_millis(250)) => {
+                                    if !is_authorized() {
+                                        break;
+                                    }
+                                }
+                            }
                         }
-                        match receiver.recv_timeout(remaining.min(Duration::from_secs(1))) {
-                            Ok(()) | Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return,
-                            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
-                        }
-                        let authorized = store
-                            .lock()
-                            .ok()
-                            .and_then(|s| s.authenticate(&key, unix_now()).ok())
-                            .is_some_and(|d| {
-                                d.device_id == expected
-                                    && d.scope.all_projects
-                                    && d.scope.all_machines
-                                    && d.scope.operations.contains(&Operation::Read)
-                            });
-                        if !authorized {
-                            break;
-                        }
-                    }
-                    let _ = socket.shutdown(std::net::Shutdown::Both);
-                }));
+                        let _ = socket.shutdown(std::net::Shutdown::Both);
+                    }));
+                }
                 Ok(())
             },
             |value| {
@@ -1162,8 +1282,8 @@ fn follow(
         if let Some(stop) = stop {
             let _ = stop.send(());
         }
-        if let Some(timer) = timer {
-            let _ = timer.join();
+        if let Some(handle) = watch_handle {
+            handle.abort();
         }
         if let Some(received) = received {
             page = received;
@@ -1326,6 +1446,28 @@ impl axum::serve::Listener for LimitedListener {
     }
 }
 
+fn build_router(gateway: Gateway) -> Router {
+    use axum::routing::{delete, get, post};
+    Router::new()
+        .route("/v1/status", get(handle))
+        .route("/v1/pair", post(handle))
+        .route("/v1/session", get(handle))
+        .route("/v1/session/renew", post(handle))
+        .route("/v1/sentinel", get(handle))
+        .route("/v1/notifications", get(handle).put(handle))
+        .route("/v1/devices", get(handle))
+        .route("/v1/devices/{id}", delete(handle))
+        .route("/v1/agents", get(handle))
+        .route("/v1/projects", get(handle))
+        .route("/v1/events", get(handle))
+        .route("/v1/ledger/search", get(handle))
+        .route("/v1/agents/{id}/relaunch", post(handle))
+        .route("/v1/specialists/{id}/launch", post(handle))
+        .route("/v1/updates", get(handle).put(handle))
+        .fallback(handle)
+        .with_state(gateway)
+}
+
 pub(super) fn serve(root: &Path, socket: &Path) -> Result<(), &'static str> {
     require_local_master(root, socket)?;
     let config = Config::load(root)?.ok_or("mobile_not_configured")?;
@@ -1342,6 +1484,7 @@ pub(super) fn serve(root: &Path, socket: &Path) -> Result<(), &'static str> {
         followers: Arc::new(Mutex::new(BTreeMap::new())),
         follow_slots: Arc::new(Semaphore::new(MAX_BLOCKING - 2)),
         uploads: Arc::new(Semaphore::new(2)),
+        auth_rev: tokio::sync::watch::channel(0u64).0,
     };
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(2)
@@ -1357,7 +1500,7 @@ pub(super) fn serve(root: &Path, socket: &Path) -> Result<(), &'static str> {
             inner,
             permits: Arc::new(Semaphore::new(MAX_CONNECTIONS)),
         };
-        axum::serve(listener, Router::new().fallback(handle).with_state(gateway))
+        axum::serve(listener, build_router(gateway))
             .with_graceful_shutdown(async {
                 let _ = tokio::signal::ctrl_c().await;
             })

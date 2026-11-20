@@ -23,10 +23,7 @@ use crate::delegation::{
     AutoAdmissionDecisionLevel, AutoAdmissionMode, AutoAdmissionReceipt, AutoAdmissionState,
     QuotaHold, QuotaWait, QuotaWaitPhase, Task, WorkspaceRecord, WorkspaceState,
 };
-use crate::registry::{
-    AdmissionPolicy, CandidateProfile, DecisionService, RoutingCandidate, RoutingCandidateFilters,
-    RoutingPolicy,
-};
+use crate::registry::{CandidateProfile, RoutingCandidate, RoutingCandidateFilters};
 use bridget_transport::poison::RecoverPoison;
 use bridget_transport::protocol::{
     AutoDelegateV1, AutoDelegateV2, LineageDecisionContinuityV4, LineageDecisionCreditsV4,
@@ -34,7 +31,6 @@ use bridget_transport::protocol::{
     LineageDecisionScoreTermsV4, NativeDelegationRequest, SpawnOwnership, SpawnPosture,
     WorkspaceRequest,
 };
-use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::Digest;
 use std::collections::BTreeMap;
@@ -48,114 +44,13 @@ pub(super) const CHILD_REQUEST_HUMAN_WINDOW_SECS: i64 = 3600;
 const MISSION_REPLY_MIN_SECS: u64 = 60;
 const MISSION_REPLY_MAX_SECS: u64 = 86_400;
 
-/// Plan immuable dérivé d'une lecture fraîche du registre. Il ne contacte pas
-/// le service de décision et ne réserve aucune capacité : T011–T021 ajoutent
-/// ces observations séparément avant que T028 ne l'admette au puits natif.
-#[derive(Debug, Clone)]
-struct AutoAdmissionPlan {
-    policy: AdmissionPolicy,
-    policy_digest: String,
-    candidates: Vec<CandidateProfile>,
-    decision_service: Option<DecisionService>,
-}
-
-/// Le reçu conserve le seul plan qu'une reprise est autorisée à consulter :
-/// le registre courant ne peut ni déplacer un choix, ni rouvrir un appel HTTP.
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct AutoAdmissionSnapshot {
-    policy: AdmissionPolicy,
-    candidates: Vec<CandidateProfile>,
-    decision_service: Option<DecisionService>,
-}
-
-/// Faits privés du probe, jamais exposés dans le catalogue public.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct RoutingCandidateObservation {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    model_option_account: Option<String>,
-    definition_digest: String,
-    permission_digest: String,
-    mapping_revision: Option<u64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    project_id: Option<String>,
-    connection_epoch: String,
-    observed_at: i64,
-    received_at: i64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct RoutingMachineObservation {
-    epoch: String,
-    resources: bridget_transport::protocol::HostResourceSnapshotV1,
-}
-
-/// Faits partagés, calculés une seule fois par machine/connexion. Ils gardent
-/// le snapshot128 borné et servent aussi la projection du seul choix public.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct RoutingMachineScoreFact {
-    scored_at: i64,
-    resources: LineageDecisionResourcesV4,
-    compilation_capacity: Option<u8>,
-    continuity: LineageDecisionContinuityV4,
-    terms: LineageDecisionScoreTermsV4,
-    saturated: bool,
-    known_available: bool,
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct RoutingConnectionScoreFact {
-    quota: LineageDecisionQuotaV4,
-    remaining: i16,
-    reset: i16,
-}
-
-/// Snapshot168 autonome : matrice, faits, ordre et repli sont durcis avant
-/// toute consultation. La source détaillée est écrite atomiquement au Chosen.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct RoutingAdmissionSnapshot {
-    policy: RoutingPolicy,
-    candidates: Vec<RoutingCandidate>,
-    decision_level: AutoAdmissionDecisionLevel,
-    decision: Option<bridget_transport::protocol::LineageDecisionV4>,
-    coordinator_machine_id: String,
-    decision_service: Option<DecisionService>,
-    observations: Vec<RoutingCandidateObservation>,
-    machines: BTreeMap<String, RoutingMachineObservation>,
-    connections: Vec<RoutingDecisionFact>,
-    #[serde(default)]
-    machine_score_facts: BTreeMap<String, RoutingMachineScoreFact>,
-    #[serde(default)]
-    connection_score_facts: BTreeMap<String, RoutingConnectionScoreFact>,
-    scores: Vec<i32>,
-    fallback_id: String,
-    lightweight_definition_digest: Option<String>,
-    decision_notes: Vec<String>,
-}
-
-#[derive(Debug, Clone)]
-struct RoutingAdmissionPlan {
-    policy: RoutingPolicy,
-    candidates: Vec<RoutingCandidate>,
-    decision_level: AutoAdmissionDecisionLevel,
-    decision_service: Option<DecisionService>,
-    policy_digest: String,
-    coordinator_machine_id: String,
-    observations: Vec<RoutingCandidateObservation>,
-    machines: BTreeMap<String, RoutingMachineObservation>,
-    connections: Vec<RoutingDecisionFact>,
-    machine_score_facts: BTreeMap<String, RoutingMachineScoreFact>,
-    connection_score_facts: BTreeMap<String, RoutingConnectionScoreFact>,
-    scores: Vec<i32>,
-    fallback_id: String,
-    lightweight_definition_digest: Option<String>,
-    decision_notes: Vec<String>,
-}
+#[path = "native_routing_types.rs"]
+mod routing_types;
+use routing_types::{
+    AutoAdmissionPlan, AutoAdmissionSnapshot, RoutingAdmissionPlan, RoutingAdmissionSnapshot,
+    RoutingCandidateObservation, RoutingConnectionScoreFact, RoutingMachineObservation,
+    RoutingMachineScoreFact,
+};
 
 // Un probe groupe plusieurs lectures Git (10 s chacune) et les politiques.
 // Aucune réservation ni lancement n’est pris pendant ce budget borné.
@@ -3798,7 +3693,9 @@ fn close_auto_admission_error(
     receipt: &AutoAdmissionReceipt,
     code: String,
 ) -> Result<String, String> {
-    if let Some(current) = st.delegation_store.auto_admission_receipt(&receipt.owner, &receipt.request_id)?
+    if let Some(current) = st
+        .delegation_store
+        .auto_admission_receipt(&receipt.owner, &receipt.request_id)?
         && current.state == AutoAdmissionState::Refused
     {
         // Garder le contexte local déjà observé, jamais une autre cause tardive.
@@ -3821,8 +3718,11 @@ fn close_auto_admission_error(
             .refuse_auto_admission(receipt, refusal, unix_timestamp())
     };
     match closed {
-        Ok(closed) if closed.refusal_code.as_deref() != Some(refusal)
-            || capacity.is_some() || routing_change_detail(&code).is_some() => {
+        Ok(closed)
+            if closed.refusal_code.as_deref() != Some(refusal)
+                || capacity.is_some()
+                || routing_change_detail(&code).is_some() =>
+        {
             Ok(auto_refusal_error(&closed))
         }
         Ok(_) => Ok(code),
@@ -4916,7 +4816,10 @@ mod incident240_tests {
 }
 
 fn failure(code: &str) -> Value {
-    if matches!(code, "origin_worker_unavailable" | "origin_proof_unavailable") {
+    if matches!(
+        code,
+        "origin_worker_unavailable" | "origin_proof_unavailable"
+    ) {
         let mut result = origin_attestation_refusal(code);
         result["code"] = json!(code);
         return result;
@@ -5875,9 +5778,13 @@ fn remote_result_slot_error_reason(error: &str) -> Option<&str> {
 
 // Texte fermé : conserver le code technique et ne jamais recopier stderr.
 fn remote_spawn_quota_limit(error: &str) -> Option<usize> {
-    error.strip_prefix("remote_start_failed:").unwrap_or(error)
+    error
+        .strip_prefix("remote_start_failed:")
+        .unwrap_or(error)
         .strip_prefix("remote_spawn_refused:quota_exceeded:")?
-        .parse::<usize>().ok().filter(|limit| *limit > 0)
+        .parse::<usize>()
+        .ok()
+        .filter(|limit| *limit > 0)
 }
 
 fn remote_start_error_message(error: &str) -> Option<&'static str> {
@@ -5899,7 +5806,9 @@ fn remote_start_error_message(error: &str) -> Option<&'static str> {
         }
     }
     if remote_spawn_quota_limit(error).is_some() {
-        return Some("La limite interne du nombre d’agents de la flotte a refusé ce lancement avant tout démarrage. Ce refus ne mesure ni le CPU ni la mémoire de la machine cible.");
+        return Some(
+            "La limite interne du nombre d’agents de la flotte a refusé ce lancement avant tout démarrage. Ce refus ne mesure ni le CPU ni la mémoire de la machine cible.",
+        );
     }
     if let Some(reason) = super::origin_proof::rejected_reason(
         error.strip_prefix("remote_start_failed:").unwrap_or(error),
@@ -6423,7 +6332,8 @@ fn task_view(task: &Task, phase: Option<&str>, full: bool) -> Value {
         view["error_message"] = json!(format!(
             "La durée maximale de cette mission ({duration} secondes) est dépassée. La tâche est terminée ; ses effets et ses fichiers sont conservés."
         ));
-        if task.error.as_deref() == Some("échéance du tour dépassée:provider_output_unobserved") {
+        if task.error.as_deref() == Some("échéance du tour dépassée:provider_output_unobserved")
+        {
             view["error_message"] = json!(
                 "La durée de cette mission est dépassée sans aucune trame JSON du programme observée pendant le tour. La consigne a été écrite localement ; sa réception par le fournisseur et le début du travail ne sont pas attestés."
             );
@@ -6434,7 +6344,8 @@ fn task_view(task: &Task, phase: Option<&str>, full: bool) -> Value {
         view["future_mission_duration"] = json!(
             "Pour une future admission longue, fixer reply_timeout avant le premier appel, par exemple 14400 pour 4 h (maximum 86400, sous la limite du parent). Le défaut est 3600, y compris development. Ne pas modifier la clé ou l’enveloppe de cette tâche terminée ; suivre les contrôles d’arrêt et de dossier indiqués ci-dessous."
         );
-        if task.error.as_deref() == Some("échéance du tour dépassée:provider_output_unobserved") {
+        if task.error.as_deref() == Some("échéance du tour dépassée:provider_output_unobserved")
+        {
             view["future_mission_duration"] = json!(
                 "Diagnostiquez d’abord l’absence de retour du programme pour cette exécution. Une durée plus longue n’établit pas que le fournisseur reçoit la consigne ; ne relancez pas cette mission pour tester le lien."
             );
@@ -6672,9 +6583,15 @@ fn task_view(task: &Task, phase: Option<&str>, full: bool) -> Value {
     }
     if let Some(limit) = task.projected_error().and_then(remote_spawn_quota_limit) {
         view["detail"]["spawn_refusal"] = json!({"scope":"this_task","capacity_scope":"fleet","cause":"quota_exceeded","fleet_limit":limit,"start_issued":false});
-        view["error_message"] = json!(format!("La limite interne de la flotte ({limit} agents) a refusé ce lancement avant tout démarrage. Ce refus ne mesure ni le CPU ni la mémoire de la machine cible."));
-        view["error_recovery"] = json!("Conservez cette même tâche, sa request_id et son dossier. La commande de lancement a un refus définitif ; rejouer sa clé ne la redémarre pas. Attendez la clôture native et vérifiez le rapport du dossier avant une nouvelle demande autorisée. Une place doit réellement se libérer, ou l’utilisateur doit choisir un nouveau plafond de flotte. Aucun remplacement pendant une issue inconnue ; les autres travaux autorisés suivent leur propre état.");
-        view["error_human_action"] = json!("Si une place ne se libère pas dans le travail autorisé, demandez à l’utilisateur s’il veut augmenter BRIDGET_FLEET_QUOTA dans l’environnement du service superviseur. Un export dans le terminal appelant ne change pas ce service ; son réglage est lu au démarrage. Ne modifiez pas le plafond et n’arrêtez pas une autre mission de votre propre initiative.");
+        view["error_message"] = json!(format!(
+            "La limite interne de la flotte ({limit} agents) a refusé ce lancement avant tout démarrage. Ce refus ne mesure ni le CPU ni la mémoire de la machine cible."
+        ));
+        view["error_recovery"] = json!(
+            "Conservez cette même tâche, sa request_id et son dossier. La commande de lancement a un refus définitif ; rejouer sa clé ne la redémarre pas. Attendez la clôture native et vérifiez le rapport du dossier avant une nouvelle demande autorisée. Une place doit réellement se libérer, ou l’utilisateur doit choisir un nouveau plafond de flotte. Aucun remplacement pendant une issue inconnue ; les autres travaux autorisés suivent leur propre état."
+        );
+        view["error_human_action"] = json!(
+            "Si une place ne se libère pas dans le travail autorisé, demandez à l’utilisateur s’il veut augmenter BRIDGET_FLEET_QUOTA dans l’environnement du service superviseur. Un export dans le terminal appelant ne change pas ce service ; son réglage est lu au démarrage. Ne modifiez pas le plafond et n’arrêtez pas une autre mission de votre propre initiative."
+        );
     }
     if !full {
         view.as_object_mut().unwrap().remove("result");
@@ -6847,13 +6764,23 @@ fn current_task_view(st: &DaemonState, task: &Task, full: bool) -> Result<Value,
     let mut view = task_view(task, phase.as_deref(), full);
     if remote_spawn_quota_limit(task.projected_error().unwrap_or_default()).is_none()
         && let Some(command) = unstarted_spawn_refusal(st, task)
-        && let Some(crate::idempotency::SpawnCommandIssue::Failed { category, reason }) = command.issue
+        && let Some(crate::idempotency::SpawnCommandIssue::Failed { category, reason }) =
+            command.issue
     {
-        let limit = reason.strip_prefix("quota de flotte atteint (")
-            .and_then(|rest| rest.split_once(')')).and_then(|(value, _)| value.parse::<usize>().ok());
+        let limit = reason
+            .strip_prefix("quota de flotte atteint (")
+            .and_then(|rest| rest.split_once(')'))
+            .and_then(|(value, _)| value.parse::<usize>().ok());
         view["detail"]["spawn_refusal"] = json!({"scope":"this_task","capacity_scope":"fleet","cause":category,"fleet_limit":limit,"start_issued":false,"workspace_report":if task.workspace.as_ref().is_some_and(|workspace| workspace.dirty.is_some()) {"observed"} else {"unavailable"}});
-        view["error_message"] = json!(format!("Le reçu natif atteste un refus par le plafond de flotte{} avant tout démarrage de cette commande. Aucun travail métier n’a été remis à cet agent.", limit.map(|value| format!(" ({value} agents)")).unwrap_or_default()));
-        view["error_recovery"] = json!("Conservez cette même tâche et son dossier. Attendez la clôture native et vérifiez les fichiers préservés avant une suite autorisée. Le rapport Git peut rester indisponible : la clôture ne permet alors aucune suppression. Un refus terminal de commande ne reprend pas par rejeu ; ne créez aucun remplacement d’issue inconnue. Les autres travaux autorisés suivent leur propre état.");
+        view["error_message"] = json!(format!(
+            "Le reçu natif atteste un refus par le plafond de flotte{} avant tout démarrage de cette commande. Aucun travail métier n’a été remis à cet agent.",
+            limit
+                .map(|value| format!(" ({value} agents)"))
+                .unwrap_or_default()
+        ));
+        view["error_recovery"] = json!(
+            "Conservez cette même tâche et son dossier. Attendez la clôture native et vérifiez les fichiers préservés avant une suite autorisée. Le rapport Git peut rester indisponible : la clôture ne permet alors aucune suppression. Un refus terminal de commande ne reprend pas par rejeu ; ne créez aucun remplacement d’issue inconnue. Les autres travaux autorisés suivent leur propre état."
+        );
     }
     project_continuation(st, task, &mut view, unix_timestamp(), None);
     view["suspended"] = json!(
@@ -7866,7 +7793,13 @@ fn handle_with_fact(
         (explicit, &mut response)
     {
         if result["code"] == "cwd_unavailable"
-            && matches!(&request, NativeDelegationRequest::Delegate { machine_id: None, .. })
+            && matches!(
+                &request,
+                NativeDelegationRequest::Delegate {
+                    machine_id: None,
+                    ..
+                }
+            )
         {
             let st = state.lock().recover_poison();
             if let Some((owner, _)) = live_connection_identity(&st, conn)
@@ -9868,13 +9801,17 @@ fn start_remote_task_with(
                         &st, &mut task, &issue,
                     )?);
                 }
-                crate::fleet::SpawnSubmission::Terminal(crate::idempotency::SpawnCommandIssue::Failed { category, reason })
-                    if category == "quota_exceeded" => {
-                        let limit = reason.strip_prefix("quota de flotte atteint (")
-                            .and_then(|rest| rest.split_once(')')).and_then(|(value, _)| value.parse::<usize>().ok())
-                            .filter(|limit| *limit > 0).ok_or("remote_spawn_not_new")?;
-                        return Err(format!("remote_spawn_refused:quota_exceeded:{limit}"));
-                    }
+                crate::fleet::SpawnSubmission::Terminal(
+                    crate::idempotency::SpawnCommandIssue::Failed { category, reason },
+                ) if category == "quota_exceeded" => {
+                    let limit = reason
+                        .strip_prefix("quota de flotte atteint (")
+                        .and_then(|rest| rest.split_once(')'))
+                        .and_then(|(value, _)| value.parse::<usize>().ok())
+                        .filter(|limit| *limit > 0)
+                        .ok_or("remote_spawn_not_new")?;
+                    return Err(format!("remote_spawn_refused:quota_exceeded:{limit}"));
+                }
                 _ => return Err("remote_spawn_not_new".into()),
             };
             st.fleet
@@ -10201,11 +10138,14 @@ fn delegate_worktree(
         branch
     );
     if let Some(receipt) = auto_receipt {
-        info!("bridget_admission_workspace_preparing {}", json!({
-            "version":1,"scope":"this_admission","owner":receipt.owner,
-            "request_id":receipt.request_id,"path":expected_path,"branch":branch,
-            "task_created":false,"physical_outcome":"not_observed"
-        }));
+        info!(
+            "bridget_admission_workspace_preparing {}",
+            json!({
+                "version":1,"scope":"this_admission","owner":receipt.owner,
+                "request_id":receipt.request_id,"path":expected_path,"branch":branch,
+                "task_created":false,"physical_outcome":"not_observed"
+            })
+        );
     }
     // La réservation est seulement en RAM. Un échec de création peut laisser
     // des effets Git : Auto conserve le choix et le diagnostic complet.
@@ -10245,18 +10185,28 @@ fn delegate_worktree(
         Err(reason) => {
             if let Some(receipt) = auto_receipt {
                 let st = state.lock().recover_poison();
-                if st.delegation_store.auto_admission_receipt(&receipt.owner, &receipt.request_id)?
-                    .is_some_and(|current| current.state == AutoAdmissionState::Refused
-                        && current.refusal_code.as_deref() == Some("admission_cancelled"))
+                if st
+                    .delegation_store
+                    .auto_admission_receipt(&receipt.owner, &receipt.request_id)?
+                    .is_some_and(|current| {
+                        current.state == AutoAdmissionState::Refused
+                            && current.refusal_code.as_deref() == Some("admission_cancelled")
+                    })
                 {
-                    warn!("bridget_admission_workspace_retained {}", json!({
-                        "version":1,"scope":"this_admission","owner":receipt.owner,
-                        "request_id":receipt.request_id,"path":record.path,"branch":record.branch,
-                        "cause":"admission_cancelled","task_created":false
-                    }));
-                    return Err(format!("admission_cancelled:{}", json!({
-                        "path":record.path,"branch":record.branch
-                    })));
+                    warn!(
+                        "bridget_admission_workspace_retained {}",
+                        json!({
+                            "version":1,"scope":"this_admission","owner":receipt.owner,
+                            "request_id":receipt.request_id,"path":record.path,"branch":record.branch,
+                            "cause":"admission_cancelled","task_created":false
+                        })
+                    );
+                    return Err(format!(
+                        "admission_cancelled:{}",
+                        json!({
+                            "path":record.path,"branch":record.branch
+                        })
+                    ));
                 }
             }
             let code = if reason.starts_with("workspace_path_unsafe") {
@@ -10549,7 +10499,7 @@ fn target_resolver<'a>(
     )
 }
 
-pub(crate) fn catalogue_entries177(
+pub(crate) fn catalogue_entries(
     registry: &AgentRegistry,
     source: &crate::lifecycle::SourceEnvironment,
     limits: &crate::provider_limits::ProviderLimits,
@@ -11831,7 +11781,7 @@ fn handle_locked_with_remote_proof(
                     .and_then(ParentPermission::root)
                     .map(Path::to_path_buf)
             });
-            let entries = catalogue_entries177(
+            let entries = catalogue_entries(
                 &st.registry,
                 &st.source_env,
                 &st.provider_limits,
@@ -14462,10 +14412,17 @@ fn workspace_report_ready(task: &Task) -> bool {
 }
 
 /// Refus durable avant la lease : aucun Start n'a pu être émis pour cette commande.
-fn unstarted_spawn_refusal(st: &DaemonState, task: &Task) -> Option<crate::idempotency::SpawnCommand> {
-    if task.remote_placement.is_none() || !task.remote_prepared
-        || task.child_instance.is_some() || task.started_at.is_some() || task.launch_issued_at.is_some()
-        || task.mission_issued_at.is_some() || task.start_recovery.is_some()
+fn unstarted_spawn_refusal(
+    st: &DaemonState,
+    task: &Task,
+) -> Option<crate::idempotency::SpawnCommand> {
+    if task.remote_placement.is_none()
+        || !task.remote_prepared
+        || task.child_instance.is_some()
+        || task.started_at.is_some()
+        || task.launch_issued_at.is_some()
+        || task.mission_issued_at.is_some()
+        || task.start_recovery.is_some()
     {
         return None;
     }
@@ -14511,14 +14468,21 @@ fn claim_workspace_report(
     let remote = if let Some(placement) = &task.remote_placement {
         match remote_command_identity(st, task) {
             Ok(command) => Some((remote_worker_identity(placement), command)),
-            Err(_) if stopped && task.terminal()
-                && (matches!(workspace.strategy, crate::delegation::WorkspaceStrategy::Worktree)
-                    || (matches!(workspace.strategy, crate::delegation::WorkspaceStrategy::CommitView)
-                        && task.commit_view_binding().is_some()))
-                && unstarted_spawn_refusal(st, task).is_some() => {
-                    unstarted = true;
-                    None
-                }
+            Err(_)
+                if stopped
+                    && task.terminal()
+                    && (matches!(
+                        workspace.strategy,
+                        crate::delegation::WorkspaceStrategy::Worktree
+                    ) || (matches!(
+                        workspace.strategy,
+                        crate::delegation::WorkspaceStrategy::CommitView
+                    ) && task.commit_view_binding().is_some()))
+                    && unstarted_spawn_refusal(st, task).is_some() =>
+            {
+                unstarted = true;
+                None
+            }
             Err(_) => {
                 work.reports.remove(&key);
                 return None;
@@ -15432,25 +15396,28 @@ pub(super) fn tick(state: &Arc<Mutex<DaemonState>>) {
         // après une panne SQL de `mark_answered`, sans dépendre du rejeu
         // worker qui retourne tôt sur un reçu Accepted.
         if let Ok(open_requests) = st.store.open_requests() {
-            for request in open_requests {
-                if let Ok(Some(task)) = st.delegation_store.for_mission(&request.id) {
-                    if task.state == "cancelled"
-                        || (task.state == "failed"
-                            && task.error.as_deref() == Some("mission_reply_timeout"))
-                    {
-                        if let Err(error) = settle_terminal_tracked_request247(&mut st, &task) {
-                            warn!("suivi de mission terminée non clôturé : {error}");
+            let mission_ids: Vec<String> = open_requests.iter().map(|r| r.id.clone()).collect();
+            if let Ok(tasks_by_mission) = st.delegation_store.for_missions(&mission_ids) {
+                for request in open_requests {
+                    if let Some(task) = tasks_by_mission.get(&request.id) {
+                        if task.state == "cancelled"
+                            || (task.state == "failed"
+                                && task.error.as_deref() == Some("mission_reply_timeout"))
+                        {
+                            if let Err(error) = settle_terminal_tracked_request(&mut st, task) {
+                                warn!("suivi de mission terminée non clôturé : {error}");
+                            }
+                            continue;
                         }
-                        continue;
-                    }
-                    if task.result.is_none() {
-                        continue;
-                    }
-                    if let Err(error) = settle_result_tracked_request(&mut st, &task) {
-                        warn!(
-                            "suivi de mission native {} non clôturé pendant la reprise des demandes ouvertes: {}",
-                            task.mission, error
-                        );
+                        if task.result.is_none() {
+                            continue;
+                        }
+                        if let Err(error) = settle_result_tracked_request(&mut st, task) {
+                            warn!(
+                                "suivi de mission native {} non clôturé pendant la reprise des demandes ouvertes: {}",
+                                task.mission, error
+                            );
+                        }
                     }
                 }
             }
@@ -15458,16 +15425,26 @@ pub(super) fn tick(state: &Arc<Mutex<DaemonState>>) {
         let Ok(mut tasks) = st.delegation_store.pending() else {
             return;
         };
-        let owners: HashSet<String> = st
+        let connected = st
+            .presences
+            .values()
+            .filter(|p| p.state == "connected")
+            .count();
+        super::get_metrics().update_directory_snapshot(super::ReadMostlyDirectory {
+            connected_agents: connected,
+            registered_agents: st.presences.len(),
+            registry_agent_count: st.registry.len(),
+        });
+        let owners: Vec<String> = st
             .presences
             .iter()
             .filter(|(_, presence)| presence.state == "connected")
             .map(|(_, presence)| presence.name.clone())
+            .collect::<HashSet<_>>()
+            .into_iter()
             .collect();
-        for owner in owners {
-            if let Ok(notices) = st.delegation_store.failed_for_owner(&owner) {
-                tasks.extend(notices);
-            }
+        if let Ok(notices) = st.delegation_store.failed_for_owners(&owners) {
+            tasks.extend(notices);
         }
         for mut task in tasks.iter().cloned() {
             if task.result.is_some()
@@ -17005,7 +16982,7 @@ fn align_request_deadline(st: &DaemonState, task: &Task) {
 
 /// Une annulation ou expiration native confirmée clôt le suivi de la mission.
 /// La preuve d’arrêt, les fichiers et les accusés de livraison restent séparés.
-fn settle_terminal_tracked_request247(st: &mut DaemonState, task: &Task) -> Result<bool, String> {
+fn settle_terminal_tracked_request(st: &mut DaemonState, task: &Task) -> Result<bool, String> {
     let timed_out =
         task.state == "failed" && task.error.as_deref() == Some("mission_reply_timeout");
     if task.state != "cancelled" && !timed_out {

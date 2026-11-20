@@ -61,7 +61,7 @@ pub(crate) fn prove_parent_permissions(
     if parent.driver == "claude_stream_json" {
         if let Some(context) = parent.provider_policy.get("launch_context") {
             bridget_transport::protocol::recheck_permission_context_sources(context)?;
-        } else if !authenticated_t3_tool_scope171(parent) {
+        } else if !authenticated_t3_tool_scope(parent) {
             // T3 attests native SDK rights without a file-transplant context.
             // A managed wrapper still owes its frozen launch/source evidence.
             return Err(unavailable());
@@ -127,7 +127,7 @@ impl<'a> AuthenticatedSdkInputs171<'a> {
 
 // Le port T3 atteste aussi les sessions natives sans profil de transplantation.
 // Conserver sa règle exacte, sans donner au fils une connexion T3 du parent.
-fn authenticated_t3_tool_scope171(parent: &ProviderPermissions) -> bool {
+fn authenticated_t3_tool_scope(parent: &ProviderPermissions) -> bool {
     parent.source == "provider_turn"
         && parent.driver == "claude_stream_json"
         && !parent.run_id.is_empty()
@@ -146,7 +146,7 @@ fn authenticated_t3_tool_scope171(parent: &ProviderPermissions) -> bool {
 /// l’origine, l’hôte et les révocations. Il ne constitue jamais une preuve seul.
 /// plan_exit=deny ne crée aucun droit Codex : ce moteur n’émet pas cet événement ;
 /// approval_policy=never refuse toute approbation au lieu d’ouvrir une médiation.
-fn native_t3_codex_scope214(parent: &ProviderPermissions, definition: &AgentDefinition) -> bool {
+fn native_t3_codex_scope(parent: &ProviderPermissions, definition: &AgentDefinition) -> bool {
     parent.driver == "claude_stream_json"
         && definition.protocol == "codex_app_server"
         && definition.mcp.interactive == "codex"
@@ -188,7 +188,7 @@ fn portable_claude_rules(parent: &ProviderPermissions) -> bool {
                         !name.is_empty()
                             && (name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
                                 || (*field == "allowed_tools"
-                                    && authenticated_t3_tool_scope171(parent)
+                                    && authenticated_t3_tool_scope(parent)
                                     && name == "mcp__t3-code__*"))
                     })
                 })
@@ -744,7 +744,7 @@ pub(crate) fn project_remote_permissions_in_operation(
         && parent.provider_policy["allowed_tools"]
             .as_array()
             .is_some_and(|rules| rules.iter().any(|rule| rule == "mcp__t3-code__*"))
-        && !native_t3_codex_scope214(parent, definition)
+        && !native_t3_codex_scope(parent, definition)
     {
         require_isolated_claude_mount171(definition)?;
     }
@@ -2466,7 +2466,7 @@ fn child_policy_reader_catalogue_scope171<'a>(
             ("claude_stream_json", "codex_app_server") => {
                 // Seul le fait natif authentifié sans profil local peut omettre
                 // launch_context. Ne pas déduire cette exception d’un nom d’outil seul.
-                let native_scope = native_t3_codex_scope214(parent, definition);
+                let native_scope = native_t3_codex_scope(parent, definition);
                 if native_scope && !origin_attested {
                     return Err("permission_attestation_unavailable".into());
                 }

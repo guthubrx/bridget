@@ -112,6 +112,38 @@ pub struct PriorHit {
     pub observed_at_unix: u64,
 }
 
+/// Mode d'exécution du ramasseur : Phase 0 (`Observer`) par défaut,
+/// Phase 1 (`Cleanup`) uniquement sur opt-in explicite (`BRIDGET_REAPER_MODE=cleanup`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ReaperMode {
+    #[default]
+    Observer,
+    Cleanup,
+}
+
+impl ReaperMode {
+    pub fn from_env() -> Self {
+        match std::env::var("BRIDGET_REAPER_MODE")
+            .unwrap_or_default()
+            .trim()
+            .to_ascii_lowercase()
+            .as_str()
+        {
+            "cleanup" | "phase1" => Self::Cleanup,
+            _ => Self::Observer,
+        }
+    }
+}
+
+/// Résultat auditable d'une action Phase 1 opt-in.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CleanupAction {
+    pub identity: String,
+    pub class: TargetClass,
+    pub executed: bool,
+    pub detail: String,
+}
+
 /// Vue du monde injectable — pour les tests et le balayage réel.
 #[derive(Debug, Clone, Default)]
 pub struct WorldView {
@@ -123,8 +155,10 @@ pub struct WorldView {
     pub now_unix: u64,
     pub min_age_secs: u64,
     pub double_observation_secs: u64,
-    /// Toujours `false` tant que le signal n'existe pas chez Bridget.
+    /// Indique si le signal d'activité de fond (`background_liveness`) a été collecté.
     pub background_liveness_available: bool,
+    /// Agents ayant un travail de fond attesté actif (protégés par garde G2).
+    pub background_active_agents: Vec<String>,
     /// L'inventaire daemon a-t-il pu être consulté ? Sans lui, l'absence d'un
     /// agent n'est pas une preuve d'abandon et reste fail-closed.
     pub agent_inventory_available: bool,
@@ -230,9 +264,17 @@ pub fn classify_managed_wrapper(
         guards.push("G5_demande_bridget_ouverte".into());
     }
 
-    // P3 / G2 — background : TROU
+    // P3 / G2 — signal background_liveness
     if world.background_liveness_available {
-        criteria_met.push("P3_pas_de_travail_de_fond".into());
+        let has_background_work = agent_name
+            .as_ref()
+            .is_some_and(|name| world.background_active_agents.iter().any(|a| a == name));
+        if has_background_work {
+            guards.push("G2_travail_de_fond_actif".into());
+            criteria_missing.push("P3_pas_de_travail_de_fond".into());
+        } else {
+            criteria_met.push("P3_pas_de_travail_de_fond".into());
+        }
     } else {
         criteria_missing.push("P3_pas_de_travail_de_fond".into());
         uncertainty.push(GAP_BACKGROUND.into());
@@ -1099,6 +1141,146 @@ pub fn default_state_dir() -> PathBuf {
         .expect("namespace validé avant le reaper")
         .root
         .join("reaper")
+}
+
+/// Exécute le nettoyage Phase 1 uniquement en mode opt-in (`ReaperMode::Cleanup`)
+/// sur les cibles prouvées `Verdict::Eligible` ET `stable_for_phase1 == true`.
+/// En mode `ReaperMode::Observer` (défaut), aucun effet de bord n'est produit.
+pub fn execute_phase1_opt_in(report: &ReaperReport, mode: ReaperMode) -> Vec<CleanupAction> {
+    let mut actions = Vec::new();
+    for target in &report.targets {
+        if target.verdict != Verdict::Eligible || !target.stable_for_phase1 {
+            continue;
+        }
+        if mode == ReaperMode::Observer {
+            actions.push(CleanupAction {
+                identity: target.identity.clone(),
+                class: target.class,
+                executed: false,
+                detail: "mode observer : aucune suppression exécutée".into(),
+            });
+            continue;
+        }
+        match target.class {
+            TargetClass::TempDir => {
+                if let Some(ref raw_path) = target.path {
+                    let path = Path::new(raw_path);
+                    let res = fs::remove_dir_all(path);
+                    actions.push(CleanupAction {
+                        identity: target.identity.clone(),
+                        class: target.class,
+                        executed: res.is_ok(),
+                        detail: match res {
+                            Ok(()) => format!("supprimé {}", path.display()),
+                            Err(err) => format!("échec suppression {}: {err}", path.display()),
+                        },
+                    });
+                }
+            }
+            TargetClass::ManagedWrapper | TargetClass::TestDaemon => {
+                if let Some(pid) = target.pid {
+                    let is_firefox = target
+                        .cmdline
+                        .as_deref()
+                        .is_some_and(|c| c.to_ascii_lowercase().contains("firefox"));
+                    if is_firefox {
+                        actions.push(CleanupAction {
+                            identity: target.identity.clone(),
+                            class: target.class,
+                            executed: false,
+                            detail: "protégé : processus Firefox interdit de signal".into(),
+                        });
+                        continue;
+                    }
+                    // SAFETY: `libc::kill` sur un PID positif avec `SIGTERM` est un appel POSIX sans pointeur.
+                    let rc = unsafe { libc::kill(pid as libc::pid_t, libc::SIGTERM) };
+                    actions.push(CleanupAction {
+                        identity: target.identity.clone(),
+                        class: target.class,
+                        executed: rc == 0,
+                        detail: if rc == 0 {
+                            format!("SIGTERM envoyé au PID {pid}")
+                        } else {
+                            format!(
+                                "SIGTERM refusé sur PID {pid}: {}",
+                                io::Error::last_os_error()
+                            )
+                        },
+                    });
+                }
+            }
+        }
+    }
+    actions
+}
+
+#[cfg(test)]
+#[test]
+fn spec306_reaper_background_liveness_protects_active_and_phase1_opt_in_cleans_only_eligible_tempdir()
+ {
+    let process = ProcessSnapshot {
+        pid: 4242,
+        ppid: 1,
+        age_secs: DEFAULT_MIN_AGE_SECS + 60,
+        command: "bridget managed-wrapper codex agent-bg".into(),
+    };
+    let mut world = WorldView::with_defaults(10_000);
+    world.background_liveness_available = true;
+    world.background_active_agents = vec!["agent-bg".into()];
+    let protected = classify_managed_wrapper(&process, None, &[], &world);
+    assert_eq!(protected.verdict, Verdict::Protege);
+    assert!(
+        protected
+            .guards_triggered
+            .iter()
+            .any(|g| g == "G2_travail_de_fond_actif")
+    );
+
+    // Un répertoire temporaire éligible + stable est nettoyé uniquement en mode Cleanup.
+    let tmp = std::env::temp_dir().join(format!("bridget-reaper306-{}", uuid::Uuid::new_v4()));
+    fs::create_dir_all(&tmp).unwrap();
+    let report = ReaperReport {
+        phase: "cleanup".into(),
+        observed_at_unix: 10_000,
+        min_age_secs: DEFAULT_MIN_AGE_SECS,
+        double_observation_secs: DEFAULT_DOUBLE_OBSERVATION_SECS,
+        background_liveness_available: true,
+        gaps_to_instruct: vec![],
+        targets: vec![TargetReport {
+            class: TargetClass::TempDir,
+            identity: "tmp-test".into(),
+            fingerprint: "fp".into(),
+            pid: None,
+            ppid: None,
+            cmdline: None,
+            path: Some(tmp.to_string_lossy().to_string()),
+            age_secs: Some(DEFAULT_MIN_AGE_SECS + 60),
+            agent_name: None,
+            criteria_met: vec![],
+            criteria_missing: vec![],
+            guards_triggered: vec![],
+            uncertainty_reasons: vec![],
+            verdict: Verdict::Eligible,
+            would_have_done: "rm".into(),
+            stable_for_phase1: true,
+            gaps: vec![],
+        }],
+        summary: ReportSummary {
+            eligible: 1,
+            protege: 0,
+            incertain: 0,
+            stable_for_phase1: 1,
+        },
+    };
+    let obs_actions = execute_phase1_opt_in(&report, ReaperMode::Observer);
+    assert_eq!(obs_actions.len(), 1);
+    assert!(!obs_actions[0].executed);
+    assert!(tmp.exists());
+
+    let clean_actions = execute_phase1_opt_in(&report, ReaperMode::Cleanup);
+    assert_eq!(clean_actions.len(), 1);
+    assert!(clean_actions[0].executed);
+    assert!(!tmp.exists());
 }
 
 #[cfg(test)]

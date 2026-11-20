@@ -128,7 +128,7 @@ pub fn initialize_process() -> Result<(), String> {
     namespace.prepare()?;
     for (key, value) in namespace.child_environment() {
         // Le CLI n'a pas encore démarré de thread ni de fournisseur.
-        // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
+        // SAFETY: appelé soit au point d'entrée CLI mono-thread avant tout spawn, soit sous verrou de sérialisation dédié en test.
         unsafe { std::env::set_var(key, value) };
     }
     // SQLite, fichiers d'état et sockets naissent privés ; aucun chmod

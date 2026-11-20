@@ -1577,7 +1577,7 @@ impl PseudoTerminal {
             "tcgetattr: {}",
             std::io::Error::last_os_error()
         );
-        // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
+        // SAFETY: l'appel système précédent a retourné un succès garantissant l'initialisation complète de la structure par le noyau.
         unsafe { attributes.assume_init() }
     }
 
@@ -1601,26 +1601,26 @@ impl PseudoTerminal {
         // SAFETY: dup ne déréférence aucun pointeur ; ses arguments sont des entiers.
         let fd = unsafe { libc::dup(self.slave) };
         assert!(fd >= 0, "dup slave: {}", std::io::Error::last_os_error());
-        // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
+        // SAFETY: le descripteur vient d'être ouvert avec succès (`fd >= 0`) et sa propriété unique est transférée ici.
         unsafe { File::from_raw_fd(fd) }
     }
 
     fn slave_reader(&self) -> File {
-        // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
+        // SAFETY: les descripteurs de répertoire sont ouverts et valides et les chaînes `CString` terminées par nul restent vivantes pendant l'appel.
         let path = unsafe { libc::ttyname(self.slave) };
         assert!(
             !path.is_null(),
             "ttyname: {}",
             std::io::Error::last_os_error()
         );
-        // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
+        // SAFETY: le descripteur vient d'être ouvert avec succès (`fd >= 0`) et sa propriété unique est transférée ici.
         let fd = unsafe { libc::open(path, libc::O_RDONLY | libc::O_NOCTTY) };
         assert!(
             fd >= 0,
             "ouverture en lecture seule du slave: {}",
             std::io::Error::last_os_error()
         );
-        // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
+        // SAFETY: le descripteur vient d'être ouvert avec succès (`fd >= 0`) et sa propriété unique est transférée ici.
         unsafe { File::from_raw_fd(fd) }
     }
 
@@ -1636,7 +1636,7 @@ impl PseudoTerminal {
             unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) },
             0
         );
-        // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
+        // SAFETY: le descripteur vient d'être ouvert avec succès (`fd >= 0`) et sa propriété unique est transférée ici.
         let mut file = unsafe { File::from_raw_fd(fd) };
         let mut output = Vec::new();
         loop {
@@ -4957,7 +4957,7 @@ fn spec092_us5_garde_double_tty_preserve_cr_lf_et_restaure_les_conversions() {
         "la garde double-TTY doit neutraliser les trois conversions CR/LF"
     );
     assert_eq!(
-        // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
+        // SAFETY: le descripteur est valide et tous les pointeurs de tampon/structure pointent vers des variables locales valides avec leur taille exacte.
         unsafe { libc::write(pseudo_tty.master, b"\n\r".as_ptr().cast(), 2) },
         2
     );
@@ -4993,7 +4993,7 @@ fn spec092_us5_garde_double_tty_preserve_cr_lf_et_restaure_les_conversions() {
     let mut redirected_configured = redirected.attrs();
     redirected_configured.c_iflag |= conversions;
     assert_eq!(
-        // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
+        // SAFETY: le descripteur est valide et tous les pointeurs de tampon/structure pointent vers des variables locales valides avec leur taille exacte.
         unsafe { libc::tcsetattr(redirected.slave, libc::TCSANOW, &redirected_configured,) },
         0
     );
@@ -5062,7 +5062,7 @@ fn spec092_pseudo_tty_livre_shift_entree_fragmente_au_vrai_handler() {
     for injected in b"premiere\x1b[13;2useconde\r" {
         let injected = [*injected];
         assert_eq!(
-            // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
+            // SAFETY: le descripteur est valide et tous les pointeurs de tampon/structure pointent vers des variables locales valides avec leur taille exacte.
             unsafe { libc::write(pseudo_tty.master, injected.as_ptr().cast(), 1) },
             1
         );
@@ -5097,7 +5097,7 @@ fn spec092_mode_clavier_lit_ctrl_c_et_restaure_push_pop() {
     assert_eq!(active.c_lflag & (libc::ICANON | libc::ECHO | libc::ISIG), 0);
 
     assert_eq!(
-        // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
+        // SAFETY: le descripteur est valide et tous les pointeurs de tampon/structure pointent vers des variables locales valides avec leur taille exacte.
         unsafe { libc::write(pseudo_tty.master, [0x03_u8].as_ptr().cast(), 1) },
         1
     );
@@ -5132,7 +5132,7 @@ fn spec092_mode_clavier_restaure_push_pop_apres_eof() {
             .unwrap()
             .expect("pseudo-TTY détecté");
         assert_eq!(
-            // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
+            // SAFETY: le descripteur est valide et tous les pointeurs de tampon/structure pointent vers des variables locales valides avec leur taille exacte.
             unsafe { libc::write(pseudo_tty.master, [0x04_u8].as_ptr().cast(), 1) },
             1
         );

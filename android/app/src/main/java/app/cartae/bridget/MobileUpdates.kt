@@ -37,23 +37,26 @@ object MobileUpdates {
     val changes = MutableStateFlow(0L)
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     @Volatile private var confirmation: Intent? = null
+    @Volatile private var sharedStore: LocalStore? = null
 
-    @Synchronized fun state(context: Context): JSONObject = LocalStore(context).use {
-        it.get("application-updates") ?: JSONObject().put("automatic", true).put("stage", "not_checked")
-    }
+    @Synchronized private fun store(context: Context): LocalStore =
+        sharedStore ?: LocalStore(context.applicationContext).also { sharedStore = it }
+
+    @Synchronized fun state(context: Context): JSONObject =
+        store(context).get("application-updates") ?: JSONObject().put("automatic", true).put("stage", "not_checked")
     @Synchronized private fun save(context: Context, change: (JSONObject) -> Unit) {
-        LocalStore(context).use { store ->
-            val value = store.get("application-updates") ?: JSONObject().put("automatic", true).put("stage", "not_checked")
-            change(value); store.put("application-updates", value)
-        }
+        val local = store(context)
+        val value = local.get("application-updates") ?: JSONObject().put("automatic", true).put("stage", "not_checked")
+        change(value); local.put("application-updates", value)
         changes.value += 1
     }
     fun automatic(context: Context): Boolean = state(context).optBoolean("automatic", true)
     @Synchronized fun setAutomatic(context: Context, enabled: Boolean) {
         save(context) { it.put("automatic", enabled) }
-        LocalStore(context).use { store -> store.get("session")?.let { session ->
-            store.put("host-update-choice", JSONObject().put("automatic", enabled).put("endpoint", session.getString("endpoint")))
-        } }
+        val local = store(context)
+        local.get("session")?.let { session ->
+            local.put("host-update-choice", JSONObject().put("automatic", enabled).put("endpoint", session.getString("endpoint")))
+        }
         val scheduler = context.getSystemService(JobScheduler::class.java)
         if (enabled) { schedule(context); launch(context, manual = false) }
         else {
@@ -70,31 +73,30 @@ object MobileUpdates {
     }
     private val hostLock = Mutex()
     suspend fun syncHosts(context: Context): JSONObject = withContext(Dispatchers.IO) { hostLock.withLock {
-        LocalStore(context).use { store ->
-            val session = store.get("session") ?: throw MobileFailure("authorization_required")
-            val pending = synchronized(MobileUpdates) { store.get("host-update-choice") }
-            val client = BridgetClient(store)
-            val value = try { if (pending != null) {
-                if (pending.optString("endpoint") != session.getString("endpoint")) throw MobileFailure("authorization_required")
-                val result = client.configureUpdates(pending.getBoolean("automatic"))
-                synchronized(MobileUpdates) {
-                    if (store.get("host-update-choice")?.toString() == pending.toString()) store.remove("host-update-choice")
-                }
-                result
-            } else client.read("/v1/updates") }
-            catch (e: MobileFailure) {
-                if (e.code == "not_found") throw MobileFailure("update_hosts_unavailable")
-                throw e
+        val store = store(context)
+        val session = store.get("session") ?: throw MobileFailure("authorization_required")
+        val pending = synchronized(MobileUpdates) { store.get("host-update-choice") }
+        val client = BridgetClient(store)
+        val value = try { if (pending != null) {
+            if (pending.optString("endpoint") != session.getString("endpoint")) throw MobileFailure("authorization_required")
+            val result = client.configureUpdates(pending.getBoolean("automatic"))
+            synchronized(MobileUpdates) {
+                if (store.get("host-update-choice")?.toString() == pending.toString()) store.remove("host-update-choice")
             }
-            store.put("host-update-status", value)
-            if (store.get("host-update-choice") == null && automatic(context) != value.getBoolean("automatic")) {
-                save(context) { it.put("automatic", value.getBoolean("automatic")) }; schedule(context)
-            }
-            changes.value += 1; value
+            result
+        } else client.read("/v1/updates") }
+        catch (e: MobileFailure) {
+            if (e.code == "not_found") throw MobileFailure("update_hosts_unavailable")
+            throw e
         }
+        store.put("host-update-status", value)
+        if (store.get("host-update-choice") == null && automatic(context) != value.getBoolean("automatic")) {
+            save(context) { it.put("automatic", value.getBoolean("automatic")) }; schedule(context)
+        }
+        changes.value += 1; value
     }
     }
-    fun hostChoicePending(context: Context): Boolean = LocalStore(context).use { it.get("host-update-choice") != null }
+    fun hostChoicePending(context: Context): Boolean = synchronized(this) { store(context).get("host-update-choice") != null }
     fun retryHostChoice(context: Context) {
         if (!hostChoicePending(context)) return
         val job = JobInfo.Builder(READY_JOB, ComponentName(context, UpdateJob::class.java))
@@ -130,7 +132,7 @@ object MobileUpdates {
     suspend fun run(context: Context, manual: Boolean, install: Boolean = false) = withContext(Dispatchers.IO) {
         if (!running.compareAndSet(false, true)) return@withContext
         try {
-            if (LocalStore(context).use { it.get("session") != null }) {
+            if (synchronized(this) { store(context).get("session") != null }) {
                 try { syncHosts(context) }
                 catch (e: CancellationException) { throw e }
                 catch (_: Exception) { /* Le choix local reste en attente et sera retenté. */ }

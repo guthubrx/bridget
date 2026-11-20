@@ -146,10 +146,57 @@ class BridgetClient(private val store: LocalStore) {
         val response = request(session.getString("endpoint"), "/v1/updates", "PUT", session.getString("device_key"), JSONObject().put("automatic", automatic))
         requireSessionOrigin(session, store.get("session")); return response
     }
-    suspend fun configureNotifications(enabled: Boolean, token: String?): JSONObject {
+    suspend fun configureNotifications(
+        enabled: Boolean,
+        token: String?,
+        filters: NotificationFilterPreferences? = null,
+    ): JSONObject {
         val session = store.get("session") ?: throw MobileFailure("authorization_required")
         val body = JSONObject().put("enabled", enabled).put("token", token ?: JSONObject.NULL)
+        if (filters != null) {
+            val serialized = filters.toJson()
+            body.put("projects", serialized.getJSONArray("projects"))
+            body.put("min_urgency", serialized.getString("min_urgency"))
+        }
         val response = request(session.getString("endpoint"), "/v1/notifications", "PUT", session.getString("device_key"), body)
+        requireSessionOrigin(session, store.get("session"))
+        return response
+    }
+    suspend fun searchLedger(query: String, project: String? = null, limit: Int = 50): JSONObject {
+        val session = store.get("session") ?: throw MobileFailure("authorization_required")
+        val params = buildList {
+            add("q=${encode(query)}")
+            if (!project.isNullOrBlank()) add("project=${encode(project)}")
+            add("limit=${limit.coerceIn(1, 200)}")
+        }.joinToString("&")
+        val response = request(session.getString("endpoint"), "/v1/ledger/search?$params", "GET", session.getString("device_key"))
+        requireSessionOrigin(session, store.get("session"))
+        return response
+    }
+    suspend fun relaunchAgent(agentId: String, commandId: String, reason: String? = null): JSONObject {
+        val session = store.get("session") ?: throw MobileFailure("authorization_required")
+        val body = OptInAgentActionController.buildRelaunchBody(commandId, reason)
+        val response = request(
+            session.getString("endpoint"),
+            "/v1/agents/${encode(agentId)}/relaunch",
+            "POST",
+            session.getString("device_key"),
+            body,
+        )
+        requireSessionOrigin(session, store.get("session"))
+        return response
+    }
+    suspend fun launchSpecialist(specialistId: String, commandId: String, prompt: String? = null): JSONObject {
+        val session = store.get("session") ?: throw MobileFailure("authorization_required")
+        val body = JSONObject().put("command_id", commandId)
+        if (!prompt.isNullOrBlank()) body.put("prompt", prompt)
+        val response = request(
+            session.getString("endpoint"),
+            "/v1/specialists/${encode(specialistId)}/launch",
+            "POST",
+            session.getString("device_key"),
+            body,
+        )
         requireSessionOrigin(session, store.get("session"))
         return response
     }

@@ -758,7 +758,8 @@ impl DelegationStore {
         }
         let idle_deadline = old.idle_deadline_at.ok_or("keep_alive_ended")?;
         if expected_round >= crate::delegation::MAX_TASK_ROUNDS
-            || old.rounds.len() >= crate::delegation::MAX_TASK_ROUNDS as usize - 1 {
+            || old.rounds.len() >= crate::delegation::MAX_TASK_ROUNDS as usize - 1
+        {
             return Err("round_limit".into());
         }
         if record.round != expected_round + 1 {

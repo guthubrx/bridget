@@ -4920,8 +4920,18 @@ fn mutation_mcp_declare_l_identite_une_fois_et_ne_vend_pas_queued_comme_un_effet
     assert!(result["applied"].is_null());
     assert_eq!(result["scope"], "guichet_request");
     assert_eq!(result["native_admission_checked"], false);
-    assert!(result["recovery"].as_str().unwrap().starts_with("Relisez guichet_request_status"));
-    assert!(!result["recovery"].as_str().unwrap().contains("bridget_auto_delegate"));
+    assert!(
+        result["recovery"]
+            .as_str()
+            .unwrap()
+            .starts_with("Relisez guichet_request_status")
+    );
+    assert!(
+        !result["recovery"]
+            .as_str()
+            .unwrap()
+            .contains("bridget_auto_delegate")
+    );
     assert_eq!(result["next"], "guichet_request_status");
     assert_eq!(result["issuer_scope"], expected_scope);
     server.join().unwrap();
@@ -5069,8 +5079,18 @@ fn coupure_apres_depot_mcp_reste_outcome_unknown_sans_succes_invente() {
     assert!(result["applied"].is_null());
     assert_eq!(result["scope"], "guichet_request");
     assert_eq!(result["native_admission_checked"], false);
-    assert!(result["recovery"].as_str().unwrap().starts_with("Relisez guichet_request_status"));
-    assert!(!result["recovery"].as_str().unwrap().contains("bridget_auto_delegate"));
+    assert!(
+        result["recovery"]
+            .as_str()
+            .unwrap()
+            .starts_with("Relisez guichet_request_status")
+    );
+    assert!(
+        !result["recovery"]
+            .as_str()
+            .unwrap()
+            .contains("bridget_auto_delegate")
+    );
     assert_eq!(result["next"], "guichet_request_status");
     server.join().unwrap();
     std::fs::remove_file(socket).unwrap();
@@ -7059,15 +7079,30 @@ fn spec276_missing_guichet_result_keeps_application_unknown() {
         );
         assert_eq!(
             view["terminal"],
-            if issue == "future_issue" { Value::Null } else { json!(!matches!(issue, "queued" | "outcome_unknown")) }
+            if issue == "future_issue" {
+                Value::Null
+            } else {
+                json!(!matches!(issue, "queued" | "outcome_unknown"))
+            }
         );
         assert_eq!(
             view["next"].is_string(),
             matches!(issue, "queued" | "outcome_unknown")
         );
-        assert_eq!(view["recovery"].as_str().unwrap().contains("bridget_auto_delegate"), issue == "idempotency_expired");
+        assert_eq!(
+            view["recovery"]
+                .as_str()
+                .unwrap()
+                .contains("bridget_auto_delegate"),
+            issue == "idempotency_expired"
+        );
         if issue == "idempotency_expired" {
-            assert!(view["recovery"].as_str().unwrap().contains("même propriétaire"));
+            assert!(
+                view["recovery"]
+                    .as_str()
+                    .unwrap()
+                    .contains("même propriétaire")
+            );
         }
     }
     for issue in [
@@ -7169,11 +7204,33 @@ fn spec276_status_miss_is_scoped_without_dispatching_an_admission() {
 fn spec276_observed_guichet_results_keep_their_boolean() {
     use bridget_transport::protocol::*;
     for (issue, payload, applied) in [
-        ("accepted", GuichetReplyPayload::RegistreAdd { status: GuichetRegistreAddStatus::Appended, constat_id: "record276".into() }, true),
-        ("accepted", GuichetReplyPayload::RegistreAdd { status: GuichetRegistreAddStatus::IdempotentNoop, constat_id: "record276".into() }, true),
-        ("refused", GuichetReplyPayload::Refused { operation: ServiceRequestOperation::Delegate, reason: GuichetRefusalReason::AuthorizationDenied }, false),
+        (
+            "accepted",
+            GuichetReplyPayload::RegistreAdd {
+                status: GuichetRegistreAddStatus::Appended,
+                constat_id: "record276".into(),
+            },
+            true,
+        ),
+        (
+            "accepted",
+            GuichetReplyPayload::RegistreAdd {
+                status: GuichetRegistreAddStatus::IdempotentNoop,
+                constat_id: "record276".into(),
+            },
+            true,
+        ),
+        (
+            "refused",
+            GuichetReplyPayload::Refused {
+                operation: ServiceRequestOperation::Delegate,
+                reason: GuichetRefusalReason::AuthorizationDenied,
+            },
+            false,
+        ),
     ] {
-        let view=guichet_result_value("request276",Some(123),"scope276",issue,Some(payload)).unwrap();
+        let view = guichet_result_value("request276", Some(123), "scope276", issue, Some(payload))
+            .unwrap();
         assert_eq!(view["applied"], applied);
         assert_eq!(view["scope"], "guichet_request");
         assert_eq!(view["native_admission_checked"], false);

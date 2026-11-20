@@ -645,7 +645,60 @@ fn default_capabilities() -> AdapterCapabilities {
     AdapterCapabilities::default()
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RegistryFileStamp {
+    mtime_sec: i64,
+    mtime_nsec: i64,
+    len: u64,
+    ino: u64,
+    mode: u32,
+    uid: u32,
+}
+
+impl RegistryFileStamp {
+    fn from_metadata(meta: &std::fs::Metadata) -> Self {
+        use std::os::unix::fs::MetadataExt;
+        Self {
+            mtime_sec: meta.mtime(),
+            mtime_nsec: meta.mtime_nsec(),
+            len: meta.len(),
+            ino: meta.ino(),
+            mode: meta.mode(),
+            uid: meta.uid(),
+        }
+    }
+}
+
+struct CachedRegistryEntry {
+    stamp: RegistryFileStamp,
+    registry: AgentRegistry,
+    warnings: Vec<String>,
+}
+
+static REGISTRY_CACHE: std::sync::OnceLock<
+    std::sync::RwLock<std::collections::HashMap<PathBuf, CachedRegistryEntry>>,
+> = std::sync::OnceLock::new();
+static REGISTRY_CACHE_HITS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+fn registry_cache()
+-> &'static std::sync::RwLock<std::collections::HashMap<PathBuf, CachedRegistryEntry>> {
+    REGISTRY_CACHE.get_or_init(|| std::sync::RwLock::new(std::collections::HashMap::new()))
+}
+
+#[cfg(test)]
+pub(crate) fn registry_cache_hits() -> u64 {
+    REGISTRY_CACHE_HITS.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 impl AgentRegistry {
+    pub fn len(&self) -> usize {
+        self.agents.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.agents.is_empty()
+    }
+
     pub fn load() -> Result<Self, String> {
         Self::load_from_path(config_path()?)
     }
@@ -664,10 +717,29 @@ impl AgentRegistry {
         let mut routing_policy = None;
         let mut project_preferences = serde_json::Value::Null;
         match std::fs::symlink_metadata(&source) {
-            Ok(_) => {
+            Ok(meta) => {
+                let stamp = if meta.file_type().is_file() {
+                    Some(RegistryFileStamp::from_metadata(&meta))
+                } else {
+                    None
+                };
+                if let Some(ref current_stamp) = stamp
+                    && let Ok(cache) = registry_cache().read()
+                    && let Some(cached) = cache.get(&source)
+                    && &cached.stamp == current_stamp
+                {
+                    REGISTRY_CACHE_HITS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    if emit_warnings {
+                        for warning in &cached.warnings {
+                            eprintln!("avertissement: {warning}");
+                        }
+                    }
+                    return Ok(cached.registry.clone());
+                }
                 let content = read_private_registry(&source)?;
+                let warnings = registry_warnings(&content, &source, &agents);
                 if emit_warnings {
-                    for warning in registry_warnings(&content, &source, &agents) {
+                    for warning in &warnings {
                         eprintln!("avertissement: {warning}");
                     }
                 }
@@ -697,6 +769,32 @@ impl AgentRegistry {
                 admission_policy = user.admission_policy;
                 routing_policy = user.routing_policy;
                 project_preferences = user.project_preferences;
+                add_project_discovery_definitions(&mut agents);
+                let built = Self {
+                    agents,
+                    machines,
+                    decision_services,
+                    admission_policy,
+                    routing_policy,
+                    project_preferences,
+                    source: source.clone(),
+                };
+                if let Some(current_stamp) = stamp
+                    && let Ok(mut cache) = registry_cache().write()
+                {
+                    if cache.len() >= 64 && !cache.contains_key(&source) {
+                        cache.clear();
+                    }
+                    cache.insert(
+                        source,
+                        CachedRegistryEntry {
+                            stamp: current_stamp,
+                            registry: built.clone(),
+                            warnings,
+                        },
+                    );
+                }
+                return Ok(built);
             }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
             Err(error) => {
@@ -3107,4 +3205,30 @@ fn held159_hold_ferme_identique() {
         "réglage daemon absent de la définition et du digest fournisseur"
     );
     std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn spec306_registry_cache_hits_and_invalidates_on_change() {
+    let dir = std::env::temp_dir().join(format!("bridget-regcache-{}", uuid::Uuid::new_v4()));
+    bridget_transport::fsutil::create_private_dir(&dir).unwrap();
+    let path = dir.join("agents.json");
+    bridget_transport::fsutil::write_private_file_atomic(&path, br#"{"agents":{}}"#).unwrap();
+
+    let _ = AgentRegistry::load_from_path_quiet(path.clone()).unwrap();
+    let before = registry_cache_hits();
+    let _ = AgentRegistry::load_from_path_quiet(path.clone()).unwrap();
+    assert!(
+        registry_cache_hits() > before,
+        "la seconde lecture identique doit toucher le cache mémoire"
+    );
+
+    // Modification atomique (nouvel inode + taille) : le cache doit invalider immédiatement.
+    bridget_transport::fsutil::write_private_file_atomic(
+        &path,
+        br#"{"agents":{"custom-test":{"command":"/bin/sh","args":[],"protocol":"acp"}}}"#,
+    )
+    .unwrap();
+    let reloaded = AgentRegistry::load_from_path_quiet(path.clone()).unwrap();
+    assert!(reloaded.get("custom-test").is_ok());
+    let _ = std::fs::remove_dir_all(&dir);
 }

@@ -163,7 +163,7 @@ pub(crate) fn validate_schedule(schedule: &WakeSchedule) -> Result<(), &'static 
 fn local(epoch: i64) -> Result<libc::tm, &'static str> {
     #[allow(clippy::useless_conversion)] // time_t varie selon la plateforme
     let raw: libc::time_t = epoch.try_into().map_err(|_| "calendar_unavailable")?;
-    // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
+    // SAFETY: structure C POD de `libc` pour laquelle le motif entièrement nul est une représentation valide.
     let mut civil: libc::tm = unsafe { std::mem::zeroed() };
     // SAFETY: les pointeurs passés à localtime_r désignent des variables locales valides pendant l'appel.
     if unsafe { libc::localtime_r(&raw, &mut civil) }.is_null() {
@@ -180,7 +180,7 @@ pub(crate) fn timezone_fingerprint(now: i64) -> Result<String, &'static str> {
     if civil.tm_zone.is_null() {
         return Err("calendar_unavailable");
     }
-    // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
+    // SAFETY: le pointeur C non nul est garanti terminé par un octet nul par l'appel système précédent pour la durée de cet emprunt.
     let zone = unsafe { CStr::from_ptr(civil.tm_zone) }
         .to_str()
         .map_err(|_| "calendar_unavailable")?;
@@ -310,7 +310,7 @@ pub(crate) fn calculate_cadence(
                     .ok_or("calendar_unavailable")?;
                 #[allow(clippy::useless_conversion)] // time_t varie selon la plateforme
                 let raw: libc::time_t = epoch.try_into().map_err(|_| "calendar_unavailable")?;
-                // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
+                // SAFETY: structure C POD de `libc` pour laquelle le motif entièrement nul est une représentation valide.
                 let mut day: libc::tm = unsafe { std::mem::zeroed() };
                 // SAFETY: les pointeurs passés à gmtime_r désignent des variables locales valides pendant l'appel.
                 if unsafe { libc::gmtime_r(&raw, &mut day) }.is_null() {

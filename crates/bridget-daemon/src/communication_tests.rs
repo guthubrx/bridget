@@ -40,10 +40,21 @@ fn spec138_git_environment_does_not_override_project() {
     if std::env::var_os(CHILD).is_some() {
         use std::os::unix::fs::DirBuilderExt;
         let root = std::env::temp_dir().join(format!("b138-env-{}", uuid::Uuid::new_v4().simple()));
-        std::fs::DirBuilder::new().mode(0o700).create(&root).unwrap();
-        assert!(std::process::Command::new("git").args(["init", "--quiet"])
-            .arg(&root).env_remove("GIT_DIR").env_remove("GIT_WORK_TREE")
-            .env_remove("GIT_COMMON_DIR").status().unwrap().success());
+        std::fs::DirBuilder::new()
+            .mode(0o700)
+            .create(&root)
+            .unwrap();
+        assert!(
+            std::process::Command::new("git")
+                .args(["init", "--quiet"])
+                .arg(&root)
+                .env_remove("GIT_DIR")
+                .env_remove("GIT_WORK_TREE")
+                .env_remove("GIT_COMMON_DIR")
+                .status()
+                .unwrap()
+                .success()
+        );
         assert!(
             resolve_communication_project(
                 root.to_str().unwrap(),
@@ -78,18 +89,39 @@ fn spec138_git_environment_does_not_override_project() {
 #[test]
 fn spec138_real_worktree_and_symlink_share_common_root() {
     use std::os::unix::fs::DirBuilderExt;
-    let fixture = std::env::temp_dir().join(format!("b138-common-{}", uuid::Uuid::new_v4().simple()));
-    std::fs::DirBuilder::new().mode(0o700).create(&fixture).unwrap();
+    let fixture =
+        std::env::temp_dir().join(format!("b138-common-{}", uuid::Uuid::new_v4().simple()));
+    std::fs::DirBuilder::new()
+        .mode(0o700)
+        .create(&fixture)
+        .unwrap();
     let primary = fixture.join("primary");
     let worktree = fixture.join("worktree");
-    assert!(std::process::Command::new("git").args(["init", "--quiet"])
-        .arg(&primary).env_remove("GIT_DIR").env_remove("GIT_WORK_TREE")
-        .env_remove("GIT_COMMON_DIR").status().unwrap().success());
+    assert!(
+        std::process::Command::new("git")
+            .args(["init", "--quiet"])
+            .arg(&primary)
+            .env_remove("GIT_DIR")
+            .env_remove("GIT_WORK_TREE")
+            .env_remove("GIT_COMMON_DIR")
+            .status()
+            .unwrap()
+            .success()
+    );
     // Git >= 2.44 : un worktree orphelin exerce common-dir sans commit ni identité.
-    assert!(std::process::Command::new("git").arg("-C").arg(&primary)
-        .args(["worktree", "add", "--quiet", "--orphan"]).arg(&worktree)
-        .env_remove("GIT_DIR").env_remove("GIT_WORK_TREE").env_remove("GIT_COMMON_DIR")
-        .status().unwrap().success());
+    assert!(
+        std::process::Command::new("git")
+            .arg("-C")
+            .arg(&primary)
+            .args(["worktree", "add", "--quiet", "--orphan"])
+            .arg(&worktree)
+            .env_remove("GIT_DIR")
+            .env_remove("GIT_WORK_TREE")
+            .env_remove("GIT_COMMON_DIR")
+            .status()
+            .unwrap()
+            .success()
+    );
     let repository = std::process::Command::new("git")
         .arg("-C")
         .arg(&worktree)

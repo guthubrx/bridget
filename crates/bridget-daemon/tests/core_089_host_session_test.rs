@@ -158,9 +158,9 @@ impl Fixture {
             },
             0
         );
-        // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
+        // SAFETY: le descripteur vient d'être ouvert avec succès (`fd >= 0`) et sa propriété unique est transférée ici.
         let _master = unsafe { fs::File::from_raw_fd(master_fd) };
-        // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
+        // SAFETY: le descripteur vient d'être ouvert avec succès (`fd >= 0`) et sa propriété unique est transférée ici.
         let slave = unsafe { fs::File::from_raw_fd(slave_fd) };
         let error = private_file(&self.root.join("control.log"), &[]);
         let command_path = std::env::join_paths(std::iter::once(self.root.join("bin")).chain(

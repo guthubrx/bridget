@@ -15,7 +15,7 @@ impl MinreqTimeoutRestore {
         let previous = std::env::var_os("MINREQ_TIMEOUT");
         // Les tests vérifient le refus local sans jamais laisser cette
         // variable globale contaminer une autre exécution concurrente.
-        // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
+        // SAFETY: appelé soit au point d'entrée CLI mono-thread avant tout spawn, soit sous verrou de sérialisation dédié en test.
         unsafe {
             match value {
                 Some(value) => std::env::set_var("MINREQ_TIMEOUT", value),
@@ -28,7 +28,7 @@ impl MinreqTimeoutRestore {
 
 impl Drop for MinreqTimeoutRestore {
     fn drop(&mut self) {
-        // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
+        // SAFETY: appelé soit au point d'entrée CLI mono-thread avant tout spawn, soit sous verrou de sérialisation dédié en test.
         unsafe {
             match self.0.take() {
                 Some(value) => std::env::set_var("MINREQ_TIMEOUT", value),

@@ -7,7 +7,9 @@ fn spec273_round_budget_is_visible_before_refusal_without_opening_a_guard() {
     let catalogue = crate::delegation_mcp::tools(&json!({}));
     for name in ["bridget_delegate", "bridget_auto_delegate"] {
         let tool = catalogue.iter().find(|tool| tool["name"] == name).unwrap();
-        let description = tool["inputSchema"]["properties"]["keep_alive_secs"]["description"].as_str().unwrap();
+        let description = tool["inputSchema"]["properties"]["keep_alive_secs"]["description"]
+            .as_str()
+            .unwrap();
         for required in ["place de flotte", "ACK", "huit rondes", "reply_timeout"] {
             assert!(description.contains(required), "{name}: {required}");
         }
@@ -17,15 +19,21 @@ fn spec273_round_budget_is_visible_before_refusal_without_opening_a_guard() {
         let view = task_view(&task, None, true);
         assert_eq!(view["round_limit"], 8);
         assert_eq!(view["rounds_remaining"], remaining);
-        assert_eq!(view["continuable"], false, "aucune garde ouverte par le compteur");
+        assert_eq!(
+            view["continuable"], false,
+            "aucune garde ouverte par le compteur"
+        );
     }
     let st = state.lock().unwrap();
-    assert_eq!(serde_json::to_value(st.delegation_store.get(&task.task_id).unwrap().unwrap()).unwrap(), before, "projection sans mutation durable");
+    assert_eq!(
+        serde_json::to_value(st.delegation_store.get(&task.task_id).unwrap().unwrap()).unwrap(),
+        before,
+        "projection sans mutation durable"
+    );
     drop(st);
     drop(state);
     cleanup(&config);
 }
-
 
 #[test]
 fn spec272_admission_cancel_fences_creation_and_preserves_owner_and_terminal_states() {
@@ -81,9 +89,16 @@ fn spec272_admission_cancel_fences_creation_and_preserves_owner_and_terminal_sta
         receipts.push(receipt);
     }
     drop(st);
-    let hint = super::super::handle_wrapper_message("conn-1", WrapperToDaemon::CancelRequest {
-        id:"pending272".into(), sender:owner.clone(), reason:None
-    }, &state).unwrap();
+    let hint = super::super::handle_wrapper_message(
+        "conn-1",
+        WrapperToDaemon::CancelRequest {
+            id: "pending272".into(),
+            sender: owner.clone(),
+            reason: None,
+        },
+        &state,
+    )
+    .unwrap();
     assert!(
         matches!(hint,DaemonToWrapper::Nack {ref reason,..} if reason.contains("kind=admission") && reason.contains("rien annulé"))
     );
@@ -118,13 +133,29 @@ fn spec272_admission_cancel_fences_creation_and_preserves_owner_and_terminal_sta
             .unwrap();
         assert_eq!(saved.state, AutoAdmissionState::Refused);
         assert_eq!(saved.refusal_code.as_deref(), Some("admission_cancelled"));
-        assert_eq!(close_auto_admission_error(&st,old,"decision_interrupted".into()).unwrap(),"admission_cancelled","la première cause durable reste celle du reçu");
-        let contextual = "admission_cancelled:{\"path\":\"/tmp/retained272\",\"branch\":\"branch272\"}";
-        assert_eq!(close_auto_admission_error(&st,old,contextual.into()).unwrap(),contextual);
+        assert_eq!(
+            close_auto_admission_error(&st, old, "decision_interrupted".into()).unwrap(),
+            "admission_cancelled",
+            "la première cause durable reste celle du reçu"
+        );
+        let contextual =
+            "admission_cancelled:{\"path\":\"/tmp/retained272\",\"branch\":\"branch272\"}";
+        assert_eq!(
+            close_auto_admission_error(&st, old, contextual.into()).unwrap(),
+            contextual
+        );
         let guidance = failure(contextual);
-        assert_eq!(guidance["code"],"admission_cancelled");
-        assert_eq!(guidance["detail"]["retained_workspace"]["path"],"/tmp/retained272");
-        assert!(guidance["detail"]["recovery"].as_str().unwrap().contains("Conserver"));
+        assert_eq!(guidance["code"], "admission_cancelled");
+        assert_eq!(
+            guidance["detail"]["retained_workspace"]["path"],
+            "/tmp/retained272"
+        );
+        assert!(
+            guidance["detail"]["recovery"]
+                .as_str()
+                .unwrap()
+                .contains("Conserver")
+        );
         assert_eq!(
             admission_cancel::cancel(&st, &owner, &old.request_id).unwrap(),
             reply
@@ -14570,8 +14601,7 @@ fn native151_boite_phases_absentes_orphelines_et_accusees() {
     let mut task = tache_151(&mut st, "box");
     task.state = "failed".into();
     for (phase, sent, acked, expected) in [
-        (None,
-        false, false, "pending"),
+        (None, false, false, "pending"),
         (None, true, false, "claimed"),
         (Some("dispatching"), false, false, "claimed"),
         (Some("indeterminate"), true, false, "claimed"),
@@ -15935,9 +15965,12 @@ fn spec172_remote_workspace_error_message_preserves_receipt_and_replay() {
         ("FilesystemAccessDenied", "accès du compte worker"),
         ("WorkspacePrepareFailed", "cause précise reste inconnue"),
         ("WorkspacePrepareIncomplete", "lecture corrélée du reçu"),
-        ("StoreUnavailable", "n’a pas fourni de cause précise"),
+        ("StoreUnavailable", "accès au magasin natif"),
         // Session 221 (e948eef5) : nomme les lectures manquantes, sans drainage supposé.
-        ("ResourceLimit", "sans sous-cause conservée"),
+        (
+            "ResourceLimit",
+            "Ce reçu ResourceLimit ne conserve pas cette sous-cause",
+        ),
         ("DiskFull:private-secret", "n’a pas fourni de cause précise"),
     ] {
         let code = format!("remote_workspace_prepare:{reason}");
@@ -21938,19 +21971,19 @@ fn spec247_refus_tardif_annulation_ne_devient_pas_echec() {
         if state == "cancelled" {
             let mut foreign = task.clone();
             foreign.owner = Uuid::new_v4().to_string();
-            assert!(!settle_terminal_tracked_request247(&mut st, &foreign).unwrap());
+            assert!(!settle_terminal_tracked_request(&mut st, &foreign).unwrap());
             assert_eq!(
                 st.store.get_request(&task.mission).unwrap().unwrap().state,
                 "open"
             );
-            assert!(settle_terminal_tracked_request247(&mut st, &task).unwrap());
+            assert!(settle_terminal_tracked_request(&mut st, &task).unwrap());
             assert_eq!(
                 st.store.get_request(&task.mission).unwrap().unwrap().state,
                 "cancelled"
             );
-            assert!(!settle_terminal_tracked_request247(&mut st, &task).unwrap());
+            assert!(!settle_terminal_tracked_request(&mut st, &task).unwrap());
         } else {
-            assert!(!settle_terminal_tracked_request247(&mut st, &task).unwrap());
+            assert!(!settle_terminal_tracked_request(&mut st, &task).unwrap());
             assert_eq!(
                 st.store.get_request(&task.mission).unwrap().unwrap().state,
                 "open"
@@ -26214,31 +26247,62 @@ fn spec281_late_startup_diagnostic_enriches_only_generic_failure() {
     use bridget_transport::protocol::*;
     let (state, config, mut task, _reader) = monitor_fixture205();
     task.state = "failed".into();
-    for previous in ["remote_start_failed", "remote_start_failed:permission_changed"] {
+    for previous in [
+        "remote_start_failed",
+        "remote_start_failed:permission_changed",
+    ] {
         task.error = Some(previous.into());
         let (worker, command) = {
             let st = state.lock().unwrap();
             st.delegation_store.save(&task).unwrap();
-            (st.remote_workers["cartae"].identity.clone(), remote_command_identity(&st, &task).unwrap())
+            (
+                st.remote_workers["cartae"].identity.clone(),
+                remote_command_identity(&st, &task).unwrap(),
+            )
         };
-        assert!(handle_worker_message(&state, "worker205", WrapperToDaemon::WorkerResponse {
-            response: WorkerResponse {
-                version: REMOTE_WORKER_VERSION,
-                correlation_id: uuid::Uuid::new_v4().to_string(),
-                connection_epoch: "epoch205".into(),
-                worker, command,
-                response: WorkerResponseOperation::Observation { observation: WorkerObservation {
-                    phase: WorkerCommandPhase::Terminal, native_ready: false,
-                    exit_code: Some(0), observed_at: unix_timestamp(), workspace: None,
-                    permission_digest: None, startup_failure: Some(WorkerStartupFailure::ExitedBeforeReady),
-                }},
-            }
-        }).is_none());
-        let current = state.lock().unwrap().delegation_store.get(&task.task_id).unwrap().unwrap();
+        assert!(
+            handle_worker_message(
+                &state,
+                "worker205",
+                WrapperToDaemon::WorkerResponse {
+                    response: WorkerResponse {
+                        version: REMOTE_WORKER_VERSION,
+                        correlation_id: uuid::Uuid::new_v4().to_string(),
+                        connection_epoch: "epoch205".into(),
+                        worker,
+                        command,
+                        response: WorkerResponseOperation::Observation {
+                            observation: WorkerObservation {
+                                phase: WorkerCommandPhase::Terminal,
+                                native_ready: false,
+                                exit_code: Some(0),
+                                observed_at: unix_timestamp(),
+                                workspace: None,
+                                permission_digest: None,
+                                startup_failure: Some(WorkerStartupFailure::ExitedBeforeReady),
+                            }
+                        },
+                    }
+                }
+            )
+            .is_none()
+        );
+        let current = state
+            .lock()
+            .unwrap()
+            .delegation_store
+            .get(&task.task_id)
+            .unwrap()
+            .unwrap();
         assert_eq!(current.state, "failed");
-        assert_eq!(current.error.as_deref(), Some(if previous == "remote_start_failed" {
-            "remote_start_failed:exited_before_ready:exit=0"
-        } else { previous }));
+        assert_eq!(
+            current.error.as_deref(),
+            Some(if previous == "remote_start_failed" {
+                "remote_start_failed:exited_before_ready:exit=0"
+            } else {
+                previous
+            })
+        );
         assert!(current.mission_issued_at.is_none());
     }
     drop(state);
@@ -27198,7 +27262,8 @@ fn spec221_continuable_status_uses_only_fresh_correlated_worker_read() {
         failed.mission_issued_at = None;
         st.delegation_store.save(&failed).unwrap();
         drop(st);
-        let failed_view = status_with_worker_observation("conn-1", &request, None, None, None, &state).unwrap();
+        let failed_view =
+            status_with_worker_observation("conn-1", &request, None, None, None, &state).unwrap();
         assert_eq!(failed_view["startup_check"]["reason"], "unknown_execution");
         assert_eq!(failed_view["startup_check"]["stage"], "command_identity");
         assert!(!failed_view["continuable"].as_bool().unwrap());
@@ -27993,8 +28058,8 @@ fn spec267_imposed_machine_cpu_and_load_are_advisory_even_with_an_idle_alternati
 #[test]
 fn spec267_imposed_machine_still_refuses_fresh_low_memory() {
     for selection in ["request", "policy"] {
-        let error = routing267_score_case(20, 5, 20, selection)
-            .expect_err("mémoire insuffisante refusée");
+        let error =
+            routing267_score_case(20, 5, 20, selection).expect_err("mémoire insuffisante refusée");
         let refusal = failure(&error);
         assert_eq!(refusal["code"], "resource_saturated");
         assert!(
@@ -28084,7 +28149,8 @@ fn spec288_prepare_capacity_guidance_names_log_without_inventing_cause() {
 }
 
 #[test]
-fn incident301_probe_refusal_workspace_unknown_guides_correlated_diagnosis_without_inventing_cause() {
+fn incident301_probe_refusal_workspace_unknown_guides_correlated_diagnosis_without_inventing_cause()
+{
     let encoded = json!([{"kind":"candidate","code":"workspace_unavailable","candidates":1}]);
     let result = failure(&format!("routing_candidate_unavailable:{encoded}"));
     let check = &result["detail"]["probe_checks"][0];

@@ -896,7 +896,7 @@ fn terminate_child(child: &mut CrashChild) {
 fn signal_and_park() {
     let byte = b'B';
     assert_eq!(
-        // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
+        // SAFETY: le descripteur est valide et tous les pointeurs de tampon/structure pointent vers des variables locales valides avec leur taille exacte.
         unsafe { libc::write(CRASH_BARRIER_FD, (&byte as *const u8).cast(), 1) },
         1
     );

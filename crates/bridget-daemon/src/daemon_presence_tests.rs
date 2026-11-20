@@ -85,10 +85,13 @@ fn spec271_completed_native_round_names_continue_before_physical_project_check()
                 "fixture".into(),
                 native,
             );
-            assert!(match result {
-                Ok(_) => true,
-                Err((code, _)) => code != "intent_not_permitted",
-            }, "l’exemption doit franchir la garde de fin de ronde");
+            assert!(
+                match result {
+                    Ok(_) => true,
+                    Err((code, _)) => code != "intent_not_permitted",
+                },
+                "l’exemption doit franchir la garde de fin de ronde"
+            );
         }
         task.state = "working".into();
         state.delegation_store.save(&task).unwrap();
@@ -647,15 +650,15 @@ fn edit159_cancel_crash_apres_commit_message_non_livre() {
     let mut st = {
         let guard = HOME_REGISTRY_LOCK.lock().recover_poison();
         let previous = std::env::var_os("HOME");
-        // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
+        // SAFETY: appelé soit au point d'entrée CLI mono-thread avant tout spawn, soit sous verrou de sérialisation dédié en test.
         unsafe { std::env::set_var("HOME", &registry_home) };
         let (tx, _rx) = mpsc::channel();
         let result = DaemonState::new(&config, tx);
         if let Some(home) = previous {
-            // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
+            // SAFETY: appelé soit au point d'entrée CLI mono-thread avant tout spawn, soit sous verrou de sérialisation dédié en test.
             unsafe { std::env::set_var("HOME", home) };
         } else {
-            // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
+            // SAFETY: appelé soit au point d'entrée CLI mono-thread avant tout spawn, soit sous verrou de sérialisation dédié en test.
             unsafe { std::env::remove_var("HOME") };
         }
         drop(guard);
@@ -1716,15 +1719,15 @@ fn held159_sweep_held_ids_reconstruit_au_demarrage() {
     let reopened = {
         let guard = HOME_REGISTRY_LOCK.lock().recover_poison();
         let previous = std::env::var_os("HOME");
-        // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
+        // SAFETY: appelé soit au point d'entrée CLI mono-thread avant tout spawn, soit sous verrou de sérialisation dédié en test.
         unsafe { std::env::set_var("HOME", &registry_home) };
         let (tx, _rx) = mpsc::channel();
         let result = DaemonState::new(&config, tx);
         if let Some(home) = previous {
-            // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
+            // SAFETY: appelé soit au point d'entrée CLI mono-thread avant tout spawn, soit sous verrou de sérialisation dédié en test.
             unsafe { std::env::set_var("HOME", home) };
         } else {
-            // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
+            // SAFETY: appelé soit au point d'entrée CLI mono-thread avant tout spawn, soit sous verrou de sérialisation dédié en test.
             unsafe { std::env::remove_var("HOME") };
         }
         drop(guard);
@@ -2840,14 +2843,14 @@ pub(super) fn state_with_registered_agent_configured(
     let previous_home = std::env::var_os("HOME");
     // DaemonState::new charge le registre via HOME ; la fixture doit lui
     // fournir une racine locale avant toute construction d'état.
-    // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
+    // SAFETY: appelé soit au point d'entrée CLI mono-thread avant tout spawn, soit sous verrou de sérialisation dédié en test.
     unsafe { std::env::set_var("HOME", &registry_home) };
     let state_result = DaemonState::new(&config, managed_tx);
     if let Some(home) = previous_home {
-        // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
+        // SAFETY: appelé soit au point d'entrée CLI mono-thread avant tout spawn, soit sous verrou de sérialisation dédié en test.
         unsafe { std::env::set_var("HOME", home) };
     } else {
-        // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
+        // SAFETY: appelé soit au point d'entrée CLI mono-thread avant tout spawn, soit sous verrou de sérialisation dédié en test.
         unsafe { std::env::remove_var("HOME") };
     }
     let mut state = state_result.unwrap();
@@ -6496,7 +6499,7 @@ fn stop_du_second_retablissement_gagne_avant_son_bootstrap() {
     let gate_ready = root.join("bootstrap-gate.ready");
     let gate_once = root.join("bootstrap-gate.once");
     let gate_c = CString::new(gate.as_os_str().as_bytes()).unwrap();
-    // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
+    // SAFETY: les descripteurs de répertoire sont ouverts et valides et les chaînes `CString` terminées par nul restent vivantes pendant l'appel.
     assert_eq!(unsafe { libc::mkfifo(gate_c.as_ptr(), 0o600) }, 0);
     let shim = root.join("managed-shim.sh");
     std::fs::write(
@@ -8349,7 +8352,12 @@ fn spec269_steer_claude_stream_refuse_durablement_avant_remise() {
     let (writer, reader) = control_socket("steer269");
     st.connections.insert("conn-1".into(), writer);
     let shared = Arc::new(Mutex::new(st));
-    negotiate_idempotent_client(&shared, "guidance-client", "012_scope_guidance_steer269", "89000000-0000-4000-8000-000000000200");
+    negotiate_idempotent_client(
+        &shared,
+        "guidance-client",
+        "012_scope_guidance_steer269",
+        "89000000-0000-4000-8000-000000000200",
+    );
     {
         let mut st = shared.lock().unwrap();
         guidance156_link_parent(&mut st, "guidance-client", "conn-1");
@@ -8357,16 +8365,35 @@ fn spec269_steer_claude_stream_refuse_durablement_avant_remise() {
         task.child_instance = Some(st.conn_instances["conn-1"].clone());
         task.definition.protocol = "claude_stream_json".into();
         task.state = "working".into();
-        st.delegation_store.insert(&task, "steer269", &serde_json::to_vec(&task.request).unwrap()).unwrap();
+        st.delegation_store
+            .insert(
+                &task,
+                "steer269",
+                &serde_json::to_vec(&task.request).unwrap(),
+            )
+            .unwrap();
     }
     let mut message = idempotent_message("guidage269");
     message.intent = Some(bridget_core::MessageIntent::SteerCurrent);
     let issued_at = unix_now_secs();
     for _ in 0..2 {
-        let response = handle_wrapper_message("guidance-client", WrapperToDaemon::SendIdempotent {
-            message: message.clone(), message_id: "steer269".into(), issued_at,
-        }, &shared).unwrap();
-        let DaemonToWrapper::IdempotencyResult { issue: IdempotencyIssue::Rejected { category, reason, .. }, .. } = response else {
+        let response = handle_wrapper_message(
+            "guidance-client",
+            WrapperToDaemon::SendIdempotent {
+                message: message.clone(),
+                message_id: "steer269".into(),
+                issued_at,
+            },
+            &shared,
+        )
+        .unwrap();
+        let DaemonToWrapper::IdempotencyResult {
+            issue: IdempotencyIssue::Rejected {
+                category, reason, ..
+            },
+            ..
+        } = response
+        else {
             panic!("refus avant remise attendu : {response:?}")
         };
         assert_eq!(category, "steer_unavailable");
@@ -8374,7 +8401,9 @@ fn spec269_steer_claude_stream_refuse_durablement_avant_remise() {
     }
     reader.get_ref().set_nonblocking(true).unwrap();
     let mut byte = [0];
-    assert!(matches!(std::io::Read::read(&mut reader.get_ref(), &mut byte), Err(e) if e.kind() == std::io::ErrorKind::WouldBlock));
+    assert!(
+        matches!(std::io::Read::read(&mut reader.get_ref(), &mut byte), Err(e) if e.kind() == std::io::ErrorKind::WouldBlock)
+    );
     drop(shared);
     let _ = std::fs::remove_file(config.db_path);
 }
@@ -16581,6 +16610,20 @@ fn register_emetteur_rejoue_les_notices_orphelines_en_attente() {
     presence.capacity_seen = stale;
     presence.link_seen = stale;
     let _ = state.agent_infos();
+    // Depuis 45de7467, la purge d'une présence n'orpheline plus automatiquement les remises durables.
+    assert_eq!(
+        state
+            .idempotency
+            .pending_orphan_emitter_notices()
+            .unwrap()
+            .len(),
+        0,
+        "purge de présence conserve la remise durable jusqu'à orphelinage explicite"
+    );
+    state
+        .idempotency
+        .orphan_dispatching_for_instance("instance-1", "test-orphan")
+        .unwrap();
     assert_eq!(
         state
             .idempotency
@@ -17938,7 +17981,7 @@ fn held159_turnstate_sortie_forcee_depuis_busy_period_start() {
     st.registry = crate::registry::AgentRegistry::from_json(&registry_json, source).unwrap();
     let previous_root = std::env::var_os("BRIDGET_HOME");
     let previous_socket = std::env::var_os("BRIDGET_SOCKET");
-    // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
+    // SAFETY: appelé soit au point d'entrée CLI mono-thread avant tout spawn, soit sous verrou de sérialisation dédié en test.
     unsafe {
         std::env::set_var("BRIDGET_HOME", &home);
         std::env::set_var("BRIDGET_SOCKET", home.join("bridget.sock"));
@@ -17960,7 +18003,7 @@ fn held159_turnstate_sortie_forcee_depuis_busy_period_start() {
         "silence de90s ne dépasse pas trois périodes"
     );
     st.release_stale_busy_turns_at(start + Duration::from_secs(121));
-    // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
+    // SAFETY: appelé soit au point d'entrée CLI mono-thread avant tout spawn, soit sous verrou de sérialisation dédié en test.
     unsafe {
         if let Some(value) = previous_root {
             std::env::set_var("BRIDGET_HOME", value);
@@ -20669,18 +20712,18 @@ fn held159_adopt_adoption_sans_presence_apres_redemarrage_du_daemon() {
         let home_lock = HOME_REGISTRY_LOCK.lock().recover_poison();
         let previous_home = std::env::var_os("HOME");
         let (managed_tx, _managed_rx) = mpsc::channel();
-        // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
+        // SAFETY: appelé soit au point d'entrée CLI mono-thread avant tout spawn, soit sous verrou de sérialisation dédié en test.
         unsafe {
             std::env::set_var("HOME", &registry_home);
         }
         let reopened = DaemonState::new(&config, managed_tx);
         if let Some(home) = previous_home {
-            // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
+            // SAFETY: appelé soit au point d'entrée CLI mono-thread avant tout spawn, soit sous verrou de sérialisation dédié en test.
             unsafe {
                 std::env::set_var("HOME", home);
             }
         } else {
-            // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
+            // SAFETY: appelé soit au point d'entrée CLI mono-thread avant tout spawn, soit sous verrou de sérialisation dédié en test.
             unsafe {
                 std::env::remove_var("HOME");
             }
@@ -20791,18 +20834,18 @@ fn held159_adopt_double_redemarrage_nouvelle_instance() {
         let home_lock = HOME_REGISTRY_LOCK.lock().recover_poison();
         let previous_home = std::env::var_os("HOME");
         let (managed_tx, _managed_rx) = mpsc::channel();
-        // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
+        // SAFETY: appelé soit au point d'entrée CLI mono-thread avant tout spawn, soit sous verrou de sérialisation dédié en test.
         unsafe {
             std::env::set_var("HOME", &registry_home);
         }
         let reopened = DaemonState::new(&config, managed_tx);
         if let Some(home) = previous_home {
-            // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
+            // SAFETY: appelé soit au point d'entrée CLI mono-thread avant tout spawn, soit sous verrou de sérialisation dédié en test.
             unsafe {
                 std::env::set_var("HOME", home);
             }
         } else {
-            // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
+            // SAFETY: appelé soit au point d'entrée CLI mono-thread avant tout spawn, soit sous verrou de sérialisation dédié en test.
             unsafe {
                 std::env::remove_var("HOME");
             }
@@ -21140,15 +21183,15 @@ fn spec_079_ack_puis_deux_redemarrages_rejouent_une_seule_continuation() {
         // suivants : on relit le verrou empoisonné plutôt que de propager.
         let _home_lock = HOME_REGISTRY_LOCK.lock().recover_poison();
         let previous_home = std::env::var_os("HOME");
-        // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
+        // SAFETY: appelé soit au point d'entrée CLI mono-thread avant tout spawn, soit sous verrou de sérialisation dédié en test.
         unsafe { std::env::set_var("HOME", home) };
         let (managed_tx, _managed_rx) = mpsc::channel();
         let result = DaemonState::new(config, managed_tx);
         if let Some(previous_home) = previous_home {
-            // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
+            // SAFETY: appelé soit au point d'entrée CLI mono-thread avant tout spawn, soit sous verrou de sérialisation dédié en test.
             unsafe { std::env::set_var("HOME", previous_home) };
         } else {
-            // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
+            // SAFETY: appelé soit au point d'entrée CLI mono-thread avant tout spawn, soit sous verrou de sérialisation dédié en test.
             unsafe { std::env::remove_var("HOME") };
         }
         result.unwrap()
@@ -22149,14 +22192,14 @@ pub(super) fn spec_087_state(label: &str) -> (DaemonState, DaemonConfig) {
     let _home_lock = HOME_REGISTRY_LOCK.lock().recover_poison();
     let (managed_tx, _managed_rx) = mpsc::channel();
     let previous_home = std::env::var_os("HOME");
-    // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
+    // SAFETY: appelé soit au point d'entrée CLI mono-thread avant tout spawn, soit sous verrou de sérialisation dédié en test.
     unsafe { std::env::set_var("HOME", &registry_home) };
     let state_result = DaemonState::new(&config, managed_tx);
     if let Some(home) = previous_home {
-        // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
+        // SAFETY: appelé soit au point d'entrée CLI mono-thread avant tout spawn, soit sous verrou de sérialisation dédié en test.
         unsafe { std::env::set_var("HOME", home) };
     } else {
-        // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
+        // SAFETY: appelé soit au point d'entrée CLI mono-thread avant tout spawn, soit sous verrou de sérialisation dédié en test.
         unsafe { std::env::remove_var("HOME") };
     }
     let mut state = state_result.unwrap();

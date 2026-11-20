@@ -1227,7 +1227,7 @@ fn spec185_repair_fifo_is_refused_without_blocking_worker() {
         fs::remove_file(target.join(".git")).unwrap();
         let fifo =
             std::ffi::CString::new(target.join(".git").as_os_str().as_encoded_bytes()).unwrap();
-        // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
+        // SAFETY: les descripteurs de répertoire sont ouverts et valides et les chaînes `CString` terminées par nul restent vivantes pendant l'appel.
         assert_eq!(unsafe { libc::mkfifo(fifo.as_ptr(), 0o600) }, 0);
         let started = Instant::now();
         assert!(inspect_repair(&record, &target, &head).is_err());

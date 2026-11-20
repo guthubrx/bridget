@@ -6,7 +6,7 @@ mod late_worker_prepares;
 mod native_child_requests;
 mod native_delegation;
 mod native_provider_catalogue;
-pub(crate) use native_delegation::catalogue_entries177;
+pub(crate) use native_delegation::catalogue_entries;
 mod agent_tracking;
 pub(crate) mod loop_control;
 mod mobile_admin;
@@ -100,7 +100,7 @@ use crate::{
     },
     registry::{AgentRegistry, DEFAULT_NOTIFY_TIMEOUT_SECS},
 };
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use uuid::Uuid;
 
 // Métriques du daemon (M-005)
@@ -114,97 +114,12 @@ const UI_HUMAN_AGENT_ID: &str = "550e8400-e29b-41d4-a716-4466554400f0";
 /// Libellé conversationnel de l'opérateur dans le ledger. Ce n'est pas un
 /// agent routable : le relais UI s'enregistre sous `UI_HUMAN_AGENT_ID`.
 const UI_HUMAN_SENDER: &str = "humain";
-pub struct Metrics {
-    pub messages_sent: AtomicU64,
-    pub messages_received: AtomicU64,
-    pub errors: AtomicU64,
-    pub active_connections: AtomicUsize,
-    pub max_connections: AtomicUsize,
-    pub execution_admitted: AtomicU64,
-    pub execution_started: AtomicU64,
-    pub execution_transition_rejected: AtomicU64,
-    pub execution_delivery_failures: AtomicU64,
-    pub execution_queue_saturated: AtomicU64,
-    pub execution_start_latency_secs_total: AtomicU64,
-    pub execution_start_latency_samples: AtomicU64,
-}
-
-impl Default for Metrics {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl Metrics {
-    pub fn new() -> Self {
-        Metrics {
-            messages_sent: AtomicU64::new(0),
-            messages_received: AtomicU64::new(0),
-            errors: AtomicU64::new(0),
-            active_connections: AtomicUsize::new(0),
-            max_connections: AtomicUsize::new(0),
-            execution_admitted: AtomicU64::new(0),
-            execution_started: AtomicU64::new(0),
-            execution_transition_rejected: AtomicU64::new(0),
-            execution_delivery_failures: AtomicU64::new(0),
-            execution_queue_saturated: AtomicU64::new(0),
-            execution_start_latency_secs_total: AtomicU64::new(0),
-            execution_start_latency_samples: AtomicU64::new(0),
-        }
-    }
-
-    pub fn increment_sent(&self) {
-        self.messages_sent.fetch_add(1, Ordering::Relaxed);
-    }
-
-    pub fn increment_received(&self) {
-        self.messages_received.fetch_add(1, Ordering::Relaxed);
-    }
-
-    pub fn increment_errors(&self) {
-        self.errors.fetch_add(1, Ordering::Relaxed);
-    }
-
-    pub fn increment_connections(&self) {
-        let n = self.active_connections.fetch_add(1, Ordering::Relaxed) + 1;
-        if self.max_connections.fetch_max(n, Ordering::Relaxed) < n && n.is_power_of_two() {
-            info!("connexions actives : {n} (nouveau maximum)");
-        }
-    }
-
-    pub fn decrement_connections(&self) {
-        self.active_connections.fetch_sub(1, Ordering::Relaxed);
-    }
-
-    pub fn record_execution_admitted(&self) {
-        self.execution_admitted.fetch_add(1, Ordering::Relaxed);
-    }
-
-    pub fn record_execution_started(&self, latency_secs: u64) {
-        self.execution_started.fetch_add(1, Ordering::Relaxed);
-        self.execution_start_latency_samples
-            .fetch_add(1, Ordering::Relaxed);
-        self.execution_start_latency_secs_total
-            .fetch_add(latency_secs, Ordering::Relaxed);
-    }
-
-    pub fn record_execution_transition_rejected(&self) {
-        self.execution_transition_rejected
-            .fetch_add(1, Ordering::Relaxed);
-        self.errors.fetch_add(1, Ordering::Relaxed);
-    }
-
-    pub fn record_execution_delivery_failure(&self) {
-        self.execution_delivery_failures
-            .fetch_add(1, Ordering::Relaxed);
-        self.errors.fetch_add(1, Ordering::Relaxed);
-    }
-
-    pub fn record_execution_queue_saturated(&self) {
-        self.execution_queue_saturated
-            .fetch_add(1, Ordering::Relaxed);
-    }
-}
+mod metrics;
+use self::metrics::{
+    MAX_UNIX_CONNECTIONS, RESERVED_UNIX_CONNECTIONS, ShutdownWakePipe, UnixConnectionBudget,
+    notify_shutdown_wake, poll_accept_or_shutdown,
+};
+pub use self::metrics::{Metrics, ReadMostlyDirectory};
 
 static SHUTDOWN_REQUESTED: AtomicBool = AtomicBool::new(false);
 const MAX_DAEMON_WAITS: usize = 64;
@@ -252,7 +167,7 @@ fn wait_client_gone(peer: Option<&UnixStream>) -> bool {
         return true;
     }
     let mut byte = 0u8;
-    // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
+    // SAFETY: le descripteur est valide et tous les pointeurs de tampon/structure pointent vers des variables locales valides avec leur taille exacte.
     let read = unsafe {
         libc::recv(
             fd,
@@ -398,9 +313,9 @@ mod native151_sql_trace_tests {
                 }
                 // Aucun unwind ne traverse la frontière C. SQLite garantit la chaîne SQL.
                 let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
+                    // SAFETY: le pointeur C non nul est garanti terminé par un octet nul par l'appel système précédent pour la durée de cet emprunt.
                     let context = unsafe { &*context.cast::<TraceContext>() };
-                    // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
+                    // SAFETY: le pointeur C non nul est garanti terminé par un octet nul par l'appel système précédent pour la durée de cet emprunt.
                     let sql = unsafe { std::ffi::CStr::from_ptr(sql.cast()) }.to_bytes();
                     if sql.starts_with(context.prefix) {
                         context
@@ -413,7 +328,7 @@ mod native151_sql_trace_tests {
                 rusqlite::ffi::SQLITE_OK
             }
             let mut trace = Self {
-                // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
+                // SAFETY: le handle SQLite reste vivant tant que le garde de trace est en portée et `Drop` désinscrit le callback avant libération de `Box<TraceContext>`.
                 connection: unsafe { connection.handle() },
                 context: Box::new(TraceContext {
                     start: Instant::now(),
@@ -423,7 +338,7 @@ mod native151_sql_trace_tests {
             };
             // Le Box garde la même adresse jusqu'à la désinstallation dans Drop.
             assert_eq!(
-                // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
+                // SAFETY: le handle SQLite reste vivant tant que le garde de trace est en portée et `Drop` désinscrit le callback avant libération de `Box<TraceContext>`.
                 unsafe {
                     rusqlite::ffi::sqlite3_trace_v2(
                         trace.connection,
@@ -456,7 +371,7 @@ mod native151_sql_trace_tests {
     impl Drop for SelectTrace {
         fn drop(&mut self) {
             // Les tests gardent l'état propriétaire vivant au-delà de ce garde.
-            // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
+            // SAFETY: le handle SQLite reste vivant tant que le garde de trace est en portée et `Drop` désinscrit le callback avant libération de `Box<TraceContext>`.
             unsafe {
                 rusqlite::ffi::sqlite3_trace_v2(self.connection, 0, None, std::ptr::null_mut());
             }
@@ -705,6 +620,56 @@ mod arret_tests {
         );
     }
 
+    #[test]
+    fn spec306_unix_connection_budget_enforces_general_and_reserved_limits_and_releases() {
+        let budget = Arc::new(super::UnixConnectionBudget::new(2, 1));
+        let p1 = budget.try_acquire(false).expect("slot 1");
+        let p2 = budget.try_acquire(false).expect("slot 2");
+        assert!(
+            budget.try_acquire(false).is_none(),
+            "plafond général atteint"
+        );
+        let p3 = budget
+            .try_acquire(true)
+            .expect("réserve propriétaire disponible");
+        assert!(budget.try_acquire(true).is_none(), "plafond total atteint");
+        assert_eq!(budget.active_count(), 3);
+        drop(p1);
+        assert_eq!(budget.active_count(), 2);
+        drop(p2);
+        drop(p3);
+        assert_eq!(budget.active_count(), 0);
+        assert!(budget.try_acquire(false).is_some());
+    }
+
+    #[test]
+    fn spec306_shutdown_wake_pipe_wakes_poll_immediately() {
+        use std::os::unix::io::AsRawFd;
+        let dir = std::path::PathBuf::from("/tmp").join(format!(
+            "bg-poll-{}",
+            &uuid::Uuid::new_v4().simple().to_string()[..8]
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let sock = dir.join("test.sock");
+        let listener = std::os::unix::net::UnixListener::bind(&sock).unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let pipe = super::ShutdownWakePipe::open().unwrap();
+        let start = Instant::now();
+        let notifier = std::thread::spawn(|| {
+            std::thread::sleep(Duration::from_millis(20));
+            super::notify_shutdown_wake();
+        });
+        super::poll_accept_or_shutdown(listener.as_raw_fd(), pipe.read_fd, 2000);
+        let elapsed = start.elapsed();
+        notifier.join().unwrap();
+        pipe.drain();
+        assert!(
+            elapsed < Duration::from_millis(500),
+            "poll doit se réveiller sur le tube d'arrêt, pas attendre le timeout ({elapsed:?})"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// Contrôle positif de l'adaptateur : sans ordre d'arrêt, il dort jusqu'au
     /// bout et rend `false`. Sans lui, un adaptateur qui rendrait TOUJOURS
     /// `true` passerait le test ci-dessus.
@@ -740,33 +705,16 @@ fn install_daemon_signal_handlers() {}
 #[cfg(not(test))]
 fn install_daemon_signal_handlers() {
     // Seul SIGTERM déclenche le shutdown propre (c'est ce que launchd/systemd envoie).
-    // SIGINT (Ctrl+C) est ignoré en mode daemon — l'utilisateur doit utiliser
-    // launchctl stop ou kill -TERM pour arrêter le daemon.
-    // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
+    // SIGINT (Ctrl+C) et SIGHUP sont ignorés en mode daemon.
+    // SAFETY: les closures enregistrées n'appellent que des opérations async-signal-safe
+    // (`AtomicBool::store` et `libc::write` sur le tube d'éveil non bloquant).
     unsafe {
         let _ = signal_hook::low_level::register(signal_hook::consts::SIGTERM, || {
-            eprintln!(
-                "[BRIDGET] *** SIGTERM REÇU *** à {}",
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_secs()
-            );
             SHUTDOWN_REQUESTED.store(true, Ordering::SeqCst);
+            notify_shutdown_wake();
         });
-        let _ = signal_hook::low_level::register(signal_hook::consts::SIGINT, || {
-            eprintln!(
-                "[BRIDGET] *** SIGINT REÇU (ignoré) *** à {}",
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_secs()
-            );
-        });
-        // Ignorer SIGHUP (envoyé quand le terminal se ferme)
-        let _ = signal_hook::low_level::register(signal_hook::consts::SIGHUP, || {
-            eprintln!("[BRIDGET] *** SIGHUP REÇU (ignoré) ***");
-        });
+        let _ = signal_hook::low_level::register(signal_hook::consts::SIGINT, || {});
+        let _ = signal_hook::low_level::register(signal_hook::consts::SIGHUP, || {});
     }
 }
 
@@ -6994,8 +6942,7 @@ pub fn run(config: DaemonConfig) -> Result<(), Box<dyn std::error::Error>> {
                         if let Some(target_writer) = target_writer {
                             let body = format!(
                                 "Rappel : {} attend une réponse au message #{}.\nPour une mission native, rendez votre réponse finale normale : le wrapper la remet au parent. Ne renvoyez pas ce résultat avec bridget_send ou bridget reply. Pour une demande ordinaire, utilisez bridget_send avec in_reply_to égal à cet identifiant complet. Ce rappel concerne cette demande ; les autres travaux autorisés suivent leur propre état.",
-                                from,
-                                msg_id
+                                from, msg_id
                             );
                             match deliver_to_agent(&target_writer, &to, &body) {
                                 Ok(reminder_message_id) => attest_reminder_sent(
@@ -7025,8 +6972,7 @@ pub fn run(config: DaemonConfig) -> Result<(), Box<dyn std::error::Error>> {
                         if let Some(target_writer) = target_writer {
                             let body = format!(
                                 "Rappel prioritaire : {} attend toujours une réponse au message #{}.\nPour une mission native, rendez votre résultat ou blocage précis par la réponse finale normale : le wrapper le remet au parent. Ne renvoyez pas ce résultat avec bridget_send ou bridget reply. Pour une demande ordinaire, répondez avec bridget_send et in_reply_to égal à cet identifiant complet. Ce rappel concerne cette demande ; il ne relance aucune mission et ne suspend pas les autres travaux autorisés.",
-                                from,
-                                msg_id
+                                from, msg_id
                             );
                             match deliver_to_agent(&target_writer, &to, &body) {
                                 Ok(reminder_message_id) => attest_reminder_sent(
@@ -7162,14 +7108,20 @@ pub fn run(config: DaemonConfig) -> Result<(), Box<dyn std::error::Error>> {
         }
     });
 
-    // Boucle d'acceptation avec timeout pour vérifier shutdown
+    // Boucle d'acceptation événementielle par poll(2) + tube d'éveil de shutdown
     listener.set_nonblocking(true)?;
+    let wake_pipe = ShutdownWakePipe::open()?;
+    let conn_budget = Arc::new(UnixConnectionBudget::new(
+        MAX_UNIX_CONNECTIONS,
+        RESERVED_UNIX_CONNECTIONS,
+    ));
     loop {
         if let Some(_update_activity) = update_activity(&state) {
             drain_managed_events(&state, &managed_event_rx);
         }
         // Vérifier si shutdown demandé
         if SHUTDOWN_REQUESTED.load(Ordering::SeqCst) {
+            wake_pipe.drain();
             info!("shutdown demandé - notification des wrappers externes...");
             let st = state.lock().recover_poison();
             for (conn_id, writer) in &st.connections {
@@ -7206,14 +7158,36 @@ pub fn run(config: DaemonConfig) -> Result<(), Box<dyn std::error::Error>> {
         }
 
         match listener.accept() {
-            Ok((stream, _)) => {
+            Ok((mut stream, _)) => {
                 if let Err(e) = stream.set_nonblocking(false) {
                     error!("set_nonblocking failed: {} — connexion ignorée", e);
                     continue;
                 }
+                let is_owner = unix_peer_uid(&stream)
+                    .map(|uid| uid == bridget_transport::fsutil::effective_uid())
+                    .unwrap_or(false);
+                let Some(permit) = conn_budget.try_acquire(false).or_else(|| {
+                    if is_owner {
+                        conn_budget.try_acquire(true)
+                    } else {
+                        None
+                    }
+                }) else {
+                    warn!(
+                        "socket Unix saturée ({} connexions actives) : refus borné",
+                        conn_budget.active_count()
+                    );
+                    let refusal = DaemonToWrapper::Disconnect;
+                    if let Ok(json) = encode(&refusal) {
+                        let _ = writeln!(stream, "{}", json);
+                        let _ = stream.flush();
+                    }
+                    continue;
+                };
                 let st = state.clone();
                 get_metrics().increment_connections();
                 thread::spawn(move || {
+                    let _permit = permit;
                     if let Err(e) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                         handle_connection(stream, st)
                     })) {
@@ -7223,11 +7197,12 @@ pub fn run(config: DaemonConfig) -> Result<(), Box<dyn std::error::Error>> {
                 });
             }
             Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                thread::sleep(Duration::from_millis(50));
+                poll_accept_or_shutdown(listener.as_raw_fd(), wake_pipe.read_fd, 500);
+                wake_pipe.drain();
             }
             Err(e) => {
                 error!("accept: {}", e);
-                thread::sleep(Duration::from_millis(100));
+                poll_accept_or_shutdown(listener.as_raw_fd(), wake_pipe.read_fd, 100);
             }
         }
     }
@@ -7613,7 +7588,7 @@ fn handle_connection(
 
 #[cfg(target_os = "linux")]
 pub(crate) fn unix_peer_uid(stream: &UnixStream) -> std::io::Result<u32> {
-    // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
+    // SAFETY: structure C POD de `libc` pour laquelle le motif entièrement nul est une représentation valide.
     let mut credentials: libc::ucred = unsafe { std::mem::zeroed() };
     let mut length = std::mem::size_of::<libc::ucred>() as libc::socklen_t;
     // SAFETY: les pointeurs passés à getsockopt désignent des variables locales valides pendant l'appel.
@@ -7636,7 +7611,7 @@ pub(crate) fn unix_peer_uid(stream: &UnixStream) -> std::io::Result<u32> {
 pub(crate) fn unix_peer_uid(stream: &UnixStream) -> std::io::Result<u32> {
     let mut uid: libc::uid_t = 0;
     let mut gid: libc::gid_t = 0;
-    // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
+    // SAFETY: le descripteur de socket Unix est ouvert et `&mut uid`/`&mut gid` pointent vers des variables locales valides.
     let result = unsafe { libc::getpeereid(stream.as_raw_fd(), &mut uid, &mut gid) };
     if result != 0 {
         return Err(std::io::Error::last_os_error());
@@ -9438,9 +9413,7 @@ fn collect_reminder_actions(state: &mut DaemonState, now: Instant) -> Vec<Remind
     let remote_result_pending: HashSet<String> = state
         .pending_replies
         .iter()
-        .filter(|pending| {
-            native_delegation::result_suppresses_reminders(state, &pending.msg_id)
-        })
+        .filter(|pending| native_delegation::result_suppresses_reminders(state, &pending.msg_id))
         .map(|pending| pending.msg_id.clone())
         .collect();
     for pending in state.pending_replies.iter_mut() {
@@ -12319,20 +12292,13 @@ fn prepare_dispatch(
         ) {
         Vec::new()
     } else {
-        crate::communication::project_scope(
+        crate::communication::project_scope_typed(
             connection_communication_project(st, conn_id).as_ref(),
             agent_communication_project(st, &routing_to).as_ref(),
             &message.to,
             scope_reason.as_deref(),
         )
-        .map_err(|reason| {
-            let category = if reason.starts_with(CROSS_PROJECT_REASON_REQUIRED) {
-                CROSS_PROJECT_REASON_REQUIRED
-            } else {
-                "invalid_cross_project_reason"
-            };
-            (category, reason)
-        })?
+        .map_err(|error| (error.category(), error.into_message()))?
     };
     message.cross_project_reason = scope_reason;
 
@@ -12538,7 +12504,8 @@ fn authorize_wrapper_reply(
         if task.remote_placement.is_some() {
             return Err("remote_result_requires_worker".into());
         }
-        if task.child != message.from || task.owner != message.to
+        if task.child != message.from
+            || task.owner != message.to
             || task.child_instance.as_deref() != Some(instance)
         {
             return Err("wrapper_reply_task_correlation_mismatch".into());
@@ -13042,12 +13009,24 @@ fn handle_idempotent_send_with_result_authority(
         });
     };
     if message.intent == Some(bridget_core::MessageIntent::SteerCurrent)
-        && st.delegation_store.for_child(&message.to).ok().flatten().is_some_and(|task|
-            task.child_instance.as_deref() == Some(recipient_instance_id.as_str())
-                && task.definition.protocol == "claude_stream_json")
+        && st
+            .delegation_store
+            .for_child(&message.to)
+            .ok()
+            .flatten()
+            .is_some_and(|task| {
+                task.child_instance.as_deref() == Some(recipient_instance_id.as_str())
+                    && task.definition.protocol == "claude_stream_json"
+            })
     {
         if let Some(facts) = &guidance_admission {
-            let _ = record_guidance_outcome(st, facts, &message.to, &message.id, "refused:steer_unavailable");
+            let _ = record_guidance_outcome(
+                st,
+                facts,
+                &message.to,
+                &message.id,
+                "refused:steer_unavailable",
+            );
         }
         return reject_idempotent_send(st, &key, "steer_unavailable",
             "Ce pilote natif ne prend pas en charge le guidage pendant un tour. Cette demande est refusée avant remise, sans interrompre l’agent. Pour attendre sa fin de tour, envoyer explicitement intent=queue ; aucun repli automatique n’a été effectué. Si une mission native est active, intent=interrupt ne l’annule pas et peut rendre mission_active. Si le travail est devenu périmé, son propriétaire peut demander bridget_task_cancel, vérifier la clôture et conserver ses fichiers avant une suite autorisée. Après résultat, task_continue exige un enfant encore gardé. Les autres travaux autorisés suivent leur propre état.")
@@ -13540,37 +13519,25 @@ fn handle_execution_control_authorized(
                 {
                     Err("invalid_command")
                 } else {
-                    crate::communication::project_scope(
+                    crate::communication::project_scope_typed(
                         connection_communication_project(st, conn_id).as_ref(),
                         agent_communication_project(st, &target.target_agent).as_ref(),
                         &target.target_agent,
                         message.cross_project_reason.as_deref(),
                     )
-                    .map_err(|error| {
-                        if error.starts_with(CROSS_PROJECT_REASON_REQUIRED) {
-                            CROSS_PROJECT_REASON_REQUIRED
-                        } else {
-                            "invalid_cross_project_reason"
-                        }
-                    })
+                    .map_err(|error| error.category())
                 }
             }
             None => Err("invalid_command"),
         }
     } else if let Some(conn) = conn_id {
-        crate::communication::project_scope(
+        crate::communication::project_scope_typed(
             connection_communication_project(st, conn).as_ref(),
             agent_communication_project(st, &target.target_agent).as_ref(),
             &target.target_agent,
             None,
         )
-        .map_err(|error| {
-            if error.starts_with(CROSS_PROJECT_REASON_REQUIRED) {
-                CROSS_PROJECT_REASON_REQUIRED
-            } else {
-                "invalid_cross_project_reason"
-            }
-        })
+        .map_err(|error| error.category())
     } else {
         Ok(Vec::new())
     };

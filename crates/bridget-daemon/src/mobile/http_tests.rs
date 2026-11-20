@@ -50,6 +50,7 @@ fn fixture() -> Gateway {
         followers: Arc::new(Mutex::new(BTreeMap::new())),
         follow_slots: Arc::new(Semaphore::new(MAX_BLOCKING - 2)),
         uploads: Arc::new(Semaphore::new(2)),
+        auth_rev: tokio::sync::watch::channel(0u64).0,
     }
 }
 fn grant(g: &Gateway) -> String {

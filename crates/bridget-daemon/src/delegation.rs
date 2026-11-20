@@ -2759,6 +2759,7 @@ WHERE state='refused' AND task_id IS NULL;
             .collect()
     }
 
+    #[cfg(test)]
     pub fn failed_for_owner(&self, owner: &str) -> Result<Vec<Task>, String> {
         let mut statement=self.conn.prepare("SELECT payload FROM native_delegations WHERE json_extract(payload,'$.owner')=?1 AND json_extract(payload,'$.state')='failed' AND coalesce(json_extract(payload,'$.failure_sent'),0)=0 AND coalesce(json_extract(payload,'$.cleanup_done'),0)=1 ORDER BY task_id LIMIT 16").map_err(|error|error.to_string())?;
         statement
@@ -2770,6 +2771,48 @@ WHERE state='refused' AND task_id IS NULL;
                 })
             })
             .collect()
+    }
+
+    /// Requête groupée pour plusieurs propriétaires connectés (élimine le N+1 de `tick()`),
+    /// en conservant le plafond de 16 notices par propriétaire.
+    pub fn failed_for_owners(&self, owners: &[String]) -> Result<Vec<Task>, String> {
+        if owners.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut out = Vec::new();
+        let mut per_owner: std::collections::HashMap<String, usize> =
+            std::collections::HashMap::new();
+        for chunk in owners.chunks(500) {
+            let placeholders = (1..=chunk.len())
+                .map(|i| format!("?{i}"))
+                .collect::<Vec<_>>()
+                .join(",");
+            let sql = format!(
+                "SELECT payload FROM native_delegations \
+                 WHERE json_extract(payload,'$.owner') IN ({placeholders}) \
+                   AND json_extract(payload,'$.state')='failed' \
+                   AND coalesce(json_extract(payload,'$.failure_sent'),0)=0 \
+                   AND coalesce(json_extract(payload,'$.cleanup_done'),0)=1 \
+                 ORDER BY task_id"
+            );
+            let mut statement = self.conn.prepare(&sql).map_err(|error| error.to_string())?;
+            let params: Vec<&dyn rusqlite::ToSql> =
+                chunk.iter().map(|s| s as &dyn rusqlite::ToSql).collect();
+            let rows = statement
+                .query_map(params.as_slice(), |row| row.get::<_, String>(0))
+                .map_err(|error| error.to_string())?;
+            for row in rows {
+                let payload = row.map_err(|error| error.to_string())?;
+                let task: Task =
+                    serde_json::from_str(&payload).map_err(|error| error.to_string())?;
+                let count = per_owner.entry(task.owner.clone()).or_insert(0);
+                if *count < 16 {
+                    *count += 1;
+                    out.push(task);
+                }
+            }
+        }
+        Ok(out)
     }
 
     pub fn for_mission(&self, mission: &str) -> Result<Option<Task>, String> {
@@ -2785,6 +2828,40 @@ WHERE state='refused' AND task_id IS NULL;
         payload
             .map(|payload| serde_json::from_str(&payload).map_err(|error| error.to_string()))
             .transpose()
+    }
+
+    /// Requête groupée pour résoudre plusieurs missions en une passe SQL (élimine le N+1 de `tick()`).
+    pub fn for_missions(
+        &self,
+        missions: &[String],
+    ) -> Result<std::collections::HashMap<String, Task>, String> {
+        let mut found = std::collections::HashMap::new();
+        if missions.is_empty() {
+            return Ok(found);
+        }
+        for chunk in missions.chunks(500) {
+            let placeholders = (1..=chunk.len())
+                .map(|i| format!("?{i}"))
+                .collect::<Vec<_>>()
+                .join(",");
+            let sql = format!(
+                "SELECT payload FROM native_delegations \
+                 WHERE json_extract(payload,'$.mission') IN ({placeholders})"
+            );
+            let mut statement = self.conn.prepare(&sql).map_err(|error| error.to_string())?;
+            let params: Vec<&dyn rusqlite::ToSql> =
+                chunk.iter().map(|s| s as &dyn rusqlite::ToSql).collect();
+            let rows = statement
+                .query_map(params.as_slice(), |row| row.get::<_, String>(0))
+                .map_err(|error| error.to_string())?;
+            for row in rows {
+                let payload = row.map_err(|error| error.to_string())?;
+                let task: Task =
+                    serde_json::from_str(&payload).map_err(|error| error.to_string())?;
+                found.insert(task.mission.clone(), task);
+            }
+        }
+        Ok(found)
     }
 
     /// O(log h + log n + B), h missions passées, n tâches et B octets du payload.

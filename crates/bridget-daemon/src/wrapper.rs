@@ -873,7 +873,10 @@ impl DeferredNativeMissionContext {
     fn project(&self, message: &bridget_core::BridgetMessage) -> bridget_core::BridgetMessage {
         let mut projected = message_for_provider(message);
         if message.id == self.mission_id {
-            projected.body = format!("{}\n\nMission Bridget :\n{}\n\nExécute la mission ci-dessus dans ce tour, dans les limites de ton mandat et de tes permissions, y compris la lecture seule. Une simple acceptation ou une promesse de travail ne constitue pas son résultat. Poursuis le travail autorisé ; si une décision ou un accès indispensable manque, rends le blocage précis et les éléments déjà produits. Réserve la réponse finale au résultat vérifié ou au blocage constaté, sans fabriquer de succès ni élargir tes droits.", self.card, message.body);
+            projected.body = format!(
+                "{}\n\nMission Bridget :\n{}\n\nExécute la mission ci-dessus dans ce tour, dans les limites de ton mandat et de tes permissions, y compris la lecture seule. Une simple acceptation ou une promesse de travail ne constitue pas son résultat. Poursuis le travail autorisé ; si une décision ou un accès indispensable manque, rends le blocage précis et les éléments déjà produits. Réserve la réponse finale au résultat vérifié ou au blocage constaté, sans fabriquer de succès ni élargir tes droits.",
+                self.card, message.body
+            );
         }
         projected
     }
@@ -4584,19 +4587,249 @@ fn launch_acp_with_status(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn launch_session_with_status(
+fn replay_pending_child_requests(
+    writer: &Arc<Mutex<Option<BufWriter<UnixStream>>>>,
+    forward_child_requests: bool,
+    child_requests: &Mutex<ManagedChildRequests>,
+) {
+    if !forward_child_requests && child_requests.lock().recover_poison().waiting.is_empty() {
+        return;
+    }
+    let pending: Vec<_> = child_requests
+        .lock()
+        .recover_poison()
+        .waiting
+        .iter()
+        .filter(|entry| !entry.uncertain)
+        .map(|entry| entry.request.clone())
+        .collect();
+    for request in pending {
+        send_wrapper_message(writer, WrapperToDaemon::ChildRequest { request });
+    }
+}
+
+fn wait_disconnect_during_backoff(reader: &mut BufReader<UnixStream>, backoff_secs: u64) -> bool {
+    let backoff_deadline = Instant::now() + Duration::from_secs(backoff_secs);
+    while Instant::now() < backoff_deadline {
+        let mut line = String::new();
+        match reader.read_line(&mut line) {
+            Ok(0) => {}
+            Ok(_) => {
+                if matches!(decode(line.trim()), Ok(DaemonToWrapper::Disconnect)) {
+                    return true;
+                }
+            }
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                ) => {}
+            Err(_) => {}
+        }
+        thread::sleep(Duration::from_millis(50));
+    }
+    false
+}
+
+fn handle_deliver_execution_frame(
+    writer: &Arc<Mutex<Option<BufWriter<UnixStream>>>>,
+    transport: &mut dyn ManagedSession,
+    execution_bindings: &mut HashMap<String, ManagedExecutionBinding>,
+    idempotent_deliveries: &mut IdempotentDeliveryTracker,
+    remote_result_context: Option<&WorkerResultContext>,
+    deferred_native_context: &mut Option<DeferredNativeMissionContext>,
+    agent_type: &str,
+    protocol: &str,
+    message: bridget_core::BridgetMessage,
+    execution_id: String,
+    generation: u64,
+    revision: u64,
+) {
+    let message_id = message.id.clone();
+    let remote_result = match remote_result_for_delivery(
+        remote_result_context,
+        &message,
+        Some((&execution_id, generation)),
+        execution_bindings,
+    ) {
+        Ok(reservation) => reservation,
+        Err(reason) => {
+            send_wrapper_message(
+                writer,
+                WrapperToDaemon::DeliveryRejected {
+                    id: message_id,
+                    execution_id: Some(execution_id),
+                    generation: Some(generation),
+                    reason,
+                },
+            );
+            return;
+        }
+    };
+    execution_bindings.insert(
+        message_id.clone(),
+        ManagedExecutionBinding {
+            execution_id,
+            generation,
+            state: "starting".to_string(),
+            provider_kind: agent_type.to_string(),
+            execution_path: protocol.to_string(),
+            revision,
+            approval_requests: 0,
+            last_approval_request: None,
+            remote_result,
+        },
+    );
+    if let Some(identity) = transport.provider_identity() {
+        publish_provider_context(writer, execution_bindings, &identity);
+    }
+    if let Err(error) = deliver_provider_message(transport, &message, deferred_native_context) {
+        let rejection =
+            bound_delivery_rejection(execution_bindings, message_id.clone(), error.to_string());
+        idempotent_deliveries.historic_injection_failed(&message_id);
+        publish_execution_transition(
+            writer,
+            execution_bindings,
+            &message_id,
+            "failed",
+            "provider_unavailable",
+        );
+        send_wrapper_message(writer, rejection);
+    }
+}
+
+fn handle_deliver_idempotent_frame(
+    writer: &Arc<Mutex<Option<BufWriter<UnixStream>>>>,
+    transport: &mut dyn ManagedSession,
+    execution_bindings: &mut HashMap<String, ManagedExecutionBinding>,
+    idempotent_deliveries: &mut IdempotentDeliveryTracker,
+    remote_result_context: Option<&WorkerResultContext>,
+    deferred_native_context: &mut Option<DeferredNativeMissionContext>,
+    agent_type: &str,
+    protocol: &str,
+    delivery_id: String,
+    recipient_instance_id: String,
+    delivery_generation: u64,
+    expires_at: i64,
+    message: bridget_core::BridgetMessage,
+    execution: Option<bridget_transport::protocol::ExecutionDeliveryContext>,
+) {
+    let message_id = message.id.clone();
+    let remote_result = match remote_result_for_delivery(
+        remote_result_context,
+        &message,
+        execution
+            .as_ref()
+            .map(|context| (context.execution_id.as_str(), context.generation)),
+        execution_bindings,
+    ) {
+        Ok(reservation) => reservation,
+        Err(reason) => {
+            let rejection = match &execution {
+                Some(context) => WrapperToDaemon::DeliveryRejected {
+                    id: message_id,
+                    execution_id: Some(context.execution_id.clone()),
+                    generation: Some(context.generation),
+                    reason,
+                },
+                None => bound_delivery_rejection(execution_bindings, message_id, reason),
+            };
+            send_wrapper_message(writer, rejection);
+            return;
+        }
+    };
+    if remote_result.is_some()
+        && execution_bindings.get(&message_id).is_some_and(|binding| {
+            matches!(
+                binding.state.as_str(),
+                "completed" | "failed" | "interrupted" | "unreachable"
+            )
+        })
+        && execution.as_ref().is_some_and(|next| {
+            execution_bindings.get(&message_id).is_some_and(|old| {
+                old.execution_id != next.execution_id || old.generation != next.generation
+            })
+        })
+    {
+        execution_bindings.remove(&message_id);
+    }
+    if bind_idempotent_delivery_execution(
+        execution_bindings,
+        &message_id,
+        execution,
+        agent_type,
+        protocol,
+    ) && let Some(identity) = transport.provider_identity()
+    {
+        publish_provider_context(writer, execution_bindings, &identity);
+    }
+    if let Some(binding) = execution_bindings.get_mut(&message_id)
+        && remote_result.is_some()
+    {
+        binding.remote_result = remote_result;
+    }
+    match idempotent_deliveries.receive(
+        delivery_id,
+        recipient_instance_id,
+        delivery_generation,
+        expires_at,
+        message,
+        unix_now_secs(),
+    ) {
+        IdempotentDeliveryAction::Pending => {}
+        IdempotentDeliveryAction::Report(report) => {
+            send_wrapper_message(writer, report);
+        }
+        IdempotentDeliveryAction::Inject {
+            message,
+            delivery_id,
+        } => {
+            let message_id = message.id.clone();
+            let ordinary =
+                !execution_bindings.contains_key(&message_id) && ordinary_queue_message(&message);
+            if ordinary {
+                idempotent_deliveries.admit_ordinary(&message);
+            }
+            // Seen est durable ; aucun PromptDispatched/ACK d’injection encore.
+            #[cfg(feature = "test-support")]
+            crate::test_sync::checkpoint("after_receipt_seen_before_injection");
+            if let Err(error) =
+                deliver_provider_message(transport, &message, deferred_native_context)
+            {
+                if ordinary {
+                    idempotent_deliveries.finish_ordinary(&message_id);
+                }
+                send_wrapper_message(
+                    writer,
+                    bound_delivery_rejection(
+                        execution_bindings,
+                        message_id.clone(),
+                        error.to_string(),
+                    ),
+                );
+                if let Some(report) = idempotent_deliveries.injection_failed(&delivery_id) {
+                    send_wrapper_message(writer, report);
+                }
+            }
+        }
+    }
+}
+
+fn validate_managed_session_preconditions<'a>(
     agent_type: &str,
     agent_args: &[String],
-    explicit_name: Option<&str>,
-    registry: &crate::registry::AgentRegistry,
+    registry: &'a crate::registry::AgentRegistry,
     socket: &Path,
     home: &Path,
-    mut managed_reporter: Option<&mut crate::managed_process::ManagedStatusReporter>,
-    frozen_definition_digest: Option<&str>,
-    mut interactive: Option<crate::codex_interactive::Launch>,
-) -> Result<(), Box<dyn std::error::Error>> {
-    // Les API injectables ne peuvent envoyer le wrapper sur un socket et ses
-    // outils MCP sur un autre. Refus avant création d'état ou fournisseur.
+    interactive_present: bool,
+) -> Result<
+    (
+        PathBuf,
+        &'a crate::registry::AgentDefinition,
+        Option<serde_json::Value>,
+    ),
+    Box<dyn std::error::Error>,
+> {
     let configured_namespace = crate::environment::Namespace::from_environment()?;
     let session_namespace = crate::environment::Namespace::resolve(
         Some(socket.parent().ok_or("socket sans racine")?.to_path_buf()),
@@ -4610,7 +4843,6 @@ fn launch_session_with_status(
     }
     let state_root = session_namespace.root;
     crate::environment::ensure_private_directory(&state_root)?;
-    let mut journal_root = state_root.join("sessions");
     if !agent_args.is_empty() {
         return Err("le mode --equipier n'accepte pas d'arguments d'agent".into());
     }
@@ -4631,7 +4863,7 @@ fn launch_session_with_status(
             &crate::lifecycle::source_environment(),
         )?;
     }
-    if interactive.is_some() && definition.protocol != "codex_app_server" {
+    if interactive_present && definition.protocol != "codex_app_server" {
         return Err("Codex interactif requiert le pilote natif codex_app_server".into());
     }
     if !matches!(
@@ -4642,8 +4874,6 @@ fn launch_session_with_status(
             format!("le type '{agent_type}' n'utilise pas une session gérée supportée").into(),
         );
     }
-    // Même garde que le spawn géré (lifecycle) : --equipier ne doit pas
-    // contourner le retrait G10 du pont Zed.
     if let Err(refusal) = crate::registry::reject_retired_zed_bridge(definition) {
         let detail = match refusal {
             bridget_transport::SpawnRefusal::EnvUnfit { detail } => detail,
@@ -4660,6 +4890,575 @@ fn launch_session_with_status(
     ) {
         return Err(billing_guard_error(&variable).into());
     }
+    Ok((state_root, definition, inherited_policy))
+}
+
+fn finalize_managed_session_exit(
+    interactive: Option<&crate::codex_interactive::Launch>,
+    codex_socket: &Path,
+    bound_codex_thread: Option<&str>,
+    tui_result: Option<Result<(), String>>,
+    tui_stopped: Option<Result<(), String>>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let codex_endpoint_retained = if interactive.is_some() {
+        match std::fs::symlink_metadata(codex_socket) {
+            Ok(_) => true,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+            Err(error) => return Err(error.into()),
+        }
+    } else {
+        false
+    };
+    if codex_endpoint_retained {
+        return Err(format!(
+            "nettoyage du serveur Codex non confirmé ; socket conservée : {}",
+            codex_socket.display()
+        )
+        .into());
+    }
+    if let Some(launch) = interactive
+        && let Some(thread_id) = bound_codex_thread
+    {
+        eprintln!(
+            "Bridget : session fermée ; la socket temporaire n'est plus utilisable.\nReprendre : {}",
+            launch.resume_command(thread_id)
+        );
+    }
+    if let Some(result) = tui_result {
+        result?;
+    }
+    if let Some(result) = tui_stopped {
+        result.map_err(|error| error.to_string())?;
+    }
+    Ok(())
+}
+
+fn spawn_initial_managed_transport(
+    interactive: &mut Option<crate::codex_interactive::Launch>,
+    agent_type: &str,
+    definition: &crate::registry::AgentDefinition,
+    native_args: &[String],
+    mcp_environment: &[(OsString, OsString)],
+    mcp_servers: Vec<serde_json::Value>,
+    inherit_stderr: bool,
+    home: &Path,
+    effective_name: &mut Option<String>,
+    explicit_name: Option<&str>,
+    instance_id: &str,
+    socket: &Path,
+    codex_socket: &Path,
+) -> Result<
+    (
+        Box<dyn ManagedSession>,
+        Option<(String, Arc<std::sync::atomic::AtomicBool>)>,
+    ),
+    Box<dyn std::error::Error>,
+> {
+    if let Some(launch) = interactive.as_mut() {
+        let select = |threads: &[bridget_transport::codex_app_server::CodexThreadSummary]| {
+            launch.select_thread(threads)
+        };
+        let selector = launch.needs_selection().then_some(
+            &select as bridget_transport::codex_app_server::InteractiveThreadSelector<'_>,
+        );
+        let native = bridget_transport::CodexAppServerTransport::spawn_interactive_selecting(
+            bridget_transport::CodexAppServerOptions {
+                child_requests: false,
+                command: definition.command.clone(),
+                args: native_args.to_vec(),
+                queue_capacity: definition.queue_capacity,
+                notify_timeout_secs: definition.notify_timeout_secs,
+                model: launch.model.clone(),
+                permissions: "interactive".into(),
+                provider_observation: None,
+                thread_bootstrap: launch.resume_thread.as_ref().map_or(
+                    bridget_transport::codex_app_server::CodexThreadBootstrap::Start,
+                    |thread_id| bridget_transport::codex_app_server::CodexThreadBootstrap::Resume {
+                        thread_id: thread_id.clone(),
+                    },
+                ),
+                dynamic_tool_handler: None,
+            },
+            &string_environment(mcp_environment),
+            codex_socket,
+            selector,
+        )?;
+        if launch.resume_thread.is_some() {
+            launch.resume_thread = Some(native.thread_id().to_owned());
+            *effective_name = resolve_interactive_identity(launch, explicit_name, socket)?;
+        }
+        let binding = (
+            native.thread_id().to_string(),
+            native.interactive_lifetime(),
+        );
+        Ok((Box::new(native), Some(binding)))
+    } else {
+        let transport = spawn_managed_session_transport(
+            agent_type,
+            definition,
+            native_args,
+            mcp_environment,
+            mcp_servers,
+            inherit_stderr,
+            home,
+            effective_name.clone(),
+            instance_id,
+            socket,
+            None,
+        )?;
+        Ok((transport, None))
+    }
+}
+
+struct ReconnectDisconnectCtx<'a> {
+    socket: &'a Path,
+    writer: &'a Arc<Mutex<Option<BufWriter<UnixStream>>>>,
+    transport: &'a dyn ManagedSession,
+    descriptor: &'a bridget_transport::ManagedSessionDescriptor,
+    protocol: &'a str,
+    agent_type: &'a str,
+    name_state_path: &'a Path,
+    host: &'a str,
+    channel: Option<&'a str>,
+    os: &'a str,
+    instance_id: &'a str,
+    terminal_session: bool,
+    native_bootstrap: Option<&'a NativeMissionBootstrap>,
+    forward_child_requests: bool,
+    remote_result_context: Option<&'a WorkerResultContext>,
+    native_termination: Option<&'a NativeTerminationSignal>,
+    child_requests: &'a Mutex<ManagedChildRequests>,
+}
+
+type PermissionObservation = (
+    Option<bridget_transport::protocol::ProviderPermissions>,
+    Option<String>,
+);
+
+#[allow(clippy::too_many_arguments)]
+fn handle_daemon_stream_disconnect(
+    ctx: ReconnectDisconnectCtx<'_>,
+    relay: &mut AttachRelayWorker,
+    idempotent_deliveries: &mut IdempotentDeliveryTracker,
+    reader: &mut BufReader<UnixStream>,
+    my_name: &mut String,
+    last_permission_fact: &mut Option<PermissionObservation>,
+    last_heartbeat: &mut Instant,
+) -> bool {
+    // Le worker distant conserve le processus et le résultat durable.
+    // Une coupure brève bénéficie de la grâce distante ; son
+    // expiration, un arrêt explicite ou le signal natif l'arrêtent.
+    if ctx.native_bootstrap.is_some()
+        && !ctx.forward_child_requests
+        && ctx.remote_result_context.is_none()
+    {
+        return false;
+    }
+    relay.reset_generation();
+    let Some((new_reader, registered_name)) =
+        reconnect_managed_session(ReconnectManagedSessionArgs {
+            socket: ctx.socket,
+            writer: ctx.writer,
+            transport: ctx.transport,
+            descriptor: ctx.descriptor,
+            protocol: ctx.protocol,
+            agent_type: ctx.agent_type,
+            name_state_path: ctx.name_state_path,
+            host: ctx.host,
+            channel: ctx.channel,
+            os: ctx.os,
+            instance_id: ctx.instance_id,
+            fallback_name: my_name,
+            terminal_session: ctx.terminal_session,
+            termination: ctx.native_termination,
+            deadline: ctx
+                .remote_result_context
+                .map(|_| Instant::now() + REMOTE_MASTER_RECONNECT_GRACE),
+        })
+    else {
+        return false;
+    };
+    idempotent_deliveries.modern_reply_core = false;
+    *reader = new_reader;
+    *my_name = registered_name;
+    *last_permission_fact = None;
+    *last_heartbeat = Instant::now();
+    if ctx
+        .native_termination
+        .is_some_and(NativeTerminationSignal::requested)
+    {
+        return false;
+    }
+    replay_pending_child_requests(ctx.writer, ctx.forward_child_requests, ctx.child_requests);
+    true
+}
+
+#[allow(clippy::too_many_arguments)]
+fn handle_workspace_repair_control(
+    task_id: String,
+    status: bridget_transport::protocol::WorkspaceRepairStatusV1,
+    remote_result_context: Option<&WorkerResultContext>,
+    transport: &mut Box<dyn ManagedSession>,
+    agent_type: &str,
+    definition: &crate::registry::AgentDefinition,
+    native_args: &[String],
+    mcp_environment: &[(OsString, OsString)],
+    mcp_servers: Vec<serde_json::Value>,
+    home: &Path,
+    my_name: &str,
+    instance_id: &str,
+    socket: &Path,
+    native_termination: Option<&NativeTerminationSignal>,
+    workspace_repair_pending_receipt: &mut Option<
+        bridget_transport::protocol::WorkspaceRepairStatusV1,
+    >,
+    workspace_repair_barrier: &mut Option<bridget_transport::protocol::WorkspaceRepairRequestV1>,
+    permission_cwd: &mut PathBuf,
+    last_permission_fact: &mut Option<PermissionObservation>,
+    marker_directory: &Path,
+    name_state_path: &Path,
+    journal_root: &Path,
+    #[cfg(target_os = "linux")] remote_drain: Option<&RemoteDrainGuard>,
+    relay: &mut AttachRelayWorker,
+    writer: &Arc<Mutex<Option<BufWriter<UnixStream>>>>,
+) {
+    let outcome = workspace_repair::apply(
+        &task_id,
+        status,
+        remote_result_context,
+        transport,
+        agent_type,
+        definition,
+        native_args,
+        mcp_environment,
+        mcp_servers,
+        home,
+        my_name,
+        instance_id,
+        socket,
+        native_termination,
+    );
+    let status = outcome.status;
+    *workspace_repair_pending_receipt = outcome.pending_receipt;
+    if status.phase != "refused" {
+        *workspace_repair_barrier = Some(status.request.clone());
+    }
+    if status.phase == "resumed" {
+        *permission_cwd = std::env::current_dir().unwrap_or_else(|_| permission_cwd.clone());
+        *last_permission_fact = None;
+        let pid = transport.process_id();
+        if let Ok(birth) = crate::managed_process::process_birth(pid) {
+            let _ = crate::mcp_identity::write_marker(
+                marker_directory,
+                pid,
+                birth,
+                instance_id,
+                name_state_path,
+            );
+        }
+        let feed = JournalLiveFeed::default();
+        if transport
+            .activate_journal(journal_root, my_name, Some(feed.clone()))
+            .is_ok()
+        {
+            #[cfg(target_os = "linux")]
+            if let Some(guard) = remote_drain
+                && let Some((writer, session)) = transport.journal_writer()
+            {
+                guard.set_journal(journal_root, my_name, &session, Some(writer));
+            }
+            relay.shutdown();
+            let relay_writer = writer.clone();
+            *relay = AttachRelayWorker::start(
+                journal_root.join(my_name),
+                feed,
+                Arc::new(move |message| send_wrapper_message(&relay_writer, message)),
+            );
+        }
+    }
+    send_wrapper_message(
+        writer,
+        WrapperToDaemon::WorkspaceRepairResult { task_id, status },
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+fn handle_provider_dead_relaunch(
+    writer: &Arc<Mutex<Option<BufWriter<UnixStream>>>>,
+    reader: &mut BufReader<UnixStream>,
+    my_name: &str,
+    transport: &mut Box<dyn ManagedSession>,
+    idempotent_deliveries: &mut IdempotentDeliveryTracker,
+    execution_bindings: &mut HashMap<String, ManagedExecutionBinding>,
+    redaction_lease: &mut Option<OutputRedactionLease>,
+    socket: &Path,
+    interactive_is_none: bool,
+    child_requests: &Mutex<ManagedChildRequests>,
+    #[cfg(target_os = "linux")] remote_drain: Option<&RemoteDrainGuard>,
+    consecutive_fast_failures: &mut u32,
+    agent_type: &str,
+    definition: &crate::registry::AgentDefinition,
+    native_args: &[String],
+    mcp_environment: &[(OsString, OsString)],
+    mcp_servers: Vec<serde_json::Value>,
+    inherit_stderr: bool,
+    home: &Path,
+    instance_id: &str,
+    last_permission_fact: &mut Option<PermissionObservation>,
+    native_launch_context: &mut Option<serde_json::Value>,
+    native_launch_refusal: &mut Option<String>,
+    permission_launch: &crate::registry::AgentDefinition,
+    permission_cwd: &Path,
+    permission_environment: &crate::lifecycle::SourceEnvironment,
+    marker_directory: &Path,
+    name_state_path: &Path,
+    journal_root: &Path,
+    relay: &mut AttachRelayWorker,
+    deferred_native_context: &mut Option<DeferredNativeMissionContext>,
+    frozen_definition_digest: Option<&str>,
+    last_provider_spawn: &mut Instant,
+    last_heartbeat: &mut Instant,
+) -> bool {
+    let terminal_events = transport.drain_events();
+    let terminal_journal_failed = forward_managed_events_with_redaction(
+        writer,
+        my_name,
+        terminal_events,
+        idempotent_deliveries,
+        execution_bindings,
+        redaction_lease,
+        profile_ledger_path(socket).as_deref(),
+        interactive_is_none,
+        Some(child_requests),
+        Some(transport.is_busy()),
+    );
+    if terminal_journal_failed {
+        return false;
+    }
+    let persistent_relaunch = interactive_is_none
+        && std::env::var_os("BRIDGET_MANAGED_PERSISTENT").is_some()
+        // Une mission native ne change jamais de fournisseur
+        // après un échec. La saga conserve son état terminal.
+        && std::env::var_os(NATIVE_MISSION_BOOTSTRAP_ENV).is_none();
+    if !persistent_relaunch {
+        return false;
+    }
+    #[cfg(target_os = "linux")]
+    if let Some(guard) = remote_drain {
+        guard.begin_stop();
+    }
+    transport.stop();
+    let max_relaunch: u32 = std::env::var("BRIDGET_PROVIDER_RELAUNCH_MAX")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .filter(|value| *value > 0)
+        .unwrap_or(5);
+    *consecutive_fast_failures = consecutive_fast_failures.saturating_add(1);
+    if *consecutive_fast_failures > max_relaunch {
+        let cause = format!(
+            "abandon relance fournisseur après {max_relaunch} tentatives (processus fournisseur terminé)"
+        );
+        eprintln!("[bridget] {cause}");
+        warn!("{cause}");
+        return false;
+    }
+    let backoff_secs = 1u64 << (*consecutive_fast_failures - 1).min(4);
+    eprintln!(
+        "[bridget] fournisseur mort - relance {consecutive_fast_failures}/{max_relaunch} dans {backoff_secs}s"
+    );
+    if wait_disconnect_during_backoff(reader, backoff_secs) {
+        return false;
+    }
+    match spawn_managed_session_transport(
+        agent_type,
+        definition,
+        native_args,
+        mcp_environment,
+        mcp_servers,
+        inherit_stderr,
+        home,
+        Some(my_name.to_string()),
+        instance_id,
+        socket,
+        None,
+    ) {
+        Ok(new_transport) => {
+            *transport = new_transport;
+            *last_permission_fact = None;
+            if native_launch_context.as_ref().is_some_and(|context| {
+                crate::native_permissions::recheck_context_with_env(
+                    context,
+                    permission_launch,
+                    permission_cwd,
+                    permission_environment,
+                )
+                .is_err()
+            }) {
+                *native_launch_context = None;
+                *native_launch_refusal = Some("settings_revision_changed".into());
+            }
+            let adapter_pid = transport.process_id();
+            match crate::managed_process::process_birth(adapter_pid) {
+                Ok(birth) => {
+                    if let Err(error) = crate::mcp_identity::write_marker(
+                        marker_directory,
+                        adapter_pid,
+                        birth,
+                        instance_id,
+                        name_state_path,
+                    ) {
+                        warn!("marqueur fournisseur après relance impossible: {error}");
+                    }
+                }
+                Err(error) => {
+                    warn!("naissance fournisseur après relance illisible: {error}");
+                }
+            }
+            let live_feed = JournalLiveFeed::default();
+            if let Err(error) =
+                transport.activate_journal(journal_root, my_name, Some(live_feed.clone()))
+            {
+                warn!("journal après relance impossible: {error}");
+            } else {
+                #[cfg(target_os = "linux")]
+                if let Some(guard) = remote_drain
+                    && let Some((writer, session)) = transport.journal_writer()
+                {
+                    guard.set_journal(journal_root, my_name, &session, Some(writer));
+                }
+            }
+            apply_pending_profile_instructions(socket, transport.as_mut(), my_name, instance_id);
+            relay.shutdown();
+            let relay_writer = writer.clone();
+            *relay = AttachRelayWorker::start(
+                journal_root.join(my_name),
+                live_feed,
+                Arc::new(move |message| send_wrapper_message(&relay_writer, message)),
+            );
+            *deferred_native_context = None;
+            if let Some(definition_digest) = frozen_definition_digest {
+                let worktree = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+                let resume = managed_resume_context(
+                    &worktree,
+                    my_name,
+                    agent_type,
+                    &definition.protocol,
+                    definition_digest,
+                );
+                let resume_message =
+                    bridget_core::BridgetMessage::new("bridget-reprise", my_name, resume);
+                let _ = deliver_injected_message(
+                    transport.as_mut(),
+                    &resume_message,
+                    "réinjection de la carte de reprise après relance",
+                );
+            }
+            *last_provider_spawn = Instant::now();
+            *last_heartbeat = Instant::now();
+            eprintln!(
+                "[bridget] fournisseur relancé (tentative {consecutive_fast_failures}/{max_relaunch})"
+            );
+            true
+        }
+        Err(error) => {
+            warn!("relance fournisseur échouée: {error}");
+            true
+        }
+    }
+}
+
+fn handle_deliver_ordinary_frame(
+    writer: &Arc<Mutex<Option<BufWriter<UnixStream>>>>,
+    transport: &mut dyn ManagedSession,
+    execution_bindings: &HashMap<String, ManagedExecutionBinding>,
+    idempotent_deliveries: &mut IdempotentDeliveryTracker,
+    remote_result_context: Option<&WorkerResultContext>,
+    deferred_native_context: &mut Option<DeferredNativeMissionContext>,
+    message: bridget_core::BridgetMessage,
+) {
+    if let Err(reason) =
+        remote_result_for_delivery(remote_result_context, &message, None, execution_bindings)
+    {
+        send_wrapper_message(
+            writer,
+            bound_delivery_rejection(execution_bindings, message.id, reason),
+        );
+        return;
+    }
+    idempotent_deliveries.record_historic(&message.id);
+    let ordinary =
+        !execution_bindings.contains_key(&message.id) && ordinary_queue_message(&message);
+    if ordinary {
+        idempotent_deliveries.admit_ordinary(&message);
+    }
+    if let Err(error) = deliver_provider_message(transport, &message, deferred_native_context) {
+        idempotent_deliveries.historic_injection_failed(&message.id);
+        if ordinary {
+            idempotent_deliveries.finish_ordinary(&message.id);
+        }
+        send_wrapper_message(
+            writer,
+            bound_delivery_rejection(execution_bindings, message.id, error.to_string()),
+        );
+    }
+}
+
+fn observe_and_publish_permission_fact(
+    writer: &Arc<Mutex<Option<BufWriter<UnixStream>>>>,
+    instance_id: &str,
+    definition: &crate::registry::AgentDefinition,
+    native_launch_context: Option<&serde_json::Value>,
+    native_launch_refusal: Option<&String>,
+    transport: &dyn ManagedSession,
+    last_permission_fact: &mut Option<PermissionObservation>,
+) {
+    let observed = crate::native_permissions::observed_fact(
+        instance_id,
+        definition,
+        native_launch_context,
+        transport,
+    );
+    let observation = match observed {
+        Ok(fact) if native_launch_refusal.is_none() => (fact, None),
+        Ok(_) => (None, native_launch_refusal.cloned()),
+        Err(code) => (None, Some(native_launch_refusal.cloned().unwrap_or(code))),
+    };
+    if last_permission_fact.as_ref() != Some(&observation) {
+        send_wrapper_message(
+            writer,
+            WrapperToDaemon::NativePermissionFact {
+                fact: observation.0.clone(),
+                request_id: None,
+                observation_id: None,
+                unavailable_code: observation.1.clone(),
+            },
+        );
+        *last_permission_fact = Some(observation);
+    }
+}
+
+fn launch_session_with_status(
+    agent_type: &str,
+    agent_args: &[String],
+    explicit_name: Option<&str>,
+    registry: &crate::registry::AgentRegistry,
+    socket: &Path,
+    home: &Path,
+    mut managed_reporter: Option<&mut crate::managed_process::ManagedStatusReporter>,
+    frozen_definition_digest: Option<&str>,
+    mut interactive: Option<crate::codex_interactive::Launch>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    // Les API injectables ne peuvent envoyer le wrapper sur un socket et ses
+    // outils MCP sur un autre. Refus avant création d'état ou fournisseur.
+    let (state_root, definition, inherited_policy) = validate_managed_session_preconditions(
+        agent_type,
+        agent_args,
+        registry,
+        socket,
+        home,
+        interactive.is_some(),
+    )?;
+    let mut journal_root = state_root.join("sessions");
 
     let mut effective_name = match interactive.as_ref() {
         Some(launch) => resolve_interactive_identity(launch, explicit_name, socket)?,
@@ -4796,68 +5595,27 @@ fn launch_session_with_status(
         .as_ref()
         .map(|endpoint| endpoint.socket.clone())
         .unwrap_or_else(|| state_root.join(format!("c-{}.sock", &instance_id[..12])));
-    let mut tui_binding = None;
     if native_termination
         .as_ref()
         .is_some_and(NativeTerminationSignal::requested)
     {
         return Err("mission native arrêtée avant le lancement du fournisseur".into());
     }
-    let mut transport: Box<dyn ManagedSession> = if let Some(launch) = interactive.as_mut() {
-        let select = |threads: &[bridget_transport::codex_app_server::CodexThreadSummary]| {
-            launch.select_thread(threads)
-        };
-        let selector = launch.needs_selection().then_some(
-            &select as bridget_transport::codex_app_server::InteractiveThreadSelector<'_>,
-        );
-        let native = bridget_transport::CodexAppServerTransport::spawn_interactive_selecting(
-            bridget_transport::CodexAppServerOptions {
-                child_requests: false,
-                command: definition.command.clone(),
-                args: native_args.clone(),
-                queue_capacity: definition.queue_capacity,
-                notify_timeout_secs: definition.notify_timeout_secs,
-                model: launch.model.clone(),
-                permissions: "interactive".into(),
-                provider_observation: None,
-                thread_bootstrap: launch.resume_thread.as_ref().map_or(
-                    bridget_transport::codex_app_server::CodexThreadBootstrap::Start,
-                    |thread_id| bridget_transport::codex_app_server::CodexThreadBootstrap::Resume {
-                        thread_id: thread_id.clone(),
-                    },
-                ),
-                dynamic_tool_handler: None,
-            },
-            &string_environment(&mcp_environment),
-            &codex_socket,
-            selector,
-        )?;
-        if launch.resume_thread.is_some() {
-            // Le fournisseur a maintenant résolu le nom/le choix en UUID.
-            // Vérifier sa liaison AVANT Register, pas après avoir écrasé un nom.
-            launch.resume_thread = Some(native.thread_id().to_owned());
-            effective_name = resolve_interactive_identity(launch, explicit_name, socket)?;
-        }
-        tui_binding = Some((
-            native.thread_id().to_string(),
-            native.interactive_lifetime(),
-        ));
-        Box::new(native)
-    } else {
-        spawn_managed_session_transport(
-            agent_type,
-            definition,
-            &native_args,
-            &mcp_environment,
-            mcp_servers.clone(),
-            inherit_stderr,
-            home,
-            effective_name.clone(),
-            &instance_id,
-            socket,
-            None,
-        )?
-    };
+    let (mut transport, tui_binding) = spawn_initial_managed_transport(
+        &mut interactive,
+        agent_type,
+        definition,
+        &native_args,
+        &mcp_environment,
+        mcp_servers.clone(),
+        inherit_stderr,
+        home,
+        &mut effective_name,
+        explicit_name,
+        &instance_id,
+        socket,
+        &codex_socket,
+    )?;
     #[cfg(target_os = "linux")]
     let _remote_drain_stop = RemoteDrainStop(remote_drain.as_ref());
     if native_launch_context.as_ref().is_some_and(|context| {
@@ -5174,29 +5932,15 @@ fn launch_session_with_status(
         {
             break;
         }
-        let observed = crate::native_permissions::observed_fact(
+        observe_and_publish_permission_fact(
+            &writer,
             &instance_id,
             definition,
             native_launch_context.as_ref(),
+            native_launch_refusal.as_ref(),
             transport.as_ref(),
+            &mut last_permission_fact,
         );
-        let observation = match observed {
-            Ok(fact) if native_launch_refusal.is_none() => (fact, None),
-            Ok(_) => (None, native_launch_refusal.clone()),
-            Err(code) => (None, Some(native_launch_refusal.clone().unwrap_or(code))),
-        };
-        if last_permission_fact.as_ref() != Some(&observation) {
-            send_wrapper_message(
-                &writer,
-                WrapperToDaemon::NativePermissionFact {
-                    fact: observation.0.clone(),
-                    request_id: None,
-                    observation_id: None,
-                    unavailable_code: observation.1.clone(),
-                },
-            );
-            last_permission_fact = Some(observation);
-        }
         if transport.is_alive()
             && consecutive_fast_failures > 0
             && last_provider_spawn.elapsed() >= Duration::from_secs(30)
@@ -5254,18 +5998,8 @@ fn launch_session_with_status(
         }
         match read_result {
             Ok(0) => {
-                // Le worker distant conserve le processus et le résultat durable.
-                // Une coupure brève bénéficie de la grâce distante ; son
-                // expiration, un arrêt explicite ou le signal natif l'arrêtent.
-                if native_bootstrap.is_some()
-                    && !forward_child_requests
-                    && remote_result_context.is_none()
-                {
-                    break;
-                }
-                relay.reset_generation();
-                let Some((new_reader, registered_name)) =
-                    reconnect_managed_session(ReconnectManagedSessionArgs {
+                if !handle_daemon_stream_disconnect(
+                    ReconnectDisconnectCtx {
                         socket,
                         writer: &writer,
                         transport: transport.as_ref(),
@@ -5277,41 +6011,21 @@ fn launch_session_with_status(
                         channel: channel.as_deref(),
                         os: &os,
                         instance_id: &instance_id,
-                        fallback_name: &my_name,
                         terminal_session: interactive.is_some(),
-                        termination: native_termination.as_ref(),
-                        deadline: remote_result_context
-                            .as_ref()
-                            .map(|_| Instant::now() + REMOTE_MASTER_RECONNECT_GRACE),
-                    })
-                else {
+                        native_bootstrap: native_bootstrap.as_ref(),
+                        forward_child_requests,
+                        remote_result_context: remote_result_context.as_ref(),
+                        native_termination: native_termination.as_ref(),
+                        child_requests: &child_requests,
+                    },
+                    &mut relay,
+                    &mut idempotent_deliveries,
+                    &mut reader,
+                    &mut my_name,
+                    &mut last_permission_fact,
+                    &mut last_heartbeat,
+                ) {
                     break;
-                };
-                idempotent_deliveries.modern_reply_core = false;
-                reader = new_reader;
-                my_name = registered_name;
-                last_permission_fact = None;
-                last_heartbeat = Instant::now();
-                if native_termination
-                    .as_ref()
-                    .is_some_and(NativeTerminationSignal::requested)
-                {
-                    break;
-                }
-                if forward_child_requests
-                    || !child_requests.lock().recover_poison().waiting.is_empty()
-                {
-                    let pending: Vec<_> = child_requests
-                        .lock()
-                        .recover_poison()
-                        .waiting
-                        .iter()
-                        .filter(|entry| !entry.uncertain)
-                        .map(|entry| entry.request.clone())
-                        .collect();
-                    for request in pending {
-                        send_wrapper_message(&writer, WrapperToDaemon::ChildRequest { request });
-                    }
                 }
                 continue;
             }
@@ -5353,42 +6067,15 @@ fn launch_session_with_status(
                     );
                 }
                 Ok(DaemonToWrapper::Deliver { message, .. }) => {
-                    if let Err(reason) = remote_result_for_delivery(
-                        remote_result_context.as_ref(),
-                        &message,
-                        None,
-                        &execution_bindings,
-                    ) {
-                        send_wrapper_message(
-                            &writer,
-                            bound_delivery_rejection(&execution_bindings, message.id, reason),
-                        );
-                        continue;
-                    }
-                    idempotent_deliveries.record_historic(&message.id);
-                    let ordinary = !execution_bindings.contains_key(&message.id)
-                        && ordinary_queue_message(&message);
-                    if ordinary {
-                        idempotent_deliveries.admit_ordinary(&message);
-                    }
-                    if let Err(error) = deliver_provider_message(
+                    handle_deliver_ordinary_frame(
+                        &writer,
                         transport.as_mut(),
-                        &message,
+                        &execution_bindings,
+                        &mut idempotent_deliveries,
+                        remote_result_context.as_ref(),
                         &mut deferred_native_context,
-                    ) {
-                        idempotent_deliveries.historic_injection_failed(&message.id);
-                        if ordinary {
-                            idempotent_deliveries.finish_ordinary(&message.id);
-                        }
-                        send_wrapper_message(
-                            &writer,
-                            bound_delivery_rejection(
-                                &execution_bindings,
-                                message.id,
-                                error.to_string(),
-                            ),
-                        );
-                    }
+                        message,
+                    );
                 }
                 Ok(DaemonToWrapper::DeliverExecution {
                     message,
@@ -5396,64 +6083,20 @@ fn launch_session_with_status(
                     generation,
                     revision,
                 }) => {
-                    let message_id = message.id.clone();
-                    let remote_result = match remote_result_for_delivery(
-                        remote_result_context.as_ref(),
-                        &message,
-                        Some((&execution_id, generation)),
-                        &execution_bindings,
-                    ) {
-                        Ok(reservation) => reservation,
-                        Err(reason) => {
-                            send_wrapper_message(
-                                &writer,
-                                WrapperToDaemon::DeliveryRejected {
-                                    id: message_id,
-                                    execution_id: Some(execution_id),
-                                    generation: Some(generation),
-                                    reason,
-                                },
-                            );
-                            continue;
-                        }
-                    };
-                    execution_bindings.insert(
-                        message_id.clone(),
-                        ManagedExecutionBinding {
-                            execution_id,
-                            generation,
-                            state: "starting".to_string(),
-                            provider_kind: agent_type.to_string(),
-                            execution_path: definition.protocol.clone(),
-                            revision,
-                            approval_requests: 0,
-                            last_approval_request: None,
-                            remote_result,
-                        },
-                    );
-                    if let Some(identity) = transport.provider_identity() {
-                        publish_provider_context(&writer, &execution_bindings, &identity);
-                    }
-                    if let Err(error) = deliver_provider_message(
+                    handle_deliver_execution_frame(
+                        &writer,
                         transport.as_mut(),
-                        &message,
+                        &mut execution_bindings,
+                        &mut idempotent_deliveries,
+                        remote_result_context.as_ref(),
                         &mut deferred_native_context,
-                    ) {
-                        let rejection = bound_delivery_rejection(
-                            &execution_bindings,
-                            message_id.clone(),
-                            error.to_string(),
-                        );
-                        idempotent_deliveries.historic_injection_failed(&message_id);
-                        publish_execution_transition(
-                            &writer,
-                            &mut execution_bindings,
-                            &message_id,
-                            "failed",
-                            "provider_unavailable",
-                        );
-                        send_wrapper_message(&writer, rejection);
-                    }
+                        agent_type,
+                        &definition.protocol,
+                        message,
+                        execution_id,
+                        generation,
+                        revision,
+                    );
                 }
                 Ok(DaemonToWrapper::DeliveryReceiptQuery {
                     delivery_id,
@@ -5509,114 +6152,22 @@ fn launch_session_with_status(
                     execution,
                     ..
                 }) => {
-                    let message_id = message.id.clone();
-                    let remote_result = match remote_result_for_delivery(
-                        remote_result_context.as_ref(),
-                        &message,
-                        execution
-                            .as_ref()
-                            .map(|context| (context.execution_id.as_str(), context.generation)),
-                        &execution_bindings,
-                    ) {
-                        Ok(reservation) => reservation,
-                        Err(reason) => {
-                            let rejection = match &execution {
-                                Some(context) => WrapperToDaemon::DeliveryRejected {
-                                    id: message_id,
-                                    execution_id: Some(context.execution_id.clone()),
-                                    generation: Some(context.generation),
-                                    reason,
-                                },
-                                None => bound_delivery_rejection(
-                                    &execution_bindings,
-                                    message_id,
-                                    reason,
-                                ),
-                            };
-                            send_wrapper_message(&writer, rejection);
-                            continue;
-                        }
-                    };
-                    if remote_result.is_some()
-                        && execution_bindings.get(&message_id).is_some_and(|binding| {
-                            matches!(
-                                binding.state.as_str(),
-                                "completed" | "failed" | "interrupted" | "unreachable"
-                            )
-                        })
-                        && execution.as_ref().is_some_and(|next| {
-                            execution_bindings.get(&message_id).is_some_and(|old| {
-                                old.execution_id != next.execution_id
-                                    || old.generation != next.generation
-                            })
-                        })
-                    {
-                        execution_bindings.remove(&message_id);
-                    }
-                    if bind_idempotent_delivery_execution(
+                    handle_deliver_idempotent_frame(
+                        &writer,
+                        transport.as_mut(),
                         &mut execution_bindings,
-                        &message_id,
-                        execution,
+                        &mut idempotent_deliveries,
+                        remote_result_context.as_ref(),
+                        &mut deferred_native_context,
                         agent_type,
                         &definition.protocol,
-                    ) && let Some(identity) = transport.provider_identity()
-                    {
-                        publish_provider_context(&writer, &execution_bindings, &identity);
-                    }
-                    if let Some(binding) = execution_bindings.get_mut(&message_id)
-                        && remote_result.is_some()
-                    {
-                        binding.remote_result = remote_result;
-                    }
-                    match idempotent_deliveries.receive(
                         delivery_id,
                         recipient_instance_id,
                         delivery_generation,
                         expires_at,
                         message,
-                        unix_now_secs(),
-                    ) {
-                        IdempotentDeliveryAction::Pending => {}
-                        IdempotentDeliveryAction::Report(report) => {
-                            send_wrapper_message(&writer, report);
-                        }
-                        IdempotentDeliveryAction::Inject {
-                            message,
-                            delivery_id,
-                        } => {
-                            let message_id = message.id.clone();
-                            let ordinary = !execution_bindings.contains_key(&message_id)
-                                && ordinary_queue_message(&message);
-                            if ordinary {
-                                idempotent_deliveries.admit_ordinary(&message);
-                            }
-                            // Seen est durable ; aucun PromptDispatched/ACK d’injection encore.
-                            #[cfg(feature = "test-support")]
-                            crate::test_sync::checkpoint("after_receipt_seen_before_injection");
-                            if let Err(error) = deliver_provider_message(
-                                transport.as_mut(),
-                                &message,
-                                &mut deferred_native_context,
-                            ) {
-                                if ordinary {
-                                    idempotent_deliveries.finish_ordinary(&message_id);
-                                }
-                                send_wrapper_message(
-                                    &writer,
-                                    bound_delivery_rejection(
-                                        &execution_bindings,
-                                        message_id.clone(),
-                                        error.to_string(),
-                                    ),
-                                );
-                                if let Some(report) =
-                                    idempotent_deliveries.injection_failed(&delivery_id)
-                                {
-                                    send_wrapper_message(&writer, report);
-                                }
-                            }
-                        }
-                    }
+                        execution,
+                    );
                 }
                 Ok(DaemonToWrapper::DelegatedRuntimeEvent { event }) => {
                     let message = delegated_runtime_message(&event, &my_name);
@@ -5627,8 +6178,8 @@ fn launch_session_with_status(
                     }
                 }
                 Ok(DaemonToWrapper::WorkspaceRepairControl { task_id, status }) => {
-                    let outcome = workspace_repair::apply(
-                        &task_id,
+                    handle_workspace_repair_control(
+                        task_id,
                         status,
                         remote_result_context.as_ref(),
                         &mut transport,
@@ -5642,50 +6193,17 @@ fn launch_session_with_status(
                         &instance_id,
                         socket,
                         native_termination.as_ref(),
-                    );
-                    let status = outcome.status;
-                    workspace_repair_pending_receipt = outcome.pending_receipt;
-                    if status.phase != "refused" {
-                        workspace_repair_barrier = Some(status.request.clone());
-                    }
-                    if status.phase == "resumed" {
-                        permission_cwd = std::env::current_dir().unwrap_or(permission_cwd);
-                        last_permission_fact = None;
-                        let pid = transport.process_id();
-                        if let Ok(birth) = crate::managed_process::process_birth(pid) {
-                            let _ = crate::mcp_identity::write_marker(
-                                &marker_directory,
-                                pid,
-                                birth,
-                                &instance_id,
-                                &name_state_path,
-                            );
-                        }
-                        let feed = JournalLiveFeed::default();
-                        if transport
-                            .activate_journal(&journal_root, &my_name, Some(feed.clone()))
-                            .is_ok()
-                        {
-                            #[cfg(target_os = "linux")]
-                            if let Some(guard) = &remote_drain
-                                && let Some((writer, session)) = transport.journal_writer()
-                            {
-                                guard.set_journal(&journal_root, &my_name, &session, Some(writer));
-                            }
-                            relay.shutdown();
-                            let relay_writer = writer.clone();
-                            relay = AttachRelayWorker::start(
-                                journal_root.join(&my_name),
-                                feed,
-                                Arc::new(move |message| {
-                                    send_wrapper_message(&relay_writer, message)
-                                }),
-                            );
-                        }
-                    }
-                    send_wrapper_message(
+                        &mut workspace_repair_pending_receipt,
+                        &mut workspace_repair_barrier,
+                        &mut permission_cwd,
+                        &mut last_permission_fact,
+                        &marker_directory,
+                        &name_state_path,
+                        &journal_root,
+                        #[cfg(target_os = "linux")]
+                        remote_drain.as_ref(),
+                        &mut relay,
                         &writer,
-                        WrapperToDaemon::WorkspaceRepairResult { task_id, status },
                     );
                 }
                 Ok(DaemonToWrapper::ControlExecutionDispatch {
@@ -5784,18 +6302,8 @@ fn launch_session_with_status(
             }
             Err(error) => {
                 warn!("connexion daemon ACP perdue : {error}");
-                // Le worker distant conserve le processus et le résultat durable.
-                // Une coupure brève bénéficie de la grâce distante ; son
-                // expiration, un arrêt explicite ou le signal natif l'arrêtent.
-                if native_bootstrap.is_some()
-                    && !forward_child_requests
-                    && remote_result_context.is_none()
-                {
-                    break;
-                }
-                relay.reset_generation();
-                let Some((new_reader, registered_name)) =
-                    reconnect_managed_session(ReconnectManagedSessionArgs {
+                if !handle_daemon_stream_disconnect(
+                    ReconnectDisconnectCtx {
                         socket,
                         writer: &writer,
                         transport: transport.as_ref(),
@@ -5807,120 +6315,40 @@ fn launch_session_with_status(
                         channel: channel.as_deref(),
                         os: &os,
                         instance_id: &instance_id,
-                        fallback_name: &my_name,
                         terminal_session: interactive.is_some(),
-                        termination: native_termination.as_ref(),
-                        deadline: remote_result_context
-                            .as_ref()
-                            .map(|_| Instant::now() + REMOTE_MASTER_RECONNECT_GRACE),
-                    })
-                else {
+                        native_bootstrap: native_bootstrap.as_ref(),
+                        forward_child_requests,
+                        remote_result_context: remote_result_context.as_ref(),
+                        native_termination: native_termination.as_ref(),
+                        child_requests: &child_requests,
+                    },
+                    &mut relay,
+                    &mut idempotent_deliveries,
+                    &mut reader,
+                    &mut my_name,
+                    &mut last_permission_fact,
+                    &mut last_heartbeat,
+                ) {
                     break;
-                };
-                idempotent_deliveries.modern_reply_core = false;
-                reader = new_reader;
-                my_name = registered_name;
-                last_permission_fact = None;
-                last_heartbeat = Instant::now();
-                if native_termination
-                    .as_ref()
-                    .is_some_and(NativeTerminationSignal::requested)
-                {
-                    break;
-                }
-                if forward_child_requests
-                    || !child_requests.lock().recover_poison().waiting.is_empty()
-                {
-                    let pending: Vec<_> = child_requests
-                        .lock()
-                        .recover_poison()
-                        .waiting
-                        .iter()
-                        .filter(|entry| !entry.uncertain)
-                        .map(|entry| entry.request.clone())
-                        .collect();
-                    for request in pending {
-                        send_wrapper_message(&writer, WrapperToDaemon::ChildRequest { request });
-                    }
                 }
                 continue;
             }
         }
         if !transport.is_alive() && workspace_repair_barrier.is_none() {
-            let terminal_events = transport.drain_events();
-            let terminal_journal_failed = forward_managed_events_with_redaction(
+            if !handle_provider_dead_relaunch(
                 &writer,
+                &mut reader,
                 &my_name,
-                terminal_events,
+                &mut transport,
                 &mut idempotent_deliveries,
                 &mut execution_bindings,
                 &mut redaction_lease,
-                profile_ledger_path(socket).as_deref(),
+                socket,
                 interactive.is_none(),
-                Some(&child_requests),
-                Some(transport.is_busy()),
-            );
-            if terminal_journal_failed {
-                break;
-            }
-            let persistent_relaunch = interactive.is_none()
-                    && std::env::var_os("BRIDGET_MANAGED_PERSISTENT").is_some()
-                    // Une mission native ne change jamais de fournisseur
-                    // après un échec. La saga conserve son état terminal.
-                    && std::env::var_os(NATIVE_MISSION_BOOTSTRAP_ENV).is_none();
-            if !persistent_relaunch {
-                break;
-            }
-            #[cfg(target_os = "linux")]
-            if let Some(guard) = &remote_drain {
-                guard.begin_stop();
-            }
-            transport.stop();
-            let max_relaunch: u32 = std::env::var("BRIDGET_PROVIDER_RELAUNCH_MAX")
-                .ok()
-                .and_then(|value| value.parse().ok())
-                .filter(|value| *value > 0)
-                .unwrap_or(5);
-            // Compteur de morts consécutives : ne se remet à zéro qu'après une
-            // période stable sous fournisseur vivant (voir bas de boucle).
-            consecutive_fast_failures = consecutive_fast_failures.saturating_add(1);
-            if consecutive_fast_failures > max_relaunch {
-                let cause = format!(
-                    "abandon relance fournisseur après {max_relaunch} tentatives (processus fournisseur terminé)"
-                );
-                eprintln!("[bridget] {cause}");
-                warn!("{cause}");
-                break;
-            }
-            let backoff_secs = 1u64 << (consecutive_fast_failures - 1).min(4);
-            eprintln!(
-                "[bridget] fournisseur mort — relance {consecutive_fast_failures}/{max_relaunch} dans {backoff_secs}s"
-            );
-            let backoff_deadline = Instant::now() + Duration::from_secs(backoff_secs);
-            let mut abandon_for_disconnect = false;
-            while Instant::now() < backoff_deadline {
-                let mut line = String::new();
-                match reader.read_line(&mut line) {
-                    Ok(0) => {}
-                    Ok(_) => {
-                        if matches!(decode(line.trim()), Ok(DaemonToWrapper::Disconnect)) {
-                            abandon_for_disconnect = true;
-                            break;
-                        }
-                    }
-                    Err(error)
-                        if matches!(
-                            error.kind(),
-                            std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
-                        ) => {}
-                    Err(_) => {}
-                }
-                thread::sleep(Duration::from_millis(50));
-            }
-            if abandon_for_disconnect {
-                break;
-            }
-            match spawn_managed_session_transport(
+                &child_requests,
+                #[cfg(target_os = "linux")]
+                remote_drain.as_ref(),
+                &mut consecutive_fast_failures,
                 agent_type,
                 definition,
                 &native_args,
@@ -5928,102 +6356,25 @@ fn launch_session_with_status(
                 mcp_servers.clone(),
                 inherit_stderr,
                 home,
-                Some(my_name.clone()),
                 &instance_id,
-                socket,
-                None,
+                &mut last_permission_fact,
+                &mut native_launch_context,
+                &mut native_launch_refusal,
+                &permission_launch,
+                &permission_cwd,
+                &permission_environment,
+                &marker_directory,
+                &name_state_path,
+                &journal_root,
+                &mut relay,
+                &mut deferred_native_context,
+                frozen_definition_digest,
+                &mut last_provider_spawn,
+                &mut last_heartbeat,
             ) {
-                Ok(new_transport) => {
-                    transport = new_transport;
-                    last_permission_fact = None;
-                    if native_launch_context.as_ref().is_some_and(|context| {
-                        crate::native_permissions::recheck_context_with_env(
-                            context,
-                            &permission_launch,
-                            &permission_cwd,
-                            &permission_environment,
-                        )
-                        .is_err()
-                    }) {
-                        native_launch_context = None;
-                        native_launch_refusal = Some("settings_revision_changed".into());
-                    }
-                    let adapter_pid = transport.process_id();
-                    match crate::managed_process::process_birth(adapter_pid) {
-                        Ok(birth) => {
-                            if let Err(error) = crate::mcp_identity::write_marker(
-                                &marker_directory,
-                                adapter_pid,
-                                birth,
-                                &instance_id,
-                                &name_state_path,
-                            ) {
-                                warn!("marqueur fournisseur après relance impossible: {error}");
-                            }
-                        }
-                        Err(error) => {
-                            warn!("naissance fournisseur après relance illisible: {error}");
-                        }
-                    }
-                    let live_feed = JournalLiveFeed::default();
-                    if let Err(error) =
-                        transport.activate_journal(&journal_root, &my_name, Some(live_feed.clone()))
-                    {
-                        warn!("journal après relance impossible: {error}");
-                    } else {
-                        #[cfg(target_os = "linux")]
-                        if let Some(guard) = &remote_drain
-                            && let Some((writer, session)) = transport.journal_writer()
-                        {
-                            guard.set_journal(&journal_root, &my_name, &session, Some(writer));
-                        }
-                    }
-                    apply_pending_profile_instructions(
-                        socket,
-                        transport.as_mut(),
-                        &my_name,
-                        &instance_id,
-                    );
-                    relay.shutdown();
-                    let relay_writer = writer.clone();
-                    relay = AttachRelayWorker::start(
-                        journal_root.join(&my_name),
-                        live_feed,
-                        Arc::new(move |message| send_wrapper_message(&relay_writer, message)),
-                    );
-                    // Le fournisseur relancé reçoit désormais la carte de reprise
-                    // normale. Ne pas la joindre à nouveau à une remise rejouée.
-                    deferred_native_context = None;
-                    if let Some(definition_digest) = frozen_definition_digest {
-                        let worktree =
-                            std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-                        let resume = managed_resume_context(
-                            &worktree,
-                            &my_name,
-                            agent_type,
-                            &definition.protocol,
-                            definition_digest,
-                        );
-                        let resume_message =
-                            bridget_core::BridgetMessage::new("bridget-reprise", &my_name, resume);
-                        let _ = deliver_injected_message(
-                            transport.as_mut(),
-                            &resume_message,
-                            "réinjection de la carte de reprise après relance",
-                        );
-                    }
-                    last_provider_spawn = Instant::now();
-                    last_heartbeat = Instant::now();
-                    eprintln!(
-                        "[bridget] fournisseur relancé (tentative {consecutive_fast_failures}/{max_relaunch})"
-                    );
-                    continue;
-                }
-                Err(error) => {
-                    warn!("relance fournisseur échouée: {error}");
-                    continue;
-                }
+                break;
             }
+            continue;
         }
     }
     // Le fournisseur natif ne doit pas rester actif pendant le drain du
@@ -6064,42 +6415,13 @@ fn launch_session_with_status(
     );
     send_wrapper_message(&writer, WrapperToDaemon::TurnState { in_progress: false });
     send_wrapper_message(&writer, WrapperToDaemon::Unregister);
-    // Le pilote garde sa socket si la disparition de son groupe n'est pas
-    // confirmée. Ne pas transformer ce diagnostic de récupération en exit 0.
-    let codex_endpoint_retained = if interactive.is_some() {
-        match std::fs::symlink_metadata(&codex_socket) {
-            Ok(_) => true,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
-            Err(error) => return Err(error.into()),
-        }
-    } else {
-        false
-    };
-    if codex_endpoint_retained {
-        return Err(format!(
-            "nettoyage du serveur Codex non confirmé ; socket conservée : {}",
-            codex_socket.display()
-        )
-        .into());
-    }
-    if let Some(launch) = &interactive {
-        // La TUI fournisseur annonce une reconnexion --remote générique,
-        // alors que SON serveur vient d'être fermé par le propriétaire Bridget.
-        // La dernière instruction affichée doit refléter ce cycle de vie réel.
-        if let Some(thread_id) = bound_codex_thread.as_deref() {
-            eprintln!(
-                "Bridget : session fermée ; la socket temporaire n'est plus utilisable.\nReprendre : {}",
-                launch.resume_command(thread_id)
-            );
-        }
-    }
-    if let Some(result) = tui_result {
-        result?;
-    }
-    if let Some(result) = tui_stopped {
-        result.map_err(|error| error.to_string())?;
-    }
-    Ok(())
+    finalize_managed_session_exit(
+        interactive.as_ref(),
+        &codex_socket,
+        bound_codex_thread.as_deref(),
+        tui_result,
+        tui_stopped.map(|res| res.map_err(|e| e.to_string())),
+    )
 }
 
 /// --name sélectionne une identité durable ; Register reste l'arbitre atomique
@@ -7885,8 +8207,12 @@ fn forward_managed_events_with_redaction(
                 // Un refus de guidage concerne sa livraison, pas la mission active.
                 if !bindings.contains_key(&message_id)
                     && !idempotent_deliveries.ordinary_active(&message_id)
-                    && idempotent_deliveries.pending.get(&message_id).is_some_and(|items|
-                        matches!(items.front(), Some(PendingAcpDispatch::Idempotent(_))))
+                    && idempotent_deliveries
+                        .pending
+                        .get(&message_id)
+                        .is_some_and(|items| {
+                            matches!(items.front(), Some(PendingAcpDispatch::Idempotent(_)))
+                        })
                 {
                     if let Some(report) = idempotent_deliveries.injection_rejected(&message_id) {
                         send_wrapper_message(writer, report);

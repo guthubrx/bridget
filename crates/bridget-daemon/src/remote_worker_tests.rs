@@ -478,7 +478,7 @@ fn spec188_registry_fifo_and_oversize_are_bounded_without_writer() {
     let fixture = Fixture::new();
     let p = fixture.0.join("registry-fifo");
     let c = std::ffi::CString::new(p.as_os_str().as_encoded_bytes()).unwrap();
-    // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
+    // SAFETY: les descripteurs de répertoire sont ouverts et valides et les chaînes `CString` terminées par nul restent vivantes pendant l'appel.
     assert_eq!(unsafe { libc::mkfifo(c.as_ptr(), 0o600) }, 0);
     let (tx, rx) = std::sync::mpsc::channel();
     let fifo = p.clone();
@@ -577,7 +577,7 @@ fn spec188_diagnostic_rejects_symlink_and_fifo_before_open() {
     );
     fs::remove_file(&p).unwrap();
     let name = std::ffi::CString::new(p.as_os_str().as_encoded_bytes()).unwrap();
-    // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
+    // SAFETY: les descripteurs de répertoire sont ouverts et valides et les chaînes `CString` terminées par nul restent vivantes pendant l'appel.
     assert_eq!(unsafe { libc::mkfifo(name.as_ptr(), 0o600) }, 0);
     assert_eq!(
         diagnose_local(&runtime.config, &command()).unwrap_err(),
@@ -7926,7 +7926,7 @@ fn worker162_marqueur_et_permis_precedent_release() {
     // SAFETY: fcntl avec une commande à argument entier ne déréférence aucun pointeur.
     let inherited_fd = unsafe { libc::fcntl(store._lock.as_raw_fd(), libc::F_DUPFD_CLOEXEC, 0) };
     assert!(inherited_fd >= 0);
-    // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
+    // SAFETY: le descripteur vient d'être ouvert avec succès (`fd >= 0`) et sa propriété unique est transférée ici.
     let inherited = unsafe { OwnedFd::from_raw_fd(inherited_fd) };
     drop(store);
     let store = fixture.open();
@@ -9222,7 +9222,7 @@ fn spec172_linked_checkout_prepare_preserves_main() {
             runtime.probe_workspace_preconditions(&request, &mapping, &cwd),
             Ok(())
         );
-        if parent_at_project_root {
+        if parent_at_project_root && !native_claude {
             let mut outside = request.clone();
             outside.parent.cwd = "/origin172-sibling".into();
             assert!(matches!(
