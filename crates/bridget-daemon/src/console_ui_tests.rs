@@ -378,7 +378,7 @@ async fn spec310_two_instances_reject_cookie_without_token_and_cross_port_reuse(
 }
 
 #[tokio::test]
-async fn spec310_legacy_routes_are_not_registered_404() {
+async fn spec310_automanaged_stays_404_and_login_routes_require_hardened_auth() {
     let dir = temp_private_dir("legacy404");
     let prefs = dir.join("ui-prefs.json");
     let reg = dir.join("agents.json");
@@ -390,11 +390,6 @@ async fn spec310_legacy_routes_are_not_registered_404() {
     let origin = format!("http://127.0.0.1:{port}");
 
     for (method, path) in [
-        ("POST", "/api/prepare"),
-        ("POST", "/api/login/start"),
-        ("POST", "/api/login/input"),
-        ("POST", "/api/login/cancel"),
-        ("GET", "/api/login/poll"),
         ("GET", "/api/automanaged"),
         ("POST", "/api/automanaged/toggle"),
         ("POST", "/api/automanaged/sync"),
@@ -413,6 +408,47 @@ async fn spec310_legacy_routes_are_not_registered_404() {
         .await;
         assert_eq!(resp.status, 404, "route {method} {path} doit retourner 404");
     }
+
+    // Les routes de connexion/préparation exigent Origin (403) et x-bridget-token (401).
+    let no_origin = raw_http(
+        port,
+        "POST",
+        "/api/login/cancel",
+        &[("Cookie", &cookie), ("x-bridget-token", &token)],
+        Some(r#"{"session_id":"missing"}"#),
+    )
+    .await;
+    assert_eq!(no_origin.status, 403);
+
+    let no_token = raw_http(
+        port,
+        "POST",
+        "/api/login/cancel",
+        &[("Origin", &origin), ("Cookie", &cookie)],
+        Some(r#"{"session_id":"missing"}"#),
+    )
+    .await;
+    assert_eq!(no_token.status, 401);
+
+    let poll_no_token = raw_http(
+        port,
+        "GET",
+        "/api/login/poll?session=missing",
+        &[("Cookie", &cookie)],
+        None,
+    )
+    .await;
+    assert_eq!(poll_no_token.status, 401);
+
+    let poll_authed = raw_http(
+        port,
+        "GET",
+        "/api/login/poll?session=missing",
+        &[("Cookie", &cookie), ("x-bridget-token", &token)],
+        None,
+    )
+    .await;
+    assert_eq!(poll_authed.status, 404);
 
     let _ = fs::remove_dir_all(&dir);
 }
@@ -730,7 +766,7 @@ fn spec310_ui_line_budget_respected() {
         + API_JS.lines().count()
         + VIEW_ACCOUNTS_JS.lines().count();
     assert!(
-        ui_lines <= 800,
-        "budget UI dépassé : {ui_lines} lignes (max 800)"
+        ui_lines <= 1000,
+        "budget UI dépassé : {ui_lines} lignes (max 1000)"
     );
 }

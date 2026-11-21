@@ -24,7 +24,7 @@ function machineDot(rows, reachable) {
 }
 
 export function renderAccountsView(ctx) {
-  const { data, activeView, onSelectView, onTogglePreview, onShowCli } = ctx;
+  const { data, activeView, onSelectView, onLogin, onTogglePreview, onShowCli } = ctx;
   const conns = data.connections || [];
   const known = data.known_machines || data.machines || [];
   const byMachine = new Map();
@@ -115,9 +115,18 @@ export function renderAccountsView(ctx) {
           const extra = c.covered_connections && c.covered_connections.length > 1
             ? ` (+${c.covered_connections.length - 1})` : "";
           const key = `${m}::${c.connection_id}::${idx}`;
-          const btnHtml = c.writable && c.managed
-            ? `<button class="btn${c.enabled ? "" : " primary"}" type="button" data-toggle="${esc(key)}">${c.enabled ? "Désactiver" : "Activer"}</button>`
-            : `<button class="btn subtle" type="button" data-cli="${esc(key)}">Commande CLI</button>`;
+          const actions = [];
+          if (c.auth_state === "unauthenticated") {
+            actions.push(`<button class="btn primary" type="button" data-login="${esc(key)}">Connecter</button>`);
+          } else if (c.auth_state === "authenticated") {
+            actions.push(`<button class="btn subtle" type="button" data-relogin="${esc(key)}">Changer</button>`);
+            if (c.writable && c.managed) {
+              actions.push(`<button class="btn${c.enabled ? "" : " primary"}" type="button" data-toggle="${esc(key)}">${c.enabled ? "Désactiver" : "Activer"}</button>`);
+            }
+          } else {
+            actions.push(`<button class="btn subtle" type="button" data-cli="${esc(key)}">Commande CLI</button>`);
+          }
+          const btnHtml = actions.join("");
           return `<div class="row">
             <div>
               <div class="row-label">${esc(c.account_label || c.engine)}</div>
@@ -152,6 +161,18 @@ export function renderAccountsView(ctx) {
     let rows = byMachine.get(m) || [];
     if (activeView === "actions") rows = rows.filter(needsAttention);
     rows.forEach((c, idx) => rowLookup.set(`${m}::${c.connection_id}::${idx}`, c));
+  }
+  for (const b of root.querySelectorAll("[data-login]")) {
+    b.onclick = () => {
+      const conn = rowLookup.get(b.getAttribute("data-login"));
+      if (conn) onLogin(conn, false, false);
+    };
+  }
+  for (const b of root.querySelectorAll("[data-relogin]")) {
+    b.onclick = () => {
+      const conn = rowLookup.get(b.getAttribute("data-relogin"));
+      if (conn) onLogin(conn, true, false);
+    };
   }
   for (const b of root.querySelectorAll("[data-toggle]")) {
     b.onclick = () => {

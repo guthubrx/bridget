@@ -69,6 +69,24 @@ pub(crate) struct ConsoleState {
     attested_default_registry: Option<PathBuf>,
     prefs_path: PathBuf,
     previews: Arc<Mutex<HashMap<String, BoundPreview>>>,
+    login_sessions: Arc<Mutex<HashMap<String, Arc<Mutex<crate::console_login::LoginSession>>>>>,
+}
+
+impl ConsoleState {
+    pub(crate) fn registry_override_ref(&self) -> Option<PathBuf> {
+        self.registry_override.clone()
+    }
+    pub(crate) fn session_id_ref(&self) -> &str {
+        &self.session_id
+    }
+    pub(crate) fn login_sessions_lock(
+        &self,
+    ) -> std::sync::MutexGuard<'_, HashMap<String, Arc<Mutex<crate::console_login::LoginSession>>>>
+    {
+        self.login_sessions
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+    }
 }
 
 #[derive(Deserialize)]
@@ -349,7 +367,7 @@ fn extract_cookie<'a>(headers: &'a HeaderMap, cookie_name: &str) -> Option<&'a s
         })
 }
 
-fn check_private_auth(
+pub(crate) fn check_private_auth(
     state: &ConsoleState,
     headers: &HeaderMap,
     is_mutation: bool,
@@ -404,11 +422,16 @@ fn check_private_auth(
     Ok(())
 }
 
-fn json_with_headers(status: StatusCode, body: Value) -> Response {
+pub(crate) fn json_with_headers(status: StatusCode, body: Value) -> Response {
     (status, security_headers(), Json(body)).into_response()
 }
 
-fn error_response(status: StatusCode, code: &str, message: &str, ui_state: &str) -> Response {
+pub(crate) fn error_response(
+    status: StatusCode,
+    code: &str,
+    message: &str,
+    ui_state: &str,
+) -> Response {
     json_with_headers(
         status,
         json!({
@@ -863,6 +886,26 @@ pub(crate) fn build_console_router(state: ConsoleState) -> Router {
         .route("/api/ui-prefs", post(route_api_ui_prefs))
         .route("/api/accounts/preview", post(route_api_accounts_preview))
         .route("/api/accounts/apply", post(route_api_accounts_apply))
+        .route(
+            "/api/prepare",
+            post(crate::console_login::route_api_prepare),
+        )
+        .route(
+            "/api/login/start",
+            post(crate::console_login::route_api_login_start),
+        )
+        .route(
+            "/api/login/poll",
+            get(crate::console_login::route_api_login_poll),
+        )
+        .route(
+            "/api/login/input",
+            post(crate::console_login::route_api_login_input),
+        )
+        .route(
+            "/api/login/cancel",
+            post(crate::console_login::route_api_login_cancel),
+        )
         .with_state(state)
 }
 
@@ -887,6 +930,7 @@ pub(crate) fn new_console_state(
         attested_default_registry,
         prefs_path,
         previews: Arc::new(Mutex::new(HashMap::new())),
+        login_sessions: Arc::new(Mutex::new(HashMap::new())),
     }
 }
 

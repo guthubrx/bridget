@@ -137,7 +137,6 @@ pub(crate) fn valid_machine_id(machine: &str) -> bool {
 
 /// Indique si une URL HTTPS correspond à un flux de connexion OAuth / authentification
 /// (et non à un lien de documentation ou d'aide imprimé par le CLI).
-#[cfg(test)]
 fn is_oauth_url(url: &str) -> bool {
     let lower = url.to_ascii_lowercase();
     lower.contains("accounts.google.com")
@@ -151,7 +150,6 @@ fn is_oauth_url(url: &str) -> bool {
 }
 
 /// Extrait la première URL HTTPS d'authentification présente dans une ligne texte.
-#[cfg(test)]
 pub(crate) fn extract_auth_url(text: &str) -> Option<String> {
     let cleaned = strip_ansi(text);
     for token in cleaned.split_whitespace() {
@@ -908,7 +906,7 @@ fn parse_json_payload(raw: &str) -> Result<Value, String> {
     Err(format!("sortie JSON illisible : {}", raw.trim()))
 }
 
-fn build_ssh_login_args(target: &ConnectionTarget, login_cmd: String) -> Vec<String> {
+pub(crate) fn build_ssh_login_args(target: &ConnectionTarget, login_cmd: String) -> Vec<String> {
     let mut ssh_args = vec![
         "-tt".to_string(),
         "-o".to_string(),
@@ -1195,7 +1193,7 @@ fn cmd_login(args: &[String]) -> Result<(), String> {
     Ok(())
 }
 
-fn find_target(
+pub(crate) fn find_target(
     targets: &[ConnectionTarget],
     connection_id: &str,
     machine: Option<&str>,
@@ -1215,7 +1213,7 @@ fn find_target(
 }
 
 /// Reconnaît strictement un code ou une URL de retour OAuth pour Antigravity ou Claude.
-#[cfg(test)]
+#[cfg_attr(not(any(target_os = "macos", test)), allow(dead_code))]
 pub(crate) fn looks_like_oauth_clipboard_code(engine: &str, raw: &str) -> bool {
     let trimmed = raw.trim();
     if trimmed.len() < 24 || trimmed.len() > 2048 || trimmed.chars().any(char::is_whitespace) {
@@ -1251,7 +1249,6 @@ pub(crate) fn looks_like_oauth_clipboard_code(engine: &str, raw: &str) -> bool {
 }
 
 /// Extrait l'identifiant du compte affiché par le CLI après connexion réussie.
-#[cfg(test)]
 pub(crate) fn extract_logged_in_account(line: &str) -> Option<String> {
     let lower = line.to_ascii_lowercase();
     let idx = lower.find("logged in as ")?;
