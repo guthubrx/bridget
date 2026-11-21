@@ -989,3 +989,68 @@ fn crash_reel_aux_frontieres_d503_rejoue_une_issue_unique() {
         fs::remove_dir_all(root).unwrap();
     }
 }
+
+#[test]
+fn spec307_recover_commands_skips_remote_spawn_with_closed_agent_link() {
+    let root = test_root("remote-closed-link");
+    fs::create_dir_all(&root).unwrap();
+    let mut definition = resolved_test_definition();
+    definition.digest = "a".repeat(64);
+    let ownership = |delegation_id: &str| SpawnOwnership {
+        parent_instance_id: "30700000-0000-4000-8000-000000000001".to_string(),
+        parent_execution_id: None,
+        objective_id: None,
+        delegation_id: Some(delegation_id.to_string()),
+        project: None,
+        role: "native_delegate".to_string(),
+        max_children: Some(4),
+        max_depth: Some(4),
+    };
+
+    let supervisor = open(&root);
+    // 1. Sous-agent distant terminé dont le lien est fermé et l'entrée purgée de fleet.json.
+    let mut closed_order = remote_order162();
+    closed_order.command_id = "cmd-remote-closed".to_string();
+    closed_order.requested_name = Some("30700000-0000-4000-8000-000000000010".to_string());
+    closed_order.persistent = false;
+    closed_order.ownership = Some(ownership("30700000-0000-4000-8000-000000000011"));
+    let closed_lease = start(&supervisor, &closed_order);
+    supervisor
+        .mark_starting(&closed_lease, NOW, &definition)
+        .unwrap();
+    supervisor
+        .register_connected(&closed_lease, &closed_lease.instance_id, NOW + 1)
+        .unwrap();
+    supervisor.invalidate_for_stop(&closed_lease).unwrap();
+    let _ = supervisor.desired.remove(&closed_lease.name);
+
+    // 2. Sous-agent distant encore actif (lien ouvert) : doit rester récupéré.
+    let mut open_order = remote_order162();
+    open_order.command_id = "cmd-remote-open".to_string();
+    open_order.requested_name = Some("30700000-0000-4000-8000-000000000020".to_string());
+    open_order.persistent = false;
+    open_order.ownership = Some(ownership("30700000-0000-4000-8000-000000000021"));
+    let open_lease = start(&supervisor, &open_order);
+    supervisor
+        .mark_starting(&open_lease, NOW, &definition)
+        .unwrap();
+    supervisor
+        .register_connected(&open_lease, &open_lease.instance_id, NOW + 1)
+        .unwrap();
+    drop(supervisor);
+
+    let reopened = open(&root);
+    let recovered_ids: Vec<String> = reopened
+        .recovery_candidates()
+        .into_iter()
+        .map(|candidate| candidate.lease.command_id)
+        .collect();
+    assert_eq!(
+        recovered_ids,
+        vec!["cmd-remote-open".to_string()],
+        "un sous-agent distant au lien fermé ne doit jamais être ressuscité"
+    );
+    assert_eq!(reopened.active_count(), 1);
+    drop(reopened);
+    fs::remove_dir_all(root).unwrap();
+}

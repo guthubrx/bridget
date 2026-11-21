@@ -1508,6 +1508,14 @@ fn recover_commands(inner: &mut FleetInner, desired: &DesiredFleet) -> Result<()
                 .clone()
                 .ok_or(IdempotencyError::CorruptRecord("instance distante absente"))?;
             let link = inner.idempotency.agent_link_for_child(&instance_id)?;
+            // Un lien d'agent déjà fermé (clôture terminale durable) interdit toute
+            // résurrection, y compris lorsque l'entrée a été purgée de bridget.fleet.json.
+            if link
+                .as_ref()
+                .is_some_and(|link| link.state == AgentLinkState::Closed)
+            {
+                continue;
+            }
             let mut ownership = order.ownership;
             if let (Some(owner), Some(link)) = (&mut ownership, &link) {
                 owner.parent_instance_id = link.parent_instance_id.clone();
