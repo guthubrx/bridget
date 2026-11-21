@@ -7320,7 +7320,8 @@ fn spec309_compact_discovery_tools_fits_acp_budget_and_keeps_core_delegation_fie
     for tool in &compact {
         let encoded = serde_json::to_string(tool).unwrap();
         assert!(
-            encoded.len() <= 620,
+            // Objet workspace typé (321) : la borne globale reste le vrai budget ACP.
+            encoded.len() <= 800,
             "outil compact trop volumineux ({} octets): {}",
             encoded.len(),
             tool["name"]

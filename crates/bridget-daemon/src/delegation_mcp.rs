@@ -16,6 +16,13 @@ use std::time::{Duration, Instant};
 
 /// Même schéma fermé pour les deux admissions ; aucune valeur JSON dans le refus.
 fn parse_workspace(value: &Value) -> Result<WorkspaceRequest, ClientError> {
+    // Certains modèles transmettent l'objet sous forme de texte JSON : le
+    // décoder une fois, puis appliquer exactement la même validation fermée.
+    let decoded = value
+        .as_str()
+        .and_then(|text| serde_json::from_str::<Value>(text).ok())
+        .filter(Value::is_object);
+    let value = decoded.as_ref().unwrap_or(value);
     if value.get("strategy").and_then(Value::as_str) == Some("commit_view")
         && !crate::workspace_git::COMMIT_VIEW_LAUNCH_ENABLED
     {
@@ -1519,5 +1526,18 @@ mod tracking230_preflight_tests {
             ),
             ClientError::InvalidParams(_)
         ));
+    }
+}
+
+#[cfg(test)]
+mod workspace_text321_tests {
+    use super::*;
+
+    #[test]
+    fn spec321_workspace_en_texte_json_suit_la_meme_validation() {
+        let text = json!("{\"strategy\":\"shared\"}");
+        assert!(matches!(parse_workspace(&text), Ok(WorkspaceRequest::Shared {})));
+        assert!(parse_workspace(&json!("{\"strategy\":\"shared\",\"x\":1}")).is_err());
+        assert!(parse_workspace(&json!("pas du json")).is_err());
     }
 }

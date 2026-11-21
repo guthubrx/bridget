@@ -2834,6 +2834,50 @@ fn truncate_compact_description(raw: &str, max_chars: usize) -> String {
 }
 
 fn compact_property_schema(schema: &Value) -> Value {
+    // Un choix entre objets (workspace, références) reste un objet : sans
+    // cela, le type par défaut « string » pousse le modèle à envoyer du texte.
+    let variants = schema
+        .get("oneOf")
+        .or_else(|| schema.get("anyOf"))
+        .and_then(Value::as_array);
+    if schema.get("type").is_none()
+        && let Some(variants) = variants
+        && !variants.is_empty()
+        && variants.iter().all(|v| v.get("type") == Some(&json!("object")))
+    {
+        let mut props = serde_json::Map::new();
+        for variant in variants {
+            for (key, value) in variant
+                .get("properties")
+                .and_then(Value::as_object)
+                .into_iter()
+                .flatten()
+            {
+                let allowed: Vec<Value> = value
+                    .get("const")
+                    .cloned()
+                    .into_iter()
+                    .chain(value.get("enum").and_then(Value::as_array).cloned().unwrap_or_default())
+                    .collect();
+                let entry = props
+                    .entry(key.clone())
+                    .or_insert_with(|| compact_property_schema(value));
+                if !allowed.is_empty() {
+                    let list = entry
+                        .as_object_mut()
+                        .expect("schéma objet")
+                        .entry("enum")
+                        .or_insert_with(|| json!([]));
+                    for item in allowed {
+                        if !list.as_array().unwrap().contains(&item) {
+                            list.as_array_mut().unwrap().push(item);
+                        }
+                    }
+                }
+            }
+        }
+        return json!({ "type": "object", "properties": props });
+    }
     let ty = schema
         .get("type")
         .and_then(Value::as_str)
@@ -3784,5 +3828,12 @@ mod compact318_tests {
         let wait = compact.iter().find(|t| t["name"] == "bridget_task_wait").unwrap();
         assert_eq!(wait["inputSchema"]["properties"]["task_ids"]["items"]["type"], "string");
         assert_eq!(compact_property_schema(&json!({"type":"array"}))["items"]["type"], "string");
+        let auto = compact.iter().find(|t| t["name"] == "bridget_auto_delegate").unwrap();
+        let workspace = &auto["inputSchema"]["properties"]["workspace"];
+        assert_eq!(workspace["type"], "object", "{workspace}");
+        let strategies = workspace["properties"]["strategy"]["enum"].as_array().unwrap();
+        for expected in ["shared", "worktree"] {
+            assert!(strategies.contains(&json!(expected)), "{strategies:?}");
+        }
     }
 }
