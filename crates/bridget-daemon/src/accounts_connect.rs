@@ -1200,6 +1200,7 @@ struct LoginSession {
 
 /// Reconnaît strictement un code ou une URL de retour OAuth pour Antigravity ou Claude.
 /// Évite tout faux positif sur du texte ordinaire présent dans le presse-papiers.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 pub(crate) fn looks_like_oauth_clipboard_code(engine: &str, raw: &str) -> bool {
     let trimmed = raw.trim();
     if trimmed.len() < 24 || trimmed.len() > 2048 || trimmed.chars().any(char::is_whitespace) {

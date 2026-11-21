@@ -491,7 +491,7 @@ fn routing168_129_meme_desactive_refuse_sans_catalogue_partiel() {
             serde_json::json!({"connection_id":"overflow-disabled", "machine_id":"cartae", "engine":"codex", "agent_type":"codex-work", "enabled":false}),
         );
     value["routing_policy"]["model_catalog"]["overflow-disabled"] = serde_json::Value::Array(
-        (0..129)
+        (0..513)
             .map(|index| {
                 serde_json::json!({
                     "model": format!("declared-overflow-{index}"),

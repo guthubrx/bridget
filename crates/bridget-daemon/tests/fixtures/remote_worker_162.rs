@@ -2468,7 +2468,7 @@ fn spec168_probe_v2_128_ids_reste_distinct_du_wire163() {
     assert_eq!(ids.len(), 128);
     assert!(ids.iter().all(|id| is_routing_candidate_id(id)));
     assert!(!is_routing_candidate_id("c01"));
-    assert_eq!(MAX_CANDIDATE_PROBE_V2_CANDIDATES, 128);
+    assert_eq!(MAX_CANDIDATE_PROBE_V2_CANDIDATES, 512);
     assert_eq!(MAX_CANDIDATE_PROBE_CANDIDATES, 8);
 }
 

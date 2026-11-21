@@ -1291,9 +1291,13 @@ fn spec221_claude_result_optional_reason_and_closed_diagnostics() {
 #[test]
 fn spec258_oauth_expire_exige_terminal_erreur_et_diagnostic_exact_du_tour() {
     let diagnostic = "Failed to authenticate: OAuth session expired and could not be refreshed";
+    let diagnostic_v2 = "Failed to authenticate: this login reached its time limit and cannot be renewed. Run `claude auth login` to sign in again, or use `claude setup-token` and set CLAUDE_CODE_OAUTH_TOKEN for unattended jobs";
     let error = json!({"type":"result","terminal_reason":"api_error","is_error":true});
     assert!(
         matches!(classify_claude_result(&error,false,false,Some(diagnostic)),ManagedTerminal::Failed{detail} if detail=="api_error:oauth_session_expired")
+    );
+    assert!(
+        matches!(classify_claude_result(&error,false,false,Some(diagnostic_v2)),ManagedTerminal::Failed{detail} if detail=="api_error:oauth_session_expired")
     );
     let success = json!({"type":"result","terminal_reason":"completed","subtype":"success","is_error":false,"result":diagnostic});
     assert!(matches!(

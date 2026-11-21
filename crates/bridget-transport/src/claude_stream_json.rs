@@ -1486,15 +1486,21 @@ fn classify_claude_result(
     // A successful assistant quotation is never an authentication fact. Only
     // this exact provider diagnostic, correlated to an api_error terminal in
     // the same turn, establishes an expired session. Keep the raw api_error.
-    const EXPIRED: &str =
+    const EXPIRED_LEGACY: &str =
         "Failed to authenticate: OAuth session expired and could not be refreshed";
+    const EXPIRED_TIME_LIMIT_PREFIX: &str =
+        "Failed to authenticate: this login reached its time limit and cannot be renewed.";
+    let is_expired_auth = |s: &str| {
+        let trimmed = s.trim();
+        trimmed == EXPIRED_LEGACY || trimmed.starts_with(EXPIRED_TIME_LIMIT_PREFIX)
+    };
     if reason == Some("api_error")
         && value["is_error"].as_bool() == Some(true)
         && (value
             .get("result")
             .and_then(Value::as_str)
-            .is_some_and(|s| s.trim() == EXPIRED)
-            || diagnostic.is_some_and(|s| s.trim() == EXPIRED))
+            .is_some_and(is_expired_auth)
+            || diagnostic.is_some_and(is_expired_auth))
     {
         return ManagedTerminal::Failed {
             detail: "api_error:oauth_session_expired".into(),
@@ -1968,8 +1974,10 @@ fn spawn_reader(
                 if let Some(active) = state.active.as_mut() {
                     // Une vraie réponse sans erreur lève un refus sans fenêtre
                     // d'une ancienne mission du même compte. Elle ne prouve aucun crédit.
+                    let is_api_err = value.get("isApiErrorMessage") == Some(&Value::Bool(true))
+                        || value.get("is_api_error_message") == Some(&Value::Bool(true));
                     let accepted = value.get("error").is_none_or(Value::is_null)
-                        && value.get("isApiErrorMessage") != Some(&Value::Bool(true))
+                        && !is_api_err
                         && value
                             .pointer("/message/content")
                             .and_then(Value::as_array)
@@ -1981,8 +1989,7 @@ fn spawn_reader(
                     active.latest_assistant_rate_limited = limited;
                     active.latest_assistant_api_error = value.get("error").and_then(Value::as_str)
                         == Some("authentication_failed")
-                        || (value.get("error").is_none_or(Value::is_null)
-                            && value.get("isApiErrorMessage") == Some(&Value::Bool(true)));
+                        || (value.get("error").is_none_or(Value::is_null) && is_api_err);
                 }
                 drop(state);
                 // TOOL : le content_block_start arrive tôt avec name mais

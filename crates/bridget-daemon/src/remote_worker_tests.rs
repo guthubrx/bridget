@@ -1698,7 +1698,7 @@ fn native171_probe_projection_guard_reasons_closed_bounded_same_refusal() {
         ("bad", admission, "c001"),
         (correlation, "a-bad", "c001"),
         (correlation, admission, "c01"),
-        (correlation, admission, "c129"),
+        (correlation, admission, "c513"),
     ] {
         let bad = ProbePermissionDiagnostics::new(corr, adm);
         let mut emitted = false;
@@ -1807,7 +1807,7 @@ fn native171_probe_permission_observation_closed_correlated_bounded_same_verdict
         ("bad", admission, "c001"),
         (correlation, "a-not-hex", "c001"),
         (correlation, admission, "c01"),
-        (correlation, admission, "c129"),
+        (correlation, admission, "c513"),
         ("9c9608cf-5f4c-41d5-a6af-1e0a3f0c012x", admission, "c001"),
         (correlation, "a-gggggggggggggggggggggggggggggggg", "c001"),
     ] {

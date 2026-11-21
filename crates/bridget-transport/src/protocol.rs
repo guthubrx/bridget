@@ -2562,7 +2562,7 @@ pub const WORKER_RECEIPT_RETENTION_SECS: i64 = 7 * 24 * 60 * 60;
 pub const WORKER_CANDIDATE_PROBE_VERSION: u16 = 1;
 pub const MAX_CANDIDATE_PROBE_CANDIDATES: usize = 8;
 pub const WORKER_CANDIDATE_PROBE_V2_VERSION: u16 = 2;
-pub const MAX_CANDIDATE_PROBE_V2_CANDIDATES: usize = 128;
+pub const MAX_CANDIDATE_PROBE_V2_CANDIDATES: usize = 512;
 pub const MAX_AUTO_ADMISSION_REASON_BYTES: usize = 256;
 const MAX_WORKER_ATOM_BYTES: usize = 256;
 const MAX_WORKER_PATH_BYTES: usize = 4096;
@@ -2586,7 +2586,7 @@ pub fn is_routing_candidate_id(value: &str) -> bool {
     };
     digits.len() == 3
         && digits.bytes().all(|byte| byte.is_ascii_digit())
-        && matches!(digits.parse::<u16>(), Ok(1..=128))
+        && matches!(digits.parse::<u16>(), Ok(1..=512))
 }
 
 /// Texte affichable, facultatif au contrat : aucune raison ne doit devenir un
@@ -8178,8 +8178,9 @@ mod routing168_protocol_tests {
     fn routing168_ids_et_probe_v2_sont_fermes() {
         assert!(is_routing_candidate_id("c001"));
         assert!(is_routing_candidate_id("c128"));
+        assert!(is_routing_candidate_id("c512"));
         assert!(!is_routing_candidate_id("c01"));
-        assert!(!is_routing_candidate_id("c129"));
+        assert!(!is_routing_candidate_id("c513"));
         let probe = CandidateProbeV2 {
             requires_workspace_write: false,
             required_tools: Vec::new(),

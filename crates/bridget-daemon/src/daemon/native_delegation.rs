@@ -131,7 +131,7 @@ fn routing_admission_plan(
     if candidates.is_empty() {
         return Err("routing_candidate_unavailable:catalogue_no_match".into());
     }
-    if candidates.len() > 128 {
+    if candidates.len() > crate::decision_service::MAX_ROUTING_CANDIDATES {
         return Err("candidate_limit".into());
     }
     let machine_policy = policy
@@ -880,7 +880,9 @@ fn valid_probe_targets(targets: &[Value], reasons: &[Value]) -> bool {
         ) else {
             return false;
         };
-        if !probe_machine_name(machine) || !(1..=128).contains(&count) {
+        if !probe_machine_name(machine)
+            || !(1..=crate::decision_service::MAX_ROUTING_CANDIDATES as u64).contains(&count)
+        {
             return false;
         }
         let key = (machine, kind, code);
@@ -2315,7 +2317,8 @@ fn frozen_routing_plan(receipt: &AutoAdmissionReceipt) -> Result<RoutingAdmissio
     );
     if digest != receipt.policy_digest
         || snapshot.policy.revision as i64 != receipt.policy_revision
-        || !(1..=128).contains(&snapshot.candidates.len())
+        || !(1..=crate::decision_service::MAX_ROUTING_CANDIDATES)
+            .contains(&snapshot.candidates.len())
         || snapshot.observations.len() != snapshot.candidates.len()
         || snapshot.scores.len() != snapshot.candidates.len()
     {
@@ -5116,9 +5119,9 @@ fn failure(code: &str) -> Value {
             && reasons.len() <= MAX_ROUTING_PROBE_REFUSAL_NOTES
             && reasons.iter().all(|reason| {
                 reason.as_object().is_some_and(|r| r.len() == 3)
-                    && reason["candidates"]
-                        .as_u64()
-                        .is_some_and(|n| (1..=128).contains(&n))
+                    && reason["candidates"].as_u64().is_some_and(|n| {
+                        (1..=crate::decision_service::MAX_ROUTING_CANDIDATES as u64).contains(&n)
+                    })
                     && match reason["kind"].as_str() {
                         Some("candidate") => {
                             serde_json::from_value::<CandidateProbeRefusal>(reason["code"].clone())

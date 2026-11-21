@@ -26,8 +26,8 @@ const MAX_LAYA_OUTPUT_BYTES: u64 = 1024;
 const MAX_LAYA_HEAD_OUTPUT_BYTES: u64 = 512;
 const MAX_LAYA_ROUTING_MODEL_BYTES: usize = 1024;
 const MAX_HEALTH_CACHE_ENTRIES: usize = 16;
-pub const MAX_ROUTING_DECISION_BYTES: usize = 64 * 1024;
-pub const MAX_ROUTING_CANDIDATES: usize = 128;
+pub const MAX_ROUTING_DECISION_BYTES: usize = 256 * 1024;
+pub const MAX_ROUTING_CANDIDATES: usize = 512;
 const MAX_ROUTING_REASON_BYTES: usize = 256;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
