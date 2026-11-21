@@ -1276,7 +1276,17 @@ fn check_token(state: &UiState, headers: &HeaderMap, query: &TokenQuery) -> bool
         .and_then(|v| v.to_str().ok())
         .is_some_and(|v| v == state.token);
     let query_ok = query.token.as_deref().is_some_and(|v| v == state.token);
-    header_ok || query_ok
+    let cookie_ok = headers
+        .get(axum::http::header::COOKIE)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|raw| {
+            raw.split(';').any(|part| {
+                part.trim()
+                    .strip_prefix("bridget_ui_token=")
+                    .is_some_and(|v| v == state.token)
+            })
+        });
+    header_ok || query_ok || cookie_ok
 }
 
 fn spawn_pty_login(target: &ConnectionTarget, logout_first: bool) -> Result<Child, String> {
@@ -1329,11 +1339,23 @@ async fn ui_index(
     if !check_token(&state, &headers, &query) {
         return (
             StatusCode::UNAUTHORIZED,
+            HeaderMap::new(),
             Html("Acces refuse : jeton de session requis.".to_string()),
         );
     }
+    let mut resp_headers = HeaderMap::new();
+    if let Ok(cookie) = axum::http::HeaderValue::from_str(&format!(
+        "bridget_ui_token={}; HttpOnly; SameSite=Strict; Path=/",
+        state.token
+    )) {
+        resp_headers.insert(axum::http::header::SET_COOKIE, cookie);
+    }
+    resp_headers.insert(
+        axum::http::header::CACHE_CONTROL,
+        axum::http::HeaderValue::from_static("no-store"),
+    );
     let page = UI_HTML.replace("__BRIDGET_TOKEN__", &state.token);
-    (StatusCode::OK, Html(page))
+    (StatusCode::OK, resp_headers, Html(page))
 }
 
 async fn api_status(
@@ -1798,7 +1820,11 @@ fn cmd_ui(args: &[String]) -> Result<(), String> {
         println!("Interface Bridget Comptes prete sur : {url}");
         println!("Ctrl+C pour fermer cette fenetre de gestion.");
         if !no_open {
-            open_browser(&url);
+            let open_url = url.clone();
+            tokio::spawn(async move {
+                tokio::time::sleep(Duration::from_millis(150)).await;
+                open_browser(&open_url);
+            });
         }
         axum::serve(listener, build_ui_router(state))
             .await
