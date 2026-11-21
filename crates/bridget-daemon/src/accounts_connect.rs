@@ -1089,9 +1089,13 @@ fn find_target(
 // ---------------------------------------------------------------------------
 
 struct LoginSession {
+    engine: String,
     log: String,
     auth_url: Option<String>,
     browser_opened: bool,
+    code_sent: bool,
+    code_auto_sent: bool,
+    logged_in_as: Option<String>,
     running: bool,
     exit_code: Option<i32>,
     stdin: Option<ChildStdin>,
@@ -1099,6 +1103,130 @@ struct LoginSession {
     enable_on_success: Option<ConnectionTarget>,
     auto_enabled: bool,
 }
+
+/// Reconnaît strictement un code ou une URL de retour OAuth pour Antigravity ou Claude.
+/// Évite tout faux positif sur du texte ordinaire présent dans le presse-papiers.
+pub(crate) fn looks_like_oauth_clipboard_code(engine: &str, raw: &str) -> bool {
+    let trimmed = raw.trim();
+    if trimmed.len() < 24 || trimmed.len() > 2048 || trimmed.chars().any(char::is_whitespace) {
+        return false;
+    }
+    match engine {
+        "antigravity" => {
+            (trimmed.starts_with("4/0A") || trimmed.starts_with("4/")) && trimmed.len() >= 30
+                || (trimmed.starts_with("https://antigravity.google/oauth-callback?")
+                    && trimmed.contains("code="))
+        }
+        "claude" => {
+            if trimmed.starts_with("https://platform.claude.com/oauth/code/callback?")
+                && trimmed.contains("code=")
+            {
+                return true;
+            }
+            if let Some((left, right)) = trimmed.split_once('#') {
+                left.len() >= 20
+                    && right.len() >= 20
+                    && left
+                        .bytes()
+                        .all(|b| b.is_ascii_alphanumeric() || b"-_.".contains(&b))
+                    && right
+                        .bytes()
+                        .all(|b| b.is_ascii_alphanumeric() || b"-_.".contains(&b))
+            } else {
+                false
+            }
+        }
+        _ => false,
+    }
+}
+
+/// Extrait l'identifiant du compte affiché par le CLI après connexion réussie
+/// (ex. `Logged in as fullflare@gmail.com.`).
+pub(crate) fn extract_logged_in_account(line: &str) -> Option<String> {
+    let lower = line.to_ascii_lowercase();
+    let idx = lower.find("logged in as ")?;
+    let after = &line[idx + "logged in as ".len()..];
+    let candidate = after
+        .split_whitespace()
+        .next()?
+        .trim_end_matches(['.', ',', ';', ')', '"']);
+    if candidate.contains('@') && candidate.len() >= 5 && candidate.len() <= 160 {
+        Some(candidate.to_string())
+    } else {
+        None
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn read_local_clipboard() -> Option<String> {
+    let output = Command::new("/usr/bin/pbpaste")
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    String::from_utf8(output.stdout).ok()
+}
+
+#[cfg(target_os = "macos")]
+fn clipboard_fingerprint(text: &str) -> String {
+    use sha2::{Digest, Sha256};
+    format!("{:x}", Sha256::digest(text.as_bytes()))
+}
+
+/// Sur macOS, surveille le presse-papiers uniquement pendant une session de connexion
+/// active (Antigravity/Claude) après ouverture du navigateur : dès que l'utilisateur
+/// clique sur « Copier » sur la page Google/Claude, le code OAuth est transmis
+/// automatiquement au processus de connexion, sans rien journaliser.
+#[cfg(target_os = "macos")]
+fn start_clipboard_watcher(session: Arc<Mutex<LoginSession>>, initial_fp: Option<String>) {
+    std::thread::spawn(move || {
+        let mut last_fp = initial_fp;
+        for _ in 0..500 {
+            std::thread::sleep(Duration::from_millis(600));
+            let (running, code_sent, engine) = {
+                let guard = session.lock().unwrap_or_else(|e| e.into_inner());
+                (guard.running, guard.code_sent, guard.engine.clone())
+            };
+            if !running || code_sent {
+                break;
+            }
+            let Some(clip) = read_local_clipboard() else {
+                continue;
+            };
+            let fp = clipboard_fingerprint(&clip);
+            if last_fp.as_deref() == Some(fp.as_str()) {
+                continue;
+            }
+            last_fp = Some(fp);
+            if looks_like_oauth_clipboard_code(&engine, &clip) {
+                let payload = format!("{}\n", clip.trim());
+                let mut guard = session.lock().unwrap_or_else(|e| e.into_inner());
+                if !guard.running || guard.code_sent {
+                    break;
+                }
+                if let Some(stdin) = guard.stdin.as_mut()
+                    && stdin
+                        .write_all(payload.as_bytes())
+                        .and_then(|_| stdin.flush())
+                        .is_ok()
+                {
+                    guard.code_sent = true;
+                    guard.code_auto_sent = true;
+                    guard
+                        .log
+                        .push_str("\n[Bridget] Code OAuth detecte dans le presse-papiers et envoye automatiquement.\n");
+                    break;
+                }
+            }
+        }
+    });
+}
+
+#[cfg(not(target_os = "macos"))]
+fn start_clipboard_watcher(_session: Arc<Mutex<LoginSession>>, _initial_fp: Option<String>) {}
 
 #[derive(Clone)]
 struct UiState {
@@ -1309,12 +1437,16 @@ async fn api_login_start(
 
     let session_id = uuid::Uuid::new_v4().to_string();
     let session = Arc::new(Mutex::new(LoginSession {
+        engine: target.engine.clone(),
         log: format!(
             "Session ouverte pour {} ({}) sur {}...\n",
             target.connection_id, target.engine, target.machine_id
         ),
         auth_url: None,
         browser_opened: false,
+        code_sent: false,
+        code_auto_sent: false,
+        logged_in_as: None,
         running: true,
         exit_code: None,
         stdin,
@@ -1422,21 +1554,35 @@ fn pump_stream<R: std::io::Read>(reader: R, session: Arc<Mutex<LoginSession>>) {
             Ok(_) => {
                 let text = strip_ansi(&String::from_utf8_lossy(&line));
                 let detected_url = extract_auth_url(&text);
+                let detected_account = extract_logged_in_account(&text);
                 let mut url_to_open = None;
+                let mut watch_engine = false;
                 {
                     let mut guard = session.lock().unwrap_or_else(|e| e.into_inner());
                     if guard.log.len() < MAX_SESSION_LOG_BYTES {
                         guard.log.push_str(&text);
+                    }
+                    if let Some(acc) = detected_account {
+                        guard.logged_in_as = Some(acc);
                     }
                     if let Some(url) = detected_url {
                         guard.auth_url = Some(url.clone());
                         if !guard.browser_opened {
                             guard.browser_opened = true;
                             url_to_open = Some(url);
+                            watch_engine =
+                                matches!(guard.engine.as_str(), "antigravity" | "claude");
                         }
                     }
                 }
                 if let Some(url) = url_to_open {
+                    if watch_engine {
+                        #[cfg(target_os = "macos")]
+                        let initial_fp = read_local_clipboard().map(|c| clipboard_fingerprint(&c));
+                        #[cfg(not(target_os = "macos"))]
+                        let initial_fp = None;
+                        start_clipboard_watcher(session.clone(), initial_fp);
+                    }
                     open_browser(&url);
                 }
             }
@@ -1489,6 +1635,10 @@ async fn api_login_poll(
             "running": guard.running,
             "exit_code": guard.exit_code,
             "auth_url": guard.auth_url,
+            "engine": guard.engine,
+            "code_sent": guard.code_sent,
+            "code_auto_sent": guard.code_auto_sent,
+            "logged_in_as": guard.logged_in_as,
             "auto_enabled": guard.auto_enabled,
             "chunk": chunk,
             "next_offset": guard.log.len()
@@ -1539,6 +1689,7 @@ async fn api_login_input(
             Json(json!({"error": e.to_string()})),
         );
     }
+    guard.code_sent = true;
     (StatusCode::OK, Json(json!({"status": "sent"})))
 }
 
@@ -1695,11 +1846,26 @@ const UI_HTML: &str = r###"<!doctype html>
   .actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: auto; }
   .modal-bg { position: fixed; inset: 0; background: rgba(0,0,0,.7); display: none; align-items: center; justify-content: center; padding: 20px; z-index: 20; }
   .modal-bg.open { display: flex; }
-  .modal { background: #141822; border: 1px solid var(--border); border-radius: 14px; width: 100%; max-width: 720px; padding: 20px; display: flex; flex-direction: column; gap: 14px; max-height: 88vh; }
-  .log { background: #0a0c10; border: 1px solid var(--border); border-radius: 8px; padding: 12px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; line-height: 1.45; white-space: pre-wrap; word-break: break-word; overflow-y: auto; min-height: 180px; max-height: 360px; color: #dbeafe; }
-  .url-box { background: rgba(79,140,255,.14); border: 1px solid var(--accent); border-radius: 8px; padding: 10px 12px; display: none; align-items: center; justify-content: space-between; gap: 10px; }
-  .url-box.visible { display: flex; }
-  .url-box a { color: #93c5fd; font-size: 12px; word-break: break-all; }
+  .modal { background: #141822; border: 1px solid var(--border); border-radius: 14px; width: 100%; max-width: 580px; padding: 22px; display: flex; flex-direction: column; gap: 16px; max-height: 88vh; overflow-y: auto; }
+  .banner { border-radius: 10px; padding: 14px 16px; display: flex; align-items: center; gap: 12px; font-size: 14px; line-height: 1.45; }
+  .banner.info { background: rgba(79,140,255,.14); border: 1px solid rgba(79,140,255,.45); color: #dbeafe; }
+  .banner.ok { background: rgba(34,197,94,.16); border: 1px solid rgba(34,197,94,.55); color: #dcfce7; }
+  .banner.err { background: rgba(239,68,68,.16); border: 1px solid rgba(239,68,68,.55); color: #fee2e2; }
+  .banner-icon { font-size: 20px; flex: 0 0 auto; }
+  .banner-title { font-weight: 600; font-size: 15px; }
+  .banner-sub { font-size: 13px; opacity: .9; margin-top: 2px; }
+  .steps { display: flex; flex-direction: column; gap: 10px; }
+  .step { background: #191f2d; border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+  .step-num { width: 24px; height: 24px; border-radius: 999px; background: rgba(79,140,255,.22); color: #93c5fd; font-weight: 700; font-size: 12px; display: inline-flex; align-items: center; justify-content: center; flex: 0 0 auto; }
+  .step-body { flex: 1; font-size: 13px; line-height: 1.4; }
+  .step-body strong { display: block; margin-bottom: 2px; }
+  .step-body span { color: var(--muted); font-size: 12px; }
+  details.tech-log { border: 1px solid var(--border); border-radius: 8px; background: #0c0f16; }
+  details.tech-log summary { cursor: pointer; padding: 8px 12px; font-size: 12px; color: var(--muted); user-select: none; }
+  .log { background: #0a0c10; border-top: 1px solid var(--border); padding: 10px 12px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; line-height: 1.45; white-space: pre-wrap; word-break: break-word; overflow-y: auto; max-height: 220px; color: #cbd5e1; }
+  button.success { background: #16a34a; border-color: #16a34a; color: #fff; font-weight: 600; }
+  button.success:hover { filter: brightness(1.08); }
+  .hidden { display: none !important; }
   input, select { background: #0c0f16; border: 1px solid var(--border); color: var(--text); padding: 9px 11px; border-radius: 8px; font-size: 13px; width: 100%; }
   .input-row { display: flex; gap: 8px; }
   label { font-size: 12px; color: var(--muted); display: block; margin-bottom: 4px; }
@@ -1727,19 +1893,50 @@ const UI_HTML: &str = r###"<!doctype html>
       <strong id="loginTitle">Connexion</strong>
       <button onclick="closeLoginModal()">Fermer</button>
     </div>
-    <div class="url-box" id="urlBox">
-      <a id="authUrlLink" href="#" target="_blank" rel="noopener noreferrer">Ouvrir la page de connexion</a>
-      <button class="primary" onclick="openDetectedUrl()">Ouvrir le lien</button>
-    </div>
-    <div class="log" id="loginLog"></div>
-    <div>
-      <label for="codeInput">Code de validation ou reponse au prompt (si le fournisseur le demande) :</label>
-      <div class="input-row">
-        <input id="codeInput" placeholder="Coller le code ici puis cliquer Envoyer..." onkeydown="if(event.key==='Enter')sendCode()" />
-        <button class="primary" onclick="sendCode()">Envoyer</button>
-        <button onclick="cancelSession()">Arreter</button>
+
+    <div class="banner info" id="loginBanner">
+      <div class="banner-icon" id="bannerIcon">...</div>
+      <div>
+        <div class="banner-title" id="bannerTitle">Demarrage de la session...</div>
+        <div class="banner-sub" id="bannerSub">Connexion securisee au serveur en cours.</div>
       </div>
     </div>
+
+    <div class="steps hidden" id="loginSteps">
+      <div class="step">
+        <span class="step-num">1</span>
+        <div class="step-body">
+          <strong>Page de connexion ouverte dans votre navigateur</strong>
+          <span>Choisissez votre compte puis validez l'autorisation.</span>
+        </div>
+        <button class="primary" onclick="openDetectedUrl()">Rouvrir la page</button>
+      </div>
+      <div class="step" id="stepCode">
+        <span class="step-num">2</span>
+        <div class="step-body">
+          <strong>Cliquez sur « Copier » sur la page d'arrivee</strong>
+          <span>Bridget detecte automatiquement le code copie et l'envoie tout seul.</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="hidden" id="manualCodeBox">
+      <label for="codeInput">Ou collez le code manuellement ici si besoin :</label>
+      <div class="input-row">
+        <input id="codeInput" placeholder="Coller le code puis Entree..." onkeydown="if(event.key==='Enter')sendCode()" />
+        <button class="primary" onclick="sendCode()">Envoyer</button>
+      </div>
+    </div>
+
+    <div class="row" style="justify-content:flex-end" id="loginFooter">
+      <button id="cancelBtn" onclick="cancelSession()">Annuler</button>
+      <button id="doneBtn" class="success hidden" onclick="closeLoginModal()">Terminer</button>
+    </div>
+
+    <details class="tech-log" id="logDetails">
+      <summary>Journal technique</summary>
+      <div class="log" id="loginLog"></div>
+    </details>
   </div>
 </div>
 
@@ -1859,13 +2056,26 @@ function esc(s) {
   return String(s || "").replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
 }
 
+function setBanner(kind, icon, title, sub) {
+  const b = document.getElementById("loginBanner");
+  b.className = "banner " + kind;
+  document.getElementById("bannerIcon").textContent = icon;
+  document.getElementById("bannerTitle").textContent = title;
+  document.getElementById("bannerSub").textContent = sub;
+}
+
 async function startLogin(connId, machineId, logoutFirst, enableOnSuccess) {
   if (pollTimer) clearInterval(pollTimer);
   logOffset = 0; detectedUrl = null;
   document.getElementById("loginTitle").textContent = (logoutFirst ? "Changer de compte : " : "Connexion : ") + connId + " (" + machineId + ")";
-  document.getElementById("loginLog").textContent = "Demarrage de la session...\n";
-  document.getElementById("urlBox").classList.remove("visible");
+  document.getElementById("loginLog").textContent = "";
+  document.getElementById("logDetails").open = false;
+  document.getElementById("loginSteps").classList.add("hidden");
+  document.getElementById("manualCodeBox").classList.add("hidden");
+  document.getElementById("cancelBtn").classList.remove("hidden");
+  document.getElementById("doneBtn").classList.add("hidden");
   document.getElementById("codeInput").value = "";
+  setBanner("info", "⏳", "Demarrage sur " + machineId + "...", "Ouverture automatique de la page de connexion dans quelques secondes.");
   document.getElementById("loginModal").classList.add("open");
   try {
     const res = await api("/api/login/start", {
@@ -1873,10 +2083,14 @@ async function startLogin(connId, machineId, logoutFirst, enableOnSuccess) {
       body: JSON.stringify({ connection_id: connId, machine_id: machineId, logout_first: logoutFirst, enable_on_success: enableOnSuccess })
     });
     currentSession = res.session_id;
-    pollTimer = setInterval(pollSession, 600);
+    pollTimer = setInterval(pollSession, 500);
     pollSession();
   } catch (e) {
+    setBanner("err", "✕", "Impossible de demarrer la connexion", e.message);
+    document.getElementById("logDetails").open = true;
     document.getElementById("loginLog").textContent += "\nErreur : " + e.message;
+    document.getElementById("cancelBtn").classList.add("hidden");
+    document.getElementById("doneBtn").classList.remove("hidden");
   }
 }
 
@@ -1892,14 +2106,37 @@ async function pollSession() {
     }
     if (res.auth_url && res.auth_url !== detectedUrl) {
       detectedUrl = res.auth_url;
-      const a = document.getElementById("authUrlLink");
-      a.href = detectedUrl;
-      a.textContent = detectedUrl;
-      document.getElementById("urlBox").classList.add("visible");
+      document.getElementById("loginSteps").classList.remove("hidden");
+      const needsCode = res.engine !== "codex";
+      document.getElementById("stepCode").classList.toggle("hidden", !needsCode);
+      document.getElementById("manualCodeBox").classList.toggle("hidden", !needsCode);
+      if (needsCode) {
+        setBanner("info", "🌐", "Validez dans votre navigateur puis cliquez « Copier »", "Des que vous copiez le code, Bridget le detecte et termine la connexion tout seul.");
+      } else {
+        setBanner("info", "🌐", "Validez la connexion dans votre navigateur", "La redirection locale est automatique pour Codex (aucun code a copier).");
+      }
+    }
+    if (res.running && res.code_auto_sent) {
+      setBanner("info", "⚡", "Code detecte et envoye automatiquement !", "Finalisation de la connexion sur le serveur...");
+      document.getElementById("manualCodeBox").classList.add("hidden");
+    } else if (res.running && res.code_sent) {
+      setBanner("info", "⏳", "Code envoye, validation en cours...", "Le serveur enregistre votre session.");
     }
     if (!res.running) {
       clearInterval(pollTimer);
       pollTimer = null;
+      document.getElementById("loginSteps").classList.add("hidden");
+      document.getElementById("manualCodeBox").classList.add("hidden");
+      document.getElementById("cancelBtn").classList.add("hidden");
+      document.getElementById("doneBtn").classList.remove("hidden");
+      if (res.exit_code === 0) {
+        const who = res.logged_in_as ? ("Compte connecte : " + res.logged_in_as) : "Votre session est enregistree et prete a l'emploi.";
+        const extra = res.auto_enabled ? " Le nouveau compte isole a ete active." : "";
+        setBanner("ok", "✓", "Connexion reussie !", who + extra);
+      } else {
+        setBanner("err", "✕", "La connexion n'a pas abouti (code " + res.exit_code + ")", "Ouvrez le journal technique ci-dessous pour voir le detail.");
+        document.getElementById("logDetails").open = true;
+      }
       refreshStatus();
     }
   } catch (e) {}
@@ -1997,6 +2234,30 @@ mod tests {
         assert_eq!(
             cmd_missing_condition("/usr/local/bin/agy"),
             "[ ! -x '/usr/local/bin/agy' ]"
+        );
+        assert!(looks_like_oauth_clipboard_code(
+            "antigravity",
+            "4/0AUn6Hd_0-XIlNMRKGGh-JY09C7sJGeSq0VEx0WH3C0Y5ET0V2uMCwRgQ2tQ5hRrap2puA"
+        ));
+        assert!(looks_like_oauth_clipboard_code(
+            "antigravity",
+            "https://antigravity.google/oauth-callback?state=abc&code=4/0AUn6Hd_0-1234567890"
+        ));
+        assert!(!looks_like_oauth_clipboard_code(
+            "antigravity",
+            "un texte ordinaire dans le presse-papiers"
+        ));
+        assert!(looks_like_oauth_clipboard_code(
+            "claude",
+            "abcdefghijklmnopqrstuvwx#0123456789abcdefghijkl"
+        ));
+        assert!(!looks_like_oauth_clipboard_code(
+            "codex",
+            "4/0AUn6Hd_0-123456789012345678901234"
+        ));
+        assert_eq!(
+            extract_logged_in_account("Logged in as fullflare@gmail.com.\n").as_deref(),
+            Some("fullflare@gmail.com")
         );
     }
 
