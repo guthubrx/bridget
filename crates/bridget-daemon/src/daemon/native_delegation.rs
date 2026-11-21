@@ -1041,8 +1041,17 @@ fn prepare_routing_projects(
     if !foreign {
         crate::native_permissions::prove_parent_permissions(&parent, parent.revision)?;
     }
+    let local_source_root = if foreign {
+        None
+    } else {
+        Some(crate::lifecycle::source_root(
+            &parent,
+            Path::new(&request.cwd),
+        )?)
+    };
     let deadline = Instant::now() + Duration::from_secs(595);
     let mut refused = BTreeMap::new();
+    let mut targets = Vec::with_capacity(machines.len());
     for machine in machines {
         if Instant::now() >= deadline {
             refused.insert(machine, "project_preparation_timeout".to_owned());
@@ -1064,28 +1073,87 @@ fn prepare_routing_projects(
                 continue;
             }
         };
-        if foreign {
-            if let Err(code) = super::origin_proof::prepare_project(
-                state,
-                &owner,
-                &parent,
-                routing_source_base(request),
-                &machine,
-                project_id.as_deref(),
-                deadline,
-            ) {
+        targets.push((machine, project_id));
+    }
+    if targets.len() <= 1 {
+        for (machine, project_id) in targets {
+            let outcome = if foreign {
+                super::origin_proof::prepare_project(
+                    state,
+                    &owner,
+                    &parent,
+                    routing_source_base(request),
+                    &machine,
+                    project_id.as_deref(),
+                    deadline,
+                )
+            } else {
+                let payload = json!({
+                    "registry":registry.source(), "machine_id":machine, "origin_host":host,
+                    "source_root":local_source_root.as_ref().unwrap(), "cwd":request.cwd, "commit":request.expected_base_commit,
+                    "project_id":project_id,
+                    "objects_only":matches!(request.workspace,Some(WorkspaceRequest::CommitView {}))
+                });
+                crate::project_preparation::prepare_until(&payload, deadline)
+            };
+            if let Err(code) = outcome {
                 refused.insert(machine, code);
             }
-            continue;
         }
-        let payload = json!({
-            "registry":registry.source(), "machine_id":machine, "origin_host":host,
-            "source_root":crate::lifecycle::source_root(&parent,Path::new(&request.cwd))?, "cwd":request.cwd, "commit":request.expected_base_commit,
-            "project_id":project_id,
-            "objects_only":matches!(request.workspace,Some(WorkspaceRequest::CommitView {}))
+    } else {
+        let source_base = routing_source_base(request);
+        let registry_source = registry.source();
+        let outcomes: Vec<(String, Result<(), String>)> = std::thread::scope(|scope| {
+            let handles: Vec<_> = targets
+                .into_iter()
+                .map(|(machine, project_id)| {
+                    let owner = &owner;
+                    let parent = &parent;
+                    let host = &host;
+                    let source_base = source_base.clone();
+                    let local_source_root = local_source_root.as_ref();
+                    let machine_id = machine.clone();
+                    let handle = scope.spawn(move || {
+                        if Instant::now() >= deadline {
+                            return (machine, Err("project_preparation_timeout".to_owned()));
+                        }
+                        let outcome = if foreign {
+                            super::origin_proof::prepare_project(
+                                state,
+                                owner,
+                                parent,
+                                source_base,
+                                &machine,
+                                project_id.as_deref(),
+                                deadline,
+                            )
+                        } else {
+                            let payload = json!({
+                                "registry":registry_source, "machine_id":machine, "origin_host":host,
+                                "source_root":local_source_root.unwrap(), "cwd":request.cwd, "commit":request.expected_base_commit,
+                                "project_id":project_id,
+                                "objects_only":matches!(request.workspace,Some(WorkspaceRequest::CommitView {}))
+                            });
+                            crate::project_preparation::prepare_until(&payload, deadline)
+                        };
+                        (machine, outcome)
+                    });
+                    (machine_id, handle)
+                })
+                .collect();
+            handles
+                .into_iter()
+                .map(|(machine_id, handle)| {
+                    handle
+                        .join()
+                        .unwrap_or_else(|_| (machine_id, Err("project_preparation_failed".into())))
+                })
+                .collect()
         });
-        if let Err(code) = crate::project_preparation::prepare_until(&payload, deadline) {
-            refused.insert(machine, code);
+        for (machine, outcome) in outcomes {
+            if let Err(code) = outcome {
+                refused.insert(machine, code);
+            }
         }
     }
     plan.candidates

@@ -3,6 +3,7 @@
 Aucun lancement de modèle. Le worker conserve son admission et ses contrôles.
 """
 import base64
+import concurrent.futures
 import contextlib
 import errno
 import fcntl
@@ -707,22 +708,42 @@ def prepare(request):
             require(not result["needs_bundle"], "project_preparation_commit_missing")
             publish_mapping(registry_path, request, result["project_id"], result["mapping"])
             return result
+        links = installed_links(registry_path.parent)
+    # Hors du verrou global de registre pendant le réseau SSH : plusieurs
+    # machines cibles d'une même demande se préparent en parallèle, avec un
+    # verrou par cible et une reprise du verrou global avant toute publication.
+    target_lock = registry_path.parent / (
+        "project-preparation-target-" + digest(request["machine_id"].encode())[:16] + ".lock"
+    )
+    with locked(target_lock, wait=SOURCE_LOCK_WAIT_SECS):
         matches = []
         first_transport_failure = None
-        for link in installed_links(registry_path.parent):
+
+        def inspect_link(candidate_link):
             try:
-                result = ssh(link, request, "inspect")
-                matches.append((link, result))
+                return ("ok", candidate_link, ssh(candidate_link, request, "inspect"))
             except Refused as error:
-                if str(error) == "project_preparation_machine_mismatch":
-                    continue
-                if str(error) in ("project_preparation_process_failed", "project_preparation_ssh_inspect_timeout"):
-                    # Une autre liaison ne prouve pas l'indisponibilité de la
-                    # cible. Seul un inspect attesté autorise sa préparation.
-                    if first_transport_failure is None:
-                        first_transport_failure = error
-                    continue
-                raise
+                return ("refused", candidate_link, error)
+
+        if len(links) <= 1:
+            outcomes = [inspect_link(link) for link in links]
+        else:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=min(8, len(links))) as pool:
+                outcomes = list(pool.map(inspect_link, links))
+        for kind, link, payload in outcomes:
+            if kind == "ok":
+                matches.append((link, payload))
+                continue
+            error = payload
+            if str(error) == "project_preparation_machine_mismatch":
+                continue
+            if str(error) in ("project_preparation_process_failed", "project_preparation_ssh_inspect_timeout"):
+                # Une autre liaison ne prouve pas l'indisponibilité de la
+                # cible. Seul un inspect attesté autorise sa préparation.
+                if first_transport_failure is None:
+                    first_transport_failure = error
+                continue
+            raise error
         if not matches and first_transport_failure is not None:
             raise first_transport_failure
         require(len(matches) == 1, "project_preparation_link_unavailable")
@@ -755,9 +776,12 @@ def prepare(request):
                 bundle = Path(directory) / "source.bundle"
                 export_bundle(source, commit, bundle, result.get("have_commit"))
                 result = ssh(link, request, "prepare", bundle)
-        else:
+        elif not (objects_only and local == result["mapping"] and request.get("linked_checkout") is None):
+            # En lecture seule (CommitView) déjà synchronisée avec mapping identique,
+            # remote_inspect vient déjà d'attester le dépôt et le commit sur la cible.
             result = ssh(link, request, "prepare")
-        publish_mapping(registry_path, request, result["project_id"], result["mapping"])
+        with locked(registry_path.parent / "project-preparation.lock", wait=SOURCE_LOCK_WAIT_SECS):
+            publish_mapping(registry_path, request, result["project_id"], result["mapping"])
         return result
 
 def remote_registry(request):

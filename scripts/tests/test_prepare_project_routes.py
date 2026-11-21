@@ -86,6 +86,42 @@ class RoutesCiblees(unittest.TestCase):
                 self.assertFalse(any(operation == 'prepare' for _, operation in calls))
                 self.assertEqual(published, 0)
 
+    def test_spec324_parallel_inspect_and_objects_only_skips_redundant_prepare(self):
+        import time
+        mapping = {'source_host': 'source', 'source_root': '/source', 'remote_root': '/remote'}
+        authority = dict(worker_id='worker-target', provisioning_revision=7, credential_fingerprint='a' * 64)
+        selected = dict(enabled=True, mappings={'project': mapping}, **authority)
+        request = dict(registry='/registry/agents.json', source_root='/source', cwd='/source',
+                       origin_host='source', machine_id='target', commit='b' * 40, objects_only=True)
+        result = dict(project_id='project', mapping=mapping, needs_bundle=False, have_commit=None)
+        calls = []
+
+        def ssh(link, actual, operation, bundle=None):
+            calls.append((link, operation))
+            time.sleep(0.15)
+            if link != 'target-link':
+                raise prep.Refused('project_preparation_machine_mismatch')
+            return result.copy()
+
+        with contextlib.ExitStack() as stack:
+            for name, value in [('locked', contextlib.nullcontext()),
+                                ('registry_read', (b'{}', {'machines': {'target': selected}})),
+                                ('select_mapping', ('project', mapping)),
+                                ('mapping_for_origin', mapping), ('commit_present', True),
+                                ('git', subprocess.CompletedProcess([], 0, b'/source\n', b'')),
+                                ('installed_links', ['other-1', 'other-2', 'target-link', 'other-3'])]:
+                stack.enter_context(patch.object(prep, name, return_value=value))
+            publisher = stack.enter_context(patch.object(prep, 'publish_mapping'))
+            stack.enter_context(patch.object(prep, 'ssh', side_effect=ssh))
+            t0 = time.monotonic()
+            answer = prep.prepare(request)
+            elapsed = time.monotonic() - t0
+        self.assertEqual(answer['project_id'], 'project')
+        self.assertEqual(publisher.call_count, 1)
+        self.assertFalse(any(op == 'prepare' for _, op in calls))
+        self.assertEqual(len(calls), 4)
+        self.assertLess(elapsed, 0.45, f"parallel inspect took {elapsed:.3f}s")
+
 
 if __name__ == '__main__':
     unittest.main()
