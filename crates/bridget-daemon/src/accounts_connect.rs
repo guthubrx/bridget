@@ -196,10 +196,15 @@ pub(crate) fn strip_ansi(input: &str) -> String {
     out
 }
 
-fn read_remote_file(machine: &str, remote_path: &str) -> Option<String> {
+fn read_remote_home_file(machine: &str, rel_path: &str) -> Option<(PathBuf, String)> {
     if !valid_machine_id(machine) {
         return None;
     }
+    let rel = rel_path.trim_start_matches('/');
+    let cmd = format!(
+        "p=\"$HOME/\"{}; [ -r \"$p\" ] && printf '%s\\n' \"$p\" && cat \"$p\" 2>/dev/null",
+        sh_quote(rel)
+    );
     let output = Command::new("ssh")
         .args([
             "-o",
@@ -207,7 +212,7 @@ fn read_remote_file(machine: &str, remote_path: &str) -> Option<String> {
             "-o",
             &format!("ConnectTimeout={DEFAULT_SSH_CONNECT_TIMEOUT}"),
             machine,
-            &format!("cat {} 2>/dev/null", sh_quote(remote_path)),
+            &cmd,
         ])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -217,7 +222,12 @@ fn read_remote_file(machine: &str, remote_path: &str) -> Option<String> {
     if !output.status.success() || output.stdout.is_empty() {
         return None;
     }
-    String::from_utf8(output.stdout).ok()
+    let text = String::from_utf8(output.stdout).ok()?;
+    let (first_line, rest) = text.split_once('\n')?;
+    if first_line.is_empty() || rest.is_empty() {
+        return None;
+    }
+    Some((PathBuf::from(first_line.trim()), rest.to_string()))
 }
 
 fn extract_connections_from_registry(
@@ -344,10 +354,9 @@ pub(crate) fn load_fleet_connections_with_machines(
     // Si on n'est pas sur cartae, lire la liste complète des machines depuis cartae.
     let mut master_connections = Vec::new();
     if local_machine != "cartae"
-        && let Some(cartae_raw) =
-            read_remote_file("cartae", "/home/moi/.cache/bridget-core/agents.json")
+        && let Some((cartae_path, cartae_raw)) =
+            read_remote_home_file("cartae", ".cache/bridget-core/agents.json")
     {
-        let cartae_path = PathBuf::from("/home/moi/.cache/bridget-core/agents.json");
         if let Ok(reg) = AgentRegistry::from_json(&cartae_raw, &cartae_path) {
             for name in reg.machines().keys() {
                 if name != "local" && valid_machine_id(name) {
@@ -377,8 +386,8 @@ pub(crate) fn load_fleet_connections_with_machines(
             .or_insert(target);
     }
 
-    // Lire en parallèle le registre worker privé de chaque machine distante pour
-    // récupérer les chemins de binaires locaux réels et les comptes isolés préparés.
+    // Lire en parallèle le registre worker privé de chaque machine distante (Linux ou macOS)
+    // pour récupérer les chemins de binaires locaux réels et les comptes isolés préparés.
     let handles: Vec<_> = remote_machines
         .into_iter()
         .map(|machine| {
@@ -386,18 +395,17 @@ pub(crate) fn load_fleet_connections_with_machines(
             std::thread::spawn(move || {
                 let candidates = if machine == "cartae" {
                     vec![
-                        "/home/moi/.cache/bridget-core/agents.json",
-                        "/home/moi/.config/bridget/agents.json",
+                        ".cache/bridget-core/agents.json",
+                        ".config/bridget/agents.json",
                     ]
                 } else {
                     vec![
-                        "/home/moi/.config/bridget/agents.json",
-                        "/home/moi/.cache/bridget-core/agents.json",
+                        ".config/bridget/agents.json",
+                        ".cache/bridget-core/agents.json",
                     ]
                 };
-                for path_str in candidates {
-                    if let Some(raw) = read_remote_file(&machine, path_str) {
-                        let p = PathBuf::from(path_str);
+                for rel_path in candidates {
+                    if let Some((p, raw)) = read_remote_home_file(&machine, rel_path) {
                         let found = extract_connections_from_registry(
                             &raw,
                             &p,
@@ -839,10 +847,12 @@ fn cmd_status(args: &[String]) -> Result<(), String> {
 /// Construit la commande shell de connexion (et optionnellement déconnexion préalable)
 /// pour un moteur et un profil donné.
 pub(crate) fn build_login_shell_command(target: &ConnectionTarget, logout_first: bool) -> String {
+    let path_setup =
+        "export PATH=\"$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:$PATH\"";
     let cmd = sh_quote(&target.command);
     let profile = target.profile_dir.as_deref().unwrap_or("");
     let env_prefix = env_prefix_for(&target.engine, profile);
-    match target.engine.as_str() {
+    let body = match target.engine.as_str() {
         "claude" => {
             if logout_first {
                 format!(
@@ -876,7 +886,8 @@ pub(crate) fn build_login_shell_command(target: &ConnectionTarget, logout_first:
             "printf 'Moteur non pris en charge : %s\\n' {} && exit 1",
             sh_quote(&target.engine)
         ),
-    }
+    };
+    format!("{path_setup}; {body}")
 }
 
 fn bridget_bin_quoted(is_local: bool) -> String {
