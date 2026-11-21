@@ -1724,53 +1724,148 @@ fn observe_routing_candidates_for_project(
         );
     }
     let mut unsupported_worker = false;
-    for (machine, (worker, candidates)) in batches {
-        let wanted: HashSet<String> = candidates.iter().map(|c| c.candidate_id.clone()).collect();
-        let probe = CandidateProbeV2 {
-            requires_workspace_write,
-            required_tools: required_tools.clone(),
-            version: WORKER_CANDIDATE_PROBE_V2_VERSION,
-            correlation_id: Uuid::new_v4().to_string(),
-            connection_epoch: String::new(),
-            worker,
-            admission_id: admission_id.clone(),
-            policy_revision: plan.policy.revision,
-            parent: parent.clone(),
-            candidates,
-        };
-        let correlation_id = probe.correlation_id.clone();
-        let candidate_connections = probe
-            .candidates
-            .iter()
-            .map(|candidate| {
-                (
-                    candidate.candidate_id.clone(),
-                    candidate.connection_id.clone(),
-                )
-            })
-            .collect::<HashMap<_, _>>();
-        let candidate_projects = probe
-            .candidates
-            .iter()
-            .map(|candidate| (candidate.candidate_id.clone(), candidate.project_id.clone()))
-            .collect::<HashMap<_, _>>();
-        let result =
-            match remote_candidate_probe_v2(state, probe, Instant::now() + ROUTING_PROBE_BUDGET) {
-                Ok(result) => result,
-                Err(reason) => {
-                    unsupported_worker |= reason == WorkerRefusal::CapabilityRequired;
-                    for candidate_id in &wanted {
-                        record_routing_probe_refusal(
-                            plan,
-                            &correlation_id,
-                            &admission_id,
-                            candidate_id,
-                            RoutingProbeRefusalCode::Worker(reason),
-                        );
-                    }
-                    continue;
-                }
+    let probe_deadline = Instant::now() + ROUTING_PROBE_BUDGET;
+    let prepared_batches: Vec<_> = batches
+        .into_iter()
+        .map(|(machine, (worker, candidates))| {
+            let wanted: HashSet<String> =
+                candidates.iter().map(|c| c.candidate_id.clone()).collect();
+            let probe = CandidateProbeV2 {
+                requires_workspace_write,
+                required_tools: required_tools.clone(),
+                version: WORKER_CANDIDATE_PROBE_V2_VERSION,
+                correlation_id: Uuid::new_v4().to_string(),
+                connection_epoch: String::new(),
+                worker,
+                admission_id: admission_id.clone(),
+                policy_revision: plan.policy.revision,
+                parent: parent.clone(),
+                candidates,
             };
+            let correlation_id = probe.correlation_id.clone();
+            let candidate_connections = probe
+                .candidates
+                .iter()
+                .map(|candidate| {
+                    (
+                        candidate.candidate_id.clone(),
+                        candidate.connection_id.clone(),
+                    )
+                })
+                .collect::<HashMap<_, _>>();
+            let candidate_projects = probe
+                .candidates
+                .iter()
+                .map(|candidate| (candidate.candidate_id.clone(), candidate.project_id.clone()))
+                .collect::<HashMap<_, _>>();
+            (
+                machine,
+                wanted,
+                correlation_id,
+                candidate_connections,
+                candidate_projects,
+                probe,
+            )
+        })
+        .collect();
+    // Sonder les machines distantes en parallèle sous un budget commun, puis
+    // traiter les verdicts dans l'ordre déterministe initial du BTreeMap.
+    let probe_results: Vec<_> = if prepared_batches.len() <= 1 {
+        prepared_batches
+            .into_iter()
+            .map(
+                |(
+                    machine,
+                    wanted,
+                    correlation_id,
+                    candidate_connections,
+                    candidate_projects,
+                    probe,
+                )| {
+                    let result = remote_candidate_probe_v2(state, probe, probe_deadline);
+                    (
+                        machine,
+                        wanted,
+                        correlation_id,
+                        candidate_connections,
+                        candidate_projects,
+                        result,
+                    )
+                },
+            )
+            .collect()
+    } else {
+        std::thread::scope(|scope| {
+            let handles: Vec<_> = prepared_batches
+                .into_iter()
+                .map(
+                    |(
+                        machine,
+                        wanted,
+                        correlation_id,
+                        candidate_connections,
+                        candidate_projects,
+                        probe,
+                    )| {
+                        let handle = scope
+                            .spawn(move || remote_candidate_probe_v2(state, probe, probe_deadline));
+                        (
+                            machine,
+                            wanted,
+                            correlation_id,
+                            candidate_connections,
+                            candidate_projects,
+                            handle,
+                        )
+                    },
+                )
+                .collect();
+            handles
+                .into_iter()
+                .map(
+                    |(
+                        machine,
+                        wanted,
+                        correlation_id,
+                        candidate_connections,
+                        candidate_projects,
+                        handle,
+                    )| {
+                        let result = handle
+                            .join()
+                            .unwrap_or(Err(WorkerRefusal::WorkerUnavailable));
+                        (
+                            machine,
+                            wanted,
+                            correlation_id,
+                            candidate_connections,
+                            candidate_projects,
+                            result,
+                        )
+                    },
+                )
+                .collect()
+        })
+    };
+    for (machine, wanted, correlation_id, candidate_connections, candidate_projects, probe_result) in
+        probe_results
+    {
+        let result = match probe_result {
+            Ok(result) => result,
+            Err(reason) => {
+                unsupported_worker |= reason == WorkerRefusal::CapabilityRequired;
+                for candidate_id in &wanted {
+                    record_routing_probe_refusal(
+                        plan,
+                        &correlation_id,
+                        &admission_id,
+                        candidate_id,
+                        RoutingProbeRefusalCode::Worker(reason),
+                    );
+                }
+                continue;
+            }
+        };
         if (result
             .verdicts
             .iter()
@@ -4090,24 +4185,60 @@ fn filter_auto_candidates(
         (parent, eligible, remote_batches)
     };
 
-    for (_, (worker, probe_candidates)) in remote_batches {
-        let wanted = probe_candidates
-            .iter()
-            .map(|candidate| candidate.candidate_id.clone())
-            .collect::<std::collections::BTreeSet<_>>();
-        let probe = CandidateProbe {
-            version: WORKER_CANDIDATE_PROBE_VERSION,
-            correlation_id: Uuid::new_v4().to_string(),
-            connection_epoch: String::new(),
-            worker,
-            admission_id: admission_id.clone(),
-            policy_revision,
-            parent: parent.clone(),
-            candidates: probe_candidates,
-        };
-        let Ok(result) =
-            remote_candidate_probe(state, probe, Instant::now() + ROUTING_PROBE_BUDGET)
-        else {
+    let probe_deadline = Instant::now() + ROUTING_PROBE_BUDGET;
+    let prepared_remote: Vec<_> = remote_batches
+        .into_iter()
+        .map(|(_, (worker, probe_candidates))| {
+            let wanted = probe_candidates
+                .iter()
+                .map(|candidate| candidate.candidate_id.clone())
+                .collect::<std::collections::BTreeSet<_>>();
+            let probe = CandidateProbe {
+                version: WORKER_CANDIDATE_PROBE_VERSION,
+                correlation_id: Uuid::new_v4().to_string(),
+                connection_epoch: String::new(),
+                worker,
+                admission_id: admission_id.clone(),
+                policy_revision,
+                parent: parent.clone(),
+                candidates: probe_candidates,
+            };
+            (wanted, probe)
+        })
+        .collect();
+    let remote_results: Vec<_> = if prepared_remote.len() <= 1 {
+        prepared_remote
+            .into_iter()
+            .map(|(wanted, probe)| {
+                let result = remote_candidate_probe(state, probe, probe_deadline);
+                (wanted, result)
+            })
+            .collect()
+    } else {
+        std::thread::scope(|scope| {
+            let handles: Vec<_> = prepared_remote
+                .into_iter()
+                .map(|(wanted, probe)| {
+                    let handle =
+                        scope.spawn(move || remote_candidate_probe(state, probe, probe_deadline));
+                    (wanted, handle)
+                })
+                .collect();
+            handles
+                .into_iter()
+                .map(|(wanted, handle)| {
+                    let result = handle
+                        .join()
+                        .unwrap_or(Err(
+                            bridget_transport::protocol::WorkerRefusal::WorkerUnavailable,
+                        ));
+                    (wanted, result)
+                })
+                .collect()
+        })
+    };
+    for (wanted, probe_result) in remote_results {
+        let Ok(result) = probe_result else {
             continue;
         };
         for verdict in result.verdicts {

@@ -2779,6 +2779,7 @@ const COMPACT_MCP_TOOLS: &[&str] = &[
     "bridget_capabilities",
     "bridget_task_status",
     "bridget_task_wait",
+    "bridget_task_ack",
     "bridget_task_cancel",
     "bridget_task_continue",
     "bridget_journal",
@@ -3796,6 +3797,9 @@ mod compact318_tests {
         }
         let wait = compact.iter().find(|t| t["name"] == "bridget_task_wait").unwrap();
         assert_eq!(wait["inputSchema"]["properties"]["task_ids"]["items"]["type"], "string");
+        let ack = compact.iter().find(|t| t["name"] == "bridget_task_ack").unwrap();
+        assert_eq!(ack["inputSchema"]["properties"]["task_ids"]["items"]["type"], "string");
+        assert_eq!(ack["inputSchema"]["required"], json!(["task_ids"]));
         assert_eq!(compact_property_schema(&json!({"type":"array"}))["items"]["type"], "string");
         let auto = compact.iter().find(|t| t["name"] == "bridget_auto_delegate").unwrap();
         // Objet simple, sans propriétés imbriquées : forme gardée par Antigravity.

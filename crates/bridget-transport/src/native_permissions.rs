@@ -750,12 +750,119 @@ pub fn claude_launch_policy_options(args: &[String], policy: &mut Value) -> Resu
     Ok(())
 }
 
+const LARGE_FILE_DIGEST_CACHE_MIN_BYTES: u64 = 1024 * 1024;
+const LARGE_FILE_DIGEST_CACHE_CAPACITY: usize = 32;
+
+#[derive(Clone, PartialEq, Eq)]
+struct FileImageStamp {
+    dev: u64,
+    ino: u64,
+    bytes: u64,
+    modified: (i64, i64),
+    changed: (i64, i64),
+}
+
+fn file_image_stamp(m: &std::fs::Metadata) -> FileImageStamp {
+    use std::os::unix::fs::MetadataExt;
+    FileImageStamp {
+        dev: m.dev(),
+        ino: m.ino(),
+        bytes: m.len(),
+        modified: (m.mtime(), m.mtime_nsec()),
+        changed: (m.ctime(), m.ctime_nsec()),
+    }
+}
+
+type LargeFileRevisionCache = std::collections::VecDeque<(std::path::PathBuf, FileImageStamp, String)>;
+static LARGE_FILE_REVISIONS: std::sync::OnceLock<std::sync::Mutex<LargeFileRevisionCache>> =
+    std::sync::OnceLock::new();
+
+/// Hache un fichier régulier déjà vérifié hors lien symbolique.
+/// Les gros exécutables (>= 1 Mio, ex. binaire Claude de 364 Mio) réutilisent un
+/// cache borné uniquement si le même inode, taille, mtime ET ctime sont encore
+/// attestés avant et après le contrôle. Les fichiers plus petits sont relus à
+/// chaque appel.
+fn hash_regular_file_revision(
+    path: &std::path::Path,
+    before: &std::fs::Metadata,
+    max_bytes: u64,
+    changed_error: &str,
+) -> Result<String, String> {
+    use sha2::{Digest, Sha256};
+    use std::io::Read;
+    let unavailable = || "permission_source_unavailable".to_string();
+    let cacheable = before.len() >= LARGE_FILE_DIGEST_CACHE_MIN_BYTES;
+    let before_stamp = cacheable.then(|| file_image_stamp(before));
+    if let Some(ref stamp) = before_stamp {
+        let cache = LARGE_FILE_REVISIONS
+            .get_or_init(|| std::sync::Mutex::new(std::collections::VecDeque::new()));
+        let cached = cache
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .iter()
+            .find(|(p, s, _)| p == path && s == stamp)
+            .map(|(_, _, rev)| rev.clone());
+        if let Some(revision) = cached {
+            let after = std::fs::symlink_metadata(path).map_err(|_| unavailable())?;
+            if !after.file_type().is_symlink()
+                && after.is_file()
+                && file_image_stamp(&after) == *stamp
+            {
+                return Ok(revision);
+            }
+            return Err(changed_error.to_owned());
+        }
+    }
+    let mut file = std::fs::File::open(path).map_err(|_| unavailable())?;
+    if let Some(ref stamp) = before_stamp {
+        let opened = file.metadata().map_err(|_| unavailable())?;
+        if !opened.is_file() || file_image_stamp(&opened) != *stamp {
+            return Err(changed_error.to_owned());
+        }
+    }
+    let mut digest = Sha256::new();
+    let mut bytes = [0u8; 65536];
+    let mut consumed = 0u64;
+    loop {
+        let n = file.read(&mut bytes).map_err(|_| unavailable())?;
+        if n == 0 {
+            break;
+        }
+        consumed = consumed.saturating_add(n as u64);
+        if consumed > max_bytes {
+            return Err(unavailable());
+        }
+        digest.update(&bytes[..n]);
+    }
+    let revision = format!("sha256:{:x}", digest.finalize());
+    if let Some(stamp) = before_stamp {
+        let opened_after = file.metadata().map_err(|_| unavailable())?;
+        let path_after = std::fs::symlink_metadata(path).map_err(|_| unavailable())?;
+        if !opened_after.is_file()
+            || path_after.file_type().is_symlink()
+            || !path_after.is_file()
+            || file_image_stamp(&opened_after) != stamp
+            || file_image_stamp(&path_after) != stamp
+        {
+            return Err(changed_error.to_owned());
+        }
+        let cache = LARGE_FILE_REVISIONS
+            .get_or_init(|| std::sync::Mutex::new(std::collections::VecDeque::new()));
+        let mut entries = cache.lock().unwrap_or_else(|poison| poison.into_inner());
+        entries.retain(|(p, _, _)| p != path);
+        if entries.len() >= LARGE_FILE_DIGEST_CACHE_CAPACITY {
+            entries.pop_front();
+        }
+        entries.push_back((path.to_path_buf(), stamp, revision.clone()));
+    }
+    Ok(revision)
+}
+
 pub fn permission_source_revision(
     path: &std::path::Path,
     max_bytes: u64,
 ) -> Result<String, String> {
     use sha2::{Digest, Sha256};
-    use std::io::Read;
     let unavailable = || "permission_source_unavailable".to_string();
     let metadata = match std::fs::symlink_metadata(path) {
         Ok(m) => m,
@@ -791,22 +898,7 @@ pub fn permission_source_revision(
     if !metadata.is_file() || metadata.len() > max_bytes {
         return Err(unavailable());
     }
-    let mut file = std::fs::File::open(path).map_err(|_| unavailable())?;
-    let mut digest = Sha256::new();
-    let mut bytes = [0u8; 65536];
-    let mut consumed = 0u64;
-    loop {
-        let n = file.read(&mut bytes).map_err(|_| unavailable())?;
-        if n == 0 {
-            break;
-        }
-        consumed = consumed.saturating_add(n as u64);
-        if consumed > max_bytes {
-            return Err(unavailable());
-        }
-        digest.update(&bytes[..n]);
-    }
-    Ok(format!("sha256:{:x}", digest.finalize()))
+    hash_regular_file_revision(path, &metadata, max_bytes, "permission_source_unavailable")
 }
 
 // Native Claude refreshes lastUpdated during startup. Preserve all other
@@ -860,7 +952,6 @@ pub fn permission_source_revision_v2(
     max_bytes: u64,
 ) -> Result<String, String> {
     use sha2::{Digest, Sha256};
-    use std::io::Read;
     let unavailable = || "permission_source_unavailable".to_string();
     let metadata = match std::fs::symlink_metadata(path) {
         Ok(m) => m,
@@ -901,21 +992,7 @@ pub fn permission_source_revision_v2(
         return Err(unavailable());
     }
     let canonical = std::fs::canonicalize(path).map_err(|_| unavailable())?;
-    let mut file = std::fs::File::open(path).map_err(|_| unavailable())?;
-    let mut digest = Sha256::new();
-    let mut bytes = [0u8; 65536];
-    let mut consumed = 0u64;
-    loop {
-        let n = file.read(&mut bytes).map_err(|_| unavailable())?;
-        if n == 0 {
-            break;
-        }
-        consumed = consumed.saturating_add(n as u64);
-        if consumed > max_bytes {
-            return Err(unavailable());
-        }
-        digest.update(&bytes[..n]);
-    }
+    let revision = hash_regular_file_revision(path, &metadata, max_bytes, "settings_revision_changed")?;
     use std::os::unix::fs::MetadataExt;
     let after = std::fs::symlink_metadata(path).map_err(|_| unavailable())?;
     if !after.is_file()
@@ -930,7 +1007,6 @@ pub fn permission_source_revision_v2(
     {
         return Err("settings_revision_changed".into());
     }
-    let revision = format!("sha256:{:x}", digest.finalize());
     if canonical == path {
         return Ok(revision);
     }
@@ -1400,6 +1476,44 @@ mod executable_revision183_tests {
             recheck_cli_revisions(&context, |p| permission_source_revision(p, 512)),
             Err("settings_revision_changed".into())
         );
+    }
+
+    #[test]
+    fn spec323_large_executable_revision_caches_by_stamp_and_invalidates_on_change() {
+        use sha2::{Digest, Sha256};
+        let dir = std::env::temp_dir().join(format!("bridget-rev323-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let bin = dir.join("claude-large");
+        let payload_a = vec![b'A'; 1024 * 1024 + 17];
+        std::fs::write(&bin, &payload_a).unwrap();
+        let expected_a = format!("sha256:{:x}", Sha256::digest(&payload_a));
+        assert_eq!(
+            permission_source_revision(&bin, 4 * 1024 * 1024).unwrap(),
+            expected_a
+        );
+        // Second call hits the bounded stamp cache and returns the exact digest.
+        assert_eq!(
+            permission_source_revision(&bin, 4 * 1024 * 1024).unwrap(),
+            expected_a
+        );
+        // Replacing the binary atomically (new inode/length) invalidates immediately.
+        let tmp = dir.join("claude-large.new");
+        let payload_b = vec![b'B'; 1024 * 1024 + 29];
+        std::fs::write(&tmp, &payload_b).unwrap();
+        std::fs::rename(&tmp, &bin).unwrap();
+        let expected_b = format!("sha256:{:x}", Sha256::digest(&payload_b));
+        assert_ne!(expected_a, expected_b);
+        assert_eq!(
+            permission_source_revision(&bin, 4 * 1024 * 1024).unwrap(),
+            expected_b
+        );
+        // Replacing with a symlink is still rejected by v1.
+        let target = dir.join("target");
+        std::fs::write(&target, &payload_b).unwrap();
+        std::fs::remove_file(&bin).unwrap();
+        std::os::unix::fs::symlink(&target, &bin).unwrap();
+        assert!(permission_source_revision(&bin, 4 * 1024 * 1024).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
 
