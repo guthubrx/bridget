@@ -2846,6 +2846,15 @@ fn compact_property_schema(schema: &Value) -> Value {
                 "string"
             }
         });
+    // Gemini refuse un tableau sans `items` : garder le type de ses éléments.
+    if ty == "array" {
+        let items = schema
+            .get("items")
+            .filter(|items| items.is_object())
+            .map(compact_property_schema)
+            .unwrap_or_else(|| json!({ "type": "string" }));
+        return json!({ "type": ty, "items": items });
+    }
     json!({ "type": ty })
 }
 
@@ -3741,5 +3750,39 @@ mod schema211_tests {
             who["inputSchema"]["properties"]["cursor"]["maxLength"],
             1024
         );
+    }
+}
+
+#[cfg(test)]
+mod compact318_tests {
+    use super::*;
+
+    /// Gemini (Antigravity) refuse toute déclaration où un tableau n'a pas
+    /// `items` : `GenerateContentRequest.tools[..].items: missing field`.
+    #[test]
+    fn spec318_schemas_compacts_gardent_items_de_chaque_tableau() {
+        fn arrays_have_items(value: &Value, path: &str) {
+            match value {
+                Value::Object(map) => {
+                    if map.get("type") == Some(&json!("array")) {
+                        assert!(map.get("items").is_some_and(Value::is_object), "{path} sans items");
+                    }
+                    for (key, child) in map {
+                        arrays_have_items(child, &format!("{path}/{key}"));
+                    }
+                }
+                Value::Array(list) => list.iter().enumerate()
+                    .for_each(|(i, child)| arrays_have_items(child, &format!("{path}[{i}]"))),
+                _ => {}
+            }
+        }
+        let compact = compact_discovery_tools(tools());
+        assert!(!compact.is_empty());
+        for tool in &compact {
+            arrays_have_items(&tool["inputSchema"], tool["name"].as_str().unwrap());
+        }
+        let wait = compact.iter().find(|t| t["name"] == "bridget_task_wait").unwrap();
+        assert_eq!(wait["inputSchema"]["properties"]["task_ids"]["items"]["type"], "string");
+        assert_eq!(compact_property_schema(&json!({"type":"array"}))["items"]["type"], "string");
     }
 }
