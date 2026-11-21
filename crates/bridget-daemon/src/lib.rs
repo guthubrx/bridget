@@ -5,6 +5,7 @@ pub mod artifact_service;
 pub mod artifact_store;
 pub mod artifact_types;
 pub mod attach;
+pub mod automanaged;
 pub mod backup;
 pub mod build_identity;
 pub mod build_info;

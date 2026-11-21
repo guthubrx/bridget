@@ -530,6 +530,21 @@ class Updater:
         finally:
             Path(name).unlink(missing_ok=True)
 
+    def run_automanaged(self):
+        # Synchronisation periodique automanaged (CLI + nouveaux modeles, active par defaut).
+        # Isolee de la boucle de mise a jour Bridget pour ne jamais la bloquer.
+        try:
+            subprocess.run(
+                [str(self.link), "automanaged", "sync", "--if-due", "--quiet"],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=300,
+                check=False,
+            )
+        except Exception:
+            pass
+
     def step(self, force=False):
         policy = rpc(self.binary, "status")
         target = policy.get("install_target")
@@ -555,6 +570,7 @@ class Updater:
                 if pending is not None:
                     self.save(candidate=None, error=None)
                 self.report("up_to_date")
+                self.run_automanaged()
             elif automatic or manual:
                 if self.state.get("client_probe_block_generation") == policy.get("check_generation", 0):
                     self.report("client_check_unavailable", installed)

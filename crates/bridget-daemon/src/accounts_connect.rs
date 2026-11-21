@@ -68,6 +68,10 @@ pub(crate) struct ConnectionStatus {
     pub is_local: bool,
     pub auth_state: String,
     pub detail: String,
+    #[serde(default)]
+    pub account_label: String,
+    #[serde(default)]
+    pub covered_connections: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -542,9 +546,86 @@ fn wait_child_output_bounded(
     }
 }
 
+fn account_group_key(t: &ConnectionTarget) -> (String, String, String) {
+    let base = Path::new(&t.command)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or(&t.command)
+        .to_string();
+    let profile = t.profile_dir.clone().unwrap_or_default();
+    (t.engine.clone(), base, profile)
+}
+
+fn friendly_account_label(t: &ConnectionTarget) -> String {
+    if t.managed {
+        let name = t
+            .connection_id
+            .strip_prefix("account-")
+            .unwrap_or(&t.connection_id);
+        let eng = match t.engine.as_str() {
+            "claude" => "Claude",
+            "codex" => "Codex",
+            "antigravity" => "Antigravity",
+            other => other,
+        };
+        return format!("{eng} ({name})");
+    }
+    let base = Path::new(&t.command)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or(&t.command);
+    match (t.engine.as_str(), base) {
+        ("claude", "gclaude") => "GLM (gclaude)".to_string(),
+        ("claude", _) => "Claude".to_string(),
+        ("codex", "codex-pro") => "Codex Pro".to_string(),
+        ("codex", _) => "Codex".to_string(),
+        ("antigravity", _) => "Antigravity".to_string(),
+        (other, _) => other.to_string(),
+    }
+}
+
+fn primary_connection_rank(t: &ConnectionTarget) -> (u8, usize, String) {
+    let penalty = if t.connection_id.ends_with("-haiku213")
+        || t.connection_id.ends_with("-terra213")
+        || t.connection_id.ends_with("-models62")
+    {
+        2
+    } else if !t.enabled {
+        3
+    } else if t.connection_id.ends_with("-native") {
+        1
+    } else {
+        0
+    };
+    (penalty, t.connection_id.len(), t.connection_id.clone())
+}
+
+/// Regroupe les connexions de routage d'une machine par vrai compte fournisseur
+/// `(engine, binaire, dossier_profil)` afin de n'afficher et ne sonder chaque compte qu'une fois.
+pub(crate) fn group_machine_accounts(
+    targets: Vec<ConnectionTarget>,
+) -> Vec<(ConnectionTarget, Vec<String>, bool)> {
+    let mut by_account: BTreeMap<(String, String, String), Vec<ConnectionTarget>> = BTreeMap::new();
+    for t in targets {
+        by_account.entry(account_group_key(&t)).or_default().push(t);
+    }
+    let mut grouped = Vec::with_capacity(by_account.len());
+    for mut items in by_account.into_values() {
+        items.sort_by_key(primary_connection_rank);
+        let any_enabled = items.iter().any(|t| t.enabled);
+        let mut covered: Vec<String> = items.iter().map(|t| t.connection_id.clone()).collect();
+        covered.sort();
+        let primary = items.into_iter().next().unwrap();
+        grouped.push((primary, covered, any_enabled));
+    }
+    grouped
+}
+
 fn probe_machine(machine: String, targets: Vec<ConnectionTarget>) -> Vec<ConnectionStatus> {
-    let is_local = targets.first().is_some_and(|t| t.is_local);
-    let script = build_probe_script(&targets);
+    let grouped = group_machine_accounts(targets);
+    let primaries: Vec<ConnectionTarget> = grouped.iter().map(|(t, _, _)| t.clone()).collect();
+    let is_local = primaries.first().is_some_and(|t| t.is_local);
+    let script = build_probe_script(&primaries);
     let output = if is_local {
         Command::new("bash")
             .arg("-lc")
@@ -595,9 +676,9 @@ fn probe_machine(machine: String, targets: Vec<ConnectionTarget>) -> Vec<Connect
         _ => false,
     };
 
-    targets
+    grouped
         .into_iter()
-        .map(|t| {
+        .map(|(t, covered, any_enabled)| {
             let (auth_state, detail) = if !reachable {
                 (
                     "machine_unreachable".to_string(),
@@ -608,18 +689,21 @@ fn probe_machine(machine: String, targets: Vec<ConnectionTarget>) -> Vec<Connect
             } else {
                 ("unknown".to_string(), "statut non retourne".to_string())
             };
+            let account_label = friendly_account_label(&t);
             ConnectionStatus {
                 connection_id: t.connection_id,
                 machine_id: t.machine_id,
                 engine: t.engine,
                 agent_type: t.agent_type,
-                enabled: t.enabled,
+                enabled: any_enabled,
                 display_name: t.display_name,
                 managed: t.managed,
                 profile_dir: t.profile_dir,
                 is_local: t.is_local,
                 auth_state,
                 detail,
+                account_label,
+                covered_connections: covered,
             }
         })
         .collect()
@@ -699,10 +783,19 @@ fn cmd_status(args: &[String]) -> Result<(), String> {
             "machine_unreachable" => "HORS LIGNE",
             _ => "INCONNU",
         };
-        let active = if row.enabled { "actif" } else { "desactive" };
+        let label = if row.account_label.is_empty() {
+            row.connection_id.as_str()
+        } else {
+            row.account_label.as_str()
+        };
+        let extra = if row.covered_connections.len() > 1 {
+            format!(" [couvre: {}]", row.covered_connections.join(", "))
+        } else {
+            String::new()
+        };
         println!(
-            "  [{:<11}] {:<14} {:<26} ({:<11}, {:<9}) : {}",
-            badge, row.machine_id, row.connection_id, row.engine, active, row.detail
+            "  [{:<11}] {:<14} {:<18} ({:<24}) : {}{}",
+            badge, row.machine_id, label, row.connection_id, row.detail, extra
         );
     }
     Ok(())
@@ -1771,10 +1864,202 @@ async fn api_login_cancel(
     (StatusCode::OK, Json(json!({"status": "cancelled"})))
 }
 
+#[derive(Deserialize)]
+struct AutomanagedToggleRequest {
+    cli_updates: Option<bool>,
+    model_sync: Option<bool>,
+}
+
+#[derive(Deserialize)]
+struct AutomanagedSyncRequest {
+    #[serde(default = "default_true")]
+    cli: bool,
+    #[serde(default = "default_true")]
+    models: bool,
+}
+
+async fn api_automanaged_get(
+    State(state): State<UiState>,
+    headers: HeaderMap,
+    Query(query): Query<TokenQuery>,
+) -> impl IntoResponse {
+    if !check_token(&state, &headers, &query) {
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(json!({"error": "unauthorized"})),
+        );
+    }
+    (StatusCode::OK, Json(crate::automanaged::status_payload()))
+}
+
+async fn api_automanaged_toggle(
+    State(state): State<UiState>,
+    headers: HeaderMap,
+    Query(query): Query<TokenQuery>,
+    Json(req): Json<AutomanagedToggleRequest>,
+) -> impl IntoResponse {
+    if !check_token(&state, &headers, &query) {
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(json!({"error": "unauthorized"})),
+        );
+    }
+    let registry = state.registry.clone();
+    let res = tokio::task::spawn_blocking(move || -> Result<Value, String> {
+        let mut cfg = crate::automanaged::load_config();
+        if let Some(v) = req.cli_updates {
+            cfg.cli_updates = v;
+        }
+        if let Some(v) = req.model_sync {
+            cfg.model_sync = v;
+        }
+        crate::automanaged::save_config(&cfg)?;
+        // Propage le réglage aux serveurs distants joignables en parallèle.
+        if let Ok((local_m, targets)) = load_fleet_connections(registry.as_deref()) {
+            let mut remote_hosts: Vec<String> = targets
+                .into_iter()
+                .map(|t| t.machine_id)
+                .filter(|m| m != &local_m && valid_machine_id(m))
+                .collect();
+            remote_hosts.sort();
+            remote_hosts.dedup();
+            let cli_cmd = if cfg.cli_updates { "on --cli" } else { "off --cli" };
+            let mod_cmd = if cfg.model_sync { "on --models" } else { "off --models" };
+            let remote_sh = format!(
+                "\"$HOME/.local/bin/bridget\" automanaged {cli_cmd} >/dev/null 2>&1 || true; \"$HOME/.local/bin/bridget\" automanaged {mod_cmd} >/dev/null 2>&1 || true"
+            );
+            let handles: Vec<_> = remote_hosts
+                .into_iter()
+                .map(|host| {
+                    let sh = remote_sh.clone();
+                    std::thread::spawn(move || {
+                        let _ = Command::new("ssh")
+                            .args([
+                                "-o",
+                                "BatchMode=yes",
+                                "-o",
+                                &format!("ConnectTimeout={DEFAULT_SSH_CONNECT_TIMEOUT}"),
+                                &host,
+                                &sh,
+                            ])
+                            .stdin(Stdio::null())
+                            .stdout(Stdio::null())
+                            .stderr(Stdio::null())
+                            .status();
+                    })
+                })
+                .collect();
+            for h in handles {
+                let _ = h.join();
+            }
+        }
+        Ok(crate::automanaged::status_payload())
+    })
+    .await;
+    match res {
+        Ok(Ok(val)) => (StatusCode::OK, Json(val)),
+        Ok(Err(e)) => (StatusCode::BAD_REQUEST, Json(json!({"error": e}))),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"error": e.to_string()})),
+        ),
+    }
+}
+
+async fn api_automanaged_sync(
+    State(state): State<UiState>,
+    headers: HeaderMap,
+    Query(query): Query<TokenQuery>,
+    Json(req): Json<AutomanagedSyncRequest>,
+) -> impl IntoResponse {
+    if !check_token(&state, &headers, &query) {
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(json!({"error": "unauthorized"})),
+        );
+    }
+    let registry = state.registry.clone();
+    let res = tokio::task::spawn_blocking(move || -> Result<Value, String> {
+        let local_state =
+            crate::automanaged::execute_sync(req.cli, req.models, registry.as_deref(), false)?;
+        let mut remote_summaries = Vec::new();
+        if let Ok((local_m, targets)) = load_fleet_connections(registry.as_deref()) {
+            let mut remote_hosts: Vec<String> = targets
+                .into_iter()
+                .map(|t| t.machine_id)
+                .filter(|m| m != &local_m && valid_machine_id(m))
+                .collect();
+            remote_hosts.sort();
+            remote_hosts.dedup();
+            let mut flags = Vec::new();
+            if req.cli {
+                flags.push("--cli");
+            }
+            if req.models {
+                flags.push("--models");
+            }
+            let flag_str = flags.join(" ");
+            let remote_sh = format!(
+                "\"$HOME/.local/bin/bridget\" automanaged sync {flag_str} --json 2>/dev/null"
+            );
+            let handles: Vec<_> = remote_hosts
+                .into_iter()
+                .map(|host| {
+                    let sh = remote_sh.clone();
+                    std::thread::spawn(move || {
+                        let out = Command::new("ssh")
+                            .args([
+                                "-o",
+                                "BatchMode=yes",
+                                "-o",
+                                &format!("ConnectTimeout={DEFAULT_SSH_CONNECT_TIMEOUT}"),
+                                &host,
+                                &sh,
+                            ])
+                            .stdin(Stdio::null())
+                            .stdout(Stdio::piped())
+                            .stderr(Stdio::null())
+                            .output();
+                        match out {
+                            Ok(o) if o.status.success() => {
+                                let parsed =
+                                    parse_json_payload(&String::from_utf8_lossy(&o.stdout)).ok();
+                                json!({"machine": host, "status": "ok", "state": parsed})
+                            }
+                            _ => json!({"machine": host, "status": "unreachable"}),
+                        }
+                    })
+                })
+                .collect();
+            for h in handles {
+                if let Ok(item) = h.join() {
+                    remote_summaries.push(item);
+                }
+            }
+        }
+        Ok(json!({
+            "local": local_state,
+            "remotes": remote_summaries
+        }))
+    })
+    .await;
+    match res {
+        Ok(Ok(val)) => (StatusCode::OK, Json(val)),
+        Ok(Err(e)) => (StatusCode::BAD_REQUEST, Json(json!({"error": e}))),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"error": e.to_string()})),
+        ),
+    }
+}
+
 fn build_ui_router(state: UiState) -> Router {
     Router::new()
         .route("/", get(ui_index))
         .route("/api/status", get(api_status))
+        .route("/api/automanaged", get(api_automanaged_get))
+        .route("/api/automanaged/toggle", post(api_automanaged_toggle))
+        .route("/api/automanaged/sync", post(api_automanaged_sync))
         .route("/api/prepare", post(api_prepare))
         .route("/api/login/start", post(api_login_start))
         .route("/api/login/poll", get(api_login_poll))
@@ -1867,6 +2152,13 @@ const UI_HTML: &str = r###"<!doctype html>
   button.primary:hover { filter: brightness(1.08); }
   button.warn { background: #3b2a12; border-color: #6b4715; color: #fcd34d; }
   main { max-width: 1120px; margin: 0 auto; padding: 20px 24px 60px; }
+  .auto-bar { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 12px 16px; margin-bottom: 18px; display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+  .auto-info { font-size: 13px; color: var(--text); }
+  .auto-info .meta { margin-top: 2px; }
+  .auto-controls { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .toggle-btn { font-size: 12px; padding: 6px 11px; border-radius: 8px; }
+  .toggle-btn.on { background: rgba(34,197,94,.16); border-color: rgba(34,197,94,.45); color: #4ade80; }
+  .toggle-btn.off { background: #222838; border-color: var(--border); color: var(--muted); }
   .filters { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 18px; }
   .chip { padding: 6px 12px; border-radius: 999px; font-size: 12px; background: var(--card); border: 1px solid var(--border); color: var(--muted); }
   .chip.active { background: var(--accent); border-color: var(--accent); color: #fff; }
@@ -1921,6 +2213,17 @@ const UI_HTML: &str = r###"<!doctype html>
   </div>
 </header>
 <main>
+  <div class="auto-bar" id="autoBar">
+    <div class="auto-info">
+      <strong>Mode Automanaged (modeles + CLI)</strong>
+      <div class="meta" id="autoStatus">Chargement...</div>
+    </div>
+    <div class="auto-controls">
+      <button class="toggle-btn on" id="toggleModels" onclick="toggleAutomanaged('models')">Modeles : ACTIF</button>
+      <button class="toggle-btn on" id="toggleCli" onclick="toggleAutomanaged('cli')">CLI : ACTIF</button>
+      <button class="primary" id="syncNowBtn" onclick="syncAutomanaged()">Synchroniser maintenant</button>
+    </div>
+  </div>
   <div class="filters" id="filters"></div>
   <div id="content">Chargement...</div>
 </main>
@@ -2006,6 +2309,7 @@ if (window.location.search.includes("token=")) {
   try { window.history.replaceState(null, "", "/"); } catch (e) {}
 }
 let fleet = null;
+let autoCfg = { cli_updates: true, model_sync: true, interval_secs: 21600 };
 let selectedMachine = "ALL";
 let currentSession = null;
 let pollTimer = null;
@@ -2057,13 +2361,66 @@ async function api(path, opts = {}) {
   return data;
 }
 
+async function refreshAutomanaged() {
+  try {
+    const data = await api("/api/automanaged");
+    autoCfg = data.config || autoCfg;
+    renderAutomanaged(data.state);
+  } catch (e) {
+    document.getElementById("autoStatus").textContent = "Indisponible : " + e.message;
+  }
+}
+
+function renderAutomanaged(st) {
+  const bMod = document.getElementById("toggleModels");
+  const bCli = document.getElementById("toggleCli");
+  bMod.textContent = "Modeles : " + (autoCfg.model_sync ? "ACTIF" : "DESACTIVE");
+  bMod.className = "toggle-btn " + (autoCfg.model_sync ? "on" : "off");
+  bCli.textContent = "CLI : " + (autoCfg.cli_updates ? "ACTIF" : "DESACTIVE");
+  bCli.className = "toggle-btn " + (autoCfg.cli_updates ? "on" : "off");
+  const hrs = Math.max(1, Math.round((autoCfg.interval_secs || 21600) / 3600));
+  const last = st && st.last_run_at ? ("Dernier passage : " + new Date(st.last_run_at * 1000).toLocaleTimeString()) : "Prochain passage automatique toutes les " + hrs + " h";
+  document.getElementById("autoStatus").textContent = last + " (sur vos 4 machines)";
+}
+
+async function toggleAutomanaged(kind) {
+  const payload = kind === "models" ? { model_sync: !autoCfg.model_sync } : { cli_updates: !autoCfg.cli_updates };
+  document.getElementById("autoStatus").textContent = "Application du reglage sur les machines...";
+  try {
+    const data = await api("/api/automanaged/toggle", { method: "POST", body: JSON.stringify(payload) });
+    autoCfg = data.config || autoCfg;
+    renderAutomanaged(data.state);
+  } catch (e) {
+    document.getElementById("autoStatus").textContent = "Erreur : " + e.message;
+  }
+}
+
+async function syncAutomanaged() {
+  const btn = document.getElementById("syncNowBtn");
+  btn.disabled = true;
+  document.getElementById("autoStatus").textContent = "Synchronisation des modeles et verification des CLI en cours...";
+  try {
+    const res = await api("/api/automanaged/sync", { method: "POST", body: JSON.stringify({ cli: autoCfg.cli_updates, models: autoCfg.model_sync }) });
+    const localAdded = (res.local && res.local.model_results || []).reduce((acc, r) => acc + (r.total_added || 0), 0);
+    const remoteAdded = (res.remotes || []).reduce((acc, rm) => acc + ((rm.state && rm.state.model_results) || []).reduce((a, r) => a + (r.total_added || 0), 0), 0);
+    const totalAdded = localAdded + remoteAdded;
+    document.getElementById("autoStatus").textContent =
+      "Synchronisation terminee : " + (totalAdded > 0 ? ("+" + totalAdded + " nouveau(x) modele(s) ajoute(s)") : "tous les modeles et CLI sont a jour") + ".";
+    refreshStatus();
+  } catch (e) {
+    document.getElementById("autoStatus").textContent = "Erreur sync : " + e.message;
+  } finally {
+    btn.disabled = false;
+  }
+}
+
 async function refreshStatus() {
   document.getElementById("subtitle").textContent = "Verification en cours sur les machines...";
   try {
     fleet = await api("/api/status");
     const okCount = fleet.connections.filter(c => c.auth_state === "authenticated").length;
     document.getElementById("subtitle").textContent =
-      okCount + " / " + fleet.connections.length + " connexions authentifiees sur " + fleet.machines.length + " machines";
+      okCount + " / " + fleet.connections.length + " comptes authentifies sur " + fleet.machines.length + " machines";
     renderFilters();
     renderCards();
   } catch (e) {
@@ -2089,15 +2446,15 @@ function renderCards() {
   container.innerHTML = machines.map(m => {
     const rows = fleet.connections.filter(c => c.machine_id === m);
     return `<section class="machine-block">
-      <h2 class="machine-title"><span>${esc(m)}</span><span class="meta">${rows.length} connexion(s)</span></h2>
+      <h2 class="machine-title"><span>${esc(m)}</span><span class="meta">${rows.length} compte(s)</span></h2>
       <div class="grid">${rows.map(c => `
         <div class="card">
           <div class="row">
-            <span class="conn-name">${esc(c.connection_id)}</span>
+            <span class="conn-name">${esc(c.account_label || c.connection_id)}</span>
             <span class="pill ${esc(c.auth_state)}">${esc(stateLabel(c.auth_state))}</span>
           </div>
-          <div class="meta">Moteur : <b>${esc(c.engine)}</b> · ${c.enabled ? 'actif' : 'desactive'}${c.managed ? ' · compte isole' : ''}</div>
           <div class="meta">${esc(c.detail)}</div>
+          <div class="meta">${c.covered_connections && c.covered_connections.length > 1 ? ('Couvre : ' + esc(c.covered_connections.join(', '))) : ('Profil : ' + esc(c.connection_id))}${c.managed ? ' · compte isole' : ''}</div>
           <div class="actions">
             ${c.auth_state === 'authenticated'
               ? `<button class="warn" data-login-conn="${esc(c.connection_id)}" data-login-machine="${esc(c.machine_id)}" data-logout-first="1">Changer de compte</button>`
@@ -2227,7 +2584,8 @@ async function pollSession() {
         setBanner("err", "✕", "La connexion n'a pas abouti (code " + res.exit_code + ")", "Ouvrez le journal technique ci-dessous pour voir le detail.");
         document.getElementById("logDetails").open = true;
       }
-      refreshStatus();
+      refreshAutomanaged();
+refreshStatus();
     }
   } catch (e) {}
 }
@@ -2286,6 +2644,7 @@ async function submitPrepare() {
   }
 }
 
+refreshAutomanaged();
 refreshStatus();
 </script>
 </body>
@@ -2401,5 +2760,70 @@ mod tests {
         assert!(codex_cmd.contains("CODEX_HOME='/tmp/acc/codex'"));
         assert!(codex_cmd.contains("-u OPENAI_API_KEY"));
         assert!(codex_cmd.contains("login"));
+    }
+
+    #[test]
+    fn spec309_group_machine_accounts_deduplicates_shared_profiles() {
+        let mk = |cid: &str, engine: &str, cmd: &str, profile: Option<&str>| ConnectionTarget {
+            connection_id: cid.into(),
+            machine_id: "sysle2".into(),
+            engine: engine.into(),
+            agent_type: cid.into(),
+            enabled: true,
+            display_name: None,
+            managed: cid.starts_with("account-"),
+            command: cmd.into(),
+            profile_dir: profile.map(str::to_string),
+            registry_path: "/home/moi/.config/bridget/agents.json".into(),
+            is_local: false,
+        };
+        let grouped = group_machine_accounts(vec![
+            mk(
+                "claude-sysle2-haiku213",
+                "claude",
+                "/home/moi/.local/bin/claude",
+                None,
+            ),
+            mk(
+                "claude-sysle2-native",
+                "claude",
+                "/home/moi/.local/bin/claude",
+                None,
+            ),
+            mk(
+                "codex-sysle2-terra213",
+                "codex",
+                "/home/moi/.local/bin/codex",
+                None,
+            ),
+            mk("codex-sysle2", "codex", "/home/moi/.local/bin/codex", None),
+            mk(
+                "codex-pro",
+                "codex",
+                "/Users/moi/.local/bin/codex-pro",
+                None,
+            ),
+            mk(
+                "antigravity-sysle2",
+                "antigravity",
+                "/home/moi/.local/bin/agy",
+                None,
+            ),
+        ]);
+        assert_eq!(grouped.len(), 4);
+        let claude = grouped
+            .iter()
+            .find(|(t, _, _)| t.engine == "claude")
+            .unwrap();
+        assert_eq!(claude.0.connection_id, "claude-sysle2-native");
+        assert_eq!(
+            claude.1,
+            vec!["claude-sysle2-haiku213", "claude-sysle2-native"]
+        );
+        let codex = grouped
+            .iter()
+            .find(|(t, _, _)| t.connection_id == "codex-sysle2")
+            .unwrap();
+        assert_eq!(codex.1, vec!["codex-sysle2", "codex-sysle2-terra213"]);
     }
 }

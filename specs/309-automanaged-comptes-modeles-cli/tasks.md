@@ -1,0 +1,8 @@
+# Tâches - Spec 309 : Comptes regroupés, modèles auto-référencés et CLI automanaged
+
+- [x] T001 Regrouper les comptes réels dans `crates/bridget-daemon/src/accounts_connect.rs` (`covered_connections`, `account_label`, déduplication des sondes par `(machine_id, engine, command, profile_dir)`, affichage cartes et CLI) + tests unitaires.
+- [x] T002 Ajouter la sonde native `probe_antigravity` (`agy models`) dans `crates/bridget-daemon/src/provider_catalogue.rs` et sa projection dans `crates/bridget-daemon/src/daemon/native_provider_catalogue.rs` + tests unitaires.
+- [x] T003 Créer `crates/bridget-daemon/src/automanaged.rs` (`bridget automanaged status|on|off|sync`, config par défaut active `automanaged.json`, synchronisation additive atomique des modèles Codex & Antigravity dans `agents.json` + maître `cartae`, mise à jour officielle des CLI `claude`/`codex`/`agy`) et raccorder dans `lib.rs` et `cli.rs` + tests unitaires.
+- [x] T004 Raccorder `automanaged` dans `scripts/update.py` (compatible Python 3.9.6, toutes les 6 h par défaut, isolé des erreurs) et ajouter les contrôles `Automanaged ON/OFF` + « Synchroniser maintenant » dans l'interface `bridget accounts ui`.
+- [x] T005 Exécuter `make fmt`, `make lint`, tests unitaires ciblés + vérification syntaxe Python 3.9 et JS (`node --check`).
+- [ ] T006 Committer et pousser sur `main`, compiler `316-automanaged-comptes-modeles-r1` (macOS ARM64 + Linux Debian 12 sur `sysle2` avec `check-linux-abi.py`), déployer le binaire + `update.py` sur les 4 machines, vérifier en direct (`bridget accounts status`, `bridget delegate --catalogue --observed`, `bridget automanaged status`, `bridget automanaged sync --models`), et faire le ménage.

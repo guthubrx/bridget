@@ -574,3 +574,18 @@ fn claude_auth_status_parses_logged_in_logged_out_and_gclaude_trailing_bytes() {
         Err(CatalogueCause::ProtocolUnavailable)
     );
 }
+
+#[test]
+fn antigravity_models_parser_strips_spinner_and_deduplicates() {
+    let sample = "\r⠋ Fetching available models...\rgemini-4-neon-high             Gemini 4 Neon (High)\ngemini-4-carbon-high           Gemini 4 Carbon (High)\nclaude-opus-5-5-high           Claude Opus 5.5 (High)\ngemini-4-neon-high             Duplicate\nError: ignored\n";
+    let models = parse_antigravity_models(sample);
+    let names: Vec<&str> = models.iter().map(|m| m.model.as_str()).collect();
+    assert_eq!(
+        names,
+        vec![
+            "claude-opus-5-5-high",
+            "gemini-4-carbon-high",
+            "gemini-4-neon-high"
+        ]
+    );
+}

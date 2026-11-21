@@ -240,7 +240,10 @@ fn project_connection_at(
                 None,
                 None,
             )
-        } else if !matches!(connection.engine.as_str(), "codex" | "claude") {
+        } else if !matches!(
+            connection.engine.as_str(),
+            "codex" | "claude" | "antigravity"
+        ) {
             (
                 "unsupported_provider",
                 Some(CatalogueCause::UnsupportedProvider),
@@ -494,6 +497,9 @@ fn project_connection_at(
             "sign_in_required" if connection.engine == "claude" => {
                 "Claude ne rapporte aucun compte connecté sur ce serveur. Demander à l’utilisateur de s’y connecter avec `bridget accounts ui` ou le mécanisme officiel ; aucune copie de secrets. La prochaine observation est automatique."
             }
+            "sign_in_required" if connection.engine == "antigravity" => {
+                "Google Antigravity ne rapporte aucun compte connecté sur ce serveur. Demander à l’utilisateur de s’y connecter avec `bridget accounts ui` ou `agy acp --login` ; aucune copie de secrets. La prochaine observation est automatique."
+            }
             "sign_in_required" => {
                 "Codex ne rapporte aucun compte connecté sur ce serveur. Demander à l’utilisateur de s’y connecter avec `bridget accounts ui` ou le mécanisme officiel et le compte prévu ; aucune copie de secrets. La prochaine observation est automatique."
             }
@@ -564,6 +570,10 @@ fn project_connection_at(
                     "refresh_target_is_guarantee":false}),
                 "claude" => json!({
                     "signals":["credentials_file_metadata","settings_file_metadata","program_metadata","definition_digest","worker_reconnection"],
+                    "external_login_without_file_change":"periodic_check_only","refresh_target_secs":120,
+                    "refresh_target_is_guarantee":false}),
+                "antigravity" => json!({
+                    "signals":["credentials_file_metadata","program_metadata","definition_digest","worker_reconnection"],
                     "external_login_without_file_change":"periodic_check_only","refresh_target_secs":120,
                     "refresh_target_is_guarantee":false}),
                 _ => json!({"signals":[],"status":"unsupported_provider"}),

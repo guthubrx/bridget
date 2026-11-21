@@ -412,6 +412,7 @@ fn run_with_args(args: Vec<String>) {
         },
         "mobile" => crate::mobile::run(&args[2..]),
         "updates" => crate::updates::run(&args[2..]),
+        "automanaged" => crate::automanaged::run(&args[2..]),
         "clients" => crate::client_compatibility::run(&args[2..]),
         "specialists" => cmd_specialists(&args[2..]),
         "accounts" => crate::provider_accounts::run(&args[2..]),
@@ -1028,7 +1029,8 @@ fn print_usage() {
          Daemon & client :\n  \
            worker <OPTIONS>       Lance le worker distant provisionné ; diagnose : lecture locale sans runtime\n  \
            daemon                 Lance le daemon\n  \
-           accounts <OP>          Comptes fournisseurs (status|login|ui|list|prepare|enable|disable|remove)\n  \
+           accounts <OP>          Comptes fournisseurs (status|login|ui|list|prepare|enable|disable|remove)
+  automanaged <OP>       Mises a jour auto CLI et modeles (status|on|off|sync)\n  \
            federate <OP>          Gère les liaisons SSH persistantes (--help)\n  \
            t3 <OP>                Expose les fils t3code comme agents (install|status|uninstall|serve)\n  \
            mcp                    Lance le serveur MCP sur stdio\n  \
