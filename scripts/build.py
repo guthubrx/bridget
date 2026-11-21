@@ -635,6 +635,115 @@ def owner_private_scope(scope):
 # Gardiens de session protégés par le système (non inspectables sans root) :
 # ils tiennent la session SSH ou PAM et n'ouvrent jamais de cache de compilation.
 SESSION_HELPERS = {"sshd", "(sd-pam)"}
+BUILD_PROTECTED_COMMS = frozenset({
+    "cargo", "rustc", "rustdoc", "clippy-driver", "bridget",
+    "cc", "clang", "gcc", "c++", "clang++", "g++", "ld", "lld", "ld64", "ar", "ranlib", "libtool",
+})
+
+
+def process_comm(pid):
+    """Lit le nom court du processus pour distinguer un outil de build d'un processus étranger."""
+    if not pid or not pid.isdigit():
+        return None
+    if sys.platform.startswith("linux"):
+        try:
+            name = Path(f"/proc/{pid}/comm").read_text().strip()
+            return Path(name).name.lower() if name else None
+        except OSError:
+            return None
+    try:
+        result = subprocess.run(
+            ["ps", "-p", pid, "-o", "comm="],
+            capture_output=True, text=True, timeout=2,
+        )
+        if result.returncode != 0:
+            return None
+        name = result.stdout.strip()
+        return Path(name).name.lower() if name else None
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+
+def drop_foreign_unverifiable_records(stdout, scopes, comm_reader=None):
+    """Ignore les descripteurs morts/transitoires (cwd ENOENT ou fd sans type)
+    de processus clairement étrangers aux builds Bridget/Cargo lorsque l'observation
+    est bornée à `scopes`. Fail-closed si la commande est illisible, si c'est un
+    outil de build/Bridget, ou si le processus ouvre déjà un chemin dans `scopes`."""
+    if not scopes:
+        return stdout
+    roots = {Path(scope).resolve() for scope in scopes}
+    reader = comm_reader or process_comm
+    blocks = []
+    cur_pid, cur_lines = None, []
+    for raw in stdout.splitlines(keepends=True):
+        if raw.startswith(b"p"):
+            if cur_lines:
+                blocks.append((cur_pid, cur_lines))
+            cur_pid = raw[1:].strip().decode(errors="replace")
+            cur_lines = [raw]
+        else:
+            cur_lines.append(raw)
+    if cur_lines:
+        blocks.append((cur_pid, cur_lines))
+
+    kept = []
+    for pid, lines in blocks:
+        header = []
+        records = []
+        cur = []
+        for line in lines:
+            if line.startswith(b"f"):
+                if cur:
+                    records.append(cur)
+                cur = [line]
+            elif records or cur:
+                cur.append(line)
+            else:
+                header.append(line)
+        if cur:
+            records.append(cur)
+
+        def _is_foreign_dead_record(rec):
+            fields = {}
+            for line in rec:
+                if line:
+                    fields[chr(line[0])] = os.fsdecode(line[1:].rstrip(b"\r\n"))
+            fd = fields.get("f", "")
+            kind = fields.get("t")
+            name = fields.get("n", "")
+            if fd == "cwd" and name == "cwd|rtd info error: No such file or directory":
+                return True
+            if kind in (None, "unknown") and re.fullmatch(r"[0-9]{1,8}[ruw]?", fd) and not name.startswith("/"):
+                return True
+            return False
+
+        if not any(_is_foreign_dead_record(rec) for rec in records):
+            kept.extend(lines)
+            continue
+
+        touches_scope = False
+        for rec in records:
+            for line in rec:
+                if line.startswith(b"n"):
+                    candidate = os.fsdecode(line[1:].rstrip(b"\r\n")).removesuffix(" (deleted)")
+                    if candidate.startswith("/"):
+                        path = Path(candidate)
+                        if path in roots or not roots.isdisjoint(path.parents):
+                            touches_scope = True
+                            break
+            if touches_scope:
+                break
+
+        comm = None if touches_scope else reader(pid)
+        if touches_scope or comm is None or comm in BUILD_PROTECTED_COMMS:
+            kept.extend(lines)
+            continue
+
+        kept.extend(header)
+        for rec in records:
+            if not _is_foreign_dead_record(rec):
+                kept.extend(rec)
+    return b"".join(kept)
 
 
 def drop_session_helpers(stdout):
@@ -688,13 +797,18 @@ def busy_paths(scopes=(), budget=None, ignore_own=()):
             exempt = foreign_mount_exemptions(result.stderr, scopes, mounts)
             result = observed_run([*command, *(arg for name in exempt for arg in ("-e", name))],
                                   budget, timeout=30)
-            if result.returncode or result.stderr.strip() or not process_output_complete(result.stdout, (*fuse, *exempt), diagnostics):
+            filtered_stdout = drop_foreign_unverifiable_records(result.stdout, scopes)
+            if result.returncode or result.stderr.strip() or not process_output_complete(filtered_stdout, (*fuse, *exempt), diagnostics):
                 if not diagnostics:
                     log(f"Conserver les caches : lecture lsof après exclusion non qualifiée (code={result.returncode}, diagnostics={len(result.stderr)} octets). Faire vérifier ce lecteur et ses diagnostics sur cette machine, sans retirer la garde.")
                 raise ValueError("incomplete scoped observation")
+            result.stdout = filtered_stdout
             budget.exempt_mounts = len(exempt)
-        elif not process_output_complete(result.stdout, fuse, diagnostics):
-            raise ValueError("incomplete process records")
+        else:
+            filtered_stdout = drop_foreign_unverifiable_records(result.stdout, scopes)
+            if not process_output_complete(filtered_stdout, fuse, diagnostics):
+                raise ValueError("incomplete process records")
+            result.stdout = filtered_stdout
         aliases = []
         if before is not None and scopes:
             validate_mount_scopes(scopes, mounts, aliases)

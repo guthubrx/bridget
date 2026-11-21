@@ -211,7 +211,7 @@ federation_set_install_paths() {
 federation_load_config() {
   local path=$1 line key value count=0
   federation_private_file "$path"
-  host= user= port= label= identity= known_hosts= root= socket= remote_root= remote_socket= config_backend= direction=from-master
+  host= user= port= label= identity= known_hosts= root= socket= remote_root= remote_socket= config_backend= direction=from-master mux_slots=0
   while IFS= read -r line || [[ -n "$line" ]]; do
     [[ "$line" == *=* ]] || federation_fail "configuration inerte invalide"
     key=${line%%=*}; value=${line#*=}; count=$((count + 1))
@@ -229,11 +229,14 @@ federation_load_config() {
       11:remote_root) remote_root=$value ;;
       12:remote_socket) remote_socket=$value ;;
       13:direction) direction=$value ;;
+      14:mux_slots) mux_slots=$value ;;
       *) federation_fail "champ ou ordre de configuration invalide : $key" ;;
     esac
   done <"$path"
-  [[ $count == 12 || $count == 13 ]] || federation_fail "configuration incomplète"
+  [[ $count == 12 || $count == 13 || $count == 14 ]] || federation_fail "configuration incomplète"
   [[ "$direction" == from-master || "$direction" == to-master ]] || federation_fail "direction de fédération invalide"
+  [[ "$mux_slots" =~ ^[0-9]+$ ]] && (( 10#$mux_slots >= 0 && 10#$mux_slots <= 16 )) || federation_fail "mux_slots invalide (0..16)"
+  (( 10#$mux_slots == 0 )) || [[ "$direction" == to-master ]] || federation_fail "mux_slots réservé à direction=to-master"
   federation_label "$label"
   [[ "$config_backend" == launchd || "$config_backend" == systemd ]] || federation_fail "backend de configuration invalide"
   [[ "$host" =~ ^[a-zA-Z0-9][a-zA-Z0-9.-]*$ && "$host" != *..* ]] || federation_fail "hôte invalide"
@@ -289,20 +292,20 @@ federation_validate_install() {
 federation_parse_link_args() {
   local allow_dry_run=$1
   shift
-  host= user= port=22 label= identity= known_hosts= root= socket= remote_root= remote_socket= direction=from-master dry_run=false
+  host= user= port=22 label= identity= known_hosts= root= socket= remote_root= remote_socket= direction=from-master mux_slots=0 dry_run=false
   while (( $# )); do
     case "$1" in
       --dry-run)
         [[ "$allow_dry_run" == true ]] || federation_fail "--dry-run réservé à run"
         dry_run=true; shift; continue ;;
-      --host|--user|--port|--label|--identity|--known-hosts|--root|--socket|--remote-root|--remote-socket|--direction)
+      --host|--user|--port|--label|--identity|--known-hosts|--root|--socket|--remote-root|--remote-socket|--direction|--mux-slots)
         (( $# >= 2 )) || federation_fail "valeur absente pour $1" ;;
       *) federation_fail "option inconnue : $1" ;;
     esac
     case "$1" in
       --host) host=$2 ;; --user) user=$2 ;; --port) port=$2 ;; --label) label=$2 ;;
       --identity) identity=$2 ;; --known-hosts) known_hosts=$2 ;; --root) root=$2 ;;
-      --socket) socket=$2 ;; --remote-root) remote_root=$2 ;; --remote-socket) remote_socket=$2 ;; --direction) direction=$2 ;;
+      --socket) socket=$2 ;; --remote-root) remote_root=$2 ;; --remote-socket) remote_socket=$2 ;; --direction) direction=$2 ;; --mux-slots) mux_slots=$2 ;;
     esac
     shift 2
   done
@@ -310,6 +313,8 @@ federation_parse_link_args() {
 
 federation_validate_link() {
   [[ "$direction" == from-master || "$direction" == to-master ]] || federation_fail "direction de fédération invalide"
+  [[ "${mux_slots:-0}" =~ ^[0-9]+$ ]] && (( 10#${mux_slots:-0} >= 0 && 10#${mux_slots:-0} <= 16 )) || federation_fail "mux_slots invalide (0..16)"
+  (( 10#${mux_slots:-0} == 0 )) || [[ "$direction" == to-master ]] || federation_fail "mux_slots réservé à direction=to-master"
   federation_connection
   federation_state_path "$root"
   federation_state_path "$remote_root"
@@ -430,7 +435,17 @@ federation_stream_run() {
   [[ "$direction" == to-master ]] || federation_fail "direction de flux invalide"
   # Observer le premier octet sans le consommer conserve le flux duplex natif.
   python3 -c 'import select,socket,sys; ready=select.select([0],[],[],10)[0]; channel=socket.socket(fileno=0); sys.exit(0 if ready and channel.recv(1,socket.MSG_PEEK) else 1)' || return 0
-  exec ssh "${ssh_args[@]}" "$target" "exec env PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin socat STDIO 'UNIX-CONNECT:$remote_socket'"
+  local -a stream_ssh_args=("${ssh_args[@]}")
+  if (( 10#${mux_slots:-0} > 0 )); then
+    local slot ctl_path
+    slot=$(( RANDOM % 10#$mux_slots ))
+    ctl_path="$install_dir/m${slot}.sock"
+    # OpenSSH applique la première occurrence d'une option : placer ControlMaster avant ssh_args.
+    if (( ${#ctl_path} <= 100 )); then
+      stream_ssh_args=(-o ControlMaster=auto -o "ControlPath=$ctl_path" -o ControlPersist=120 "${ssh_args[@]}")
+    fi
+  fi
+  exec ssh "${stream_ssh_args[@]}" "$target" "exec env PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin socat STDIO 'UNIX-CONNECT:$remote_socket'"
 }
 
 federation_run() {
@@ -465,6 +480,7 @@ federation_write_config() {
     printf 'identity=%s\nknown_hosts=%s\n' "$identity" "$known_hosts"
     printf 'root=%s\nsocket=%s\nremote_root=%s\nremote_socket=%s\n' "$root" "$socket" "$remote_root" "$remote_socket"
     [[ "$direction" != to-master ]] || printf 'direction=to-master\n'
+    (( 10#${mux_slots:-0} == 0 )) || printf 'mux_slots=%s\n' "$((10#$mux_slots))"
   } | federation_atomic_create "$config_path" 600 "configuration"
 }
 
@@ -597,7 +613,7 @@ federation_rollback_file() {
 
 federation_install() {
   local requested_host requested_user requested_port requested_label requested_identity requested_known_hosts
-  local requested_root requested_socket requested_remote_root requested_remote_socket requested_direction
+  local requested_root requested_socket requested_remote_root requested_remote_socket requested_direction requested_mux_slots
   federation_parse_link_args false "$@"
   federation_validate_link
   federation_set_install_paths
@@ -605,10 +621,11 @@ federation_install() {
   requested_identity=$identity; requested_known_hosts=$known_hosts
   requested_root=$root; requested_socket=$socket
   requested_remote_root=$remote_root; requested_remote_socket=$remote_socket; requested_direction=$direction
+  requested_mux_slots=${mux_slots:-0}
   if [[ -e "$install_dir" || -L "$install_dir" || -e "$service_path" || -L "$service_path" ]]; then
     [[ -d "$install_dir" && ! -L "$install_dir" && -f "$service_path" && ! -L "$service_path" ]] || federation_fail "collision avec une installation étrangère : $label"
     federation_validate_install
-    [[ "$host" == "$requested_host" && "$user" == "$requested_user" && "$port" == "$requested_port" && "$label" == "$requested_label" && "$identity" == "$requested_identity" && "$known_hosts" == "$requested_known_hosts" && "$root" == "$requested_root" && "$socket" == "$requested_socket" && "$remote_root" == "$requested_remote_root" && "$remote_socket" == "$requested_remote_socket" && "$direction" == "$requested_direction" ]] || federation_fail "installation existante attestée mais paramètres divergents"
+    [[ "$host" == "$requested_host" && "$user" == "$requested_user" && "$port" == "$requested_port" && "$label" == "$requested_label" && "$identity" == "$requested_identity" && "$known_hosts" == "$requested_known_hosts" && "$root" == "$requested_root" && "$socket" == "$requested_socket" && "$remote_root" == "$requested_remote_root" && "$remote_socket" == "$requested_remote_socket" && "$direction" == "$requested_direction" && "${mux_slots:-0}" == "$requested_mux_slots" ]] || federation_fail "installation existante attestée mais paramètres divergents"
     printf 'Liaison [%s] déjà installée et attestée (%s).\n' "$label" "$backend" >&2
     return 0
   fi
@@ -733,6 +750,12 @@ federation_remove() {
   federation_remove_if_attested "$runner_path" 700 "$receipt_runner_hash"
   federation_remove_log "$stdout_path"; federation_remove_log "$stderr_path"
   federation_remove_if_attested "$receipt_path" 600 "$receipt_self_hash"
+  local mux_sock
+  for mux_sock in "$install_dir"/m[0-9]*.sock; do
+    [[ -S "$mux_sock" ]] || continue
+    ssh "${ssh_args[@]}" -o "ControlPath=$mux_sock" -O exit "$target" >/dev/null 2>&1 || true
+    rm -f -- "$mux_sock"
+  done
   rmdir "$logs_dir" || federation_fail "répertoire de logs non vide : $logs_dir"
   rmdir "$install_dir" || federation_fail "installation contient des fichiers étrangers : $install_dir"
   printf 'Liaison [%s] retirée ; clés SSH et données Bridget conservées.\n' "$label" >&2

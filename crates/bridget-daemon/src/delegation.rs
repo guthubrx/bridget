@@ -1963,6 +1963,123 @@ WHERE state='refused' AND task_id IS NULL;
         Ok(purged)
     }
 
+    /// Purge par lot borné les admissions automatiques abandonnées (`pending`,
+    /// `decision_started`, `chosen`) sans tâche associée et inactives depuis plus de 24 h.
+    /// Pose une pierre tombale dans la même transaction pour rejeter tout rejeu tardif.
+    pub(crate) fn purge_expired_auto_admission_abandoned(
+        &self,
+        now: i64,
+        limit: usize,
+    ) -> Result<usize, String> {
+        if !(1..=128).contains(&limit) {
+            return Err("auto_admission_invalid".into());
+        }
+        let cutoff = now.saturating_sub(24 * 3600);
+        let limit_i64 = i64::try_from(limit).map_err(|_| "auto_admission_invalid")?;
+        let tx = Transaction::new_unchecked(&self.conn, rusqlite::TransactionBehavior::Immediate)
+            .map_err(|error| error.to_string())?;
+        let keys: Vec<(String, String)> = {
+            let mut statement = tx
+                .prepare(
+                    "SELECT receipt.owner, receipt.request_id
+                     FROM auto_admission_receipts AS receipt
+                     WHERE receipt.state IN ('pending', 'decision_started', 'chosen')
+                       AND receipt.task_id IS NULL
+                       AND receipt.updated_at < ?1
+                       AND NOT EXISTS (
+                           SELECT 1 FROM native_delegations AS task
+                           WHERE json_extract(task.payload, '$.owner') = receipt.owner
+                             AND task.request_id = receipt.request_id
+                       )
+                     ORDER BY receipt.updated_at, receipt.owner, receipt.request_id
+                     LIMIT ?2",
+                )
+                .map_err(|error| error.to_string())?;
+            statement
+                .query_map(params![cutoff, limit_i64], |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                })
+                .map_err(|error| error.to_string())?
+                .collect::<rusqlite::Result<Vec<_>>>()
+                .map_err(|error| error.to_string())?
+        };
+        for (owner, request_id) in &keys {
+            tx.execute(
+                "INSERT INTO native_delegation_tombstones(owner,request_id,purged_at) VALUES(?1,?2,?3)
+                 ON CONFLICT(owner,request_id) DO UPDATE SET purged_at=excluded.purged_at",
+                params![owner, request_id, now],
+            )
+            .map_err(|error| error.to_string())?;
+            tx.execute(
+                "DELETE FROM auto_admission_receipts
+                 WHERE owner=?1 AND request_id=?2
+                   AND state IN ('pending', 'decision_started', 'chosen')
+                   AND task_id IS NULL",
+                params![owner, request_id],
+            )
+            .map_err(|error| error.to_string())?;
+        }
+        tx.commit().map_err(|error| error.to_string())?;
+        Ok(keys.len())
+    }
+
+    /// Purge par lot borné (<= 512) les anciens reçus `admitted` (> 14 jours) dont
+    /// la tâche n'existe plus dans `native_delegations`.
+    pub(crate) fn purge_expired_auto_admission_admitted(
+        &self,
+        now: i64,
+        limit: usize,
+    ) -> Result<usize, String> {
+        if !(1..=512).contains(&limit) {
+            return Err("auto_admission_invalid".into());
+        }
+        let cutoff = now.saturating_sub(14 * 24 * 3600);
+        let limit_i64 = i64::try_from(limit).map_err(|_| "auto_admission_invalid")?;
+        let tx = Transaction::new_unchecked(&self.conn, rusqlite::TransactionBehavior::Immediate)
+            .map_err(|error| error.to_string())?;
+        let keys: Vec<(String, String)> = {
+            let mut statement = tx
+                .prepare(
+                    "SELECT receipt.owner, receipt.request_id
+                     FROM auto_admission_receipts AS receipt
+                     WHERE receipt.state = 'admitted'
+                       AND receipt.updated_at < ?1
+                       AND (
+                           receipt.task_id IS NULL
+                           OR NOT EXISTS (
+                               SELECT 1 FROM native_delegations AS task
+                               WHERE task.task_id = receipt.task_id
+                           )
+                       )
+                       AND NOT EXISTS (
+                           SELECT 1 FROM native_delegations AS task
+                           WHERE json_extract(task.payload, '$.owner') = receipt.owner
+                             AND task.request_id = receipt.request_id
+                       )
+                     ORDER BY receipt.updated_at, receipt.owner, receipt.request_id
+                     LIMIT ?2",
+                )
+                .map_err(|error| error.to_string())?;
+            statement
+                .query_map(params![cutoff, limit_i64], |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                })
+                .map_err(|error| error.to_string())?
+                .collect::<rusqlite::Result<Vec<_>>>()
+                .map_err(|error| error.to_string())?
+        };
+        for (owner, request_id) in &keys {
+            tx.execute(
+                "DELETE FROM auto_admission_receipts
+                 WHERE owner=?1 AND request_id=?2 AND state='admitted'",
+                params![owner, request_id],
+            )
+            .map_err(|error| error.to_string())?;
+        }
+        tx.commit().map_err(|error| error.to_string())?;
+        Ok(keys.len())
+    }
+
     /// Passe du service au décideur léger avec l'unique snapshot v2 déjà
     /// préparé par le coordinateur. Le store ne construit ni politique ni
     /// métadonnée : il vérifie seulement le niveau déclaré et le CAS complet.

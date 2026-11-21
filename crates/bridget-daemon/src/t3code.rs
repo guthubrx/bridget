@@ -267,6 +267,10 @@ pub(crate) struct ThreadState {
     pub notification_messages: Vec<String>,
     #[serde(default)]
     pub turn_origins: BTreeMap<String, String>,
+    /// Dernier offset d'octet confirmé par fichier JSONL, pour éviter de relire
+    /// des journaux de plusieurs dizaines de Mo depuis 0 après redémarrage.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub journal_offsets: BTreeMap<String, u64>,
 }
 
 impl ThreadState {
@@ -3907,11 +3911,33 @@ impl LinkWorker {
             .collect();
         paths.sort();
         let mut changed = false;
+        // Ensembles O(1) pour éviter les recherches linéaires O(N²) sur de gros journaux.
+        let mut seen_set: HashSet<String> = self.state.seen.iter().cloned().collect();
+        let mut seen_activities_set: HashSet<String> =
+            self.state.seen_activities.iter().cloned().collect();
+        let mut ended_turns_set: HashSet<String> = self.state.ended_turns.iter().cloned().collect();
+        let active_keys: HashSet<String> = paths
+            .iter()
+            .map(|p| p.to_string_lossy().into_owned())
+            .collect();
+        let prev_offsets_len = self.state.journal_offsets.len();
+        self.state
+            .journal_offsets
+            .retain(|key, _| active_keys.contains(key));
+        if self.state.journal_offsets.len() != prev_offsets_len {
+            changed = true;
+        }
         for path in paths {
-            let reader = self
-                .journal_readers
-                .entry(path.clone())
-                .or_insert_with(|| IncrementalJournalReader::new(path.clone()));
+            let path_key = path.to_string_lossy().into_owned();
+            let saved_offset = self
+                .state
+                .journal_offsets
+                .get(&path_key)
+                .copied()
+                .unwrap_or(0);
+            let reader = self.journal_readers.entry(path.clone()).or_insert_with(|| {
+                IncrementalJournalReader::from_offset(path.clone(), saved_offset)
+            });
             // Budget par tour de boucle ; les lecteurs gardent leur position.
             let items = match reader.read_chunk(4 * 1024 * 1024) {
                 Ok(items) => items,
@@ -3934,7 +3960,7 @@ impl LinkWorker {
                 match value["event"].as_str() {
                     Some("t3_activity_seen") => {
                         if let Some(activity) = value["payload"]["t3_activity_id"].as_str() {
-                            if !self.state.seen_activities.iter().any(|id| id == activity) {
+                            if seen_activities_set.insert(activity.to_string()) {
                                 self.state.seen_activities.push(activity.into());
                                 changed = true;
                             }
@@ -3943,14 +3969,14 @@ impl LinkWorker {
                         }
                     }
                     Some("turn_start" | "update") => {
-                        if !self.state.seen.iter().any(|seen| seen == id) {
+                        if seen_set.insert(id.to_string()) {
                             self.state.remember(id);
                             changed = true;
                         }
                         self.journal_inflight.remove(id);
                     }
                     Some("error") if value["payload"]["gap"] == true => {
-                        if !self.state.seen.iter().any(|seen| seen == id) {
+                        if seen_set.insert(id.to_string()) {
                             self.state.remember(id);
                             changed = true;
                         }
@@ -3958,7 +3984,7 @@ impl LinkWorker {
                     }
                     Some("turn_end") => {
                         if let Some(turn) = value["payload"]["t3_turn_id"].as_str() {
-                            if !self.state.ended_turns.iter().any(|ended| ended == turn) {
+                            if ended_turns_set.insert(turn.to_string()) {
                                 self.state.ended_turns.push(turn.to_string());
                                 changed = true;
                             }
@@ -3969,6 +3995,10 @@ impl LinkWorker {
                 }
             }
             let offset = reader.next_offset();
+            if self.state.journal_offsets.get(&path_key).copied() != Some(offset) {
+                self.state.journal_offsets.insert(path_key, offset);
+                changed = true;
+            }
             let size = std::fs::metadata(&path).map(|m| m.len()).ok();
             if size.is_none_or(|size| offset < size) {
                 self.journal_caught_up = false;

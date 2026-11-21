@@ -4568,3 +4568,45 @@ fn spec279_expired_queued_request_names_budget_and_scope_without_injecting() {
     assert!(reason.contains("propriétaire") && reason.contains("autres travaux"));
     assert!(saga_closed113(&frames, "d-budget279"));
 }
+
+#[test]
+fn spec307_t3_persists_journal_offsets_and_resumes_incrementally() {
+    let (mut worker, _peer) = worker099();
+    worker.state.seeded = true;
+    worker.state.observations_seeded = true;
+    let detail = contract::parse_thread_detail(
+        r#"{"thread":{
+            "messages":[{"id":"u","role":"user","streaming":false,"createdAt":"date"}],
+            "latestTurn":{"turnId":"t","state":"completed","requestedAt":"date"},
+            "activities":[]}}"#,
+    )
+    .unwrap();
+    let summary = summary(Some(("t", "completed")));
+    worker.project_journal(&detail, &summary);
+    worker.journal.stop();
+    worker.confirm_journal();
+
+    let saved = ThreadState::load(&worker.state_path);
+    assert!(
+        !saved.journal_offsets.is_empty(),
+        "l'offset confirmé du journal doit être persisté dans ThreadState"
+    );
+    let persisted_offset = *saved.journal_offsets.values().next().unwrap();
+    assert!(persisted_offset > 0);
+
+    // Simuler un redémarrage : journal_readers vide, état rechargé depuis disque.
+    worker.state = saved;
+    worker.journal_readers.clear();
+    worker.journal_inflight.clear();
+    worker.confirm_journal();
+    assert_eq!(
+        worker
+            .journal_readers
+            .values()
+            .next()
+            .map(|r| r.next_offset()),
+        Some(persisted_offset),
+        "le lecteur reprend directement à l'offset persisté sans relire depuis 0"
+    );
+    worker.relay.shutdown();
+}

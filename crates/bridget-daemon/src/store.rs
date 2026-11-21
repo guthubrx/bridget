@@ -128,6 +128,16 @@ impl Store {
         &self.conn
     }
 
+    /// Entretien SQLite non bloquant : checkpoint WAL passif, récupération
+    /// incrémentale de pages libres si active, et statistiques du planificateur.
+    pub fn maintain_storage(&self) {
+        if let Err(error) = self.conn.execute_batch(
+            "PRAGMA wal_checkpoint(PASSIVE); PRAGMA incremental_vacuum(256); PRAGMA optimize;",
+        ) {
+            log::warn!("entretien: maintenance SQLite ignorée : {error}");
+        }
+    }
+
     /// Session 104 : connexion de lecture seule sur une base existante, sans
     /// création de schéma ni migration. Attente SQLite limitée à 100 ms : un
     /// écrivain long rend `busy`, jamais une file d'attente.
@@ -627,5 +637,19 @@ mod observation_tests {
         store.conn.execute_batch("PRAGMA query_only=ON").unwrap();
         assert!(store.save_observation_snapshot(b"[]").is_err());
         assert_eq!(store.observation_snapshot().unwrap(), b"[{}]");
+    }
+
+    #[test]
+    fn spec307_maintain_storage_runs_passive_checkpoint_vacuum_and_optimize() {
+        let root =
+            std::env::temp_dir().join(format!("bg307-store-{}", uuid::Uuid::new_v4().simple()));
+        bridget_transport::fsutil::create_private_dir(&root).unwrap();
+        let path = root.join("state.db");
+        let store = Store::open(&path).unwrap();
+        store.save_observation_snapshot(b"[{}]").unwrap();
+        store.maintain_storage();
+        assert_eq!(store.observation_snapshot().unwrap(), b"[{}]");
+        drop(store);
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

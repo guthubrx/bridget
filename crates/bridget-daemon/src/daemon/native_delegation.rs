@@ -17280,6 +17280,22 @@ pub(super) fn maintain_retention(st: &DaemonState, now: i64) {
     if let Err(error) = st.delegation_store.purge_expired_refusals(now) {
         warn!("entretien: reçus de refus de délégation : {error}");
     }
+    match st
+        .delegation_store
+        .purge_expired_auto_admission_abandoned(now, 128)
+    {
+        Ok(0) => {}
+        Ok(count) => info!("entretien: {count} admission(s) auto abandonnée(s) (> 24 h) purgée(s)"),
+        Err(error) => warn!("entretien: admissions auto abandonnées : {error}"),
+    }
+    match st
+        .delegation_store
+        .purge_expired_auto_admission_admitted(now, 512)
+    {
+        Ok(0) => {}
+        Ok(count) => info!("entretien: {count} reçu(s) auto admitted (> 14 j) purgé(s)"),
+        Err(error) => warn!("entretien: reçus auto admitted : {error}"),
+    }
     let pruned = prune_decommissioned_fleet_children(st);
     if pruned > 0 {
         info!(

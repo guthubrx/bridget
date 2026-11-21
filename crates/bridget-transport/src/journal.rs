@@ -740,11 +740,18 @@ pub struct IncrementalJournalReader {
 
 impl IncrementalJournalReader {
     pub fn new(path: impl Into<PathBuf>) -> Self {
+        Self::from_offset(path, 0)
+    }
+
+    /// Crée un lecteur reprenant à un offset d'octet déjà confirmé.
+    /// Si le fichier sur disque est plus court que `offset` (rotation ou troncature),
+    /// `read_chunk_with_source` repart automatiquement de 0.
+    pub fn from_offset(path: impl Into<PathBuf>, offset: u64) -> Self {
         Self {
             path: path.into(),
-            next_offset: 0,
+            next_offset: offset,
             next_line: 1,
-            pending_offset: 0,
+            pending_offset: offset,
             pending: Vec::new(),
             discarding: None,
         }
@@ -786,6 +793,13 @@ impl IncrementalJournalReader {
             ino: metadata.ino(),
             len: metadata.len(),
         };
+        if metadata.len() < self.next_offset {
+            self.next_offset = 0;
+            self.pending_offset = 0;
+            self.next_line = 1;
+            self.pending.clear();
+            self.discarding = None;
+        }
         file.seek(SeekFrom::Start(self.next_offset))?;
         let mut chunk = vec![0; max_bytes];
         let count = file.read(&mut chunk)?;

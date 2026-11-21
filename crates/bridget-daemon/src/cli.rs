@@ -6832,6 +6832,7 @@ struct DirectoryArgs {
     json: bool,
     domain: Option<String>,
     global: bool,
+    all: bool,
     project_root: Option<String>,
 }
 
@@ -6844,6 +6845,7 @@ fn parse_directory_args(
         json: false,
         domain: None,
         global: false,
+        all: false,
         project_root: None,
     };
     let mut index = 0;
@@ -6865,6 +6867,8 @@ fn parse_directory_args(
             "--domain" => return Err(format!("{command}: option dupliquée: --domain")),
             "--global" if !parsed.global => parsed.global = true,
             "--global" => return Err(format!("{command}: option dupliquée: --global")),
+            "--all" if !allow_json && !parsed.all => parsed.all = true,
+            "--all" if !allow_json => return Err(format!("{command}: option dupliquée: --all")),
             "--project-root" if parsed.project_root.is_none() => {
                 parsed.project_root = Some(option_value(args, &mut index, "--project-root")?);
             }
@@ -7697,10 +7701,32 @@ fn cmd_inbox(args: &[String]) {
     }
 }
 
+fn is_hidden_stopped_subagent(agent: &AgentInfo) -> bool {
+    agent.state == "stopped" && uuid::Uuid::parse_str(&agent.agent_id).is_ok()
+}
+
+fn filter_who_agents(agents: Vec<AgentInfo>, include_all: bool) -> (Vec<AgentInfo>, usize) {
+    if include_all {
+        return (agents, 0);
+    }
+    let mut visible = Vec::with_capacity(agents.len());
+    let mut hidden = 0usize;
+    for agent in agents {
+        if is_hidden_stopped_subagent(&agent) {
+            hidden += 1;
+        } else {
+            visible.push(agent);
+        }
+    }
+    (visible, hidden)
+}
+
 fn cmd_who(args: &[String]) {
     let parsed = parse_directory_args("who", args, false).unwrap_or_else(|error| {
         eprintln!("bridget {error}");
-        eprintln!("usage: bridget who [--domain <nom>] [--global] [--project-root <racine>]");
+        eprintln!(
+            "usage: bridget who [--domain <nom>] [--global] [--all] [--project-root <racine>]"
+        );
         crate::cli_table::exit(2);
     });
     let config = DaemonConfig::default();
@@ -7712,7 +7738,10 @@ fn cmd_who(args: &[String]) {
 
     let build_id = status.build_id.as_deref().unwrap_or("inconnu");
     let scoped = scoped_directory_or_exit("who", &parsed, &config.socket_path);
-    let agents: Vec<_> = scoped.iter().map(|agent| agent.agent.clone()).collect();
+    let (agents, hidden_stopped) = filter_who_agents(
+        scoped.iter().map(|agent| agent.agent.clone()).collect(),
+        parsed.all,
+    );
 
     if crate::cli_table::active() {
         println!(
@@ -7721,9 +7750,17 @@ fn cmd_who(args: &[String]) {
         );
     } else {
         print!("{}", render_who(&agents, parsed.domain.as_deref()));
+        if hidden_stopped > 0 {
+            println!(
+                "({hidden_stopped} sous-agent(s) arrêté(s) masqué(s) ; utiliser --all pour tout afficher)"
+            );
+        }
     }
     if parsed.global && !crate::cli_table::active() {
         for agent in &scoped {
+            if !parsed.all && is_hidden_stopped_subagent(&agent.agent) {
+                continue;
+            }
             println!(
                 "Projet de {} : {} ; relation {:?}",
                 agent.agent.display_name,
@@ -9254,5 +9291,47 @@ mod message244_tests {
         assert_eq!(plan["side_effects"], "none");
         assert_eq!(plan["payload"]["role"], "reviewer");
         assert_eq!(plan["fleet"]["registry_agents"], 0);
+    }
+
+    #[test]
+    fn spec307_who_hides_stopped_uuid_subagents_unless_all() {
+        let parsed = super::parse_directory_args("who", &["--all".into()], false).unwrap();
+        assert!(parsed.all);
+        assert!(super::parse_directory_args("agents", &["--all".into()], true).is_err());
+
+        let make_agent = |id: &str, state: &str| -> bridget_transport::protocol::AgentInfo {
+            serde_json::from_value(serde_json::json!({
+                "agent_id": id,
+                "display_name": id,
+                "agent_type": "codex",
+                "connection_id": "c1",
+                "host": "cartae",
+                "transport": "acp",
+                "state": state,
+                "last_seen_secs": 0,
+                "reconnect_count": 0
+            }))
+            .unwrap()
+        };
+        let stopped_uuid = make_agent("30700000-0000-4000-8000-0000000000aa", "stopped");
+        let active_uuid = make_agent("30700000-0000-4000-8000-0000000000bb", "idle");
+        let stopped_named = make_agent("chef-projet", "stopped");
+
+        let (visible, hidden) = super::filter_who_agents(
+            vec![
+                stopped_uuid.clone(),
+                active_uuid.clone(),
+                stopped_named.clone(),
+            ],
+            false,
+        );
+        assert_eq!(hidden, 1);
+        assert_eq!(visible.len(), 2);
+        assert!(visible.iter().all(|a| a.agent_id != stopped_uuid.agent_id));
+
+        let (all_visible, all_hidden) =
+            super::filter_who_agents(vec![stopped_uuid, active_uuid, stopped_named], true);
+        assert_eq!(all_hidden, 0);
+        assert_eq!(all_visible.len(), 3);
     }
 }

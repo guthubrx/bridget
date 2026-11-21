@@ -546,6 +546,51 @@ class Federation095(unittest.TestCase):
         for action in ['install', 'status', 'remove']:
             self.run_script([action, 'historique'], success=False)
 
+    def test307_mux_slots_persisted_for_to_master_and_rejected_for_from_master(self):
+        target = self.remote / 'master.sock'
+        local_sock = self.local / 'bridget.sock'
+        live = socket.socket(socket.AF_UNIX)
+        live.bind(str(target))
+        live.listen(1)
+        try:
+            # Rejet sur from-master et hors bornes.
+            self.run_script(['install', '--label', 'badmux', '--host', 'peer.example', '--user', 'alice',
+                             '--identity', str(self.identity), '--known-hosts', str(self.known),
+                             '--root', str(self.local), '--socket', str(local_sock),
+                             '--remote-root', str(self.remote), '--remote-socket', str(target),
+                             '--direction', 'from-master', '--mux-slots', '4'], success=False)
+            self.run_script(['install', '--label', 'badmux2', '--host', 'peer.example', '--user', 'alice',
+                             '--identity', str(self.identity), '--known-hosts', str(self.known),
+                             '--root', str(self.local), '--socket', str(local_sock),
+                             '--remote-root', str(self.remote), '--remote-socket', str(target),
+                             '--direction', 'to-master', '--mux-slots', '17'], success=False)
+            # Accepté sur to-master dans 1..16 et attesté dans config.
+            self.run_script(['install', '--label', 'muxok', '--host', 'peer.example', '--user', 'alice',
+                             '--identity', str(self.identity), '--known-hosts', str(self.known),
+                             '--root', str(self.local), '--socket', str(local_sock),
+                             '--remote-root', str(self.remote), '--remote-socket', str(target),
+                             '--direction', 'to-master', '--mux-slots', '8'])
+            cfg = (self.home / '.local/share/bridget-federation/muxok/config').read_text()
+            self.assertIn('direction=to-master\n', cfg)
+            self.assertIn('mux_slots=8\n', cfg)
+            # Réinstallation idempotente avec les mêmes paramètres OK, divergente refusée.
+            self.run_script(['install', '--label', 'muxok', '--host', 'peer.example', '--user', 'alice',
+                             '--identity', str(self.identity), '--known-hosts', str(self.known),
+                             '--root', str(self.local), '--socket', str(local_sock),
+                             '--remote-root', str(self.remote), '--remote-socket', str(target),
+                             '--direction', 'to-master', '--mux-slots', '8'])
+            self.run_script(['install', '--label', 'muxok', '--host', 'peer.example', '--user', 'alice',
+                             '--identity', str(self.identity), '--known-hosts', str(self.known),
+                             '--root', str(self.local), '--socket', str(local_sock),
+                             '--remote-root', str(self.remote), '--remote-socket', str(target),
+                             '--direction', 'to-master', '--mux-slots', '4'], success=False)
+            self.run_script(['status', '--label', 'muxok'])
+            self.run_script(['remove', '--label', 'muxok'])
+        finally:
+            live.close()
+            if target.exists():
+                target.unlink()
+
 
 unittest.main(verbosity=2)
 PY

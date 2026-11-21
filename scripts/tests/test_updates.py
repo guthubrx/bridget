@@ -166,6 +166,25 @@ class Updates179Tests(unittest.TestCase):
             self.assertFalse(any(call.args[1]=="prepare" for call in rpc.call_args_list))
             self.assertEqual(updater.link.resolve(),old)
 
+    def test307_installed_up_to_date_clears_stale_candidate_despite_old_probe_block(self):
+        with tempfile.TemporaryDirectory() as temp:
+            updater, old, _new = self.fixture(Path(temp))
+            updater.save(
+                candidate={"version": "0.5.0", "url": update.BASE + "v0.5.0/bridget-0.5.0-x.tar.gz",
+                           "size": 10, "sha256": "0" * 64, "member": "bridget-0.5.0-x/bridget"},
+                client_probe_block_generation=0,
+                error="update_client_check_unavailable",
+            )
+            with patch.object(update, "rpc", return_value={"status": "ok", "automatic": True, "check_generation": 0}), \
+                 patch.object(update, "healthy", return_value=True), \
+                 patch.object(update, "client_check") as check, \
+                 patch.object(update, "restart") as restart:
+                updater.step()
+            check.assert_not_called()
+            restart.assert_not_called()
+            self.assertEqual(updater.state["stage"], "up_to_date")
+            self.assertIsNone(updater.state["candidate"])
+
     def test209_both_candidate_streams_are_bounded_without_raw_output(self):
         with tempfile.TemporaryDirectory() as temp:
             p=Path(temp)/"probe"

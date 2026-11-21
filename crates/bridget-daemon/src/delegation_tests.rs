@@ -2881,3 +2881,206 @@ fn spec234_pending_keeps_cancelled_unpublished_view_until_native_conservation() 
     drop(store);
     std::fs::remove_dir_all(root).unwrap();
 }
+
+#[test]
+fn spec307_purge_abandoned_and_admitted_auto_admission_receipts() {
+    let store = DelegationStore::open(Path::new(":memory:")).unwrap();
+    let owner = "owner-purge-307";
+    let now = 2_000_000_i64;
+    let old_abandoned_at = now - (24 * 3600) - 60;
+    let fresh_abandoned_at = now - 300;
+    let old_admitted_at = now - (14 * 86_400) - 60;
+    let fresh_admitted_at = now - 3600;
+
+    // 1. Reçu abandonné (chosen, task_id IS NULL, > 24 h) : doit être purgé avec pierre tombale.
+    let old_chosen = auto_receipt163(owner, "abandoned-old", 1, old_abandoned_at);
+    assert!(store.insert_auto_admission_receipt(&old_chosen).unwrap());
+    let old_chosen = store
+        .start_auto_decision(&old_chosen, old_abandoned_at)
+        .unwrap();
+    let _old_chosen = store
+        .choose_auto_admission(
+            owner,
+            "abandoned-old",
+            &old_chosen.canonical,
+            "c01".into(),
+            b"delegate-abandoned-old".to_vec(),
+            AutoAdmissionMode::Automatic,
+            None,
+            old_abandoned_at,
+        )
+        .unwrap();
+
+    // 2. Reçu pending récent (< 24 h) : doit être conservé.
+    let fresh_pending = auto_receipt163(owner, "pending-fresh", 1, fresh_abandoned_at);
+    assert!(store.insert_auto_admission_receipt(&fresh_pending).unwrap());
+
+    // 3. Reçu admitted > 14 j dont la tâche n'existe plus : doit être purgé.
+    let old_admitted = auto_receipt163(owner, "admitted-orphan", 1, old_admitted_at);
+    assert!(store.insert_auto_admission_receipt(&old_admitted).unwrap());
+    let old_admitted = store
+        .start_auto_decision(&old_admitted, old_admitted_at)
+        .unwrap();
+    let old_admitted = store
+        .choose_auto_admission(
+            owner,
+            "admitted-orphan",
+            &old_admitted.canonical,
+            "c01".into(),
+            b"delegate-admitted-orphan".to_vec(),
+            AutoAdmissionMode::Automatic,
+            None,
+            old_admitted_at,
+        )
+        .unwrap();
+    let mut orphan_task = legacy_task151();
+    orphan_task.owner = owner.into();
+    orphan_task.root_owner_agent_id = owner.into();
+    orphan_task.task_id = "30700000-0000-4000-8000-000000000001".into();
+    orphan_task.child = "30700000-0000-4000-8000-000000000002".into();
+    orphan_task.mission = "30700000-0000-4000-8000-000000000003".into();
+    store
+        .admit_auto_task(
+            &old_admitted,
+            &orphan_task,
+            "admitted-orphan",
+            b"delegate-admitted-orphan",
+            old_admitted_at,
+        )
+        .unwrap();
+    store
+        .conn
+        .execute(
+            "DELETE FROM native_delegations WHERE task_id = ?1",
+            params![orphan_task.task_id],
+        )
+        .unwrap();
+
+    // 4. Reçu admitted > 14 j mais tâche encore présente : doit être conservé.
+    let old_kept = auto_receipt163(owner, "admitted-active", 1, old_admitted_at);
+    assert!(store.insert_auto_admission_receipt(&old_kept).unwrap());
+    let old_kept = store
+        .start_auto_decision(&old_kept, old_admitted_at)
+        .unwrap();
+    let old_kept = store
+        .choose_auto_admission(
+            owner,
+            "admitted-active",
+            &old_kept.canonical,
+            "c01".into(),
+            b"delegate-admitted-active".to_vec(),
+            AutoAdmissionMode::Automatic,
+            None,
+            old_admitted_at,
+        )
+        .unwrap();
+    let mut live_task = legacy_task151();
+    live_task.owner = owner.into();
+    live_task.root_owner_agent_id = owner.into();
+    live_task.task_id = "30700000-0000-4000-8000-000000000004".into();
+    live_task.child = "30700000-0000-4000-8000-000000000005".into();
+    live_task.mission = "30700000-0000-4000-8000-000000000006".into();
+    store
+        .admit_auto_task(
+            &old_kept,
+            &live_task,
+            "admitted-active",
+            b"delegate-admitted-active",
+            old_admitted_at,
+        )
+        .unwrap();
+
+    // 5. Reçu admitted récent (< 14 j) sans tâche : doit être conservé.
+    let fresh_admitted = auto_receipt163(owner, "admitted-fresh", 1, fresh_admitted_at);
+    assert!(
+        store
+            .insert_auto_admission_receipt(&fresh_admitted)
+            .unwrap()
+    );
+    let fresh_admitted = store
+        .start_auto_decision(&fresh_admitted, fresh_admitted_at)
+        .unwrap();
+    let fresh_admitted = store
+        .choose_auto_admission(
+            owner,
+            "admitted-fresh",
+            &fresh_admitted.canonical,
+            "c01".into(),
+            b"delegate-admitted-fresh".to_vec(),
+            AutoAdmissionMode::Automatic,
+            None,
+            fresh_admitted_at,
+        )
+        .unwrap();
+    let mut fresh_task = legacy_task151();
+    fresh_task.owner = owner.into();
+    fresh_task.root_owner_agent_id = owner.into();
+    fresh_task.task_id = "30700000-0000-4000-8000-000000000007".into();
+    fresh_task.child = "30700000-0000-4000-8000-000000000008".into();
+    fresh_task.mission = "30700000-0000-4000-8000-000000000009".into();
+    store
+        .admit_auto_task(
+            &fresh_admitted,
+            &fresh_task,
+            "admitted-fresh",
+            b"delegate-admitted-fresh",
+            fresh_admitted_at,
+        )
+        .unwrap();
+    store
+        .conn
+        .execute(
+            "DELETE FROM native_delegations WHERE task_id = ?1",
+            params![fresh_task.task_id],
+        )
+        .unwrap();
+
+    let purged_abandoned = store
+        .purge_expired_auto_admission_abandoned(now, 128)
+        .unwrap();
+    assert_eq!(purged_abandoned, 1);
+    assert_eq!(
+        store
+            .auto_admission_receipt(owner, "abandoned-old")
+            .unwrap_err(),
+        "request_expired"
+    );
+    assert!(
+        store
+            .auto_admission_receipt(owner, "pending-fresh")
+            .unwrap()
+            .is_some()
+    );
+    let tombstone_count: i64 = store
+        .conn
+        .query_row(
+            "SELECT COUNT(*) FROM native_delegation_tombstones WHERE owner = ?1 AND request_id = 'abandoned-old'",
+            params![owner],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(tombstone_count, 1);
+
+    let purged_admitted = store
+        .purge_expired_auto_admission_admitted(now, 512)
+        .unwrap();
+    assert_eq!(purged_admitted, 1);
+    assert!(
+        store
+            .auto_admission_receipt(owner, "admitted-orphan")
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        store
+            .auto_admission_receipt(owner, "admitted-active")
+            .unwrap()
+            .is_some()
+    );
+    assert!(
+        store
+            .auto_admission_receipt(owner, "admitted-fresh")
+            .unwrap()
+            .is_some()
+    );
+}

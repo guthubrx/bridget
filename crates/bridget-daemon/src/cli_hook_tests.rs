@@ -548,6 +548,7 @@ fn parseurs_structures_conservent_les_formes_documentees_et_le_hook_fail_soft() 
             json: true,
             domain: Some("revue".to_string()),
             global: false,
+            all: false,
             project_root: None,
         }
     );

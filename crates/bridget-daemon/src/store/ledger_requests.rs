@@ -101,6 +101,40 @@ impl Store {
             .map_err(StoreError::Sqlite)
     }
 
+    /// Charge tous les noms d'affichage en une seule requête SQL (évite le N+1 de `list_agents`).
+    pub fn agent_display_names(
+        &self,
+    ) -> Result<std::collections::HashMap<String, String>, StoreError> {
+        let has_profiles = self
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master
+                 WHERE type = 'table' AND name = 'agent_profiles'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .map_err(StoreError::Sqlite)?
+            > 0;
+        if !has_profiles {
+            return Ok(std::collections::HashMap::new());
+        }
+        let mut statement = self
+            .conn
+            .prepare("SELECT agent_id, display_name FROM agent_profiles")
+            .map_err(StoreError::Sqlite)?;
+        let rows = statement
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })
+            .map_err(StoreError::Sqlite)?;
+        let mut names = std::collections::HashMap::new();
+        for row in rows {
+            let (agent_id, display_name) = row.map_err(StoreError::Sqlite)?;
+            names.insert(agent_id, display_name);
+        }
+        Ok(names)
+    }
+
     /// Enregistre un échantillon de consommation attesté. Jamais de zéro inventé
     /// ici : l'appelant n'émet que des faits complets du pilote.
     pub fn record_usage_sample(
@@ -1426,5 +1460,38 @@ mod spec104_index_tests {
             assert_eq!(count, 2);
         }
         let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn spec307_agent_display_names_loads_profiles_in_one_query() {
+        let store = crate::store::Store::open(std::path::Path::new(":memory:")).unwrap();
+        assert!(store.agent_display_names().unwrap().is_empty());
+        store
+            .connection()
+            .execute_batch(
+                "CREATE TABLE agent_profiles (
+                    agent_id TEXT PRIMARY KEY,
+                    display_name TEXT NOT NULL
+                );",
+            )
+            .unwrap();
+        store
+            .connection()
+            .execute(
+                "INSERT INTO agent_profiles(agent_id, display_name) VALUES (?1, ?2)",
+                rusqlite::params!["agent-a", "Alpha"],
+            )
+            .unwrap();
+        store
+            .connection()
+            .execute(
+                "INSERT INTO agent_profiles(agent_id, display_name) VALUES (?1, ?2)",
+                rusqlite::params!["agent-b", "Beta"],
+            )
+            .unwrap();
+        let names = store.agent_display_names().unwrap();
+        assert_eq!(names.get("agent-a").map(String::as_str), Some("Alpha"));
+        assert_eq!(names.get("agent-b").map(String::as_str), Some("Beta"));
+        assert_eq!(names.len(), 2);
     }
 }

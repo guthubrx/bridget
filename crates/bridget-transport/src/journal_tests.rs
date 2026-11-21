@@ -797,3 +797,28 @@ fn fenetres_resolvent_rotation_seq_inclusif_et_vide() {
     assert!(!is_date("2026-02-29"));
     assert!(!is_date("2026-04-31"));
 }
+
+#[test]
+fn spec307_incremental_reader_from_offset_skips_prefix_and_resets_on_truncation() {
+    let dir = root("from-offset");
+    create_private_dir(&dir).unwrap();
+    let path = dir.join("2026-11-21.jsonl");
+    let line1 = "{\"v\":1,\"seq\":1}\n";
+    let line2 = "{\"v\":1,\"seq\":2}\n";
+    fs::write(&path, format!("{line1}{line2}")).unwrap();
+
+    let mut reader = IncrementalJournalReader::from_offset(&path, line1.len() as u64);
+    let items = reader.read_chunk(4096).unwrap();
+    assert_eq!(items.len(), 1);
+    assert!(matches!(&items[0], JournalReadItem::Event(e) if e.seq == 2));
+    assert_eq!(reader.next_offset(), (line1.len() + line2.len()) as u64);
+
+    // Troncature du fichier : le lecteur revient à 0 automatiquement.
+    let line3 = "{\"v\":1,\"seq\":3}\n";
+    fs::write(&path, line3).unwrap();
+    let items = reader.read_chunk(4096).unwrap();
+    assert_eq!(items.len(), 1);
+    assert!(matches!(&items[0], JournalReadItem::Event(e) if e.seq == 3 && e.offset == 0));
+    assert_eq!(reader.next_offset(), line3.len() as u64);
+    fs::remove_dir_all(&dir).unwrap();
+}

@@ -74,6 +74,42 @@ class CleanupTests(unittest.TestCase):
         self.assertNotIn("customer", json.dumps(notes))
         self.assertEqual(notes[0]["code"], "process_record_unverifiable")
 
+    def test307_drop_foreign_unverifiable_records_ignores_external_dead_cwd_only(self):
+        scope = self.repo / "target"
+        scope.mkdir()
+        raw = (
+            b"p9001\nfcwd\nncwd|rtd info error: No such file or directory\nf4\ntREG\nn/tmp/other\n"
+            b"p9002\nf3\ntREG\nn" + str(scope / "deps/x").encode() + b"\n"
+        )
+        # Processus étranger (`uv`) hors scope : le cwd mort est filtré.
+        filtered = build.drop_foreign_unverifiable_records(
+            raw, [scope], comm_reader=lambda pid: "uv" if pid == "9001" else "cargo"
+        )
+        self.assertTrue(build.process_output_complete(filtered))
+        self.assertIn(scope / "deps/x", build.parse_open_paths(filtered))
+
+        # Processus de build (`cargo`) avec cwd mort : conservé (fail-closed).
+        kept_cargo = build.drop_foreign_unverifiable_records(
+            raw, [scope], comm_reader=lambda _pid: "cargo"
+        )
+        self.assertFalse(build.process_output_complete(kept_cargo))
+
+        # Commande illisible (`None`) : conservé (fail-closed).
+        kept_unknown = build.drop_foreign_unverifiable_records(
+            raw, [scope], comm_reader=lambda _pid: None
+        )
+        self.assertFalse(build.process_output_complete(kept_unknown))
+
+        # Processus étranger mais avec un fichier ouvert dans le scope : conservé (fail-closed).
+        touching = (
+            b"p9003\nfcwd\nncwd|rtd info error: No such file or directory\n"
+            b"f5\ntREG\nn" + str(scope / "build/y").encode() + b"\n"
+        )
+        kept_touching = build.drop_foreign_unverifiable_records(
+            touching, [scope], comm_reader=lambda _pid: "uv"
+        )
+        self.assertFalse(build.process_output_complete(kept_touching))
+
     def test_cache_seul_supprime_executable_sources_et_sauvegardes_conserves(self):
         path = self.profile()
         (self.repo / "source.rs").write_text("source")

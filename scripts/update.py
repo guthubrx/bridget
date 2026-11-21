@@ -542,9 +542,6 @@ class Updater:
             self.report("disabled", self.state.get("available"))
             return
         installed = binary_version(self.link)
-        if self.state.get("client_probe_block_generation") == policy.get("check_generation", 0):
-            self.report("client_check_unavailable", self.state.get("available"))
-            return
         pending = self.state.get("candidate")
         if force or requested or time.time() - self.state.get("checked_at", 0) >= CHECK_INTERVAL:
             # Record attempt before I/O, so an outage does not cause a 60-second download loop.
@@ -555,13 +552,21 @@ class Updater:
             self.save(candidate=pending)
         if not pending or version(pending["version"]) <= version(installed):
             if healthy(self.system, self.services, self.link, installed, time.monotonic() + 2):
+                if pending is not None:
+                    self.save(candidate=None, error=None)
                 self.report("up_to_date")
             elif automatic or manual:
+                if self.state.get("client_probe_block_generation") == policy.get("check_generation", 0):
+                    self.report("client_check_unavailable", installed)
+                    return
                 # A newer executable on disk does not prove that every service loaded it.
                 self.report("ready", installed)
                 self.activate(self.link.resolve(), installed, manual)
             else:
                 self.report("waiting_idle", installed)
+            return
+        if self.state.get("client_probe_block_generation") == policy.get("check_generation", 0):
+            self.report("client_check_unavailable", self.state.get("available"))
             return
         # Revalidate persisted release metadata, never trust an arbitrary persisted URL.
         v = pending["version"]
