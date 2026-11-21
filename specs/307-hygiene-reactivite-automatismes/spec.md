@@ -1,6 +1,6 @@
 # Spécification 307 : Hygiène, réactivité et déblocage des automatismes Bridget
 
-**Statut** : En cours
+**Statut** : Implémenté et livré (build `309-hygiene-reactivite-r1` actif sur `monordinateur`, `cartae`, `sysle2`, `ksstore` ; `com.bridget.t3` en attente de confirmation utilisateur)
 **Branche** : `main` (décision branche unique du 10 novembre 2026)
 **Date** : 2026-11-21
 **Dépendances** : specs 089/095 (fédération SSH), 116 (entretien périodique), 150 (rétention délégation native), 209/221 (mises à jour vérifiées), 306 (audit complet).
