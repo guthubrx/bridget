@@ -31,6 +31,10 @@ pub(crate) fn permits_command_execution(policy: &Value, requires_workspace_write
                     })
                 })
         }
+        Some("acp") => {
+            policy["permission_mode"] == "full-access"
+                || (!requires_workspace_write && policy["permission_mode"] == "plan")
+        }
         _ => false,
     }
 }
@@ -150,6 +154,12 @@ fn native_t3_codex_scope(parent: &ProviderPermissions, definition: &AgentDefinit
     parent.driver == "claude_stream_json"
         && definition.protocol == "codex_app_server"
         && definition.mcp.interactive == "codex"
+        && unrestricted_source_scope(parent)
+}
+
+fn native_t3_acp_scope(parent: &ProviderPermissions, definition: &AgentDefinition) -> bool {
+    parent.driver == "claude_stream_json"
+        && definition.protocol == "acp"
         && unrestricted_source_scope(parent)
 }
 
@@ -745,6 +755,7 @@ pub(crate) fn project_remote_permissions_in_operation(
             .as_array()
             .is_some_and(|rules| rules.iter().any(|rule| rule == "mcp__t3-code__*"))
         && !native_t3_codex_scope(parent, definition)
+        && !native_t3_acp_scope(parent, definition)
     {
         require_isolated_claude_mount171(definition)?;
     }
@@ -2519,6 +2530,138 @@ fn child_policy_reader_catalogue_scope171<'a>(
                 }
                 policy = json!({"kind":"codex","approval_policy":"never","approvals_reviewer":"user","sandbox_policy":if read{json!({"type":"readOnly","networkAccess":false})}else{json!({"type":"dangerFullAccess"})}});
             }
+            ("acp", "acp") => {
+                let read = readonly || policy["permission_mode"] == "plan";
+                if !read && policy["permission_mode"] != "full-access" {
+                    return Err("permission_mapping_unavailable".into());
+                }
+                policy = json!({
+                    "kind": "acp",
+                    "permission_mode": if read { "plan" } else { "full-access" }
+                });
+            }
+            ("acp", "codex_app_server") => {
+                let read = readonly || policy["permission_mode"] == "plan";
+                if !read && policy["permission_mode"] != "full-access" {
+                    return Err("permission_mapping_unavailable".into());
+                }
+                policy = json!({
+                    "kind": "codex",
+                    "approval_policy": "never",
+                    "approvals_reviewer": "user",
+                    "sandbox_policy": if read {
+                        json!({"type": "readOnly", "networkAccess": false})
+                    } else {
+                        json!({"type": "dangerFullAccess"})
+                    }
+                });
+            }
+            ("acp", "claude_stream_json") => {
+                let read = readonly || policy["permission_mode"] == "plan";
+                if !read && policy["permission_mode"] != "full-access" {
+                    return Err("permission_mapping_unavailable".into());
+                }
+                policy = json!({
+                    "kind": "claude",
+                    "permission_mode": if read { "plan" } else { "bypassPermissions" },
+                    "tools": {"type": "preset", "preset": "claude_code"},
+                    "permission_callback": {
+                        "kind": "native_wrapper",
+                        "tool_approval": "allow",
+                        "plan_exit": "deny"
+                    },
+                    "settings_sources": "provider_default",
+                    "launch_context": captured
+                        .get_or_insert_with(|| capture_context(definition, cwd, source))
+                        .clone()?
+                });
+                if read {
+                    policy["tools"] = json!(["Read", "Glob", "Grep"]);
+                    policy["disallowed_tools"] = json!([
+                        "Bash",
+                        "Edit",
+                        "Write",
+                        "NotebookEdit",
+                        "WebFetch",
+                        "WebSearch"
+                    ]);
+                }
+            }
+            ("codex_app_server", "acp") => {
+                let inherited_readonly = policy["sandbox_policy"]["type"] == "readOnly";
+                if inherited_readonly
+                    && !readonly
+                    && policy["sandbox_policy"].get("networkAccess") != Some(&Value::Bool(false))
+                {
+                    return Err("permission_mapping_unavailable".into());
+                }
+                let read = readonly || inherited_readonly;
+                if !read && policy["sandbox_policy"]["type"] != "dangerFullAccess" {
+                    return Err("provider_confinement_unavailable".into());
+                }
+                if !read && policy["approval_policy"] != "never" {
+                    return Err("permission_mapping_unavailable".into());
+                }
+                policy = json!({
+                    "kind": "acp",
+                    "permission_mode": if read { "plan" } else { "full-access" }
+                });
+            }
+            ("claude_stream_json", "acp") => {
+                let native_scope = native_t3_acp_scope(parent, definition);
+                if native_scope && !origin_attested {
+                    return Err("permission_attestation_unavailable".into());
+                }
+                if native_scope {
+                    policy.as_object_mut().unwrap().remove("allowed_tools");
+                } else {
+                    let context = policy
+                        .get("launch_context")
+                        .ok_or("permission_source_unavailable")?;
+                    if !origin_attested
+                        && !without_rules
+                            .get_or_insert_with(|| claude_inputs_without_rules(context))
+                            .clone()?
+                    {
+                        return Err("permission_mapping_unavailable".into());
+                    }
+                }
+                if policy["disallowed_tools"]
+                    .as_array()
+                    .is_some_and(|a| !a.is_empty())
+                {
+                    return Err("permission_mapping_unavailable".into());
+                }
+                let tools = &policy["tools"];
+                if tools.as_array().is_some_and(Vec::is_empty)
+                    || policy["allowed_tools"]
+                        .as_array()
+                        .is_some_and(|rules| !rules.is_empty())
+                {
+                    return Err("permission_mapping_unavailable".into());
+                }
+                let full = policy["permission_mode"] == "bypassPermissions"
+                    && policy["permission_callback"]["tool_approval"] == "allow"
+                    && (tools["preset"] == "claude_code"
+                        || tools
+                            .as_array()
+                            .is_some_and(|a| a.iter().any(|t| t == "Bash")));
+                let read = readonly
+                    || (policy["permission_mode"] == "plan"
+                        && tools.as_array().is_some_and(|a| {
+                            a.iter().all(|t| {
+                                t.as_str()
+                                    .is_some_and(|t| matches!(t, "Read" | "Glob" | "Grep"))
+                            })
+                        }));
+                if !full && !read {
+                    return Err("permission_mapping_unavailable".into());
+                }
+                policy = json!({
+                    "kind": "acp",
+                    "permission_mode": if read { "plan" } else { "full-access" }
+                });
+            }
             _ => return Err("permission_mapping_unavailable".into()),
         }
         let only_read_tools = policy["tools"].as_array().is_some_and(|tools| {
@@ -2759,6 +2902,13 @@ pub(crate) fn apply_child_arguments_in_operation(
                         .collect::<Vec<_>>()
                         .join(","),
                 ]);
+            }
+        }
+        "acp" => {
+            if policy["permission_mode"] == "full-access" {
+                kept.push("--dangerously-skip-permissions".into());
+            } else if policy["permission_mode"] != "plan" {
+                return Err("permission_mapping_unavailable".into());
             }
         }
         _ => return Err("permission_mapping_unavailable".into()),

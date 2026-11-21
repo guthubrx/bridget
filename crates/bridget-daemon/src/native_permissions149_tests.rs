@@ -2461,3 +2461,198 @@ fn spec262_inherited_ancestor_of_worker_private_space_is_refused_without_changin
     assert!(project_policy_directories171(&mut precise, &mapping, &protected, None, true).is_ok());
     fs::remove_dir_all(root).unwrap();
 }
+
+#[test]
+fn acp_permissions_bidirectional_translation_and_arguments_preserve_ceiling() {
+    let (root, env, mapping, protected) = remote162_fixture("acp-bidirectional");
+    let cwd = mapping.remote_root.join("src");
+    let acp_parent = |mode: &str| ProviderPermissions {
+        version: 1,
+        source: "provider_turn".into(),
+        run_id: "run-acp".into(),
+        provider_session_id: "sess-acp".into(),
+        provider_instance_id: "inst-acp".into(),
+        revision: 1,
+        driver: "acp".into(),
+        cwd: "/origin162/project/src".into(),
+        runtime_mode: if mode == "full-access" {
+            "full-access"
+        } else {
+            "approval-required"
+        }
+        .into(),
+        interaction_mode: if mode == "plan" { "plan" } else { "default" }.into(),
+        provider_policy: json!({"kind":"acp","permission_mode":mode}),
+    };
+    let mut acp_def = codex_definition();
+    acp_def.command = "/usr/local/bin/agy".into();
+    acp_def.protocol = "acp".into();
+    acp_def.args = vec!["acp".into(), "--dangerously-skip-permissions".into()];
+    acp_def.mcp.interactive = "none".into();
+    acp_def.mcp.acp_session = true;
+
+    let codex_def = codex_definition();
+    let claude_def = claude_definition(&root, &[]);
+
+    // 1. ACP full-access -> Codex, Claude, ACP (Development et Discovery)
+    let parent_full = acp_parent("full-access");
+    let (codex_pol, posture) = project_remote_permissions(
+        &parent_full,
+        &codex_def,
+        &mapping,
+        &cwd,
+        &env,
+        Some(SpawnPosture::Development),
+        &protected,
+    )
+    .unwrap();
+    assert_eq!(posture, SpawnPosture::Development);
+    assert_eq!(codex_pol["sandbox_policy"]["type"], "dangerFullAccess");
+
+    let (claude_pol, posture) = project_remote_permissions(
+        &parent_full,
+        &claude_def,
+        &mapping,
+        &cwd,
+        &env,
+        Some(SpawnPosture::Discovery),
+        &protected,
+    )
+    .unwrap();
+    assert_eq!(posture, SpawnPosture::Discovery);
+    assert_eq!(claude_pol["permission_mode"], "plan");
+
+    let (acp_pol, posture) = project_remote_permissions(
+        &parent_full,
+        &acp_def,
+        &mapping,
+        &cwd,
+        &env,
+        Some(SpawnPosture::Development),
+        &protected,
+    )
+    .unwrap();
+    assert_eq!(posture, SpawnPosture::Development);
+    assert_eq!(
+        acp_pol,
+        json!({"kind":"acp","permission_mode":"full-access"})
+    );
+
+    // 2. ACP plan reste confiné en lecture seule et refuse Development
+    let parent_plan = acp_parent("plan");
+    let (codex_ro, posture) = project_remote_permissions(
+        &parent_plan,
+        &codex_def,
+        &mapping,
+        &cwd,
+        &env,
+        Some(SpawnPosture::Discovery),
+        &protected,
+    )
+    .unwrap();
+    assert_eq!(posture, SpawnPosture::Discovery);
+    assert_eq!(
+        codex_ro["sandbox_policy"],
+        json!({"type":"readOnly","networkAccess":false})
+    );
+    assert_eq!(
+        project_remote_permissions(
+            &parent_plan,
+            &codex_def,
+            &mapping,
+            &cwd,
+            &env,
+            Some(SpawnPosture::Development),
+            &protected,
+        )
+        .unwrap_err(),
+        "permission_not_inherited"
+    );
+
+    // 3. Codex full-access -> ACP (incident evols-t3)
+    let codex_parent = codex_fact(
+        &cwd.to_string_lossy(),
+        json!({"type":"dangerFullAccess"}),
+        "never",
+    );
+    let (to_acp_dev, posture) = project_remote_permissions(
+        &codex_parent,
+        &acp_def,
+        &mapping,
+        &cwd,
+        &env,
+        Some(SpawnPosture::Development),
+        &protected,
+    )
+    .unwrap();
+    assert_eq!(posture, SpawnPosture::Development);
+    assert_eq!(
+        to_acp_dev,
+        json!({"kind":"acp","permission_mode":"full-access"})
+    );
+
+    let (to_acp_ro, posture) = project_remote_permissions(
+        &codex_parent,
+        &acp_def,
+        &mapping,
+        &cwd,
+        &env,
+        Some(SpawnPosture::Discovery),
+        &protected,
+    )
+    .unwrap();
+    assert_eq!(posture, SpawnPosture::Discovery);
+    assert_eq!(to_acp_ro, json!({"kind":"acp","permission_mode":"plan"}));
+
+    // 4. Claude T3 bypassPermissions -> ACP
+    let mut claude_t3 = claude_fact(
+        &root,
+        &cwd,
+        &env,
+        "bypassPermissions",
+        "t3_runtime",
+        "allow",
+        true,
+    );
+    claude_t3.runtime_mode = "full-access".into();
+    claude_t3.provider_policy["allowed_tools"] = json!(["mcp__t3-code__*"]);
+    claude_t3
+        .provider_policy
+        .as_object_mut()
+        .unwrap()
+        .remove("launch_context");
+    let (claude_to_acp, posture) = project_remote_permissions(
+        &claude_t3,
+        &acp_def,
+        &mapping,
+        &cwd,
+        &env,
+        Some(SpawnPosture::Development),
+        &protected,
+    )
+    .unwrap();
+    assert_eq!(posture, SpawnPosture::Development);
+    assert_eq!(
+        claude_to_acp,
+        json!({"kind":"acp","permission_mode":"full-access"})
+    );
+
+    // 5. apply_child_arguments applique et retire --dangerously-skip-permissions
+    let mut args = vec!["acp".into(), "--dangerously-skip-permissions".into()];
+    apply_child_arguments("acp", &to_acp_ro, &mut args).unwrap();
+    assert_eq!(args, vec!["acp".to_string()]);
+    apply_child_arguments("acp", &to_acp_dev, &mut args).unwrap();
+    assert_eq!(
+        args,
+        vec![
+            "acp".to_string(),
+            "--dangerously-skip-permissions".to_string()
+        ]
+    );
+
+    assert!(permits_command_execution(&to_acp_dev, true));
+    assert!(permits_command_execution(&to_acp_ro, false));
+    assert!(!permits_command_execution(&to_acp_ro, true));
+
+    fs::remove_dir_all(root).unwrap();
+}

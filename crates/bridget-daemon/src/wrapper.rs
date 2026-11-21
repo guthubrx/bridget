@@ -4352,7 +4352,7 @@ fn spawn_managed_session_transport(
     socket: &Path,
     repair: Option<(&serde_json::Value, &str)>,
 ) -> Result<Box<dyn ManagedSession>, Box<dyn std::error::Error>> {
-    if let Some(policy) = repair
+    let child_policy = repair
         .map(|v| Ok(Some(v.0.clone())))
         .unwrap_or_else(|| {
             std::env::var(crate::native_permissions::CHILD_POLICY_ENV)
@@ -4360,8 +4360,10 @@ fn spawn_managed_session_transport(
                 .map(|raw| serde_json::from_str::<serde_json::Value>(&raw))
                 .transpose()
         })
-        .map_err(|_| "permission_attestation_unavailable")?
-        && let Some(context) = policy.get("launch_context")
+        .map_err(|_| "permission_attestation_unavailable")?;
+    if let Some(context) = child_policy
+        .as_ref()
+        .and_then(|policy| policy.get("launch_context"))
     {
         crate::native_permissions::recheck_context(
             context,
@@ -4378,11 +4380,36 @@ fn spawn_managed_session_transport(
                 == Some("agy");
             let mut acp_args = Vec::with_capacity(native_args.len() + 4);
             let mut session_config = bridget_transport::acp::AcpSessionConfig::default();
+            let mut acp_mcp_servers = mcp_servers.to_vec();
             if is_antigravity {
                 session_config.client_info = Some(("zed".to_string(), "0.0.0".to_string()));
                 session_config.auth_method_id = Some("oauth-personal".to_string());
-                if definition.permissions == "allow" {
+                let allow_yolo = match child_policy
+                    .as_ref()
+                    .and_then(|policy| policy["permission_mode"].as_str())
+                {
+                    Some("full-access") => true,
+                    Some(_) => false,
+                    None => definition.permissions == "allow",
+                };
+                if allow_yolo {
                     session_config.session_mode = Some("yolo".to_string());
+                }
+                for server in &mut acp_mcp_servers {
+                    if server.get("name").and_then(serde_json::Value::as_str) == Some("bridget")
+                        && let Some(env_list) = server
+                            .get_mut("env")
+                            .and_then(serde_json::Value::as_array_mut)
+                        && !env_list.iter().any(|entry| {
+                            entry.get("name").and_then(serde_json::Value::as_str)
+                                == Some("BRIDGET_MCP_COMPACT_SCHEMAS")
+                        })
+                    {
+                        env_list.push(serde_json::json!({
+                            "name": "BRIDGET_MCP_COMPACT_SCHEMAS",
+                            "value": "1"
+                        }));
+                    }
                 }
                 let mut idx = 0;
                 while idx < native_args.len() {
@@ -4427,7 +4454,7 @@ fn spawn_managed_session_transport(
                 options,
                 inherit_stderr,
                 mcp_environment,
-                mcp_servers,
+                acp_mcp_servers,
                 session_config,
             )?))
         }

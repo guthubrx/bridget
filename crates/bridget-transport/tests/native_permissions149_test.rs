@@ -874,3 +874,49 @@ fn native171_equivalence_mode_content_dependency_and_opaque_fields_close_the_rou
         bridget_transport::protocol::permission_source_equivalence_pairs(&a, &unknown).is_err()
     );
 }
+
+#[test]
+fn acp_permissions_validation_accepts_closed_modes_and_rejects_unknown() {
+    let make = |mode: &str, runtime_mode: &str| ProviderPermissions {
+        version: 1,
+        source: "provider_turn".into(),
+        run_id: "run-acp".into(),
+        provider_session_id: "sess-acp".into(),
+        provider_instance_id: "inst-acp".into(),
+        revision: 1,
+        driver: "acp".into(),
+        cwd: "/private/tmp".into(),
+        runtime_mode: runtime_mode.into(),
+        interaction_mode: if mode == "plan" { "plan" } else { "default" }.into(),
+        provider_policy: json!({"kind":"acp","permission_mode":mode}),
+    };
+    for mode in ["plan", "default", "auto-accept-edits", "full-access"] {
+        assert_eq!(
+            bridget_transport::protocol::validate_permissions(&make(mode, "full-access"), true),
+            Ok(()),
+            "mode {mode}"
+        );
+    }
+    assert!(
+        bridget_transport::protocol::provider_has_unrestricted_source_scope(&make(
+            "full-access",
+            "full-access"
+        ))
+    );
+    assert!(
+        !bridget_transport::protocol::provider_has_unrestricted_source_scope(&make(
+            "plan",
+            "full-access"
+        ))
+    );
+    assert_eq!(
+        bridget_transport::protocol::validate_permissions(&make("yolo", "full-access"), true),
+        Err("permission_attestation_unavailable".into())
+    );
+    let mut extra = make("full-access", "full-access");
+    extra.provider_policy["extra"] = json!(true);
+    assert_eq!(
+        bridget_transport::protocol::validate_permissions(&extra, true),
+        Err("permission_attestation_unavailable".into())
+    );
+}

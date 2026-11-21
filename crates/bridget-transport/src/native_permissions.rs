@@ -51,6 +51,13 @@ pub fn provider_has_unrestricted_source_scope(parent: &ProviderPermissions) -> b
     {
         return true;
     }
+    if parent.driver == "acp"
+        && parent.runtime_mode == "full-access"
+        && policy["kind"] == "acp"
+        && policy["permission_mode"] == "full-access"
+    {
+        return true;
+    }
     parent.source == "provider_turn"
         && parent.driver == "claude_stream_json"
         && !parent.run_id.is_empty()
@@ -429,6 +436,16 @@ pub fn validate_permissions(fact: &ProviderPermissions, t3: bool) -> Result<(), 
                         return Err("permission_source_unavailable".into());
                     }
                 }
+            }
+        }
+        "acp" => {
+            if policy["kind"] != "acp"
+                || !keys(policy, &["kind", "permission_mode"], &[])
+                || !policy["permission_mode"].as_str().is_some_and(|s| {
+                    matches!(s, "plan" | "default" | "auto-accept-edits" | "full-access")
+                })
+            {
+                return Err(fail());
             }
         }
         _ => return Err(fail()),
