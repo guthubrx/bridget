@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="fr" data-theme-pref="__BRIDGET_THEME__">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Bridget · Comptes</title>
+<script>
+(function(){
+  var d=document.documentElement,p=d.getAttribute("data-theme-pref")||"system";
+  var m=window.matchMedia&&window.matchMedia("(prefers-color-scheme: dark)").matches;
+  d.setAttribute("data-theme",p==="light"?"light":(p==="dark"?"dark":(m?"dark":"light")));
+  if(location.hash&&location.hash.indexOf("#bt=")===0){
+    try{sessionStorage.setItem("bridget_console_token",decodeURIComponent(location.hash.slice(4)));}catch(e){}
+    try{history.replaceState(null,"",location.pathname+location.search);}catch(e){}
+  }
+})();
+</script>
+<link rel="stylesheet" href="/assets/styles.css" />
+</head>
+<body>
+<div class="shell">
+  <aside class="sidebar" aria-label="Navigation principale">
+    <div class="brand">
+      <span class="brand-mark" aria-hidden="true"><span></span><span></span><span></span><span></span></span>
+      <div class="brand-text">
+        <span class="brand-name">Bridget</span>
+        <span class="brand-sep" aria-hidden="true">|</span>
+        <span class="brand-section">Comptes</span>
+      </div>
+    </div>
+    <div class="host-pill" id="hostBadge" title="Hôte exécutant cette console">Console locale</div>
+    <div class="nav-group">
+      <div class="nav-label">VUES</div>
+      <button class="nav-item active" type="button" data-view="all">
+        <span>Tous les comptes</span>
+        <span class="nav-count" id="countAll">0</span>
+      </button>
+      <button class="nav-item" type="button" data-view="actions">
+        <span>Actions requises</span>
+        <span class="nav-count warn" id="countActions">0</span>
+      </button>
+    </div>
+    <div class="nav-group">
+      <div class="nav-label">MACHINES</div>
+      <div id="machineNav" class="machine-nav"></div>
+    </div>
+    <div class="sidebar-footer">
+      <div class="theme-block">
+        <div class="theme-header">
+          <span class="theme-title">Apparence</span>
+          <span class="theme-resolved" id="themeResolved"></span>
+        </div>
+        <div class="theme-group" role="radiogroup" aria-label="Thème de la console">
+          <button class="theme-opt" type="button" role="radio" aria-checked="false" data-theme-value="system">
+            <span class="ico" aria-hidden="true">◐</span><span>Système</span>
+          </button>
+          <button class="theme-opt" type="button" role="radio" aria-checked="false" data-theme-value="light">
+            <span class="ico" aria-hidden="true">☀</span><span>Clair</span>
+          </button>
+          <button class="theme-opt" type="button" role="radio" aria-checked="false" data-theme-value="dark">
+            <span class="ico" aria-hidden="true">☾</span><span>Sombre</span>
+          </button>
+        </div>
+      </div>
+    </div>
+  </aside>
+
+  <main class="main">
+    <header class="topbar">
+      <div>
+        <h1 id="viewTitle">Tous les comptes</h1>
+        <div class="summary" id="viewSummary">Chargement de l'état de la flotte…</div>
+      </div>
+      <div class="topbar-actions">
+        <button class="btn" type="button" id="cliHelpBtn">Commandes CLI</button>
+        <button class="btn primary" type="button" id="refreshBtn">Actualiser</button>
+      </div>
+    </header>
+
+    <div id="feedbackBar" class="feedback hidden" role="status" aria-live="polite"></div>
+    <div id="alertBanner" class="alert-banner hidden"></div>
+    <div id="accountsRoot" class="content"></div>
+  </main>
+</div>
+
+<div class="modal-backdrop hidden" id="modalBackdrop" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
+  <div class="modal-card">
+    <div class="modal-head">
+      <h2 id="modalTitle">Confirmation</h2>
+      <button class="icon-btn" type="button" id="modalCloseBtn" aria-label="Fermer">✕</button>
+    </div>
+    <div id="modalBody" class="modal-body"></div>
+    <div id="modalFoot" class="modal-foot"></div>
+  </div>
+</div>
+
+<script type="module" src="/assets/app.js"></script>
+</body>
+</html>

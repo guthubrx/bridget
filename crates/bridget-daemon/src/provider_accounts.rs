@@ -720,6 +720,94 @@ fn execute(args: &[String]) -> Result<Value> {
     }
 }
 
+pub(crate) fn guidance_message(code: &str) -> &'static str {
+    guidance(code)
+}
+
+pub(crate) fn preview_toggle_from_ui(
+    registry_path: &Path,
+    action: &str,
+    id: &str,
+) -> Result<Value> {
+    if !matches!(action, "enable" | "disable") {
+        return Err("account_arguments_invalid");
+    }
+    if !registry_path.is_absolute()
+        || registry_path
+            .components()
+            .any(|p| matches!(p, std::path::Component::ParentDir))
+    {
+        return Err("account_registry_unsafe");
+    }
+    let raw = crate::registry::read_private_registry(registry_path)
+        .map_err(|_| "account_registry_unsafe")?;
+    let registry =
+        AgentRegistry::from_json(&raw, registry_path).map_err(|_| "account_registry_invalid")?;
+    let scope = crate::client_compatibility::machine_scope(
+        &registry,
+        registry_path,
+        &crate::build_info::local_host(),
+    )
+    .map_err(|_| "account_machine_scope_unavailable")?;
+    let change = prepare_change(&raw, registry_path, &scope, action, id, None)?;
+    let mut view = change.view;
+    view["status"] = json!("preview");
+    view["expected"] = json!(digest(raw.as_bytes()));
+    view["files_created"] = json!(false);
+    view["provider_started"] = json!(false);
+    Ok(view)
+}
+
+pub(crate) fn apply_toggle_from_ui(
+    registry_path: &Path,
+    expected: &str,
+    action: &str,
+    id: &str,
+) -> Result<Value> {
+    if !matches!(action, "enable" | "disable") {
+        return Err("account_arguments_invalid");
+    }
+    if expected.len() != 64 || !expected.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return Err("account_arguments_invalid");
+    }
+    if !registry_path.is_absolute()
+        || registry_path
+            .components()
+            .any(|p| matches!(p, std::path::Component::ParentDir))
+    {
+        return Err("account_registry_unsafe");
+    }
+    let raw = crate::registry::read_private_registry(registry_path)
+        .map_err(|_| "account_registry_unsafe")?;
+    let registry =
+        AgentRegistry::from_json(&raw, registry_path).map_err(|_| "account_registry_invalid")?;
+    let scope = crate::client_compatibility::machine_scope(
+        &registry,
+        registry_path,
+        &crate::build_info::local_host(),
+    )
+    .map_err(|_| "account_machine_scope_unavailable")?;
+    let mut view = apply(registry_path, expected, action, id, None, &scope)?;
+    // Relecture effective depuis le disque après renommage atomique.
+    let reread = crate::registry::read_private_registry(registry_path)
+        .map_err(|_| "account_registry_publish_unconfirmed")?;
+    let reread_reg = AgentRegistry::from_json(&reread, registry_path)
+        .map_err(|_| "account_registry_publish_unconfirmed")?;
+    let conn_id = format!("account-{id}");
+    let readback_enabled = reread_reg
+        .routing_policy()
+        .and_then(|p| p.connections.iter().find(|c| c.connection_id == conn_id))
+        .map(|c| c.enabled)
+        .ok_or("account_registry_publish_unconfirmed")?;
+    view["readback_enabled"] = json!(readback_enabled);
+    view["registry_sha256"] = json!(digest(reread.as_bytes()));
+    view["fields_touched"] = json!([
+        "routing_policy.connections[].enabled",
+        "routing_policy.revision"
+    ]);
+    Ok(view)
+}
+
 #[cfg(test)]
 #[path = "provider_accounts_tests.rs"]
 mod tests;

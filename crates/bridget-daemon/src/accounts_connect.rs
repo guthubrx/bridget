@@ -10,22 +10,15 @@
 
 use crate::cli_table::table_println as println;
 use crate::registry::AgentRegistry;
-use axum::Router;
-use axum::extract::{Query, State};
-use axum::http::{HeaderMap, StatusCode};
-use axum::response::{Html, IntoResponse, Json};
-use axum::routing::{get, post};
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
-use std::collections::{BTreeMap, HashMap};
-use std::io::{BufRead, BufReader, Write};
+use serde_json::Value;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::{Child, ChildStdin, Command, Stdio};
-use std::sync::{Arc, Mutex};
+use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
 const PROBE_TIMEOUT_SECS: u64 = 8;
-const MAX_SESSION_LOG_BYTES: usize = 256 * 1024;
 const DEFAULT_SSH_CONNECT_TIMEOUT: &str = "4";
 
 const CLEAR_AUTH_ENV: &[&str] = &[
@@ -65,6 +58,8 @@ pub(crate) struct ConnectionStatus {
     pub display_name: Option<String>,
     pub managed: bool,
     pub profile_dir: Option<String>,
+    #[serde(default)]
+    pub registry_path: String,
     pub is_local: bool,
     pub auth_state: String,
     pub detail: String,
@@ -79,6 +74,8 @@ pub(crate) struct FleetAuthStatus {
     pub local_machine: String,
     pub checked_at: i64,
     pub machines: Vec<String>,
+    #[serde(default)]
+    pub known_machines: Vec<String>,
     pub connections: Vec<ConnectionStatus>,
 }
 
@@ -88,7 +85,7 @@ pub(crate) fn run(args: &[String]) {
     let result = match sub {
         "status" => cmd_status(rest),
         "login" => cmd_login(rest),
-        "ui" => cmd_ui(rest),
+        "ui" => crate::console_ui::cmd_ui(rest),
         _ => Err(format!("sous-commande accounts inconnue : {sub}")),
     };
     if let Err(error) = result {
@@ -140,6 +137,7 @@ pub(crate) fn valid_machine_id(machine: &str) -> bool {
 
 /// Indique si une URL HTTPS correspond à un flux de connexion OAuth / authentification
 /// (et non à un lien de documentation ou d'aide imprimé par le CLI).
+#[cfg(test)]
 fn is_oauth_url(url: &str) -> bool {
     let lower = url.to_ascii_lowercase();
     lower.contains("accounts.google.com")
@@ -153,6 +151,7 @@ fn is_oauth_url(url: &str) -> bool {
 }
 
 /// Extrait la première URL HTTPS d'authentification présente dans une ligne texte.
+#[cfg(test)]
 pub(crate) fn extract_auth_url(text: &str) -> Option<String> {
     let cleaned = strip_ansi(text);
     for token in cleaned.split_whitespace() {
@@ -278,10 +277,11 @@ fn extract_connections_from_registry(
 }
 
 /// Charge toutes les connexions connues sur la machine locale et sur les serveurs
-/// joignables de la fédération (en fusionnant le registre maître et les registres worker).
-pub(crate) fn load_fleet_connections(
+/// joignables de la fédération (en fusionnant le registre maître et les registres worker),
+/// ainsi que la liste complète des machines connues (y compris sans connexion ou hors ligne).
+pub(crate) fn load_fleet_connections_with_machines(
     registry_override: Option<&Path>,
-) -> Result<(String, Vec<ConnectionTarget>), String> {
+) -> Result<(String, Vec<String>, Vec<ConnectionTarget>), String> {
     let local_machine = local_machine_name();
     let local_path = match registry_override {
         Some(p) => p.to_path_buf(),
@@ -289,6 +289,16 @@ pub(crate) fn load_fleet_connections(
     };
     let local_raw = crate::registry::read_private_registry(&local_path)
         .map_err(|e| format!("registre local illisible ({}): {e}", local_path.display()))?;
+
+    let mut known_machines: BTreeSet<String> = BTreeSet::new();
+    known_machines.insert(local_machine.clone());
+    if let Ok(reg) = AgentRegistry::from_json(&local_raw, &local_path) {
+        for name in reg.machines().keys() {
+            if name != "local" && valid_machine_id(name) {
+                known_machines.insert(name.clone());
+            }
+        }
+    }
 
     let mut by_key: BTreeMap<(String, String), ConnectionTarget> = BTreeMap::new();
     let local_only_filter = if registry_override.is_some() {
@@ -303,6 +313,7 @@ pub(crate) fn load_fleet_connections(
         &local_machine,
         local_only_filter,
     ) {
+        known_machines.insert(target.machine_id.clone());
         by_key.insert(
             (target.machine_id.clone(), target.connection_id.clone()),
             target,
@@ -311,7 +322,11 @@ pub(crate) fn load_fleet_connections(
 
     // Si un registre explicite est fourni (--registry), ne pas interroger d'autres hôtes en SSH.
     if registry_override.is_some() {
-        return Ok((local_machine, by_key.into_values().collect()));
+        return Ok((
+            local_machine,
+            known_machines.into_iter().collect(),
+            by_key.into_values().collect(),
+        ));
     }
 
     // Découvrir les machines de la fédération depuis le registre local et/ou cartae.
@@ -325,6 +340,7 @@ pub(crate) fn load_fleet_connections(
     }
     if local_machine != "cartae" && !remote_machines.iter().any(|m| m == "cartae") {
         remote_machines.push("cartae".to_string());
+        known_machines.insert("cartae".to_string());
     }
 
     // Si on n'est pas sur cartae, lire la liste complète des machines depuis cartae.
@@ -336,6 +352,9 @@ pub(crate) fn load_fleet_connections(
         let cartae_path = PathBuf::from("/home/moi/.cache/bridget-core/agents.json");
         if let Ok(reg) = AgentRegistry::from_json(&cartae_raw, &cartae_path) {
             for name in reg.machines().keys() {
+                if name != "local" && valid_machine_id(name) {
+                    known_machines.insert(name.clone());
+                }
                 if name != &local_machine
                     && name != "local"
                     && valid_machine_id(name)
@@ -354,6 +373,7 @@ pub(crate) fn load_fleet_connections(
         );
     }
     for target in master_connections {
+        known_machines.insert(target.machine_id.clone());
         by_key
             .entry((target.machine_id.clone(), target.connection_id.clone()))
             .or_insert(target);
@@ -400,6 +420,7 @@ pub(crate) fn load_fleet_connections(
     for handle in handles {
         if let Ok(items) = handle.join() {
             for target in items {
+                known_machines.insert(target.machine_id.clone());
                 by_key.insert(
                     (target.machine_id.clone(), target.connection_id.clone()),
                     target,
@@ -408,7 +429,20 @@ pub(crate) fn load_fleet_connections(
         }
     }
 
-    Ok((local_machine, by_key.into_values().collect()))
+    Ok((
+        local_machine,
+        known_machines.into_iter().collect(),
+        by_key.into_values().collect(),
+    ))
+}
+
+/// Charge toutes les connexions connues sur la machine locale et sur les serveurs
+/// joignables de la fédération (en fusionnant le registre maître et les registres worker).
+pub(crate) fn load_fleet_connections(
+    registry_override: Option<&Path>,
+) -> Result<(String, Vec<ConnectionTarget>), String> {
+    let (local_machine, _, targets) = load_fleet_connections_with_machines(registry_override)?;
+    Ok((local_machine, targets))
 }
 
 fn unset_auth_env_args() -> String {
@@ -699,6 +733,7 @@ fn probe_machine(machine: String, targets: Vec<ConnectionTarget>) -> Vec<Connect
                 display_name: t.display_name,
                 managed: t.managed,
                 profile_dir: t.profile_dir,
+                registry_path: t.registry_path,
                 is_local: t.is_local,
                 auth_state,
                 detail,
@@ -712,7 +747,8 @@ fn probe_machine(machine: String, targets: Vec<ConnectionTarget>) -> Vec<Connect
 pub(crate) fn collect_fleet_status(
     registry_override: Option<&Path>,
 ) -> Result<FleetAuthStatus, String> {
-    let (local_machine, targets) = load_fleet_connections(registry_override)?;
+    let (local_machine, known_machines, targets) =
+        load_fleet_connections_with_machines(registry_override)?;
     let mut grouped: BTreeMap<String, Vec<ConnectionTarget>> = BTreeMap::new();
     for target in targets {
         grouped
@@ -741,6 +777,7 @@ pub(crate) fn collect_fleet_status(
         local_machine,
         checked_at: now_secs(),
         machines,
+        known_machines,
         connections,
     })
 }
@@ -1042,7 +1079,7 @@ fn run_shell_pty_capture(
     ))
 }
 
-fn open_browser(url: &str) {
+pub(crate) fn open_browser(url: &str) {
     #[cfg(target_os = "macos")]
     let _ = Command::new("open").arg(url).spawn();
     #[cfg(not(target_os = "macos"))]
@@ -1177,30 +1214,8 @@ fn find_target(
     }
 }
 
-// ---------------------------------------------------------------------------
-// Interface graphique locale (`bridget accounts ui`)
-// ---------------------------------------------------------------------------
-
-struct LoginSession {
-    engine: String,
-    log: String,
-    auth_url: Option<String>,
-    browser_opened: bool,
-    open_in_browser: bool,
-    code_sent: bool,
-    code_auto_sent: bool,
-    logged_in_as: Option<String>,
-    running: bool,
-    exit_code: Option<i32>,
-    stdin: Option<ChildStdin>,
-    child: Arc<Mutex<Option<Child>>>,
-    enable_on_success: Option<ConnectionTarget>,
-    auto_enabled: bool,
-}
-
 /// Reconnaît strictement un code ou une URL de retour OAuth pour Antigravity ou Claude.
-/// Évite tout faux positif sur du texte ordinaire présent dans le presse-papiers.
-#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+#[cfg(test)]
 pub(crate) fn looks_like_oauth_clipboard_code(engine: &str, raw: &str) -> bool {
     let trimmed = raw.trim();
     if trimmed.len() < 24 || trimmed.len() > 2048 || trimmed.chars().any(char::is_whitespace) {
@@ -1235,8 +1250,8 @@ pub(crate) fn looks_like_oauth_clipboard_code(engine: &str, raw: &str) -> bool {
     }
 }
 
-/// Extrait l'identifiant du compte affiché par le CLI après connexion réussie
-/// (ex. `Logged in as fullflare@gmail.com.`).
+/// Extrait l'identifiant du compte affiché par le CLI après connexion réussie.
+#[cfg(test)]
 pub(crate) fn extract_logged_in_account(line: &str) -> Option<String> {
     let lower = line.to_ascii_lowercase();
     let idx = lower.find("logged in as ")?;
@@ -1251,1406 +1266,6 @@ pub(crate) fn extract_logged_in_account(line: &str) -> Option<String> {
         None
     }
 }
-
-#[cfg(target_os = "macos")]
-fn read_local_clipboard() -> Option<String> {
-    let output = Command::new("/usr/bin/pbpaste")
-        .stdin(Stdio::null())
-        .stderr(Stdio::null())
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    String::from_utf8(output.stdout).ok()
-}
-
-#[cfg(target_os = "macos")]
-fn clipboard_fingerprint(text: &str) -> String {
-    use sha2::{Digest, Sha256};
-    format!("{:x}", Sha256::digest(text.as_bytes()))
-}
-
-/// Sur macOS, surveille le presse-papiers uniquement pendant une session de connexion
-/// active (Antigravity/Claude) après ouverture du navigateur : dès que l'utilisateur
-/// clique sur « Copier » sur la page Google/Claude, le code OAuth est transmis
-/// automatiquement au processus de connexion, sans rien journaliser.
-#[cfg(target_os = "macos")]
-fn start_clipboard_watcher(session: Arc<Mutex<LoginSession>>, initial_fp: Option<String>) {
-    std::thread::spawn(move || {
-        let mut last_fp = initial_fp;
-        for _ in 0..500 {
-            std::thread::sleep(Duration::from_millis(600));
-            let (running, code_sent, engine) = {
-                let guard = session.lock().unwrap_or_else(|e| e.into_inner());
-                (guard.running, guard.code_sent, guard.engine.clone())
-            };
-            if !running || code_sent {
-                break;
-            }
-            let Some(clip) = read_local_clipboard() else {
-                continue;
-            };
-            let fp = clipboard_fingerprint(&clip);
-            if last_fp.as_deref() == Some(fp.as_str()) {
-                continue;
-            }
-            last_fp = Some(fp);
-            if looks_like_oauth_clipboard_code(&engine, &clip) {
-                let payload = format!("{}\n", clip.trim());
-                let mut guard = session.lock().unwrap_or_else(|e| e.into_inner());
-                if !guard.running || guard.code_sent {
-                    break;
-                }
-                if let Some(stdin) = guard.stdin.as_mut()
-                    && stdin
-                        .write_all(payload.as_bytes())
-                        .and_then(|_| stdin.flush())
-                        .is_ok()
-                {
-                    guard.code_sent = true;
-                    guard.code_auto_sent = true;
-                    guard
-                        .log
-                        .push_str("\n[Bridget] Code OAuth detecte dans le presse-papiers et envoye automatiquement.\n");
-                    break;
-                }
-            }
-        }
-    });
-}
-
-#[cfg(not(target_os = "macos"))]
-fn start_clipboard_watcher(_session: Arc<Mutex<LoginSession>>, _initial_fp: Option<String>) {}
-
-#[derive(Clone)]
-struct UiState {
-    token: String,
-    registry: Option<PathBuf>,
-    sessions: Arc<Mutex<HashMap<String, Arc<Mutex<LoginSession>>>>>,
-}
-
-#[derive(Deserialize)]
-struct TokenQuery {
-    token: Option<String>,
-    session: Option<String>,
-    offset: Option<usize>,
-}
-
-fn default_true() -> bool {
-    true
-}
-
-#[derive(Deserialize)]
-struct StartLoginRequest {
-    connection_id: String,
-    machine_id: String,
-    #[serde(default)]
-    logout_first: bool,
-    #[serde(default)]
-    enable_on_success: bool,
-    #[serde(default = "default_true")]
-    open_in_browser: bool,
-}
-
-#[derive(Deserialize)]
-struct InputLoginRequest {
-    session_id: String,
-    text: String,
-}
-
-#[derive(Deserialize)]
-struct CancelLoginRequest {
-    session_id: String,
-}
-
-#[derive(Deserialize)]
-struct PrepareRequest {
-    from_connection_id: String,
-    machine_id: String,
-    new_id: String,
-}
-
-fn check_token(state: &UiState, headers: &HeaderMap, query: &TokenQuery) -> bool {
-    let header_ok = headers
-        .get("x-bridget-token")
-        .and_then(|v| v.to_str().ok())
-        .is_some_and(|v| v == state.token);
-    let query_ok = query.token.as_deref().is_some_and(|v| v == state.token);
-    let cookie_ok = headers
-        .get(axum::http::header::COOKIE)
-        .and_then(|v| v.to_str().ok())
-        .is_some_and(|raw| {
-            raw.split(';').any(|part| {
-                part.trim()
-                    .strip_prefix("bridget_ui_token=")
-                    .is_some_and(|v| v == state.token)
-            })
-        });
-    header_ok || query_ok || cookie_ok
-}
-
-fn spawn_pty_login(target: &ConnectionTarget, logout_first: bool) -> Result<Child, String> {
-    let login_cmd = build_login_shell_command(target, logout_first);
-    let mut command = if target.is_local {
-        #[cfg(target_os = "macos")]
-        {
-            let mut c = Command::new("/usr/bin/script");
-            c.args(["-q", "/dev/null", "bash", "-lc", &login_cmd]);
-            c
-        }
-        #[cfg(not(target_os = "macos"))]
-        {
-            let mut c = Command::new("/usr/bin/script");
-            c.args(["-q", "-e", "-c", &login_cmd, "/dev/null"]);
-            c
-        }
-    } else {
-        if !valid_machine_id(&target.machine_id) {
-            return Err("machine cible invalide".into());
-        }
-        let ssh_args = build_ssh_login_args(target, login_cmd);
-        #[cfg(target_os = "macos")]
-        {
-            let mut c = Command::new("/usr/bin/script");
-            c.args(["-q", "/dev/null", "ssh"]);
-            c.args(&ssh_args);
-            c
-        }
-        #[cfg(not(target_os = "macos"))]
-        {
-            let mut c = Command::new("ssh");
-            c.args(&ssh_args);
-            c
-        }
-    };
-    command
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| format!("impossible de lancer la session de connexion : {e}"))
-}
-
-async fn ui_index(
-    State(state): State<UiState>,
-    headers: HeaderMap,
-    Query(query): Query<TokenQuery>,
-) -> impl IntoResponse {
-    if !check_token(&state, &headers, &query) {
-        return (
-            StatusCode::UNAUTHORIZED,
-            HeaderMap::new(),
-            Html("Acces refuse : jeton de session requis.".to_string()),
-        );
-    }
-    let mut resp_headers = HeaderMap::new();
-    if let Ok(cookie) = axum::http::HeaderValue::from_str(&format!(
-        "bridget_ui_token={}; HttpOnly; SameSite=Strict; Path=/",
-        state.token
-    )) {
-        resp_headers.insert(axum::http::header::SET_COOKIE, cookie);
-    }
-    resp_headers.insert(
-        axum::http::header::CACHE_CONTROL,
-        axum::http::HeaderValue::from_static("no-store"),
-    );
-    let page = UI_HTML.replace("__BRIDGET_TOKEN__", &state.token);
-    (StatusCode::OK, resp_headers, Html(page))
-}
-
-async fn api_status(
-    State(state): State<UiState>,
-    headers: HeaderMap,
-    Query(query): Query<TokenQuery>,
-) -> impl IntoResponse {
-    if !check_token(&state, &headers, &query) {
-        return (
-            StatusCode::UNAUTHORIZED,
-            Json(json!({"error": "unauthorized"})),
-        );
-    }
-    let registry = state.registry.clone();
-    let res = tokio::task::spawn_blocking(move || collect_fleet_status(registry.as_deref())).await;
-    match res {
-        Ok(Ok(status)) => (
-            StatusCode::OK,
-            Json(serde_json::to_value(status).unwrap_or_default()),
-        ),
-        Ok(Err(e)) => (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e}))),
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({"error": e.to_string()})),
-        ),
-    }
-}
-
-async fn api_prepare(
-    State(state): State<UiState>,
-    headers: HeaderMap,
-    Query(query): Query<TokenQuery>,
-    Json(req): Json<PrepareRequest>,
-) -> impl IntoResponse {
-    if !check_token(&state, &headers, &query) {
-        return (
-            StatusCode::UNAUTHORIZED,
-            Json(json!({"error": "unauthorized"})),
-        );
-    }
-    let registry = state.registry.clone();
-    let res = tokio::task::spawn_blocking(move || -> Result<Value, String> {
-        let (_, targets) = load_fleet_connections(registry.as_deref())?;
-        let source = find_target(&targets, &req.from_connection_id, Some(&req.machine_id))?;
-        let new_conn_id = prepare_isolated_account(&source, &req.new_id)?;
-        Ok(json!({
-            "status": "prepared",
-            "connection_id": new_conn_id,
-            "machine_id": source.machine_id,
-            "engine": source.engine
-        }))
-    })
-    .await;
-    match res {
-        Ok(Ok(val)) => (StatusCode::OK, Json(val)),
-        Ok(Err(e)) => (StatusCode::BAD_REQUEST, Json(json!({"error": e}))),
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({"error": e.to_string()})),
-        ),
-    }
-}
-
-async fn api_login_start(
-    State(state): State<UiState>,
-    headers: HeaderMap,
-    Query(query): Query<TokenQuery>,
-    Json(req): Json<StartLoginRequest>,
-) -> impl IntoResponse {
-    if !check_token(&state, &headers, &query) {
-        return (
-            StatusCode::UNAUTHORIZED,
-            Json(json!({"error": "unauthorized"})),
-        );
-    }
-    let registry = state.registry.clone();
-    let target_res = tokio::task::spawn_blocking(move || {
-        let (_, targets) = load_fleet_connections(registry.as_deref())?;
-        find_target(&targets, &req.connection_id, Some(&req.machine_id))
-    })
-    .await;
-    let target = match target_res {
-        Ok(Ok(t)) => t,
-        Ok(Err(e)) => return (StatusCode::BAD_REQUEST, Json(json!({"error": e}))),
-        Err(e) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error": e.to_string()})),
-            );
-        }
-    };
-
-    let mut child = match spawn_pty_login(&target, req.logout_first) {
-        Ok(c) => c,
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e}))),
-    };
-    let stdin = child.stdin.take();
-    let stdout = child.stdout.take();
-    let stderr = child.stderr.take();
-    let child_handle = Arc::new(Mutex::new(Some(child)));
-
-    let session_id = uuid::Uuid::new_v4().to_string();
-    let session = Arc::new(Mutex::new(LoginSession {
-        engine: target.engine.clone(),
-        log: format!(
-            "Session ouverte pour {} ({}) sur {}...\n",
-            target.connection_id, target.engine, target.machine_id
-        ),
-        auth_url: None,
-        browser_opened: false,
-        open_in_browser: req.open_in_browser,
-        code_sent: false,
-        code_auto_sent: false,
-        logged_in_as: None,
-        running: true,
-        exit_code: None,
-        stdin,
-        child: child_handle.clone(),
-        enable_on_success: req.enable_on_success.then_some(target.clone()),
-        auto_enabled: false,
-    }));
-    {
-        let mut map = state.sessions.lock().unwrap_or_else(|e| e.into_inner());
-        if map.len() >= 16 {
-            map.retain(|_, s| s.lock().unwrap_or_else(|e| e.into_inner()).running);
-        }
-        map.insert(session_id.clone(), session.clone());
-    }
-
-    if let Some(out) = stdout {
-        let s = session.clone();
-        std::thread::spawn(move || pump_stream(out, s));
-    }
-    if let Some(err) = stderr {
-        let s = session.clone();
-        std::thread::spawn(move || pump_stream(err, s));
-    }
-    {
-        let s = session.clone();
-        std::thread::spawn(move || {
-            // Attend la fin du processus enfant sans bloquer le verrou pendant le sommeil,
-            // ce qui garantit que `api_login_cancel` ne peut jamais cibler un PID déjà récolté.
-            let exit = loop {
-                let maybe_status = {
-                    let mut guard = child_handle.lock().unwrap_or_else(|e| e.into_inner());
-                    match guard.as_mut() {
-                        Some(c) => match c.try_wait() {
-                            Ok(Some(st)) => {
-                                *guard = None;
-                                Some(st.code().unwrap_or(-1))
-                            }
-                            Ok(None) => None,
-                            Err(_) => {
-                                *guard = None;
-                                Some(-1)
-                            }
-                        },
-                        None => Some(-1),
-                    }
-                };
-                if let Some(code) = maybe_status {
-                    break code;
-                }
-                std::thread::sleep(Duration::from_millis(80));
-            };
-            let enable_target = {
-                let mut guard = s.lock().unwrap_or_else(|e| e.into_inner());
-                guard.running = false;
-                guard.exit_code = Some(exit);
-                guard.stdin = None;
-                if exit == 0 {
-                    guard.log.push_str("\nConnexion terminee avec succes.\n");
-                    guard.enable_on_success.clone()
-                } else {
-                    guard
-                        .log
-                        .push_str(&format!("\nSession terminee (code {exit}).\n"));
-                    None
-                }
-            };
-            if let Some(t) = enable_target {
-                match enable_isolated_account(&t) {
-                    Ok(()) => {
-                        let mut guard = s.lock().unwrap_or_else(|e| e.into_inner());
-                        guard.auto_enabled = true;
-                        guard
-                            .log
-                            .push_str("Compte isole active dans le registre.\n");
-                    }
-                    Err(e) => {
-                        let mut guard = s.lock().unwrap_or_else(|e| e.into_inner());
-                        guard
-                            .log
-                            .push_str(&format!("Activation automatique echouee : {e}\n"));
-                    }
-                }
-            }
-        });
-    }
-
-    (
-        StatusCode::OK,
-        Json(json!({
-            "session_id": session_id,
-            "connection_id": target.connection_id,
-            "machine_id": target.machine_id,
-            "engine": target.engine
-        })),
-    )
-}
-
-fn pump_stream<R: std::io::Read>(reader: R, session: Arc<Mutex<LoginSession>>) {
-    let mut buf = BufReader::new(reader);
-    let mut line = Vec::new();
-    loop {
-        line.clear();
-        match buf.read_until(b'\n', &mut line) {
-            Ok(0) | Err(_) => break,
-            Ok(_) => {
-                let text = strip_ansi(&String::from_utf8_lossy(&line));
-                let detected_url = extract_auth_url(&text);
-                let detected_account = extract_logged_in_account(&text);
-                let mut url_to_open = None;
-                let mut open_via_os = false;
-                let mut watch_engine = false;
-                {
-                    let mut guard = session.lock().unwrap_or_else(|e| e.into_inner());
-                    if guard.log.len() < MAX_SESSION_LOG_BYTES {
-                        guard.log.push_str(&text);
-                    }
-                    if let Some(acc) = detected_account {
-                        guard.logged_in_as = Some(acc);
-                    }
-                    if let Some(url) = detected_url {
-                        guard.auth_url = Some(url.clone());
-                        if !guard.browser_opened {
-                            guard.browser_opened = true;
-                            url_to_open = Some(url);
-                            open_via_os = guard.open_in_browser;
-                            watch_engine =
-                                matches!(guard.engine.as_str(), "antigravity" | "claude");
-                        }
-                    }
-                }
-                if let Some(url) = url_to_open {
-                    if watch_engine {
-                        #[cfg(target_os = "macos")]
-                        let initial_fp = read_local_clipboard().map(|c| clipboard_fingerprint(&c));
-                        #[cfg(not(target_os = "macos"))]
-                        let initial_fp = None;
-                        start_clipboard_watcher(session.clone(), initial_fp);
-                    }
-                    if open_via_os {
-                        open_browser(&url);
-                    }
-                }
-            }
-        }
-    }
-}
-
-async fn api_login_poll(
-    State(state): State<UiState>,
-    headers: HeaderMap,
-    Query(query): Query<TokenQuery>,
-) -> impl IntoResponse {
-    if !check_token(&state, &headers, &query) {
-        return (
-            StatusCode::UNAUTHORIZED,
-            Json(json!({"error": "unauthorized"})),
-        );
-    }
-    let Some(session_id) = query.session.as_deref() else {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(json!({"error": "session requis"})),
-        );
-    };
-    let session = {
-        state
-            .sessions
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .get(session_id)
-            .cloned()
-    };
-    let Some(session) = session else {
-        return (
-            StatusCode::NOT_FOUND,
-            Json(json!({"error": "session inconnue"})),
-        );
-    };
-    let guard = session.lock().unwrap_or_else(|e| e.into_inner());
-    let offset = query.offset.unwrap_or(0).min(guard.log.len());
-    // Assurer une frontière UTF-8 valide.
-    let mut safe_offset = offset;
-    while safe_offset > 0 && !guard.log.is_char_boundary(safe_offset) {
-        safe_offset -= 1;
-    }
-    let chunk = &guard.log[safe_offset..];
-    (
-        StatusCode::OK,
-        Json(json!({
-            "running": guard.running,
-            "exit_code": guard.exit_code,
-            "auth_url": guard.auth_url,
-            "engine": guard.engine,
-            "code_sent": guard.code_sent,
-            "code_auto_sent": guard.code_auto_sent,
-            "logged_in_as": guard.logged_in_as,
-            "auto_enabled": guard.auto_enabled,
-            "chunk": chunk,
-            "next_offset": guard.log.len()
-        })),
-    )
-}
-
-async fn api_login_input(
-    State(state): State<UiState>,
-    headers: HeaderMap,
-    Query(query): Query<TokenQuery>,
-    Json(req): Json<InputLoginRequest>,
-) -> impl IntoResponse {
-    if !check_token(&state, &headers, &query) {
-        return (
-            StatusCode::UNAUTHORIZED,
-            Json(json!({"error": "unauthorized"})),
-        );
-    }
-    let session = {
-        state
-            .sessions
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .get(&req.session_id)
-            .cloned()
-    };
-    let Some(session) = session else {
-        return (
-            StatusCode::NOT_FOUND,
-            Json(json!({"error": "session inconnue"})),
-        );
-    };
-    let mut guard = session.lock().unwrap_or_else(|e| e.into_inner());
-    let Some(stdin) = guard.stdin.as_mut() else {
-        return (
-            StatusCode::CONFLICT,
-            Json(json!({"error": "session fermee"})),
-        );
-    };
-    let payload = format!("{}\n", req.text.trim_end_matches(&['\r', '\n'][..]));
-    if let Err(e) = stdin
-        .write_all(payload.as_bytes())
-        .and_then(|_| stdin.flush())
-    {
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({"error": e.to_string()})),
-        );
-    }
-    guard.code_sent = true;
-    (StatusCode::OK, Json(json!({"status": "sent"})))
-}
-
-async fn api_login_cancel(
-    State(state): State<UiState>,
-    headers: HeaderMap,
-    Query(query): Query<TokenQuery>,
-    Json(req): Json<CancelLoginRequest>,
-) -> impl IntoResponse {
-    if !check_token(&state, &headers, &query) {
-        return (
-            StatusCode::UNAUTHORIZED,
-            Json(json!({"error": "unauthorized"})),
-        );
-    }
-    let session = {
-        state
-            .sessions
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .get(&req.session_id)
-            .cloned()
-    };
-    let Some(session) = session else {
-        return (
-            StatusCode::NOT_FOUND,
-            Json(json!({"error": "session inconnue"})),
-        );
-    };
-    let child_handle = session
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .child
-        .clone();
-    {
-        let mut child_guard = child_handle.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some(child) = child_guard.as_mut() {
-            // Envoie SIGTERM sous verrou du Child (non encore récolté -> zéro réutilisation PID).
-            let pid = child.id();
-            let _ = Command::new("kill")
-                .args(["-TERM", &pid.to_string()])
-                .status();
-        }
-    }
-    (StatusCode::OK, Json(json!({"status": "cancelled"})))
-}
-
-#[derive(Deserialize)]
-struct AutomanagedToggleRequest {
-    cli_updates: Option<bool>,
-    model_sync: Option<bool>,
-}
-
-#[derive(Deserialize)]
-struct AutomanagedSyncRequest {
-    #[serde(default = "default_true")]
-    cli: bool,
-    #[serde(default = "default_true")]
-    models: bool,
-}
-
-async fn api_automanaged_get(
-    State(state): State<UiState>,
-    headers: HeaderMap,
-    Query(query): Query<TokenQuery>,
-) -> impl IntoResponse {
-    if !check_token(&state, &headers, &query) {
-        return (
-            StatusCode::UNAUTHORIZED,
-            Json(json!({"error": "unauthorized"})),
-        );
-    }
-    (StatusCode::OK, Json(crate::automanaged::status_payload()))
-}
-
-async fn api_automanaged_toggle(
-    State(state): State<UiState>,
-    headers: HeaderMap,
-    Query(query): Query<TokenQuery>,
-    Json(req): Json<AutomanagedToggleRequest>,
-) -> impl IntoResponse {
-    if !check_token(&state, &headers, &query) {
-        return (
-            StatusCode::UNAUTHORIZED,
-            Json(json!({"error": "unauthorized"})),
-        );
-    }
-    let registry = state.registry.clone();
-    let res = tokio::task::spawn_blocking(move || -> Result<Value, String> {
-        let mut cfg = crate::automanaged::load_config();
-        if let Some(v) = req.cli_updates {
-            cfg.cli_updates = v;
-        }
-        if let Some(v) = req.model_sync {
-            cfg.model_sync = v;
-        }
-        crate::automanaged::save_config(&cfg)?;
-        // Propage le réglage aux serveurs distants joignables en parallèle.
-        if let Ok((local_m, targets)) = load_fleet_connections(registry.as_deref()) {
-            let mut remote_hosts: Vec<String> = targets
-                .into_iter()
-                .map(|t| t.machine_id)
-                .filter(|m| m != &local_m && valid_machine_id(m))
-                .collect();
-            remote_hosts.sort();
-            remote_hosts.dedup();
-            let cli_cmd = if cfg.cli_updates { "on --cli" } else { "off --cli" };
-            let mod_cmd = if cfg.model_sync { "on --models" } else { "off --models" };
-            let remote_sh = format!(
-                "\"$HOME/.local/bin/bridget\" automanaged {cli_cmd} >/dev/null 2>&1 || true; \"$HOME/.local/bin/bridget\" automanaged {mod_cmd} >/dev/null 2>&1 || true"
-            );
-            let handles: Vec<_> = remote_hosts
-                .into_iter()
-                .map(|host| {
-                    let sh = remote_sh.clone();
-                    std::thread::spawn(move || {
-                        let _ = Command::new("ssh")
-                            .args([
-                                "-o",
-                                "BatchMode=yes",
-                                "-o",
-                                &format!("ConnectTimeout={DEFAULT_SSH_CONNECT_TIMEOUT}"),
-                                &host,
-                                &sh,
-                            ])
-                            .stdin(Stdio::null())
-                            .stdout(Stdio::null())
-                            .stderr(Stdio::null())
-                            .status();
-                    })
-                })
-                .collect();
-            for h in handles {
-                let _ = h.join();
-            }
-        }
-        Ok(crate::automanaged::status_payload())
-    })
-    .await;
-    match res {
-        Ok(Ok(val)) => (StatusCode::OK, Json(val)),
-        Ok(Err(e)) => (StatusCode::BAD_REQUEST, Json(json!({"error": e}))),
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({"error": e.to_string()})),
-        ),
-    }
-}
-
-async fn api_automanaged_sync(
-    State(state): State<UiState>,
-    headers: HeaderMap,
-    Query(query): Query<TokenQuery>,
-    Json(req): Json<AutomanagedSyncRequest>,
-) -> impl IntoResponse {
-    if !check_token(&state, &headers, &query) {
-        return (
-            StatusCode::UNAUTHORIZED,
-            Json(json!({"error": "unauthorized"})),
-        );
-    }
-    let registry = state.registry.clone();
-    let res = tokio::task::spawn_blocking(move || -> Result<Value, String> {
-        let local_state =
-            crate::automanaged::execute_sync(req.cli, req.models, registry.as_deref(), false)?;
-        let mut remote_summaries = Vec::new();
-        if let Ok((local_m, targets)) = load_fleet_connections(registry.as_deref()) {
-            let mut remote_hosts: Vec<String> = targets
-                .into_iter()
-                .map(|t| t.machine_id)
-                .filter(|m| m != &local_m && valid_machine_id(m))
-                .collect();
-            remote_hosts.sort();
-            remote_hosts.dedup();
-            let mut flags = Vec::new();
-            if req.cli {
-                flags.push("--cli");
-            }
-            if req.models {
-                flags.push("--models");
-            }
-            let flag_str = flags.join(" ");
-            let remote_sh = format!(
-                "\"$HOME/.local/bin/bridget\" automanaged sync {flag_str} --json 2>/dev/null"
-            );
-            let handles: Vec<_> = remote_hosts
-                .into_iter()
-                .map(|host| {
-                    let sh = remote_sh.clone();
-                    std::thread::spawn(move || {
-                        let out = Command::new("ssh")
-                            .args([
-                                "-o",
-                                "BatchMode=yes",
-                                "-o",
-                                &format!("ConnectTimeout={DEFAULT_SSH_CONNECT_TIMEOUT}"),
-                                &host,
-                                &sh,
-                            ])
-                            .stdin(Stdio::null())
-                            .stdout(Stdio::piped())
-                            .stderr(Stdio::null())
-                            .output();
-                        match out {
-                            Ok(o) if o.status.success() => {
-                                let parsed =
-                                    parse_json_payload(&String::from_utf8_lossy(&o.stdout)).ok();
-                                json!({"machine": host, "status": "ok", "state": parsed})
-                            }
-                            _ => json!({"machine": host, "status": "unreachable"}),
-                        }
-                    })
-                })
-                .collect();
-            for h in handles {
-                if let Ok(item) = h.join() {
-                    remote_summaries.push(item);
-                }
-            }
-        }
-        Ok(json!({
-            "local": local_state,
-            "remotes": remote_summaries
-        }))
-    })
-    .await;
-    match res {
-        Ok(Ok(val)) => (StatusCode::OK, Json(val)),
-        Ok(Err(e)) => (StatusCode::BAD_REQUEST, Json(json!({"error": e}))),
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({"error": e.to_string()})),
-        ),
-    }
-}
-
-fn build_ui_router(state: UiState) -> Router {
-    Router::new()
-        .route("/", get(ui_index))
-        .route("/api/status", get(api_status))
-        .route("/api/automanaged", get(api_automanaged_get))
-        .route("/api/automanaged/toggle", post(api_automanaged_toggle))
-        .route("/api/automanaged/sync", post(api_automanaged_sync))
-        .route("/api/prepare", post(api_prepare))
-        .route("/api/login/start", post(api_login_start))
-        .route("/api/login/poll", get(api_login_poll))
-        .route("/api/login/input", post(api_login_input))
-        .route("/api/login/cancel", post(api_login_cancel))
-        .with_state(state)
-}
-
-fn cmd_ui(args: &[String]) -> Result<(), String> {
-    let mut no_open = false;
-    let mut port: u16 = 0;
-    let mut registry: Option<PathBuf> = None;
-    let mut i = 0;
-    while i < args.len() {
-        match args[i].as_str() {
-            "--no-open" => {
-                no_open = true;
-                i += 1;
-            }
-            "--port" => {
-                port = args
-                    .get(i + 1)
-                    .ok_or("--port exige un numero")?
-                    .parse()
-                    .map_err(|_| "--port invalide")?;
-                i += 2;
-            }
-            "--registry" => {
-                registry = Some(PathBuf::from(
-                    args.get(i + 1).ok_or("--registry exige un chemin")?,
-                ));
-                i += 2;
-            }
-            other => return Err(format!("option inconnue : {other}")),
-        }
-    }
-
-    let token = uuid::Uuid::new_v4().simple().to_string();
-    let state = UiState {
-        token: token.clone(),
-        registry,
-        sessions: Arc::new(Mutex::new(HashMap::new())),
-    };
-    let rt = tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .build()
-        .map_err(|e| format!("runtime tokio indisponible : {e}"))?;
-
-    rt.block_on(async move {
-        let listener = tokio::net::TcpListener::bind(("127.0.0.1", port))
-            .await
-            .map_err(|e| format!("ecoute locale impossible : {e}"))?;
-        let addr = listener.local_addr().map_err(|e| e.to_string())?;
-        let url = format!("http://127.0.0.1:{}/?token={token}", addr.port());
-        println!("Interface Bridget Comptes prete sur : {url}");
-        println!("Ctrl+C pour fermer cette fenetre de gestion.");
-        if !no_open {
-            let open_url = url.clone();
-            tokio::spawn(async move {
-                tokio::time::sleep(Duration::from_millis(150)).await;
-                open_browser(&open_url);
-            });
-        }
-        axum::serve(listener, build_ui_router(state))
-            .await
-            .map_err(|e| e.to_string())
-    })
-}
-
-const UI_HTML: &str = r###"<!doctype html>
-<html lang="fr">
-<head>
-<meta charset="utf-8" />
-<meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>Bridget Comptes - Connexions fournisseurs</title>
-<style>
-  :root {
-    --bg: #0f1117; --card: #181c25; --border: #2a3142; --text: #edf2f7;
-    --muted: #9aa5b8; --accent: #4f8cff; --ok: #22c55e; --warn: #f59e0b; --err: #ef4444;
-  }
-  * { box-sizing: border-box; }
-  body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: var(--bg); color: var(--text); }
-  header { display: flex; align-items: center; justify-content: space-between; padding: 18px 24px; border-bottom: 1px solid var(--border); background: #131720; position: sticky; top: 0; z-index: 5; }
-  header h1 { font-size: 18px; margin: 0; font-weight: 600; }
-  header .sub { font-size: 13px; color: var(--muted); margin-top: 2px; }
-  .toolbar { display: flex; gap: 10px; align-items: center; }
-  button { cursor: pointer; border: 1px solid var(--border); background: #222838; color: var(--text); padding: 8px 14px; border-radius: 8px; font-size: 13px; font-weight: 500; }
-  button:hover { background: #2c3448; }
-  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
-  button.primary:hover { filter: brightness(1.08); }
-  button.warn { background: #3b2a12; border-color: #6b4715; color: #fcd34d; }
-  main { max-width: 1120px; margin: 0 auto; padding: 20px 24px 60px; }
-  .auto-bar { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 12px 16px; margin-bottom: 18px; display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
-  .auto-info { font-size: 13px; color: var(--text); }
-  .auto-info .meta { margin-top: 2px; }
-  .auto-controls { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-  .toggle-btn { font-size: 12px; padding: 6px 11px; border-radius: 8px; }
-  .toggle-btn.on { background: rgba(34,197,94,.16); border-color: rgba(34,197,94,.45); color: #4ade80; }
-  .toggle-btn.off { background: #222838; border-color: var(--border); color: var(--muted); }
-  .filters { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 18px; }
-  .chip { padding: 6px 12px; border-radius: 999px; font-size: 12px; background: var(--card); border: 1px solid var(--border); color: var(--muted); }
-  .chip.active { background: var(--accent); border-color: var(--accent); color: #fff; }
-  .machine-block { margin-bottom: 24px; }
-  .machine-title { font-size: 15px; font-weight: 600; margin: 0 0 10px; display: flex; align-items: center; justify-content: space-between; color: #cbd5e1; }
-  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(310px, 1fr)); gap: 12px; }
-  .card { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 14px 16px; display: flex; flex-direction: column; gap: 10px; }
-  .row { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
-  .conn-name { font-weight: 600; font-size: 14px; word-break: break-word; }
-  .meta { font-size: 12px; color: var(--muted); }
-  .pill { font-size: 11px; font-weight: 600; padding: 3px 9px; border-radius: 999px; white-space: nowrap; }
-  .pill.authenticated { background: rgba(34,197,94,.16); color: #4ade80; }
-  .pill.unauthenticated { background: rgba(245,158,11,.18); color: #fbbf24; }
-  .pill.binary_missing, .pill.machine_unreachable { background: rgba(239,68,68,.16); color: #f87171; }
-  .actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: auto; }
-  .modal-bg { position: fixed; inset: 0; background: rgba(0,0,0,.7); display: none; align-items: center; justify-content: center; padding: 20px; z-index: 20; }
-  .modal-bg.open { display: flex; }
-  .modal { background: #141822; border: 1px solid var(--border); border-radius: 14px; width: 100%; max-width: 580px; padding: 22px; display: flex; flex-direction: column; gap: 16px; max-height: 88vh; overflow-y: auto; }
-  .banner { border-radius: 10px; padding: 14px 16px; display: flex; align-items: center; gap: 12px; font-size: 14px; line-height: 1.45; }
-  .banner.info { background: rgba(79,140,255,.14); border: 1px solid rgba(79,140,255,.45); color: #dbeafe; }
-  .banner.ok { background: rgba(34,197,94,.16); border: 1px solid rgba(34,197,94,.55); color: #dcfce7; }
-  .banner.err { background: rgba(239,68,68,.16); border: 1px solid rgba(239,68,68,.55); color: #fee2e2; }
-  .banner-icon { font-size: 20px; flex: 0 0 auto; }
-  .banner-title { font-weight: 600; font-size: 15px; }
-  .banner-sub { font-size: 13px; opacity: .9; margin-top: 2px; }
-  .steps { display: flex; flex-direction: column; gap: 10px; }
-  .step { background: #191f2d; border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; display: flex; align-items: center; justify-content: space-between; gap: 12px; }
-  .step-num { width: 24px; height: 24px; border-radius: 999px; background: rgba(79,140,255,.22); color: #93c5fd; font-weight: 700; font-size: 12px; display: inline-flex; align-items: center; justify-content: center; flex: 0 0 auto; }
-  .step-body { flex: 1; font-size: 13px; line-height: 1.4; }
-  .step-body strong { display: block; margin-bottom: 2px; }
-  .step-body span { color: var(--muted); font-size: 12px; }
-  details.tech-log { border: 1px solid var(--border); border-radius: 8px; background: #0c0f16; }
-  details.tech-log summary { cursor: pointer; padding: 8px 12px; font-size: 12px; color: var(--muted); user-select: none; }
-  .log { background: #0a0c10; border-top: 1px solid var(--border); padding: 10px 12px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; line-height: 1.45; white-space: pre-wrap; word-break: break-word; overflow-y: auto; max-height: 220px; color: #cbd5e1; }
-  button.success { background: #16a34a; border-color: #16a34a; color: #fff; font-weight: 600; }
-  button.success:hover { filter: brightness(1.08); }
-  .hidden { display: none !important; }
-  input, select { background: #0c0f16; border: 1px solid var(--border); color: var(--text); padding: 9px 11px; border-radius: 8px; font-size: 13px; width: 100%; }
-  .input-row { display: flex; gap: 8px; }
-  label { font-size: 12px; color: var(--muted); display: block; margin-bottom: 4px; }
-</style>
-</head>
-<body>
-<header>
-  <div>
-    <h1>Bridget Comptes</h1>
-    <div class="sub" id="subtitle">Chargement des connexions sur vos machines...</div>
-  </div>
-  <div class="toolbar">
-    <button onclick="openPrepareModal()">+ Nouveau compte isole</button>
-    <button class="primary" onclick="refreshStatus()">Actualiser</button>
-  </div>
-</header>
-<main>
-  <div class="auto-bar" id="autoBar">
-    <div class="auto-info">
-      <strong>Mode Automanaged (modeles + CLI)</strong>
-      <div class="meta" id="autoStatus">Chargement...</div>
-    </div>
-    <div class="auto-controls">
-      <button class="toggle-btn on" id="toggleModels" onclick="toggleAutomanaged('models')">Modeles : ACTIF</button>
-      <button class="toggle-btn on" id="toggleCli" onclick="toggleAutomanaged('cli')">CLI : ACTIF</button>
-      <button class="primary" id="syncNowBtn" onclick="syncAutomanaged()">Synchroniser maintenant</button>
-    </div>
-  </div>
-  <div class="filters" id="filters"></div>
-  <div id="content">Chargement...</div>
-</main>
-
-<div class="modal-bg" id="loginModal">
-  <div class="modal">
-    <div class="row">
-      <strong id="loginTitle">Connexion</strong>
-      <button onclick="closeLoginModal()">Fermer</button>
-    </div>
-
-    <div class="banner info" id="loginBanner">
-      <div class="banner-icon" id="bannerIcon">...</div>
-      <div>
-        <div class="banner-title" id="bannerTitle">Demarrage de la session...</div>
-        <div class="banner-sub" id="bannerSub">Connexion securisee au serveur en cours.</div>
-      </div>
-    </div>
-
-    <div class="steps hidden" id="loginSteps">
-      <div class="step">
-        <span class="step-num">1</span>
-        <div class="step-body">
-          <strong>Page de connexion ouverte dans votre navigateur</strong>
-          <span>Choisissez votre compte puis validez l'autorisation.</span>
-        </div>
-        <button class="primary" onclick="openDetectedUrl()">Rouvrir la page</button>
-      </div>
-      <div class="step" id="stepCode">
-        <span class="step-num">2</span>
-        <div class="step-body">
-          <strong>Cliquez sur « Copier » sur la page d'arrivee</strong>
-          <span>Bridget detecte automatiquement le code copie et l'envoie tout seul.</span>
-        </div>
-      </div>
-    </div>
-
-    <div class="hidden" id="manualCodeBox">
-      <label for="codeInput">Ou collez le code manuellement ici si besoin :</label>
-      <div class="input-row">
-        <input id="codeInput" placeholder="Coller le code puis Entree..." onkeydown="if(event.key==='Enter')sendCode()" />
-        <button class="primary" onclick="sendCode()">Envoyer</button>
-      </div>
-    </div>
-
-    <div class="row" style="justify-content:flex-end" id="loginFooter">
-      <button id="cancelBtn" onclick="cancelSession()">Annuler</button>
-      <button id="doneBtn" class="success hidden" onclick="closeLoginModal()">Terminer</button>
-    </div>
-
-    <details class="tech-log" id="logDetails">
-      <summary>Journal technique</summary>
-      <div class="log" id="loginLog"></div>
-    </details>
-  </div>
-</div>
-
-<div class="modal-bg" id="prepareModal">
-  <div class="modal">
-    <div class="row">
-      <strong>Creer et connecter un nouveau compte isole</strong>
-      <button onclick="closePrepareModal()">Fermer</button>
-    </div>
-    <div>
-      <label>Connexion modele (machine + fournisseur)</label>
-      <select id="prepSource"></select>
-    </div>
-    <div>
-      <label>Nom du nouveau compte (minuscules, chiffres, tiret) : ex. perso2, pro-alt</label>
-      <input id="prepName" placeholder="ex: google2" />
-    </div>
-    <div id="prepErr" class="meta" style="color:#f87171"></div>
-    <div class="row" style="justify-content:flex-end">
-      <button onclick="closePrepareModal()">Annuler</button>
-      <button class="primary" onclick="submitPrepare()">Creer et lancer la connexion</button>
-    </div>
-  </div>
-</div>
-
-<script>
-const TOKEN = "__BRIDGET_TOKEN__";
-if (window.location.search.includes("token=")) {
-  try { window.history.replaceState(null, "", "/"); } catch (e) {}
-}
-let fleet = null;
-let autoCfg = { cli_updates: true, model_sync: true, interval_secs: 21600 };
-let selectedMachine = "ALL";
-let currentSession = null;
-let pollTimer = null;
-let logOffset = 0;
-let detectedUrl = null;
-let authPopup = null;
-
-function openManagedPopup(url) {
-  try {
-    const w = 560, h = 720;
-    const left = Math.max(40, Math.round((window.screen.width - w) / 2));
-    const top = Math.max(40, Math.round((window.screen.height - h) / 2));
-    const feats = `popup=yes,width=${w},height=${h},left=${left},top=${top}`;
-    if (authPopup && !authPopup.closed) {
-      if (url) authPopup.location.href = url;
-      authPopup.focus();
-      return authPopup;
-    }
-    const pop = window.open(url || "about:blank", "bridget_oauth_popup", feats);
-    if (pop && !url) {
-      try {
-        pop.document.title = "Connexion fournisseur - Bridget";
-        pop.document.body.style.cssText = "margin:0;background:#0f1117;color:#edf2f7;font-family:-apple-system,sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;";
-        pop.document.body.textContent = "Preparation de la page de connexion...";
-      } catch (e) {}
-    }
-    authPopup = pop;
-    return pop;
-  } catch (e) {
-    authPopup = null;
-    return null;
-  }
-}
-
-function closeAuthPopup() {
-  try {
-    if (authPopup && !authPopup.closed) authPopup.close();
-  } catch (e) {}
-  authPopup = null;
-  try { window.focus(); } catch (e) {}
-}
-
-async function api(path, opts = {}) {
-  const headers = Object.assign({ "X-Bridget-Token": TOKEN }, opts.headers || {});
-  if (opts.body) headers["Content-Type"] = "application/json";
-  const resp = await fetch(path, Object.assign({}, opts, { headers }));
-  const data = await resp.json().catch(() => ({}));
-  if (!resp.ok) throw new Error(data.error || ("HTTP " + resp.status));
-  return data;
-}
-
-async function refreshAutomanaged() {
-  try {
-    const data = await api("/api/automanaged");
-    autoCfg = data.config || autoCfg;
-    renderAutomanaged(data.state);
-  } catch (e) {
-    document.getElementById("autoStatus").textContent = "Indisponible : " + e.message;
-  }
-}
-
-function renderAutomanaged(st) {
-  const bMod = document.getElementById("toggleModels");
-  const bCli = document.getElementById("toggleCli");
-  bMod.textContent = "Modeles : " + (autoCfg.model_sync ? "ACTIF" : "DESACTIVE");
-  bMod.className = "toggle-btn " + (autoCfg.model_sync ? "on" : "off");
-  bCli.textContent = "CLI : " + (autoCfg.cli_updates ? "ACTIF" : "DESACTIVE");
-  bCli.className = "toggle-btn " + (autoCfg.cli_updates ? "on" : "off");
-  const hrs = Math.max(1, Math.round((autoCfg.interval_secs || 21600) / 3600));
-  const last = st && st.last_run_at ? ("Dernier passage : " + new Date(st.last_run_at * 1000).toLocaleTimeString()) : "Prochain passage automatique toutes les " + hrs + " h";
-  document.getElementById("autoStatus").textContent = last + " (sur vos 4 machines)";
-}
-
-async function toggleAutomanaged(kind) {
-  const payload = kind === "models" ? { model_sync: !autoCfg.model_sync } : { cli_updates: !autoCfg.cli_updates };
-  document.getElementById("autoStatus").textContent = "Application du reglage sur les machines...";
-  try {
-    const data = await api("/api/automanaged/toggle", { method: "POST", body: JSON.stringify(payload) });
-    autoCfg = data.config || autoCfg;
-    renderAutomanaged(data.state);
-  } catch (e) {
-    document.getElementById("autoStatus").textContent = "Erreur : " + e.message;
-  }
-}
-
-async function syncAutomanaged() {
-  const btn = document.getElementById("syncNowBtn");
-  btn.disabled = true;
-  document.getElementById("autoStatus").textContent = "Synchronisation des modeles et verification des CLI en cours...";
-  try {
-    const res = await api("/api/automanaged/sync", { method: "POST", body: JSON.stringify({ cli: autoCfg.cli_updates, models: autoCfg.model_sync }) });
-    const localAdded = (res.local && res.local.model_results || []).reduce((acc, r) => acc + (r.total_added || 0), 0);
-    const remoteAdded = (res.remotes || []).reduce((acc, rm) => acc + ((rm.state && rm.state.model_results) || []).reduce((a, r) => a + (r.total_added || 0), 0), 0);
-    const totalAdded = localAdded + remoteAdded;
-    document.getElementById("autoStatus").textContent =
-      "Synchronisation terminee : " + (totalAdded > 0 ? ("+" + totalAdded + " nouveau(x) modele(s) ajoute(s)") : "tous les modeles et CLI sont a jour") + ".";
-    refreshStatus();
-  } catch (e) {
-    document.getElementById("autoStatus").textContent = "Erreur sync : " + e.message;
-  } finally {
-    btn.disabled = false;
-  }
-}
-
-async function refreshStatus() {
-  document.getElementById("subtitle").textContent = "Verification en cours sur les machines...";
-  try {
-    fleet = await api("/api/status");
-    const okCount = fleet.connections.filter(c => c.auth_state === "authenticated").length;
-    document.getElementById("subtitle").textContent =
-      okCount + " / " + fleet.connections.length + " comptes authentifies sur " + fleet.machines.length + " machines";
-    renderFilters();
-    renderCards();
-  } catch (e) {
-    document.getElementById("content").textContent = "Erreur : " + e.message;
-  }
-}
-
-function renderFilters() {
-  const el = document.getElementById("filters");
-  const all = ["ALL", ...fleet.machines];
-  el.innerHTML = all.map(m =>
-    `<button class="chip ${selectedMachine===m?'active':''}" data-filter-machine="${esc(m)}">${m==='ALL'?'Toutes les machines':esc(m)}</button>`
-  ).join("");
-}
-
-function stateLabel(s) {
-  return { authenticated: "Connecte", unauthenticated: "A connecter", binary_missing: "Binaire absent", machine_unreachable: "Hors ligne" }[s] || s;
-}
-
-function renderCards() {
-  const container = document.getElementById("content");
-  const machines = selectedMachine === "ALL" ? fleet.machines : [selectedMachine];
-  container.innerHTML = machines.map(m => {
-    const rows = fleet.connections.filter(c => c.machine_id === m);
-    return `<section class="machine-block">
-      <h2 class="machine-title"><span>${esc(m)}</span><span class="meta">${rows.length} compte(s)</span></h2>
-      <div class="grid">${rows.map(c => `
-        <div class="card">
-          <div class="row">
-            <span class="conn-name">${esc(c.account_label || c.connection_id)}</span>
-            <span class="pill ${esc(c.auth_state)}">${esc(stateLabel(c.auth_state))}</span>
-          </div>
-          <div class="meta">${esc(c.detail)}</div>
-          <div class="meta">${c.covered_connections && c.covered_connections.length > 1 ? ('Couvre : ' + esc(c.covered_connections.join(', '))) : ('Profil : ' + esc(c.connection_id))}${c.managed ? ' · compte isole' : ''}</div>
-          <div class="actions">
-            ${c.auth_state === 'authenticated'
-              ? `<button class="warn" data-login-conn="${esc(c.connection_id)}" data-login-machine="${esc(c.machine_id)}" data-logout-first="1">Changer de compte</button>`
-              : `<button class="primary" data-login-conn="${esc(c.connection_id)}" data-login-machine="${esc(c.machine_id)}" data-logout-first="0">Se connecter</button>`}
-          </div>
-        </div>`).join("")}
-      </div>
-    </section>`;
-  }).join("");
-}
-
-document.getElementById("filters").addEventListener("click", (ev) => {
-  const btn = ev.target.closest("button[data-filter-machine]");
-  if (!btn) return;
-  selectedMachine = btn.getAttribute("data-filter-machine") || "ALL";
-  renderFilters();
-  renderCards();
-});
-
-document.getElementById("content").addEventListener("click", (ev) => {
-  const btn = ev.target.closest("button[data-login-conn]");
-  if (!btn) return;
-  const connId = btn.getAttribute("data-login-conn");
-  const machineId = btn.getAttribute("data-login-machine");
-  const logoutFirst = btn.getAttribute("data-logout-first") === "1";
-  if (connId && machineId) startLogin(connId, machineId, logoutFirst, false);
-});
-
-function esc(s) {
-  return String(s || "").replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
-}
-
-function setBanner(kind, icon, title, sub) {
-  const b = document.getElementById("loginBanner");
-  b.className = "banner " + kind;
-  document.getElementById("bannerIcon").textContent = icon;
-  document.getElementById("bannerTitle").textContent = title;
-  document.getElementById("bannerSub").textContent = sub;
-}
-
-async function startLogin(connId, machineId, logoutFirst, enableOnSuccess) {
-  if (pollTimer) clearInterval(pollTimer);
-  closeAuthPopup();
-  logOffset = 0; detectedUrl = null;
-  const pop = openManagedPopup(null);
-  const popupReady = !!(pop && !pop.closed);
-  document.getElementById("loginTitle").textContent = (logoutFirst ? "Changer de compte : " : "Connexion : ") + connId + " (" + machineId + ")";
-  document.getElementById("loginLog").textContent = "";
-  document.getElementById("logDetails").open = false;
-  document.getElementById("loginSteps").classList.add("hidden");
-  document.getElementById("manualCodeBox").classList.add("hidden");
-  document.getElementById("cancelBtn").classList.remove("hidden");
-  document.getElementById("doneBtn").classList.add("hidden");
-  document.getElementById("codeInput").value = "";
-  setBanner("info", "⏳", "Demarrage sur " + machineId + "...", "Ouverture automatique de la page de connexion dans quelques secondes.");
-  document.getElementById("loginModal").classList.add("open");
-  try {
-    const res = await api("/api/login/start", {
-      method: "POST",
-      body: JSON.stringify({
-        connection_id: connId,
-        machine_id: machineId,
-        logout_first: logoutFirst,
-        enable_on_success: enableOnSuccess,
-        open_in_browser: !popupReady
-      })
-    });
-    currentSession = res.session_id;
-    pollTimer = setInterval(pollSession, 500);
-    pollSession();
-  } catch (e) {
-    closeAuthPopup();
-    setBanner("err", "✕", "Impossible de demarrer la connexion", e.message);
-    document.getElementById("logDetails").open = true;
-    document.getElementById("loginLog").textContent += "\nErreur : " + e.message;
-    document.getElementById("cancelBtn").classList.add("hidden");
-    document.getElementById("doneBtn").classList.remove("hidden");
-  }
-}
-
-async function pollSession() {
-  if (!currentSession) return;
-  try {
-    const res = await api(`/api/login/poll?session=${encodeURIComponent(currentSession)}&offset=${logOffset}`);
-    if (res.chunk) {
-      const logEl = document.getElementById("loginLog");
-      logEl.textContent += res.chunk;
-      logEl.scrollTop = logEl.scrollHeight;
-      logOffset = res.next_offset;
-    }
-    if (res.auth_url && res.auth_url !== detectedUrl) {
-      detectedUrl = res.auth_url;
-      if (authPopup && !authPopup.closed) {
-        try { authPopup.location.href = detectedUrl; authPopup.focus(); } catch (e) {}
-      }
-      document.getElementById("loginSteps").classList.remove("hidden");
-      const needsCode = res.engine !== "codex";
-      document.getElementById("stepCode").classList.toggle("hidden", !needsCode);
-      document.getElementById("manualCodeBox").classList.toggle("hidden", !needsCode);
-      if (needsCode) {
-        setBanner("info", "🌐", "Validez dans la fenetre ouverte puis cliquez « Copier »", "Des que vous copiez le code, Bridget ferme la fenetre fournisseur et termine la connexion tout seul.");
-      } else {
-        setBanner("info", "🌐", "Validez la connexion dans la fenetre ouverte", "La redirection locale est automatique pour Codex et la fenetre se fermera toute seule.");
-      }
-    }
-    if (res.running && res.code_auto_sent) {
-      closeAuthPopup();
-      setBanner("info", "⚡", "Code detecte et envoye automatiquement !", "Finalisation de la connexion sur le serveur...");
-      document.getElementById("manualCodeBox").classList.add("hidden");
-    } else if (res.running && res.code_sent) {
-      closeAuthPopup();
-      setBanner("info", "⏳", "Code envoye, validation en cours...", "Le serveur enregistre votre session.");
-    }
-    if (!res.running) {
-      clearInterval(pollTimer);
-      pollTimer = null;
-      closeAuthPopup();
-      document.getElementById("loginSteps").classList.add("hidden");
-      document.getElementById("manualCodeBox").classList.add("hidden");
-      document.getElementById("cancelBtn").classList.add("hidden");
-      document.getElementById("doneBtn").classList.remove("hidden");
-      if (res.exit_code === 0) {
-        const who = res.logged_in_as ? ("Compte connecte : " + res.logged_in_as) : "Votre session est enregistree et prete a l'emploi.";
-        const extra = res.auto_enabled ? " Le nouveau compte isole a ete active." : "";
-        setBanner("ok", "✓", "Connexion reussie !", who + extra);
-      } else {
-        setBanner("err", "✕", "La connexion n'a pas abouti (code " + res.exit_code + ")", "Ouvrez le journal technique ci-dessous pour voir le detail.");
-        document.getElementById("logDetails").open = true;
-      }
-      refreshAutomanaged();
-refreshStatus();
-    }
-  } catch (e) {}
-}
-
-function openDetectedUrl() { if (detectedUrl) openManagedPopup(detectedUrl); }
-
-async function sendCode() {
-  if (!currentSession) return;
-  const input = document.getElementById("codeInput");
-  const text = input.value;
-  input.value = "";
-  await api("/api/login/input", { method: "POST", body: JSON.stringify({ session_id: currentSession, text }) });
-}
-
-async function cancelSession() {
-  closeAuthPopup();
-  if (!currentSession) return;
-  await api("/api/login/cancel", { method: "POST", body: JSON.stringify({ session_id: currentSession }) });
-}
-
-function closeLoginModal() {
-  if (pollTimer) clearInterval(pollTimer);
-  closeAuthPopup();
-  document.getElementById("loginModal").classList.remove("open");
-}
-
-function openPrepareModal() {
-  if (!fleet) return;
-  const sel = document.getElementById("prepSource");
-  const candidates = fleet.connections.filter(c => !c.managed && c.auth_state !== "machine_unreachable");
-  sel.innerHTML = candidates.map(c =>
-    `<option value="${esc(c.machine_id)}|${esc(c.connection_id)}">${esc(c.machine_id)} - ${esc(c.connection_id)} (${esc(c.engine)})</option>`
-  ).join("");
-  document.getElementById("prepName").value = "";
-  document.getElementById("prepErr").textContent = "";
-  document.getElementById("prepareModal").classList.add("open");
-}
-
-function closePrepareModal() { document.getElementById("prepareModal").classList.remove("open"); }
-
-async function submitPrepare() {
-  const val = document.getElementById("prepSource").value;
-  const [machineId, fromConn] = val.split("|");
-  const newId = document.getElementById("prepName").value.trim().toLowerCase();
-  document.getElementById("prepErr").textContent = "Preparation du compte isole sur " + machineId + "...";
-  try {
-    const res = await api("/api/prepare", {
-      method: "POST",
-      body: JSON.stringify({ machine_id: machineId, from_connection_id: fromConn, new_id: newId })
-    });
-    closePrepareModal();
-    await refreshStatus();
-    startLogin(res.connection_id, res.machine_id, false, true);
-  } catch (e) {
-    document.getElementById("prepErr").textContent = e.message;
-  }
-}
-
-refreshAutomanaged();
-refreshStatus();
-</script>
-</body>
-</html>
-"###;
 
 #[cfg(test)]
 mod tests {
