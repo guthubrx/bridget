@@ -731,6 +731,7 @@ fn taille_evenement_bornee_et_message_terminal_preserve() {
     let event = finish_turn(
         original,
         "réponse".to_string(),
+        Vec::new(),
         Ok(json!({"stopReason":"end_turn"})),
     );
     let ManagedEventKind::TurnFinished {
@@ -751,6 +752,7 @@ fn turn_normal_empty_and_error_have_distinct_events() {
     match finish_turn(
         message("normal"),
         "réponse".to_string(),
+        Vec::new(),
         Ok(json!({"stopReason":"end_turn"})),
     ) {
         AcpEvent::TurnFinished {
@@ -766,6 +768,7 @@ fn turn_normal_empty_and_error_have_distinct_events() {
     match finish_turn(
         message("empty"),
         String::new(),
+        Vec::new(),
         Ok(json!({"stopReason":"end_turn"})),
     ) {
         AcpEvent::TurnFinished { response, .. } => assert!(response.is_empty()),
@@ -774,6 +777,7 @@ fn turn_normal_empty_and_error_have_distinct_events() {
     match finish_turn(
         message("error"),
         String::new(),
+        Vec::new(),
         Err(TransportError::DeliveryFailed("refus".to_string())),
     ) {
         AcpEvent::DeliveryRejected { message_id, reason } => {
@@ -2141,4 +2145,113 @@ while read remaining; do :; done
     )
     .unwrap();
     transport.shutdown();
+}
+
+#[test]
+fn spec325_acp_empty_turn_after_denied_permission_returns_explicit_rejection() {
+    let script = r#"
+read initialize
+echo '{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":1}}'
+read session
+echo '{"jsonrpc":"2.0","id":2,"result":{"sessionId":"agy-session"}}'
+read prompt
+echo '{"jsonrpc":"2.0","id":"perm-1","method":"session/request_permission","params":{"sessionId":"agy-session","toolCall":{"toolCallId":"tc-1","title":"File /var/tmp/hors-workspace.md"},"options":[{"optionId":"allow-1","kind":"allow_once"},{"optionId":"reject-1","kind":"reject_once"}]}}'
+read perm_reply
+echo '{"jsonrpc":"2.0","id":3,"result":{"stopReason":"end_turn"}}'
+while read remaining; do :; done
+"#;
+    let mut transport = AcpTransport::spawn(AcpOptions {
+        command: "sh".into(),
+        args: vec!["-c".into(), script.into()],
+        queue_capacity: 2,
+        permissions: "deny".into(),
+        notify_timeout_secs: 5,
+        provider_observation: None,
+    })
+    .unwrap();
+    transport.deliver(&message("msg-perm-empty")).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(3);
+    let mut rejected = None;
+    while Instant::now() < deadline && rejected.is_none() {
+        for event in transport.drain_events() {
+            if let AcpEvent::DeliveryRejected { message_id, reason } = event {
+                rejected = Some((message_id, reason));
+                break;
+            }
+            assert!(
+                !matches!(event, AcpEvent::TurnFinished { .. }),
+                "un tour vide après refus de permission ne doit pas passer en TurnFinished"
+            );
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+    transport.shutdown();
+    let (message_id, reason) = rejected.expect("rejet explicite attendu");
+    assert_eq!(message_id, "msg-perm-empty");
+    assert!(reason.contains("acp_permission_denied"), "reason={reason}");
+    assert!(
+        reason.contains("File /var/tmp/hors-workspace.md"),
+        "reason={reason}"
+    );
+}
+
+#[test]
+fn spec325_acp_non_empty_turn_after_denied_permission_still_succeeds() {
+    let script = r#"
+read initialize
+echo '{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":1}}'
+read session
+echo '{"jsonrpc":"2.0","id":2,"result":{"sessionId":"agy-session"}}'
+read prompt
+echo '{"jsonrpc":"2.0","id":"perm-1","method":"session/request_permission","params":{"sessionId":"agy-session","toolCall":{"toolCallId":"tc-1","title":"Run shell"},"options":[{"optionId":"allow-1","kind":"allow_once"},{"optionId":"reject-1","kind":"reject_once"}]}}'
+read perm_reply
+echo '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"agy-session","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"Réponse utile malgré refus"}}}}'
+echo '{"jsonrpc":"2.0","id":3,"result":{"stopReason":"end_turn"}}'
+while read remaining; do :; done
+"#;
+    let mut transport = AcpTransport::spawn(AcpOptions {
+        command: "sh".into(),
+        args: vec!["-c".into(), script.into()],
+        queue_capacity: 2,
+        permissions: "deny".into(),
+        notify_timeout_secs: 5,
+        provider_observation: None,
+    })
+    .unwrap();
+    transport.deliver(&message("msg-perm-ok")).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(3);
+    let mut finished = None;
+    while Instant::now() < deadline && finished.is_none() {
+        for event in transport.drain_events() {
+            if let AcpEvent::TurnFinished {
+                message, response, ..
+            } = event
+            {
+                finished = Some((message.id, response));
+                break;
+            }
+            assert!(
+                !matches!(event, AcpEvent::DeliveryRejected { .. }),
+                "une réponse non vide après refus de permission reste valide"
+            );
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+    transport.shutdown();
+    let (message_id, response) = finished.expect("TurnFinished attendu");
+    assert_eq!(message_id, "msg-perm-ok");
+    assert_eq!(response, "Réponse utile malgré refus");
+}
+
+#[test]
+fn spec325_acp_deny_prompt_warns_against_shell_and_preserves_body() {
+    let msg = message("corps-exact-325");
+    let denied = prompt_for_acp_turn(&msg, None, "deny");
+    assert!(denied.contains("Contraintes ACP actives"));
+    assert!(denied.contains("sans commande shell"));
+    assert!(denied.ends_with(&msg.body));
+
+    let allowed = prompt_for_acp_turn(&msg, None, "allow");
+    assert!(!allowed.contains("Contraintes ACP actives"));
+    assert_eq!(allowed, prompt_for(&msg));
 }

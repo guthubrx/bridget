@@ -8564,11 +8564,10 @@ fn native160_rouge_double_avis() {
             assert!(saved.failure_sent);
             assert_eq!(durable, 1, "un seul avis durable existant");
             assert_eq!(
-                direct,
-                usize::from(!opt_in),
-                "seul l'opt-in retire le message direct"
+                direct, 0,
+                "aucun doublon direct Échec de livraison pour une tâche native"
             );
-            assert_eq!(count, if opt_in { 1 } else { 2 });
+            assert_eq!(count, 1);
         }
     }
 }
@@ -13154,9 +13153,20 @@ fn native152_pause_refus_hors_pause_notifie_toujours() {
             .iter()
             .any(|pending| pending.msg_id == task.mission)
     );
+    drop(st);
+    // Une tâche native en échec n'envoie plus de doublon brut « Échec de livraison » ;
+    // son seul avis éventuel est l'avis durable native-failure-* émis au tick.
+    tick(&shared);
     let mut raw = String::new();
     parent.read_line(&mut raw).unwrap();
-    assert!(raw.contains("Échec de livraison de la demande"));
+    assert!(
+        raw.contains(&format!("native-failure-{}", task.task_id)),
+        "avis durable native-failure attendu, reçu: {raw}"
+    );
+    assert!(
+        !raw.contains("Échec de livraison de la demande"),
+        "pas de doublon direct sur échec natif: {raw}"
+    );
     cleanup(&config);
 }
 
@@ -28615,5 +28625,116 @@ fn purge_fleet_retire_uniquement_les_sous_agents_natifs_decommissionnes_orphelin
 
     // Second appel idempotent : plus rien à retirer.
     assert_eq!(prune_decommissioned_fleet_children(&st), 0);
+    cleanup(&config);
+}
+
+#[test]
+fn spec325_ack_suppresses_pending_tick_notifications_and_cancels_queued_deliveries() {
+    let (mut st, config, _rx, _reader) = fixture("n325");
+    let ok_view = handle_locked("conn-1", request("req-ok-325"), &mut st).unwrap();
+    let fail_view = handle_locked("conn-1", request("req-fail-325"), &mut st).unwrap();
+    let ok_id = ok_view["task_id"].as_str().unwrap().to_string();
+    let fail_id = fail_view["task_id"].as_str().unwrap().to_string();
+
+    let mut ok_task = st.delegation_store.get(&ok_id).unwrap().unwrap();
+    ok_task.state = "result_available".into();
+    ok_task.result = Some("résultat lu".into());
+    ok_task.child_instance = Some("child-inst-ok-325".into());
+    st.delegation_store.save(&ok_task).unwrap();
+
+    let mut fail_task = st.delegation_store.get(&fail_id).unwrap().unwrap();
+    fail_task.state = "failed".into();
+    fail_task.error = Some("échec lu".into());
+    st.delegation_store.save(&fail_task).unwrap();
+
+    // Injecter une remise déjà retenue (`held`) dans `send_deliveries` pour simuler
+    // un avis émis pendant que le parent était occupé en tour 1.
+    let result_msg_id = ok_task.result_message_id();
+    let scope = crate::communication::issuer_scope(&ok_id);
+    let key = crate::idempotency::IdempotencyKey::new(
+        &scope,
+        crate::idempotency::OperationKind::Send,
+        &result_msg_id,
+    )
+    .unwrap();
+    let mut held_msg = bridget_core::BridgetMessage::new(&ok_task.child, &ok_task.owner, "résultat");
+    held_msg.id = result_msg_id.clone();
+    let bytes = serde_json::to_vec(&held_msg).unwrap();
+    let now = unix_timestamp();
+    st.idempotency
+        .reserve(&key, &bytes, now, 3600, now, 300)
+        .unwrap();
+    st.idempotency
+        .begin_send_delivery_with_guidance(
+            &key,
+            &crate::idempotency::SendDelivery {
+                delivery_id: format!("del-{result_msg_id}"),
+                recipient_instance_id: ok_task.owner_instance.clone(),
+                delivery_generation: 1,
+                expires_at: now + 3600,
+                message_bytes: bytes,
+            },
+            None,
+            None,
+            None,
+            None,
+            Some(&ok_task.owner),
+        )
+        .unwrap();
+
+    let ack = handle_locked(
+        "conn-1",
+        NativeDelegationRequest::Ack {
+            task_ids: vec![ok_id.clone(), fail_id.clone()],
+        },
+        &mut st,
+    )
+    .unwrap();
+    assert_eq!(ack["acknowledged"].as_array().unwrap().len(), 2);
+
+    // 1. La remise retenue dans `send_deliveries` est annulée sans notice orpheline.
+    assert_eq!(
+        st.idempotency.send_delivery_phase(&key).unwrap().as_deref(),
+        Some("cancelled")
+    );
+    assert!(
+        st.idempotency
+            .pending_orphan_emitter_notices()
+            .unwrap()
+            .is_empty()
+    );
+
+    // 2. Des trames CancelDelivery non-interruptives sont programmées vers le parent.
+    let parent_controls = st
+        .pending_post_response_controls
+        .remove("conn-1")
+        .expect("contrôles CancelDelivery attendus pour conn-1");
+    let cancelled_ids: Vec<String> = parent_controls
+        .iter()
+        .filter_map(|control| match &control.message {
+            DaemonToWrapper::CancelDelivery {
+                id,
+                interrupt_active,
+                ..
+            } => {
+                assert_eq!(*interrupt_active, Some(false));
+                Some(id.clone())
+            }
+            _ => None,
+        })
+        .collect();
+    assert!(cancelled_ids.contains(&result_msg_id));
+    assert!(cancelled_ids.contains(&format!("native-failure-{fail_id}")));
+
+    // 3. Un tick ultérieur n'émet ni native-result-* ni native-failure-*, mais lance le cleanup.
+    let shared = Arc::new(Mutex::new(st));
+    tick(&shared);
+    let st = shared.lock().unwrap();
+    let ok_after = st.delegation_store.get(&ok_id).unwrap().unwrap();
+    let fail_after = st.delegation_store.get(&fail_id).unwrap().unwrap();
+    assert!(!ok_after.result_sent, "aucun native-result-* après ACK");
+    assert!(!fail_after.failure_sent, "aucun native-failure-* après ACK");
+    assert!(ok_after.cleanup_done, "le cleanup reste exécuté après ACK");
+    assert!(fail_after.cleanup_done, "le cleanup reste exécuté après ACK");
     cleanup(&config);
 }

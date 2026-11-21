@@ -183,6 +183,8 @@ struct TurnWorker {
     state: Arc<Mutex<TurnState>>,
     events: Arc<Mutex<AcpEventQueue>>,
     response: Arc<Mutex<String>>,
+    denied_permissions: Arc<Mutex<Vec<String>>>,
+    permissions: String,
     /// Accumulé depuis `agent_thought_chunk` ; vidé en début de tour.
     /// Une seule ligne journal `event=reasoning` est émise en fin de tour
     /// (alignement C3 avec L3 Codex — pas de DTO ManagedEvent).
@@ -382,6 +384,7 @@ impl AcpTransport {
         let shutdown_started = Arc::new(AtomicBool::new(false));
         let events = Arc::new(Mutex::new(AcpEventQueue::default()));
         let response = Arc::new(Mutex::new(String::new()));
+        let denied_permissions = Arc::new(Mutex::new(Vec::new()));
         let reasoning_raw = Arc::new(Mutex::new(String::new()));
         let writer = Arc::new(Mutex::new(Some(stdin)));
         let waiters: Waiters = Arc::new(Mutex::new(HashMap::new()));
@@ -405,6 +408,7 @@ impl AcpTransport {
             completions.clone(),
             events.clone(),
             response.clone(),
+            denied_permissions.clone(),
             reasoning_raw.clone(),
             alive.clone(),
             options.permissions.clone(),
@@ -550,6 +554,8 @@ impl AcpTransport {
             state: state.clone(),
             events: events.clone(),
             response,
+            denied_permissions,
+            permissions: options.permissions.clone(),
             reasoning_raw,
             session_id: session_id.clone(),
             notify_timeout: Duration::from_secs(options.notify_timeout_secs),
@@ -1025,6 +1031,7 @@ fn spawn_worker(worker: TurnWorker) -> thread::JoinHandle<()> {
                 }),
             );
             worker.response.lock().recover_poison().clear();
+            worker.denied_permissions.lock().recover_poison().clear();
             let instructions = worker
                 .private_profile_instructions
                 .lock()
@@ -1038,7 +1045,7 @@ next_id: &worker.next_id,
 method: "session/prompt",
 params: json!({
                     "sessionId": &worker.session_id,
-                    "prompt": [{ "type": "text", "text": prompt_for_with_private_instructions(&message, instructions.as_deref()) }]
+                    "prompt": [{ "type": "text", "text": prompt_for_acp_turn(&message, instructions.as_deref(), &worker.permissions) }]
                 }),
 timeout: // L'échéance absolue vient du daemon (relue à chaque livraison).
                 // Sans elle, repli sur la valeur figée au spawn — qui ne suit
@@ -1062,9 +1069,10 @@ cancel_grace: worker.cancel_grace,
 poll_interval: worker.poll_interval,
 });
             let collected = worker.response.lock().recover_poison().clone();
+            let denied = std::mem::take(&mut *worker.denied_permissions.lock().recover_poison());
             *worker.state.lock().recover_poison() = TurnState::Idle;
             clear_active_turn(&worker.queue);
-            let event = finish_turn(message, collected, result);
+            let event = finish_turn(message, collected, denied, result);
             match &event {
                 AcpEvent::TurnFinished {
                     message,
@@ -1192,18 +1200,39 @@ fn enqueue_and_capture_active_message_id(
 fn finish_turn(
     message: BridgetMessage,
     response: String,
+    denied_permissions: Vec<String>,
     result: Result<Value, TransportError>,
 ) -> AcpEvent {
     match result {
-        Ok(value) => AcpEvent::TurnFinished {
-            message: Box::new(message),
-            response,
-            stop_reason: value
+        Ok(value) => {
+            let stop_reason = value
                 .get("stopReason")
                 .and_then(Value::as_str)
                 .unwrap_or("inconnu")
-                .to_string(),
-        },
+                .to_string();
+            if response.trim().is_empty() {
+                if !denied_permissions.is_empty() {
+                    return AcpEvent::DeliveryRejected {
+                        message_id: message.id,
+                        reason: format!(
+                            "acp_permission_denied : réponse vide après refus de permission ACP ({}) ; un refus de permission interrompt immédiatement le tour sur cet adaptateur. En posture discovery, lire uniquement les fichiers du dossier de travail ou inclure le contenu externe dans la consigne, sans commande shell.",
+                            denied_permissions.join(" ; ")
+                        ),
+                    };
+                }
+                if stop_reason != "end_turn" {
+                    return AcpEvent::DeliveryRejected {
+                        message_id: message.id,
+                        reason: format!("acp_empty_response : réponse vide (stop_reason={stop_reason})"),
+                    };
+                }
+            }
+            AcpEvent::TurnFinished {
+                message: Box::new(message),
+                response,
+                stop_reason,
+            }
+        }
         Err(error) => AcpEvent::DeliveryRejected {
             message_id: message.id,
             reason: error.to_string(),
@@ -1211,10 +1240,29 @@ fn finish_turn(
     }
 }
 
+fn record_denied_permission(denied: &Arc<Mutex<Vec<String>>>, payload: &Value) {
+    let raw_tool = payload
+        .get("tool")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("inconnu");
+    let tool = if raw_tool.chars().count() > 140 {
+        let prefix: String = raw_tool.chars().take(140).collect();
+        format!("{prefix}…")
+    } else {
+        raw_tool.to_string()
+    };
+    let mut list = denied.lock().recover_poison();
+    if list.len() < 3 && !list.iter().any(|existing| existing == &tool) {
+        list.push(tool);
+    }
+}
+
 // Les huit ressources sont les extrémités explicites du pipeline stdio ; les
 // regrouper masquerait l'unique propriétaire de stdout imposé par D-204.
 #[allow(clippy::too_many_arguments)]
-// 14 paramètres : regroupement différé (programme 260, lot 9).
+// 15 paramètres : regroupement différé (programme 260, lot 9).
 fn spawn_reader(
     stdout: ChildStdout,
     writer: Writer,
@@ -1222,6 +1270,7 @@ fn spawn_reader(
     completions: Completions,
     events: Arc<Mutex<AcpEventQueue>>,
     response: Arc<Mutex<String>>,
+    denied_permissions: Arc<Mutex<Vec<String>>>,
     reasoning_raw: Arc<Mutex<String>>,
     alive: Arc<AtomicBool>,
     permissions: String,
@@ -1379,10 +1428,20 @@ fn spawn_reader(
                     }
                 }
                 Some("session/request_permission") => {
+                    let cancelled = active_turn_is_cancelled(&queue);
                     if let Some((reply, payload)) =
-                        permission_response(&value, &permissions, active_turn_is_cancelled(&queue))
+                        permission_response(&value, &permissions, cancelled)
                     {
                         let message_id = active_message_id(&queue);
+                        if !cancelled
+                            && (permissions != "allow"
+                                || payload
+                                    .pointer("/decision/outcome")
+                                    .and_then(Value::as_str)
+                                    == Some("cancelled"))
+                        {
+                            record_denied_permission(&denied_permissions, &payload);
+                        }
                         // Mesure Cursor MCP : le vrai nom arrive ici
                         // (`bridget-bridget_ledger: bridget_ledger`) alors que
                         // tool_call ne porte que `MCP: tool` + rawInput vide.
@@ -2158,6 +2217,20 @@ fn prompt_for_with_private_instructions(
         return prompt;
     };
     format!("[Instructions individuelles Bridget]\n{instructions}\n\n{prompt}")
+}
+
+fn prompt_for_acp_turn(
+    message: &BridgetMessage,
+    instructions: Option<&str>,
+    permissions: &str,
+) -> String {
+    let base = prompt_for_with_private_instructions(message, instructions);
+    if permissions == "allow" {
+        return base;
+    }
+    format!(
+        "[Contraintes ACP actives : toute demande de permission (commande shell, lecture ou écriture hors dossier courant) est refusée et interrompt immédiatement le tour sans réponse. Utilise uniquement les outils de lecture/recherche intégrés dans le dossier courant, sans commande shell.]\n\n{base}"
+    )
 }
 
 #[cfg(test)]

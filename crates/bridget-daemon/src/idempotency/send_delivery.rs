@@ -160,6 +160,71 @@ impl IdempotencyStore {
         Ok(result)
     }
 
+    /// Annule silencieusement les remises `held`/`dispatching` des avis natifs
+    /// (`native-result-*`, `native-failure-*`) déjà acquittés par le parent via
+    /// `bridget_task_ack`. Aucune notice orpheline n'est créée : le parent a déjà
+    /// lu l'issue durable. Complexité : O(k log N) pour k identifiants.
+    pub(crate) fn cancel_acknowledged_native_deliveries(
+        &mut self,
+        recipient_agent: &str,
+        message_ids: &[String],
+    ) -> Result<usize, IdempotencyError> {
+        if recipient_agent.is_empty() || message_ids.is_empty() {
+            return Ok(0);
+        }
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let mut cancelled = 0usize;
+        for message_id in message_ids {
+            if message_id.is_empty() {
+                continue;
+            }
+            let rows = tx
+                .prepare(
+                    "SELECT delivery_id, issuer_scope, idempotency_key
+                     FROM send_deliveries
+                     WHERE recipient_agent = ?1
+                       AND operation_kind = 'send'
+                       AND idempotency_key = ?2
+                       AND phase IN ('held', 'dispatching')",
+                )?
+                .query_map(params![recipient_agent, message_id], |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                    ))
+                })?
+                .collect::<Result<Vec<_>, _>>()?;
+            for (delivery_id, issuer_scope, idempotency_key) in rows {
+                let updated = tx.execute(
+                    "UPDATE send_deliveries
+                     SET phase = 'cancelled', turn_gate = 0
+                     WHERE delivery_id = ?1 AND phase IN ('held', 'dispatching')",
+                    [&delivery_id],
+                )?;
+                if updated == 1 {
+                    let _ = tx.execute(
+                        "UPDATE idempotency_records
+                         SET state = 'terminal',
+                             public_result_kind = 'rejected',
+                             public_result_category = 'acknowledged_by_parent',
+                             public_result_reason = 'tâche native déjà acquittée'
+                         WHERE issuer_scope = ?1
+                           AND operation_kind = 'send'
+                           AND idempotency_key = ?2
+                           AND state = 'dispatching'",
+                        params![issuer_scope, idempotency_key],
+                    )?;
+                    cancelled += 1;
+                }
+            }
+        }
+        tx.commit()?;
+        Ok(cancelled)
+    }
+
     /// O(log E+log N+Bgroup+H log N), E reçus, N remises, H retenus du groupe,
     /// Bgroup JSON inspecté ; mémoire O(H+I), I octets des IDs. Rangs hors groupe intacts.
     /// Toutes les valeurs provisoires négatives restent dans la TX Immediate.

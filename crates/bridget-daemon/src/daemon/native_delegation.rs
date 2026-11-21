@@ -8499,7 +8499,8 @@ fn handle_with_fact_inner(
         &request,
         NativeDelegationRequest::Delegate { .. } | NativeDelegationRequest::Cancel { .. }
     );
-    let (result, drives) = {
+    let is_ack = matches!(&request, NativeDelegationRequest::Ack { .. });
+    let (result, drives, ack_controls) = {
         let mut st = state.lock().recover_poison();
         if let Some(thread) = thread {
             let owner = crate::t3code::stable_uuid(thread);
@@ -8540,10 +8541,37 @@ fn handle_with_fact_inner(
                 &code,
             ),
         };
+        let ack_controls = if is_ack && result["status"] != "refused" {
+            live_connection_identity(&st, conn)
+                .and_then(|(owner, _)| {
+                    st.router
+                        .get_agent(&owner)
+                        .map(|route| route.connection_id.clone())
+                })
+                .and_then(|parent_conn| {
+                    st.pending_post_response_controls
+                        .remove(&parent_conn)
+                        .map(|controls| (parent_conn, controls))
+                })
+        } else {
+            None
+        };
         let drives = drives
             || previous_epoch.is_some_and(|seen| st.delegation_store.wait_epoch().get() != seen);
-        (result, drives)
+        (result, drives, ack_controls)
     };
+    if let Some((parent_conn, controls)) = ack_controls {
+        let retry = execute_controls(controls);
+        if !retry.is_empty() {
+            state
+                .lock()
+                .recover_poison()
+                .pending_post_response_controls
+                .entry(parent_conn)
+                .or_default()
+                .extend(retry);
+        }
+    }
     // Un refus ne crée ni ne modifie aucune tâche active : il ne doit pas faire
     // avancer les autres tâches (une purge de borne éventuelle ne retire que des arbres soldés).
     if drives && !continuation_receipt && result["status"] != "refused" {
@@ -12093,6 +12121,38 @@ fn handle_locked_with_remote_proof(
             let (acknowledged, already) = st
                 .delegation_store
                 .acknowledge_tasks(task_ids, unix_timestamp())?;
+            let mut cancel_ids = Vec::with_capacity(tasks.len() * 2);
+            for task in &tasks {
+                cancel_ids.push(task.result_message_id());
+                cancel_ids.push(format!("native-failure-{}", task.task_id));
+            }
+            if let Err(error) = st
+                .idempotency
+                .cancel_acknowledged_native_deliveries(&owner, &cancel_ids)
+            {
+                warn!("annulation des avis natifs acquittés impossible: {error}");
+            }
+            if let Some(parent_conn) = st
+                .router
+                .get_agent(&owner)
+                .map(|route| route.connection_id.clone())
+                && let Some(writer) = st.connections.get(&parent_conn).cloned()
+            {
+                let controls = st
+                    .pending_post_response_controls
+                    .entry(parent_conn)
+                    .or_default();
+                for id in cancel_ids {
+                    controls.push(DeferredControl {
+                        writer: writer.clone(),
+                        message: DaemonToWrapper::CancelDelivery {
+                            id,
+                            reason: "tâche native déjà acquittée".into(),
+                            interrupt_active: Some(false),
+                        },
+                    });
+                }
+            }
             Ok(json!({"version":1,"acknowledged":acknowledged,"already":already}))
         }
         NativeDelegationRequest::Wait { .. } => Err("wait_unsupported".into()),
@@ -13592,7 +13652,7 @@ pub(super) fn rejected(
         task.state = "failed".into();
         task.error = Some(reason.chars().take(1024).collect());
         st.delegation_store.save(&task)?;
-        return Ok(NativeRejection::Pass);
+        return Ok(NativeRejection::NativeFailed);
     }
     let snapshot = st
         .execution_store
@@ -15926,6 +15986,7 @@ pub(super) fn tick(state: &Arc<Mutex<DaemonState>>) {
                         .and_then(|route| st.conn_instances.get(&route.connection_id))
                         == Some(&task.owner_instance);
                 if !task.failure_sent
+                    && task.acknowledged_at.is_none()
                     && workspace_report_ready(&task)
                     && parent_live
                     && st
@@ -15997,7 +16058,7 @@ pub(super) fn tick(state: &Arc<Mutex<DaemonState>>) {
                 continue;
             }
             if task.state == "result_available"
-                && task.result_sent
+                && (task.result_sent || task.acknowledged_at.is_some())
                 && !task.cleanup_done
                 && task.idle_deadline_at.is_none()
             {
@@ -16282,114 +16343,122 @@ pub(super) fn tick(state: &Arc<Mutex<DaemonState>>) {
             }
             if task.state == "result_available" && !task.result_sent {
                 super::specialist_requests::capture_task(&st, &task);
-                let Some(child_instance) = task.child_instance.as_deref() else {
-                    task.state = "failed".into();
-                    task.error = Some("native_result_invalid".into());
-                    let _ = st.delegation_store.save(&task);
-                    continue;
-                };
-                let mut response = bridget_core::BridgetMessage::new(
-                    &task.child,
-                    &task.owner,
-                    task.result.as_deref().unwrap_or(""),
-                );
-                response.id = task.result_message_id();
-                response.in_reply_to = Some(task.mission.clone());
-                // Même un replay vérifie la tâche durable et son destinataire
-                // actuel avant de consulter la clé idempotente existante.
-                let authority = RetainedResultAuthority {
-                    task_id: task.task_id.clone(),
-                };
-                let result = send_as_with_result_authority(
-                    &mut st,
-                    &task.child,
-                    child_instance,
-                    &task.task_id,
-                    response,
-                    task.created_at,
-                    &mut controls,
-                    Some(&authority),
-                );
-                if matches!(
-                    &result,
-                    DaemonToWrapper::IdempotencyResult {
-                        issue: IdempotencyIssue::Accepted { .. }
-                            | IdempotencyIssue::OutcomeUnknown {
-                                delivery_id: Some(_),
-                                ..
-                            },
-                        ..
-                    }
-                ) {
-                    task.result_sent = true;
-                    task.error = None;
-                    if task.guarded
-                        && !task.guard_released
-                        && let NativeDelegationRequest::Delegate {
-                            keep_alive_secs: Some(secs),
-                            ..
-                        } = &task.request
-                    {
-                        // Même sauvegarde que result_sent ; durée bornée à l'admission.
-                        task.idle_deadline_at = Some(unix_timestamp().saturating_add(*secs as i64));
-                    }
-                    if st.delegation_store.save(&task).is_err() {
-                        task.result_sent = false;
-                        task.idle_deadline_at = None;
-                    }
-                } else {
-                    match result {
-                        DaemonToWrapper::Nack { reason, .. } => {
-                            if matches!(
-                                reason.as_str(),
-                                "native_result_invalid" | "native_result_authority_revoked"
-                            ) {
-                                task.state = "failed".into();
-                            }
-                            task.error = Some(reason.chars().take(1024).collect());
-                        }
+                if task.acknowledged_at.is_none() {
+                    let Some(child_instance) = task.child_instance.as_deref() else {
+                        task.state = "failed".into();
+                        task.error = Some("native_result_invalid".into());
+                        let _ = st.delegation_store.save(&task);
+                        continue;
+                    };
+                    let mut response = bridget_core::BridgetMessage::new(
+                        &task.child,
+                        &task.owner,
+                        task.result.as_deref().unwrap_or(""),
+                    );
+                    response.id = task.result_message_id();
+                    response.in_reply_to = Some(task.mission.clone());
+                    // Même un replay vérifie la tâche durable et son destinataire
+                    // actuel avant de consulter la clé idempotente existante.
+                    let authority = RetainedResultAuthority {
+                        task_id: task.task_id.clone(),
+                    };
+                    let result = send_as_with_result_authority(
+                        &mut st,
+                        &task.child,
+                        child_instance,
+                        &task.task_id,
+                        response,
+                        task.created_at,
+                        &mut controls,
+                        Some(&authority),
+                    );
+                    if matches!(
+                        &result,
                         DaemonToWrapper::IdempotencyResult {
-                            issue:
-                                IdempotencyIssue::Rejected {
-                                    category, reason, ..
+                            issue: IdempotencyIssue::Accepted { .. }
+                                | IdempotencyIssue::OutcomeUnknown {
+                                    delivery_id: Some(_),
+                                    ..
                                 },
                             ..
-                        } => {
-                            task.state = "failed".into();
-                            task.error =
-                                Some(format!("{category}:{reason}").chars().take(1024).collect());
                         }
-                        DaemonToWrapper::IdempotencyResult {
-                            issue: IdempotencyIssue::EnvelopeMismatch,
-                            ..
-                        } => {
-                            task.state = "failed".into();
-                            task.error = Some("native_result_invalid".into());
+                    ) {
+                        task.result_sent = true;
+                        task.error = None;
+                        if task.guarded
+                            && !task.guard_released
+                            && let NativeDelegationRequest::Delegate {
+                                keep_alive_secs: Some(secs),
+                                ..
+                            } = &task.request
+                        {
+                            // Même sauvegarde que result_sent ; durée bornée à l'admission.
+                            task.idle_deadline_at =
+                                Some(unix_timestamp().saturating_add(*secs as i64));
                         }
-                        DaemonToWrapper::IdempotencyResult {
-                            issue: IdempotencyIssue::Orphaned { reason, .. },
-                            ..
-                        } => {
-                            task.state = "failed".into();
-                            task.error = Some(reason.chars().take(1024).collect());
+                        if st.delegation_store.save(&task).is_err() {
+                            task.result_sent = false;
+                            task.idle_deadline_at = None;
                         }
-                        DaemonToWrapper::IdempotencyResult {
-                            issue:
-                                IdempotencyIssue::IdempotencyExpired | IdempotencyIssue::InvalidIssuedAt,
-                            ..
-                        } => {
-                            task.state = "failed".into();
-                            task.error = Some("native_result_delivery_expired".into());
+                    } else {
+                        match result {
+                            DaemonToWrapper::Nack { reason, .. } => {
+                                if matches!(
+                                    reason.as_str(),
+                                    "native_result_invalid" | "native_result_authority_revoked"
+                                ) {
+                                    task.state = "failed".into();
+                                }
+                                task.error = Some(reason.chars().take(1024).collect());
+                            }
+                            DaemonToWrapper::IdempotencyResult {
+                                issue:
+                                    IdempotencyIssue::Rejected {
+                                        category, reason, ..
+                                    },
+                                ..
+                            } => {
+                                task.state = "failed".into();
+                                task.error = Some(
+                                    format!("{category}:{reason}")
+                                        .chars()
+                                        .take(1024)
+                                        .collect(),
+                                );
+                            }
+                            DaemonToWrapper::IdempotencyResult {
+                                issue: IdempotencyIssue::EnvelopeMismatch,
+                                ..
+                            } => {
+                                task.state = "failed".into();
+                                task.error = Some("native_result_invalid".into());
+                            }
+                            DaemonToWrapper::IdempotencyResult {
+                                issue: IdempotencyIssue::Orphaned { reason, .. },
+                                ..
+                            } => {
+                                task.state = "failed".into();
+                                task.error = Some(reason.chars().take(1024).collect());
+                            }
+                            DaemonToWrapper::IdempotencyResult {
+                                issue:
+                                    IdempotencyIssue::IdempotencyExpired
+                                    | IdempotencyIssue::InvalidIssuedAt,
+                                ..
+                            } => {
+                                task.state = "failed".into();
+                                task.error = Some("native_result_delivery_expired".into());
+                            }
+                            _ => {
+                                task.error = Some("native_result_delivery_pending".into());
+                            }
                         }
-                        _ => {
-                            task.error = Some("native_result_delivery_pending".into());
-                        }
+                        let _ = st.delegation_store.save(&task);
                     }
-                    let _ = st.delegation_store.save(&task);
                 }
             }
             if task.state == "result_available"
-                && task.result_sent
+                && (task.result_sent || task.acknowledged_at.is_some())
                 && !task.cleanup_done
                 && task.idle_deadline_at.is_none()
             {
