@@ -28536,3 +28536,84 @@ fn incident305_direct_cwd_refusal_names_the_coordinator_for_foreign_parents() {
     drop(state);
     cleanup(&config);
 }
+
+#[test]
+fn purge_fleet_retire_uniquement_les_sous_agents_natifs_decommissionnes_orphelins() {
+    use crate::desired_state::{DesiredAgentLink, DesiredEquipier, DesiredLifecycleState};
+
+    let (mut st, config, _rx, _reader) = fixture("n308");
+    let result = handle_locked("conn-1", request("task-vivante"), &mut st).unwrap();
+    let active_task_id = result["task_id"].as_str().unwrap().to_string();
+    let active_child = st
+        .delegation_store
+        .get(&active_task_id)
+        .unwrap()
+        .unwrap()
+        .child;
+
+    let dead_uuid = uuid::Uuid::new_v4().to_string();
+    let stopped_uuid = uuid::Uuid::new_v4().to_string();
+    let named_decomm = "agent-metier-nomme".to_string();
+
+    let make_entry = |state: DesiredLifecycleState, linked: bool| DesiredEquipier {
+        agent_type: "native-test".to_string(),
+        cwd: config.db_path.parent().unwrap().to_path_buf(),
+        command_id: "cmd-test".to_string(),
+        generation: 1,
+        created: unix_timestamp().to_string(),
+        persistent: false,
+        lifecycle_state: state,
+        resolved_definition: None,
+        domain: None,
+        project: None,
+        agent_link: linked.then(|| DesiredAgentLink {
+            link_id: "link-1".to_string(),
+            parent_instance_id: "parent-1".to_string(),
+            parent_execution_id: None,
+            objective_id: None,
+            delegation_id: Some("del-1".to_string()),
+            project: None,
+            role: "verification".to_string(),
+            agent_path: "parent-1/child".to_string(),
+        }),
+        runtime_execution: None,
+        remote_placement: None,
+    };
+
+    let desired_store =
+        DesiredStateStore::at_path(st.fixture_root.as_ref().unwrap().0.join("fleet.json"));
+    desired_store
+        .upsert(
+            dead_uuid.clone(),
+            make_entry(DesiredLifecycleState::Decommissioned, true),
+        )
+        .unwrap();
+    desired_store
+        .upsert(
+            stopped_uuid.clone(),
+            make_entry(DesiredLifecycleState::Stopped, true),
+        )
+        .unwrap();
+    desired_store
+        .upsert(
+            named_decomm.clone(),
+            make_entry(DesiredLifecycleState::Decommissioned, false),
+        )
+        .unwrap();
+    desired_store
+        .upsert(
+            active_child.clone(),
+            make_entry(DesiredLifecycleState::Decommissioned, true),
+        )
+        .unwrap();
+
+    assert_eq!(prune_decommissioned_fleet_children(&st), 1);
+    assert!(st.fleet.desired_entry(&dead_uuid).unwrap().is_none());
+    assert!(st.fleet.desired_entry(&stopped_uuid).unwrap().is_some());
+    assert!(st.fleet.desired_entry(&named_decomm).unwrap().is_some());
+    assert!(st.fleet.desired_entry(&active_child).unwrap().is_some());
+
+    // Second appel idempotent : plus rien à retirer.
+    assert_eq!(prune_decommissioned_fleet_children(&st), 0);
+    cleanup(&config);
+}

@@ -464,6 +464,35 @@ impl DesiredStateStore {
         Ok(removed)
     }
 
+    /// Retire en une seule écriture atomique toutes les entrées vérifiant le prédicat.
+    /// Complexité : O(F), F étant le nombre d'entrées de la flotte.
+    pub fn remove_where(
+        &self,
+        mut predicate: impl FnMut(&str, &DesiredEquipier) -> bool,
+    ) -> Result<Vec<String>, DesiredStateError> {
+        let mut cache = self.state.lock().recover_poison();
+        let to_remove: Vec<String> = {
+            let current = self.load_cached(&mut cache)?;
+            current
+                .equipiers
+                .iter()
+                .filter(|(name, entry)| predicate(name, entry))
+                .map(|(name, _)| name.clone())
+                .collect()
+        };
+        if to_remove.is_empty() {
+            return Ok(to_remove);
+        }
+        let mut fleet = self.take_owned_fleet(&mut cache)?;
+        for name in &to_remove {
+            fleet.equipiers.remove(name);
+        }
+        fleet.schema = FLEET_SCHEMA_VERSION;
+        self.persist_unlocked(&fleet)?;
+        self.store_cache(&mut cache, fleet);
+        Ok(to_remove)
+    }
+
     /// Applique une transition explicite de cycle de vie et retourne l'entrée
     /// mise à jour. L'absence n'est jamais transformée en création implicite.
     pub fn set_lifecycle_state(
@@ -1087,6 +1116,40 @@ mod tests {
         assert!(reloaded.equipiers.is_empty());
         assert_eq!(reader.read_count(), 2);
 
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn remove_where_retire_en_une_ecriture_et_no_op_sans_correspondance() {
+        let root = test_root("remove-where");
+        let path = root.join("fleet.json");
+        let store = DesiredStateStore::at_path(&path);
+        let mut a = equipier("cmd-a", 1);
+        a.lifecycle_state = DesiredLifecycleState::Decommissioned;
+        let mut b = equipier("cmd-b", 1);
+        b.lifecycle_state = DesiredLifecycleState::Decommissioned;
+        let mut c = equipier("cmd-c", 1);
+        c.lifecycle_state = DesiredLifecycleState::Stopped;
+        store.upsert("a".to_string(), a).unwrap();
+        store.upsert("b".to_string(), b).unwrap();
+        store.upsert("c".to_string(), c).unwrap();
+        let before = store.write_count();
+
+        let removed = store
+            .remove_where(|_, entry| entry.lifecycle_state == DesiredLifecycleState::Decommissioned)
+            .unwrap();
+        assert_eq!(removed, vec!["a".to_string(), "b".to_string()]);
+        assert_eq!(store.write_count(), before + 1);
+        assert!(store.get("a").unwrap().is_none());
+        assert!(store.get("b").unwrap().is_none());
+        assert!(store.get("c").unwrap().is_some());
+
+        // Second passage sans correspondance : zéro écriture disque.
+        let again = store
+            .remove_where(|_, entry| entry.lifecycle_state == DesiredLifecycleState::Decommissioned)
+            .unwrap();
+        assert!(again.is_empty());
+        assert_eq!(store.write_count(), before + 1);
         fs::remove_dir_all(root).unwrap();
     }
 

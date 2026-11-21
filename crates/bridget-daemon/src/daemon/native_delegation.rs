@@ -17102,7 +17102,7 @@ pub(super) fn purge_retained(
 ) -> usize {
     let (launching, desired) = match (
         st.idempotency.spawn_commands(&st.fleet.supervisor_scope()),
-        st.fleet.desired_fleet(),
+        st.fleet.desired_fleet_shared(),
     ) {
         (Ok(sagas), Ok(desired)) => (sagas, desired),
         (Err(error), _) => {
@@ -17279,6 +17279,67 @@ pub(super) fn maintain_retention(st: &DaemonState, now: i64) {
     }
     if let Err(error) = st.delegation_store.purge_expired_refusals(now) {
         warn!("entretien: reçus de refus de délégation : {error}");
+    }
+    let pruned = prune_decommissioned_fleet_children(st);
+    if pruned > 0 {
+        info!(
+            "entretien: {pruned} sous-agent(s) natif(s) décommissionné(s) purgé(s) de fleet.json"
+        );
+    }
+}
+
+/// Retire de `fleet.json` les seuls sous-agents natifs déjà `decommissioned`,
+/// identifiés par UUID avec `agent_link`, dont aucune tâche ni activité ne subsiste.
+/// Les entrées `stopped` et les agents nommés permanents restent toujours conservés.
+/// Complexité : O(T + S + P + M + F) — T tâches, S sagas, P présences, M spawns, F flotte.
+pub(super) fn prune_decommissioned_fleet_children(st: &DaemonState) -> usize {
+    let (tasks, launching) = match (
+        st.delegation_store.tasks(),
+        st.idempotency.spawn_commands(&st.fleet.supervisor_scope()),
+    ) {
+        (Ok(tasks), Ok(sagas)) => (tasks, sagas),
+        (Err(error), _) => {
+            warn!("entretien: tâches natives illisibles, purge fleet.json suspendue : {error}");
+            return 0;
+        }
+        (_, Err(error)) => {
+            warn!("entretien: sagas illisibles, purge fleet.json suspendue : {error}");
+            return 0;
+        }
+    };
+    let mut protected: HashSet<&str> = tasks.iter().map(|task| task.child.as_str()).collect();
+    for presence in st.presences.values() {
+        if matches!(presence.state.as_str(), "connected" | "busy") {
+            protected.insert(presence.name.as_str());
+        }
+    }
+    for name in &st.decommissioning_names {
+        protected.insert(name.as_str());
+    }
+    for spawn in st.managed_spawns.values() {
+        protected.insert(spawn.lease.name.as_str());
+    }
+    for saga in &launching {
+        if matches!(
+            saga.state,
+            crate::idempotency::SpawnCommandState::Requested
+                | crate::idempotency::SpawnCommandState::Reserved
+                | crate::idempotency::SpawnCommandState::Starting
+        ) {
+            protected.insert(saga.name.as_str());
+        }
+    }
+    match st.fleet.prune_decommissioned_desired(|name, entry| {
+        entry.agent_link.is_some()
+            && uuid::Uuid::parse_str(name).is_ok()
+            && st.router.get_agent(name).is_none()
+            && !protected.contains(name)
+    }) {
+        Ok(count) => count,
+        Err(error) => {
+            warn!("entretien: purge fleet.json des sous-agents décommissionnés : {error}");
+            0
+        }
     }
 }
 
