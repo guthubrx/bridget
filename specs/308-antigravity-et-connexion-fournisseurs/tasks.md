@@ -15,4 +15,4 @@
 
 ## Phase 4 : Vérification, déploiement et ménage (US5)
 - [x] T008 Exécuter `make fmt`, `make lint` et tous les tests ciblés (`bridget-transport` ACP, `registry`, `provider_accounts`, `client_compatibility`, `accounts_connect`, `wrapper`).
-- [ ] T009 Committer et pousser sur `main`, compiler `311-antigravity-comptes-r1` (macOS ARM64 + Linux Debian 12 sur `sysle2` avec `check-linux-abi.py`), déployer et activer sur les 4 machines, ajouter les connexions `antigravity` dans les `agents.json` (avec sauvegardes), vérifier `bridget accounts status` et `bridget accounts ui`, et exécuter le ménage.
+- [x] T009 Committer et pousser sur `main`, compiler `311-antigravity-comptes-r1` (macOS ARM64 + Linux Debian 12 sur `sysle2` avec `check-linux-abi.py`), déployer et activer sur les 4 machines, ajouter les connexions `antigravity` dans les `agents.json` (avec sauvegardes), vérifier `bridget accounts status` et `bridget accounts ui`, et exécuter le ménage.
