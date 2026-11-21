@@ -2092,3 +2092,53 @@ while read remaining; do :; done
         "ACP traite la promotion comme une remise FIFO ordinaire"
     );
 }
+
+#[test]
+fn spec308_acp_session_config_sends_client_info_authenticate_mode_and_model() {
+    let script = r#"
+read initialize
+echo "$initialize" | grep -q '"name":"zed"' || exit 11
+echo '{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":1}}'
+read auth
+echo "$auth" | grep -q '"method":"authenticate"' || exit 12
+echo "$auth" | grep -q '"methodId":"oauth-personal"' || exit 13
+echo '{"jsonrpc":"2.0","id":2,"result":{}}'
+read session
+echo '{"jsonrpc":"2.0","id":3,"result":{"sessionId":"agy-session","configOptions":[{"id":"model","type":"select"},{"id":"thought","category":"thought_level","type":"select"}]}}'
+read set_mode
+echo "$set_mode" | grep -q '"method":"session/set_mode"' || exit 14
+echo "$set_mode" | grep -q '"modeId":"yolo"' || exit 15
+echo '{"jsonrpc":"2.0","id":4,"result":{}}'
+read set_model
+echo "$set_model" | grep -q '"method":"session/set_config_option"' || exit 16
+echo "$set_model" | grep -q '"value":"gemini-4-neon-high"' || exit 17
+echo '{"jsonrpc":"2.0","id":5,"result":{}}'
+read set_effort
+echo "$set_effort" | grep -q '"configId":"thought"' || exit 18
+echo "$set_effort" | grep -q '"value":"high"' || exit 19
+echo '{"jsonrpc":"2.0","id":6,"result":{}}'
+while read remaining; do :; done
+"#;
+    let transport = AcpTransport::spawn_with_session_config(
+        AcpOptions {
+            command: "sh".into(),
+            args: vec!["-c".into(), script.into()],
+            queue_capacity: 2,
+            permissions: "allow".into(),
+            notify_timeout_secs: 2,
+            provider_observation: None,
+        },
+        false,
+        &[],
+        Vec::new(),
+        AcpSessionConfig {
+            client_info: Some(("zed".into(), "0.0.0".into())),
+            auth_method_id: Some("oauth-personal".into()),
+            session_mode: Some("yolo".into()),
+            model: Some("gemini-4-neon-high".into()),
+            effort: Some("high".into()),
+        },
+    )
+    .unwrap();
+    transport.shutdown();
+}

@@ -36,6 +36,17 @@ pub struct AcpOptions {
     pub provider_observation: Option<ProviderObservation>,
 }
 
+/// Options de session ACP avancées (clientInfo, authentification explicite,
+/// mode, modèle et niveau de réflexion), rétrocompatibles via `Default`.
+#[derive(Debug, Clone, Default)]
+pub struct AcpSessionConfig {
+    pub client_info: Option<(String, String)>,
+    pub auth_method_id: Option<String>,
+    pub session_mode: Option<String>,
+    pub model: Option<String>,
+    pub effort: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TurnState {
     Idle,
@@ -147,6 +158,7 @@ struct SpawnContext<'a> {
     inherit_stderr: bool,
     environment: &'a [(OsString, OsString)],
     mcp_servers: Vec<Value>,
+    session_config: AcpSessionConfig,
 }
 
 struct ActiveTurn {
@@ -240,6 +252,31 @@ impl AcpTransport {
                 inherit_stderr: false,
                 environment,
                 mcp_servers,
+                session_config: AcpSessionConfig::default(),
+            },
+        )
+    }
+
+    /// Variante complète avec configuration de session ACP (authentification,
+    /// identité client, mode, modèle et effort).
+    pub fn spawn_with_session_config(
+        options: AcpOptions,
+        inherit_stderr: bool,
+        environment: &[(OsString, OsString)],
+        mcp_servers: Vec<Value>,
+        session_config: AcpSessionConfig,
+    ) -> Result<Self, TransportError> {
+        Self::spawn_with_clock_and_cancel_grace_inner(
+            options,
+            Arc::new(SystemTime::now),
+            CANCEL_GRACE,
+            CANCEL_POLL,
+            None,
+            SpawnContext {
+                inherit_stderr,
+                environment,
+                mcp_servers,
+                session_config,
             },
         )
     }
@@ -273,6 +310,7 @@ impl AcpTransport {
                 inherit_stderr: true,
                 environment,
                 mcp_servers,
+                session_config: AcpSessionConfig::default(),
             },
         )
     }
@@ -298,6 +336,7 @@ impl AcpTransport {
                 inherit_stderr: false,
                 environment: &[],
                 mcp_servers: Vec::new(),
+                session_config: AcpSessionConfig::default(),
             },
         )
     }
@@ -376,6 +415,10 @@ impl AcpTransport {
         );
 
         let setup = (|| -> Result<String, TransportError> {
+            let (client_name, client_version) = match &context.session_config.client_info {
+                Some((name, version)) => (name.as_str(), version.as_str()),
+                None => ("bridget", env!("CARGO_PKG_VERSION")),
+            };
             let initialize = request(
                 &writer,
                 &waiters,
@@ -384,10 +427,19 @@ impl AcpTransport {
                 json!({
                     "protocolVersion": 1,
                     "clientCapabilities": {},
-                    "clientInfo": { "name": "bridget", "version": env!("CARGO_PKG_VERSION") }
+                    "clientInfo": { "name": client_name, "version": client_version }
                 }),
             )?;
             ensure_protocol_version(&initialize)?;
+            if let Some(method_id) = context.session_config.auth_method_id.as_deref() {
+                request(
+                    &writer,
+                    &waiters,
+                    &next_id,
+                    "authenticate",
+                    json!({ "methodId": method_id }),
+                )?;
+            }
             let session = request(
                 &writer,
                 &waiters,
@@ -407,6 +459,69 @@ impl AcpTransport {
                     )
                 })?
                 .to_string();
+            if let Some(mode_id) = context.session_config.session_mode.as_deref() {
+                let _ = request(
+                    &writer,
+                    &waiters,
+                    &next_id,
+                    "session/set_mode",
+                    json!({ "sessionId": session_id, "modeId": mode_id }),
+                );
+            }
+            let config_options = session
+                .get("configOptions")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default();
+            if let Some(model) = context.session_config.model.as_deref() {
+                let has_model_option = config_options
+                    .iter()
+                    .any(|opt| opt.get("id").and_then(Value::as_str) == Some("model"));
+                if has_model_option {
+                    request(
+                        &writer,
+                        &waiters,
+                        &next_id,
+                        "session/set_config_option",
+                        json!({
+                            "sessionId": session_id,
+                            "configId": "model",
+                            "value": model
+                        }),
+                    )?;
+                } else {
+                    let _ = request(
+                        &writer,
+                        &waiters,
+                        &next_id,
+                        "session/set_model",
+                        json!({ "sessionId": session_id, "modelId": model }),
+                    );
+                }
+            }
+            if let Some(effort) = context.session_config.effort.as_deref()
+                && let Some(thought_id) = config_options.iter().find_map(|opt| {
+                    let category = opt.get("category").and_then(Value::as_str);
+                    let id = opt.get("id").and_then(Value::as_str)?;
+                    if category == Some("thought_level") || id == "thought_level" {
+                        Some(id.to_string())
+                    } else {
+                        None
+                    }
+                })
+            {
+                let _ = request(
+                    &writer,
+                    &waiters,
+                    &next_id,
+                    "session/set_config_option",
+                    json!({
+                        "sessionId": session_id,
+                        "configId": thought_id,
+                        "value": effort
+                    }),
+                );
+            }
             Ok(session_id)
         })();
         let session_id = match setup {

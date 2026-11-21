@@ -96,6 +96,7 @@ fn prepare_change(
         let variable = match (source.engine.as_str(), definition.protocol.as_str()) {
             ("codex", "codex_app_server") => "CODEX_HOME",
             ("claude", "claude_stream_json") => "CLAUDE_CONFIG_DIR",
+            ("antigravity", "acp") => "GEMINI_DIR",
             _ => return Err("account_adapter_unavailable"),
         };
         if root.exists() || root.symlink_metadata().is_ok() {
@@ -124,6 +125,9 @@ fn prepare_change(
             "CLAUDE_CODE_USE_BEDROCK",
             "CLAUDE_CODE_USE_VERTEX",
             "CLAUDE_CODE_USE_FOUNDRY",
+            "GEMINI_API_KEY",
+            "GOOGLE_API_KEY",
+            "AGY_ADC_AUTH",
         ];
         definition
             .pass_env
@@ -132,6 +136,13 @@ fn prepare_change(
         if source.engine == "codex" {
             definition.codex_home = Some(profile.to_string_lossy().into_owned());
             for name in ["OPENAI_API_KEY", "CODEX_API_KEY"] {
+                if !definition.forbidden_env.iter().any(|v| v == name) {
+                    definition.forbidden_env.push(name.into());
+                }
+            }
+        } else if source.engine == "antigravity" {
+            definition.antigravity_home = Some(profile.to_string_lossy().into_owned());
+            for name in ["GEMINI_API_KEY", "GOOGLE_API_KEY", "AGY_ADC_AUTH"] {
                 if !definition.forbidden_env.iter().any(|v| v == name) {
                     definition.forbidden_env.push(name.into());
                 }
@@ -177,12 +188,26 @@ fn prepare_change(
             );
         advance(&mut next)?;
         validate_next(&next, path)?;
-        let login_args = if source.engine == "codex" {
-            vec!["login", "--device-auth"]
+        let profile_str = profile.to_string_lossy().into_owned();
+        let login_args: Vec<String> = if source.engine == "codex" {
+            vec!["login".into(), "--device-auth".into()]
+        } else if source.engine == "antigravity" {
+            vec![
+                "acp".into(),
+                "--gemini-dir".into(),
+                profile_str.clone(),
+                "--app-data-dir".into(),
+                "antigravity-bridget".into(),
+                "--login".into(),
+            ]
         } else {
-            vec!["auth", "login"]
+            vec!["auth".into(), "login".into()]
         };
-        let mut login_environment = json!({(variable):profile});
+        let mut login_environment = if source.engine == "antigravity" {
+            json!({})
+        } else {
+            json!({(variable):profile})
+        };
         if source.engine == "claude" {
             login_environment["ANTHROPIC_CONFIG_DIR"] = json!(profile.join("anthropic"));
         }
@@ -194,11 +219,15 @@ fn prepare_change(
                 "engine":source.engine,"account_directory":profile,"enabled":false,"auth":"not_verified",
                 "login":{"program":definition.command,"args":login_args,"environment":login_environment,
                     "clear_environment":AUTH_SELECTION},
-                "login_scope":if source.engine=="claude" {"claude_and_anthropic_isolated"} else {"native_codex_profile"},
-                "next_action":if source.engine=="claude" {
-                    "Connecter le compte voulu avec la commande et les deux dossiers indiqués, puis activer cette connexion avec accounts enable. CLAUDE_CONFIG_DIR isole Claude et ANTHROPIC_CONFIG_DIR isole aussi les profils Console. Ne pas lancer la connexion sans cet environnement. Aucun login ni changement du compte principal n'a été lancé."
-                } else {
-                    "Effectuer la connexion officielle Codex avec la commande et l'environnement indiqués. Vérifier le compte choisi, puis activer cette connexion avec accounts enable. Aucun login ni changement du compte principal n'a été lancé."
+                "login_scope":match source.engine.as_str() {
+                    "claude" => "claude_and_anthropic_isolated",
+                    "antigravity" => "antigravity_gemini_dir_isolated",
+                    _ => "native_codex_profile",
+                },
+                "next_action":match source.engine.as_str() {
+                    "claude" => "Connecter le compte voulu avec la commande et les deux dossiers indiqués, puis activer cette connexion avec accounts enable. CLAUDE_CONFIG_DIR isole Claude et ANTHROPIC_CONFIG_DIR isole aussi les profils Console. Ne pas lancer la connexion sans cet environnement. Aucun login ni changement du compte principal n'a été lancé.",
+                    "antigravity" => "Connecter le compte Google voulu avec agy acp --gemini-dir <dossier> --app-data-dir antigravity-bridget --login (ou bridget accounts login), puis activer cette connexion avec accounts enable. Aucun login ni changement du compte principal n'a été lancé.",
+                    _ => "Effectuer la connexion officielle Codex avec la commande et l'environnement indiqués. Vérifier le compte choisi, puis activer cette connexion avec accounts enable. Aucun login ni changement du compte principal n'a été lancé.",
                 }
             }),
         });
@@ -213,6 +242,7 @@ fn prepare_change(
     let profile = match connection.engine.as_str() {
         "codex" => definition.codex_home.as_deref(),
         "claude" => definition.claude_config_dir.as_deref(),
+        "antigravity" => definition.antigravity_home.as_deref(),
         _ => None,
     }
     .ok_or("account_not_managed")?;
@@ -269,16 +299,28 @@ fn prepare_change(
 /// Ne jamais copier une map de réglages libres ou un argument de secret depuis
 /// le compte principal. Le profil conserve ses restrictions ou refuse en bloc.
 fn safe_template(definition: &crate::registry::AgentDefinition, engine: &str) -> bool {
+    let expected_bin = match engine {
+        "antigravity" => "agy",
+        other => other,
+    };
     if Path::new(&definition.command)
         .file_name()
         .and_then(|s| s.to_str())
-        != Some(engine)
+        != Some(expected_bin)
     {
         return false;
     }
     let mut args = definition.args.iter().map(String::as_str);
     while let Some(arg) = args.next() {
         match (engine, arg) {
+            ("antigravity", "acp" | "--dangerously-skip-permissions" | "--sandbox") => {}
+            ("antigravity", "--model" | "--effort") => {
+                if !args.next().is_some_and(|v| {
+                    !v.is_empty() && v.len() <= 128 && !v.chars().any(char::is_control)
+                }) {
+                    return false;
+                }
+            }
             ("codex", "app-server" | "--dangerously-bypass-approvals-and-sandbox") => {}
             ("codex", "-c" | "--config") => {
                 let Some((key, value)) = args.next().and_then(|s| s.split_once('=')) else {
@@ -515,6 +557,13 @@ fn write_new(path: &Path, bytes: &[u8]) -> Result<()> {
 }
 
 pub(crate) fn run(args: &[String]) {
+    if matches!(
+        args.first().map(String::as_str),
+        Some("status" | "login" | "ui")
+    ) {
+        crate::accounts_connect::run(args);
+        return;
+    }
     match execute(args) {
         Ok(view) => println!("{view}"),
         Err(code) => {

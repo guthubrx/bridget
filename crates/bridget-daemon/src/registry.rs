@@ -83,6 +83,9 @@ pub struct AgentDefinition {
     /// Dossier Codex isolé, non secret ; aucun repli vers le compte principal.
     #[serde(default)]
     pub codex_home: Option<String>,
+    /// Dossier Google Antigravity isolé (`--gemini-dir`), non secret.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub antigravity_home: Option<String>,
     #[serde(default = "default_permissions")]
     pub permissions: String,
     #[serde(default = "default_queue_capacity")]
@@ -1331,6 +1334,7 @@ impl AgentRegistry {
             pass_env: resolved.pass_env.clone(),
             claude_config_dir: resolved.claude_config_dir.clone(),
             codex_home: resolved.codex_home.clone(),
+            antigravity_home: resolved.antigravity_home.clone(),
             permissions: resolved.permissions.clone(),
             queue_capacity: resolved.queue_capacity,
             held_queue: false,
@@ -1344,10 +1348,12 @@ impl AgentRegistry {
         let expected = resolved_definition(&definition)?;
         let digest_before_profile = definition.claude_config_dir.is_none()
             && definition.codex_home.is_none()
+            && definition.antigravity_home.is_none()
             && expected.digest != resolved.digest
             && pre_profile_resolved_digest(&definition)? == resolved.digest;
         let digest_before_capabilities = definition.claude_config_dir.is_none()
             && definition.codex_home.is_none()
+            && definition.antigravity_home.is_none()
             && expected.digest != resolved.digest
             && legacy_resolved_digest(&definition)? == resolved.digest;
         if expected.digest != resolved.digest
@@ -1663,6 +1669,7 @@ impl AgentRegistry {
             "codex" => Some("codex"),
             "claude" | "gclaude" | "claude-son" => Some("claude"),
             "gemini" => Some("gemini"),
+            "agy" | "antigravity" => Some("antigravity"),
             _ => None,
         }
     }
@@ -1936,6 +1943,7 @@ fn registry_warnings(
         "pass_env",
         "claude_config_dir",
         "codex_home",
+        "antigravity_home",
         "permissions",
         "queue_capacity",
         "held_queue",
@@ -2050,6 +2058,8 @@ struct CanonicalResolvedDefinition<'a> {
     claude_config_dir: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     codex_home: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    antigravity_home: Option<&'a str>,
     permissions: &'a str,
     queue_capacity: usize,
     notify_timeout_secs: u64,
@@ -2146,6 +2156,7 @@ fn resolved_definition(definition: &AgentDefinition) -> Result<ResolvedAgentDefi
         pass_env: &definition.pass_env,
         claude_config_dir: definition.claude_config_dir.as_deref(),
         codex_home: definition.codex_home.as_deref(),
+        antigravity_home: definition.antigravity_home.as_deref(),
         permissions: &definition.permissions,
         queue_capacity: definition.queue_capacity,
         notify_timeout_secs: definition.notify_timeout_secs,
@@ -2166,6 +2177,7 @@ fn resolved_definition(definition: &AgentDefinition) -> Result<ResolvedAgentDefi
         pass_env: definition.pass_env.clone(),
         claude_config_dir: definition.claude_config_dir.clone(),
         codex_home: definition.codex_home.clone(),
+        antigravity_home: definition.antigravity_home.clone(),
         permissions: definition.permissions.clone(),
         queue_capacity: definition.queue_capacity,
         notify_timeout_secs: definition.notify_timeout_secs,
@@ -2357,7 +2369,7 @@ fn validate_admission_config(
 fn valid_routing_engine(engine: &str, protocol: &str) -> bool {
     matches!(
         (engine, protocol),
-        ("codex", "codex_app_server") | ("claude", "claude_stream_json")
+        ("codex", "codex_app_server") | ("claude", "claude_stream_json") | ("antigravity", "acp")
     )
 }
 
@@ -2684,13 +2696,34 @@ fn validate_registry(
                 ));
             }
         }
+        if let Some(profile) = definition.antigravity_home.as_deref() {
+            let path = Path::new(profile);
+            if definition.protocol != "acp"
+                || !path.is_absolute()
+                || path
+                    .components()
+                    .any(|part| matches!(part, std::path::Component::ParentDir))
+                || profile.chars().any(char::is_control)
+                || definition.claude_config_dir.is_some()
+                || definition.codex_home.is_some()
+            {
+                return Err(format!(
+                    "registre invalide {}: antigravity_home exige ACP et un dossier absolu sans '..' pour '{name}'",
+                    source.display()
+                ));
+            }
+        }
         if definition.codex_home.is_some() && !definition.capabilities.account_profiles {
+            return Err("provider_account_reader_guard_required".into());
+        }
+        if definition.antigravity_home.is_some() && !definition.capabilities.account_profiles {
             return Err("provider_account_reader_guard_required".into());
         }
         if definition.capabilities.account_profiles
             && !((definition.protocol == "codex_app_server" && definition.codex_home.is_some())
                 || (definition.protocol == "claude_stream_json"
-                    && definition.claude_config_dir.is_some()))
+                    && definition.claude_config_dir.is_some())
+                || (definition.protocol == "acp" && definition.antigravity_home.is_some()))
         {
             return Err("provider_account_profile_required".into());
         }
@@ -2846,6 +2879,7 @@ fn definition(
         pass_env: pass_env.iter().map(ToString::to_string).collect(),
         claude_config_dir: None,
         codex_home: None,
+        antigravity_home: None,
         permissions: "allow".to_string(),
         queue_capacity: DEFAULT_QUEUE_CAPACITY,
         held_queue: false,
@@ -2889,6 +2923,7 @@ fn native_claude_definition() -> Result<AgentDefinition, String> {
         .collect(),
         claude_config_dir: None,
         codex_home: None,
+        antigravity_home: None,
         permissions: "allow".to_string(),
         queue_capacity: DEFAULT_QUEUE_CAPACITY,
         held_queue: false,
@@ -2957,6 +2992,7 @@ fn native_codex_definition() -> AgentDefinition {
         .collect(),
         claude_config_dir: None,
         codex_home: None,
+        antigravity_home: None,
         permissions: "allow".to_string(),
         queue_capacity: DEFAULT_QUEUE_CAPACITY,
         held_queue: false,
@@ -2989,6 +3025,7 @@ fn native_cursor_definition() -> AgentDefinition {
         pass_env: Vec::new(),
         claude_config_dir: None,
         codex_home: None,
+        antigravity_home: None,
         permissions: "allow".to_string(),
         queue_capacity: DEFAULT_QUEUE_CAPACITY,
         held_queue: false,
@@ -3124,10 +3161,76 @@ fn strip_claude_discovery_unsafe_arguments(args: &mut Vec<String>) {
     *args = cleaned;
 }
 
+fn native_antigravity_definition() -> AgentDefinition {
+    let command = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .filter(|home| home.is_absolute())
+        .map(|home| home.join(".local/bin/agy").to_string_lossy().into_owned())
+        .unwrap_or_else(|| "agy".to_string());
+    AgentDefinition {
+        command,
+        args: vec![
+            "acp".to_string(),
+            "--dangerously-skip-permissions".to_string(),
+        ],
+        protocol: "acp".to_string(),
+        forbidden_env: vec![
+            "GEMINI_API_KEY".to_string(),
+            "GOOGLE_API_KEY".to_string(),
+            "AGY_ADC_AUTH".to_string(),
+        ],
+        pass_env: [
+            "XDG_CONFIG_HOME",
+            "XDG_CACHE_HOME",
+            "SSH_AUTH_SOCK",
+            "HTTPS_PROXY",
+            "HTTP_PROXY",
+            "NO_PROXY",
+            "SSL_CERT_FILE",
+            "SSL_CERT_DIR",
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .collect(),
+        claude_config_dir: None,
+        codex_home: None,
+        antigravity_home: None,
+        permissions: "allow".to_string(),
+        queue_capacity: DEFAULT_QUEUE_CAPACITY,
+        held_queue: false,
+        notify_timeout_secs: DEFAULT_NOTIFY_TIMEOUT_SECS,
+        mcp: McpDefinition {
+            interactive: "none".to_string(),
+            acp_session: true,
+        },
+        capabilities: AdapterCapabilities {
+            account_profiles: false,
+            execution_paths: vec!["acp".to_string()],
+            models: BTreeMap::from([
+                (
+                    "gemini-4-neon-high".to_string(),
+                    ModelCapabilities::default(),
+                ),
+                (
+                    "gemini-4-carbon-high".to_string(),
+                    ModelCapabilities::default(),
+                ),
+                (
+                    "gemini-3.8-flash-high".to_string(),
+                    ModelCapabilities::default(),
+                ),
+            ]),
+            observed: None,
+        },
+    }
+}
+
 fn default_agents() -> Result<BTreeMap<String, AgentDefinition>, String> {
     Ok(BTreeMap::from([
         ("codex".to_string(), native_codex_definition()),
         ("claude".to_string(), native_claude_definition()?),
+        ("antigravity".to_string(), native_antigravity_definition()),
+        ("agy".to_string(), native_antigravity_definition()),
         ("cursor".to_string(), native_cursor_definition()),
         (
             "gemini".to_string(),

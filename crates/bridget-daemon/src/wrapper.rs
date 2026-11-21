@@ -4372,29 +4372,64 @@ fn spawn_managed_session_transport(
     }
     match definition.protocol.as_str() {
         "acp" => {
+            let is_antigravity = std::path::Path::new(&definition.command)
+                .file_name()
+                .and_then(|s| s.to_str())
+                == Some("agy");
+            let mut acp_args = Vec::with_capacity(native_args.len() + 4);
+            let mut session_config = bridget_transport::acp::AcpSessionConfig::default();
+            if is_antigravity {
+                session_config.client_info = Some(("zed".to_string(), "0.0.0".to_string()));
+                session_config.auth_method_id = Some("oauth-personal".to_string());
+                if definition.permissions == "allow" {
+                    session_config.session_mode = Some("yolo".to_string());
+                }
+                let mut idx = 0;
+                while idx < native_args.len() {
+                    if native_args[idx] == "--model" && idx + 1 < native_args.len() {
+                        session_config.model = Some(native_args[idx + 1].clone());
+                        idx += 2;
+                    } else if native_args[idx] == "--effort" && idx + 1 < native_args.len() {
+                        session_config.effort = Some(native_args[idx + 1].clone());
+                        idx += 2;
+                    } else {
+                        acp_args.push(native_args[idx].clone());
+                        idx += 1;
+                    }
+                }
+                if let Some(profile) = definition.antigravity_home.as_deref()
+                    && !acp_args
+                        .iter()
+                        .any(|arg| arg == "--gemini-dir" || arg == "--gemini_dir")
+                {
+                    acp_args.push("--gemini-dir".to_string());
+                    acp_args.push(profile.to_string());
+                    if !acp_args
+                        .iter()
+                        .any(|arg| arg == "--app-data-dir" || arg == "--app_data_dir")
+                    {
+                        acp_args.push("--app-data-dir".to_string());
+                        acp_args.push("antigravity-bridget".to_string());
+                    }
+                }
+            } else {
+                acp_args.extend(native_args.iter().cloned());
+            }
             let options = AcpOptions {
                 command: definition.command.clone(),
-                args: native_args.to_vec(),
+                args: acp_args,
                 queue_capacity: definition.queue_capacity,
                 permissions: definition.permissions.clone(),
                 notify_timeout_secs: definition.notify_timeout_secs,
                 provider_observation: definition.capabilities.observed.clone(),
             };
-            if inherit_stderr {
-                Ok(Box::new(
-                    AcpTransport::spawn_inheriting_stderr_with_environment_and_mcp(
-                        options,
-                        mcp_environment,
-                        mcp_servers,
-                    )?,
-                ))
-            } else {
-                Ok(Box::new(AcpTransport::spawn_with_environment_and_mcp(
-                    options,
-                    mcp_environment,
-                    mcp_servers,
-                )?))
-            }
+            Ok(Box::new(AcpTransport::spawn_with_session_config(
+                options,
+                inherit_stderr,
+                mcp_environment,
+                mcp_servers,
+                session_config,
+            )?))
         }
         "claude_stream_json" => {
             let options = ClaudeStreamJsonOptions {

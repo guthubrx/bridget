@@ -732,6 +732,9 @@ pub fn build_environment(
         validate_provider_profile_directory(profile, "Codex")?;
         env.insert("CODEX_HOME".to_string(), OsString::from(profile));
     }
+    if let Some(profile) = definition.antigravity_home.as_deref() {
+        validate_provider_profile_directory(profile, "Antigravity")?;
+    }
     Ok(env)
 }
 

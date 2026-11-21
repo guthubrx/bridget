@@ -250,3 +250,14 @@ fn spec209_real_version_only_probe_is_bounded_and_excludes_raw_errors() {
     );
     std::fs::remove_dir(&dir).unwrap();
 }
+
+#[test]
+fn spec308_client_compatibility_accepts_agy_version() {
+    assert_eq!(
+        parse_version("antigravity", b"1.5.13\n").as_deref(),
+        Some("1.5.13")
+    );
+    assert_eq!(parse_version("antigravity", b"bad"), None);
+    assert!(triplet("1.5.13") >= triplet(minimum("antigravity")));
+    assert!(triplet("1.4.9") < triplet(minimum("antigravity")));
+}

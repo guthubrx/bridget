@@ -1382,6 +1382,7 @@ fn spawn_roundtrip_rejoue_la_meme_issue_apres_reponse_perdue() {
                         pass_env: Vec::new(),
                         claude_config_dir: None,
                         codex_home: None,
+                        antigravity_home: None,
                         permissions: "allow".to_string(),
                         queue_capacity: 32,
                         notify_timeout_secs: 600,

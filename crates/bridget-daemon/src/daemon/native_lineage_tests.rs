@@ -24,6 +24,7 @@ fn definition() -> bridget_transport::protocol::ResolvedAgentDefinition {
         pass_env: Vec::new(),
         claude_config_dir: None,
         codex_home: None,
+        antigravity_home: None,
         permissions: "allow".into(),
         queue_capacity: 32,
         notify_timeout_secs: 600,

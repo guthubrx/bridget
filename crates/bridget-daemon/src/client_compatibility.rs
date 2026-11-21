@@ -15,9 +15,11 @@ use std::{
 const MAX_PROGRAMS: usize = 16;
 
 fn minimum(engine: &str) -> &'static str {
-    // Politique de support209 : preuve208 pour Claude ; schéma de référence ADR155 pour Codex.
+    // Politique de support209 : preuve208 pour Claude ; schéma de référence ADR155 pour Codex ;
+    // CLI ACP qualifié 1.5.0+ pour Google Antigravity.
     match engine {
         "claude" => "2.1.280",
+        "antigravity" => "1.5.0",
         _ => "0.162.1",
     }
 }
@@ -44,6 +46,7 @@ fn parse_version(engine: &str, raw: &[u8]) -> Option<String> {
     let value = match engine {
         "claude" => text.strip_suffix(" (Claude Code)")?,
         "codex" => text.strip_prefix("codex-cli ")?,
+        "antigravity" => text.lines().next()?.trim(),
         _ => return None,
     };
     triplet(value)?;
@@ -74,7 +77,7 @@ fn probe(program: &str, engine: &str, deadline: Instant) -> (String, Option<Stri
         .file_name()
         .and_then(|p| p.to_str())
         .unwrap_or("");
-    if !matches!(base, "claude" | "codex" | "gclaude" | "codex-pro") {
+    if !matches!(base, "claude" | "codex" | "gclaude" | "codex-pro" | "agy") {
         return ("launcher_unverified".into(), None);
     }
     let mut child = match Command::new(program)
@@ -250,14 +253,15 @@ fn entries(
             .iter()
             .filter(|c| c.enabled && (c.machine_id == host || c.machine_id == "local"))
         {
-            if !matches!(c.engine.as_str(), "claude" | "codex") {
+            if !matches!(c.engine.as_str(), "claude" | "codex" | "antigravity") {
                 continue;
             }
             let d = registry.get(&c.agent_type)?;
-            let protocol = if c.engine == "claude" {
-                "claude_stream_json"
-            } else {
-                "codex_app_server"
+            let protocol = match c.engine.as_str() {
+                "claude" => "claude_stream_json",
+                "codex" => "codex_app_server",
+                "antigravity" => "acp",
+                _ => continue,
             };
             if d.protocol != protocol {
                 return Err("client_definition_unverified".into());
@@ -272,6 +276,12 @@ fn entries(
             let engine = match d.protocol.as_str() {
                 "claude_stream_json" => "claude",
                 "codex_app_server" => "codex",
+                "acp"
+                    if Path::new(&d.command).file_name().and_then(|s| s.to_str())
+                        == Some("agy") =>
+                {
+                    "antigravity"
+                }
                 _ => continue,
             };
             out.entry((engine.into(), d.command.clone()))
@@ -349,7 +359,17 @@ fn report_with(
     } else {
         "compatible"
     };
-    serde_json::to_value(Report{version:1,policy:policy(),host:host.into(),machine_id:scope.into(),bridget_build:crate::build_info::BUILD_ID.into(),
+    let mut report_policy = policy();
+    if clients.iter().any(|c| c.engine == "antigravity") {
+        report_policy.requirements.insert(
+            "antigravity".into(),
+            Requirement {
+                minimum: minimum("antigravity").into(),
+                provenance: "antigravity_acp_308".into(),
+            },
+        );
+    }
+    serde_json::to_value(Report{version:1,policy:report_policy,host:host.into(),machine_id:scope.into(),bridget_build:crate::build_info::BUILD_ID.into(),
         scope:"installed_local_clients".into(),verdict:verdict.into(),registry_file:None,clients,
         authentication_checked:false,model_access_checked:false,
         message:"Contrôle des versions des seuls clients locaux installés ; aucun accès fournisseur vérifié.".into(),
@@ -457,12 +477,19 @@ pub(crate) fn valid_report(value: &Value, host: &str) -> bool {
             .as_deref()
             .is_none_or(|p| atom(p, 4096) && Path::new(p).is_absolute())
         && report.policy.version == 1
-        && report.policy.requirements.len() == 2
+        && (2..=3).contains(&report.policy.requirements.len())
         && ["claude", "codex"].iter().all(|engine| {
             report.policy.requirements.get(*engine).is_some_and(|r| {
                 triplet(&r.minimum).is_some_and(|v| v >= triplet(minimum(engine)).unwrap())
                     && atom(&r.provenance, 128)
             })
+        })
+        && report.policy.requirements.keys().all(|k| {
+            matches!(k.as_str(), "claude" | "codex" | "antigravity")
+                && report.policy.requirements.get(k).is_some_and(|r| {
+                    triplet(&r.minimum).is_some_and(|v| v >= triplet(minimum(k)).unwrap())
+                        && atom(&r.provenance, 128)
+                })
         })
         && report.scope == "installed_local_clients"
         && !report.authentication_checked
@@ -477,7 +504,7 @@ pub(crate) fn valid_report(value: &Value, host: &str) -> bool {
         && value.to_string().len() <= 32768
         && report.verdict == expected_verdict
         && report.clients.iter().all(|c| {
-            matches!(c.engine.as_str(), "claude" | "codex")
+            matches!(c.engine.as_str(), "claude" | "codex" | "antigravity")
                 && atom(&c.program, 4096)
                 && c.connections.len() <= 64
                 && c.connections.iter().all(|s| atom(s, 256))

@@ -2477,6 +2477,7 @@ fn spawn_accepted_transporte_la_definition_resolue_complete() {
             pass_env: vec!["HOME".to_string()],
             claude_config_dir: None,
             codex_home: None,
+            antigravity_home: None,
             permissions: "allow".to_string(),
             queue_capacity: 32,
             notify_timeout_secs: 600,

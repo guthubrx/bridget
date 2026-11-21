@@ -1021,13 +1021,14 @@ fn print_usage() {
          Agents CLI (wrappers) :\n  \
            codex [ARGS...]        Lance Codex + connexion daemon\n  \
            claude [ARGS...]       Lance Claude + connexion daemon\n  \
+           agy [ARGS...]          Lance Google Antigravity + connexion daemon\n  \
            gemini [ARGS...]       Lance Gemini + connexion daemon\n  \
            gclaude [ARGS...]      Lance gclaude + connexion daemon\n  \
            -- <CMD> [ARGS...]     Agent personnalisé\n\n\
          Daemon & client :\n  \
            worker <OPTIONS>       Lance le worker distant provisionné ; diagnose : lecture locale sans runtime\n  \
            daemon                 Lance le daemon\n  \
-           accounts <OP>          Prépare et retire un compte isolé (list|prepare|enable|disable|remove)\n  \
+           accounts <OP>          Comptes fournisseurs (status|login|ui|list|prepare|enable|disable|remove)\n  \
            federate <OP>          Gère les liaisons SSH persistantes (--help)\n  \
            t3 <OP>                Expose les fils t3code comme agents (install|status|uninstall|serve)\n  \
            mcp                    Lance le serveur MCP sur stdio\n  \

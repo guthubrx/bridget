@@ -386,3 +386,67 @@ fn spec221_c06_profile_digest_and_missing_directory_cannot_fall_back_to_main() {
             .is_none()
     );
 }
+
+#[test]
+fn spec308_antigravity_isolated_account_prepare_and_digest() {
+    let f = Fixture::new();
+    let registry_json = json!({
+        "agents": {
+            "antigravity": {
+                "command": "/usr/local/bin/agy",
+                "args": ["acp", "--dangerously-skip-permissions"],
+                "protocol": "acp",
+                "forbidden_env": ["GEMINI_API_KEY"],
+                "pass_env": ["XDG_CONFIG_HOME"],
+                "permissions": "allow",
+                "queue_capacity": 32,
+                "mcp": {"interactive": "none", "acp_session": true},
+                "capabilities": {"execution_paths": ["acp"], "models": {"gemini-4-neon-high": {"efforts": []}}}
+            }
+        },
+        "routing_policy": {
+            "version": 2,
+            "revision": 1,
+            "enabled": true,
+            "connections": [
+                {"connection_id": "antigravity-local", "machine_id": "local", "engine": "antigravity", "agent_type": "antigravity", "enabled": true}
+            ],
+            "model_catalog": {
+                "antigravity-local": [{"model": "gemini-4-neon-high", "supported_efforts": [], "default_effort": null, "provenance": "declared", "observed_at": null}]
+            },
+            "machine_policies": {"local": {"enabled": true}}
+        }
+    });
+    let raw = serde_json::to_string_pretty(&registry_json).unwrap();
+    let reg_path = f.path();
+    write_new(&reg_path, raw.as_bytes()).unwrap();
+    let expected = digest(raw.as_bytes());
+    let applied = apply(
+        &reg_path,
+        &expected,
+        "prepare",
+        "google2",
+        Some("antigravity-local"),
+        "local",
+    )
+    .unwrap();
+    assert_eq!(applied["engine"], "antigravity");
+    assert_eq!(applied["connection_id"], "account-google2");
+    assert_eq!(applied["login_scope"], "antigravity_gemini_dir_isolated");
+    let updated_raw = fs::read_to_string(&reg_path).unwrap();
+    let updated = AgentRegistry::from_json(&updated_raw, &reg_path).unwrap();
+    let def = updated.get("account-google2").unwrap();
+    assert!(
+        def.antigravity_home
+            .as_deref()
+            .unwrap()
+            .ends_with("provider-accounts/google2/antigravity")
+    );
+    assert!(def.capabilities.account_profiles);
+    let resolved = updated.resolved_definition("account-google2").unwrap();
+    let reloaded = AgentRegistry::from_resolved("account-google2", &resolved).unwrap();
+    assert_eq!(
+        reloaded.get("account-google2").unwrap().antigravity_home,
+        resolved.antigravity_home
+    );
+}

@@ -6457,6 +6457,9 @@ pub struct ResolvedAgentDefinition {
     /// Dossier non secret du compte Codex figé avec la définition.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub codex_home: Option<String>,
+    /// Dossier non secret du profil Google Antigravity (`--gemini-dir`) figé avec la définition.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub antigravity_home: Option<String>,
     pub queue_capacity: usize,
     pub notify_timeout_secs: u64,
     pub mcp: ResolvedMcpDefinition,

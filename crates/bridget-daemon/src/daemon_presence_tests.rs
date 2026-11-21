@@ -24205,6 +24205,7 @@ fn mort_spontanee_rejette_les_demandes_marque_stopped_et_termine_les_vues() {
             pass_env: Vec::new(),
             claude_config_dir: None,
             codex_home: None,
+            antigravity_home: None,
             permissions: "allow".to_string(),
             queue_capacity: 32,
             notify_timeout_secs: 600,
