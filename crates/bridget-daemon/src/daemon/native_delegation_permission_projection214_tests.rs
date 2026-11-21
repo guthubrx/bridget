@@ -1707,3 +1707,137 @@ fn spec220_hello_clears_old_epoch_then_restores_retained_constraint() {
     drop(shared);
     super::tests::cleanup(&config);
 }
+
+#[test]
+fn claude_catalogue_projects_reported_present_and_sign_in_required_without_fake_models() {
+    use super::super::native_provider_catalogue as catalogue;
+    use bridget_transport::protocol::{WorkerCapability, WorkerContactState, WorkerIdentity};
+    use bridget_transport::provider_catalogue::*;
+    let (shared, config, _rx, _reader, _request, _root) = super::tests::routing168_fixture(1);
+    {
+        let mut st = shared.lock().unwrap();
+        let path = st.registry.source().to_path_buf();
+        let mut raw: Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        raw["agents"]["claude-cartae-agent"] = json!({
+            "command": "/home/moi/.local/bin/claude",
+            "args": ["--model", "claude-haiku-5-5"],
+            "protocol": "claude_stream_json",
+            "pass_env": ["CLAUDE_CONFIG_DIR"],
+            "capabilities": {
+                "execution_paths": ["claude_stream_json"],
+                "models": {"claude-haiku-5-5": {"efforts": []}}
+            }
+        });
+        raw["routing_policy"]["connections"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({
+                "connection_id": "claude-cartae",
+                "machine_id": "local",
+                "engine": "claude",
+                "agent_type": "claude-cartae-agent",
+                "enabled": true
+            }));
+        raw["routing_policy"]["model_catalog"]["claude-cartae"] = json!([{
+            "model": "claude-haiku-5-5",
+            "supported_efforts": [],
+            "default_effort": null,
+            "provenance": "declared",
+            "observed_at": null
+        }]);
+        std::fs::write(&path, raw.to_string()).unwrap();
+        st.registry = AgentRegistry::load_from_path_quiet(path).unwrap();
+        let digest = st
+            .registry
+            .resolved_definition("claude-cartae-agent")
+            .unwrap()
+            .digest;
+        let now = unix_timestamp();
+        let mut catalogues = HashMap::new();
+        catalogues.insert(
+            "claude-cartae".into(),
+            catalogue::CachedCatalogue {
+                sequence: 1,
+                received: Instant::now(),
+                received_at: now,
+                value: ProviderCatalogue {
+                    connection_id: "claude-cartae".into(),
+                    definition_digest: digest.clone(),
+                    observed_at: now,
+                    state: CatalogueState::Observed,
+                    account_scope: Some("a".repeat(32)),
+                    models: vec![CatalogueModel {
+                        service_tiers_unavailable: false,
+                        model: "claude-haiku-5-5".into(),
+                        supported_efforts: Vec::new(),
+                        default_effort: None,
+                        service_tiers: Vec::new(),
+                        default_service_tier: None,
+                    }],
+                    cause: None,
+                },
+            },
+        );
+        st.remote_workers.insert(
+            "local".into(),
+            RemoteWorkerConnection {
+                identity: WorkerIdentity {
+                    machine_id: "local".into(),
+                    worker_id: "worker-claude".into(),
+                    provisioning_revision: 1,
+                },
+                conn_id: "worker-claude".into(),
+                epoch: "epoch".into(),
+                capabilities: vec![WorkerCapability::ProviderCatalogueV1],
+                catalogues,
+                catalogue_refresh_id: "epoch".into(),
+                catalogue_refresh_at: None,
+                contact: WorkerContactState::Connected,
+                last_contact: Instant::now(),
+                last_contact_at: now,
+            },
+        );
+        let projected = catalogue::project(&st, &st.registry);
+        let claude = projected
+            .iter()
+            .find(|v| v["connection_id"] == "claude-cartae")
+            .expect("claude-cartae présent");
+        assert_eq!(claude["status"], "auth_reported");
+        assert_eq!(claude["auth"], "reported_present");
+        assert!(claude["cause"].is_null());
+        assert_eq!(claude["scope"], "auth_status_by_program");
+        assert_eq!(claude["models"], json!([]));
+
+        st.remote_workers
+            .get_mut("local")
+            .unwrap()
+            .catalogues
+            .get_mut("claude-cartae")
+            .unwrap()
+            .value = ProviderCatalogue {
+            connection_id: "claude-cartae".into(),
+            definition_digest: digest,
+            observed_at: now,
+            state: CatalogueState::SignInRequired,
+            account_scope: None,
+            models: Vec::new(),
+            cause: None,
+        };
+        let projected_absent = catalogue::project(&st, &st.registry);
+        let claude_absent = projected_absent
+            .iter()
+            .find(|v| v["connection_id"] == "claude-cartae")
+            .unwrap();
+        assert_eq!(claude_absent["status"], "sign_in_required");
+        assert_eq!(claude_absent["auth"], "reported_absent");
+        assert!(
+            claude_absent["next_action"]
+                .as_str()
+                .unwrap()
+                .contains("Claude ne rapporte aucun compte connecté")
+        );
+    }
+    drop(shared);
+    super::tests::cleanup(&config);
+}

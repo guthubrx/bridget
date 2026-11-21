@@ -543,3 +543,34 @@ fn spec220_generation_fences_old_snapshots_and_private_paths_reject_links() {
     assert!(private_dir(&link).is_err());
     std::fs::remove_dir_all(root).unwrap();
 }
+
+#[test]
+fn claude_auth_status_parses_logged_in_logged_out_and_gclaude_trailing_bytes() {
+    let salt = b"test-salt-claude";
+    let ok = parse_claude_auth_status(
+        r#"{"loggedIn": true, "authMethod": "claude.ai", "email": "user@example.com", "orgId": "org-1"}"#,
+        salt,
+    )
+    .unwrap()
+    .expect("loggedIn=true doit produire une empreinte salée");
+    assert_eq!(ok.len(), 64);
+    assert!(!ok.contains("example.com"));
+    assert!(!ok.contains("org-1"));
+
+    // gclaude ajoute parfois des octets après l'accolade fermante.
+    let gclaude = parse_claude_auth_status(
+        "{\r\n\"loggedIn\":true,\r\n\"authMethod\":\"oauth_token\",\r\n\"apiKeySource\":\"ANTHROPIC_API_KEY\"\r\n}\r\nB\n",
+        salt,
+    )
+    .unwrap();
+    assert!(gclaude.is_some());
+
+    let logged_out =
+        parse_claude_auth_status(r#"{"loggedIn": false, "authMethod": "none"}"#, salt).unwrap();
+    assert!(logged_out.is_none());
+
+    assert_eq!(
+        parse_claude_auth_status("not json", salt),
+        Err(CatalogueCause::ProtocolUnavailable)
+    );
+}

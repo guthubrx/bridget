@@ -240,7 +240,7 @@ fn project_connection_at(
                 None,
                 None,
             )
-        } else if connection.engine != "codex" {
+        } else if !matches!(connection.engine.as_str(), "codex" | "claude") {
             (
                 "unsupported_provider",
                 Some(CatalogueCause::UnsupportedProvider),
@@ -294,6 +294,9 @@ fn project_connection_at(
                 (
                     match value.state {
                         CatalogueState::Refreshing => "refreshing",
+                        CatalogueState::Observed if connection.engine == "claude" => {
+                            "auth_reported"
+                        }
                         CatalogueState::Observed => "reported_models",
                         CatalogueState::SignInRequired => "sign_in_required",
                         CatalogueState::Unavailable => "unavailable",
@@ -331,38 +334,79 @@ fn project_connection_at(
         } else {
             "not_observed"
         };
-        let models=observation.filter(|o|o.state==CatalogueState::Observed).map(|o|o.models.iter().map(|m| {
-            let policy_model=declared.get(m.model.as_str());
-            let supported=m.supported_efforts.iter().collect::<std::collections::BTreeSet<_>>();
-            let missing=policy_model.into_iter().flat_map(|p|p.supported_efforts.iter())
-                .filter(|effort|!supported.contains(effort)).collect::<Vec<_>>();
-            let default_announced=policy_model.and_then(|p|p.default_effort.as_ref())
-                .map(|effort|supported.contains(effort));
-            let effort_status=match policy_model {
-                None=>"outside_policy",
-                Some(p) if p.supported_efforts.is_empty() && p.default_effort.is_none()=>"not_configured",
-                Some(_) if !missing.is_empty() || default_announced==Some(false)=>"not_announced",
-                Some(_)=>"announced",
-            };
-            let mut projected=json!({"model":m.model,"supported_efforts":m.supported_efforts,"default_effort":m.default_effort,
-                "declared_in_policy":policy_model.is_some(),
-                "policy_effort_status":effort_status,"declared_efforts_not_announced":missing,
-                "declared_default_effort_announced":default_announced});
-            if options_negotiated {
-                projected["model_options_status"]=json!(if m.service_tiers_unavailable {"not_observed"} else {"reported"});
-                projected["service_tiers"]=json!(m.service_tiers);
-                if let Some(policy)=policy_model {
-                    projected["authorized_service_tiers"]=json!(m.service_tiers.iter()
-                        .filter(|tier|policy.service_tiers.contains(tier)).collect::<Vec<_>>());
-                    projected["policy_service_tiers_not_announced_count"]=json!(
-                        policy.service_tiers.iter().filter(|tier|!m.service_tiers.contains(tier)).count());
-                }
-                projected["default_service_tier"]=json!(m.default_service_tier);
-                projected["default_service_tier_announced"]=json!(
-                    m.default_service_tier.as_ref().map(|v|m.service_tiers.contains(v)));
-            }
-            projected
-        }).collect::<Vec<_>>()).unwrap_or_default();
+        let models = if connection.engine == "claude" {
+            Vec::new()
+        } else {
+            observation
+                .filter(|o| o.state == CatalogueState::Observed)
+                .map(|o| {
+                    o.models
+                        .iter()
+                        .map(|m| {
+                            let policy_model = declared.get(m.model.as_str());
+                            let supported = m
+                                .supported_efforts
+                                .iter()
+                                .collect::<std::collections::BTreeSet<_>>();
+                            let missing = policy_model
+                                .into_iter()
+                                .flat_map(|p| p.supported_efforts.iter())
+                                .filter(|effort| !supported.contains(effort))
+                                .collect::<Vec<_>>();
+                            let default_announced = policy_model
+                                .and_then(|p| p.default_effort.as_ref())
+                                .map(|effort| supported.contains(effort));
+                            let effort_status = match policy_model {
+                                None => "outside_policy",
+                                Some(p)
+                                    if p.supported_efforts.is_empty()
+                                        && p.default_effort.is_none() =>
+                                {
+                                    "not_configured"
+                                }
+                                Some(_) if !missing.is_empty() || default_announced == Some(false) => {
+                                    "not_announced"
+                                }
+                                Some(_) => "announced",
+                            };
+                            let mut projected = json!({"model":m.model,"supported_efforts":m.supported_efforts,"default_effort":m.default_effort,
+                                "declared_in_policy":policy_model.is_some(),
+                                "policy_effort_status":effort_status,"declared_efforts_not_announced":missing,
+                                "declared_default_effort_announced":default_announced});
+                            if options_negotiated {
+                                projected["model_options_status"] = json!(if m.service_tiers_unavailable {
+                                    "not_observed"
+                                } else {
+                                    "reported"
+                                });
+                                projected["service_tiers"] = json!(m.service_tiers);
+                                if let Some(policy) = policy_model {
+                                    projected["authorized_service_tiers"] = json!(m
+                                        .service_tiers
+                                        .iter()
+                                        .filter(|tier| policy.service_tiers.contains(tier))
+                                        .collect::<Vec<_>>());
+                                    projected["policy_service_tiers_not_announced_count"] = json!(
+                                        policy
+                                            .service_tiers
+                                            .iter()
+                                            .filter(|tier| !m.service_tiers.contains(tier))
+                                            .count()
+                                    );
+                                }
+                                projected["default_service_tier"] = json!(m.default_service_tier);
+                                projected["default_service_tier_announced"] = json!(
+                                    m.default_service_tier
+                                        .as_ref()
+                                        .map(|v| m.service_tiers.contains(v))
+                                );
+                            }
+                            projected
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default()
+        };
         // Lecture par modèle C07 : ne jamais transformer une omission de liste
         // ou un contrôle manquant en refus d'abonnement ou en autorité d'admission.
         let announced = observation
@@ -420,7 +464,7 @@ fn project_connection_at(
         } else {
             None
         };
-        let expires_at = if status == "reported_models" {
+        let expires_at = if matches!(status, "reported_models" | "auth_reported") {
             remaining.map(|left| now.saturating_add(left as i64))
         } else {
             None
@@ -436,7 +480,7 @@ fn project_connection_at(
                 "Cette connexion est désactivée. Une nouvelle connexion au fournisseur ne l’active pas. Demander au responsable de ce serveur de vérifier la décision d’activation ; aucun changement automatique."
             }
             "unsupported_provider" => {
-                "La découverte automatique n’est pas prise en charge pour ce fournisseur. Le catalogue déclaré et les gardes habituelles restent applicables ; ne pas annoncer un accès vérifié."
+                "La découverte automatique n’est pas prise en charge pour ce fournisseur ; ce statut ne signifie pas que la session est expirée ni que l’admission est bloquée. Le catalogue déclaré et les gardes habituelles restent applicables ; ne pas annoncer un accès vérifié."
             }
             "observation_source_unavailable" => {
                 "Aucun worker observateur n’est déclaré pour cette connexion. Demander au responsable Bridget de qualifier son mode d’observation local ou un worker provisionné. Ce fait ne prouve pas une panne de lien ni un défaut du compte."
@@ -447,8 +491,14 @@ fn project_connection_at(
             "unverified_peer" => {
                 "Ce worker ne négocie pas l’observation des modèles. Avant tout changement de version, faire vérifier les marqueurs privés et les processus de sonde sur ce serveur par le responsable Bridget : ce statut ne confirme aucun arrêt. Ne pas effacer un marqueur ni créer une mission pour diagnostiquer. Charger ensuite une version compatible selon le parcours de maintenance. Aucun accès au modèle ne peut être déduit de l’ancien catalogue. Ce contrôle concerne l’observation de cette connexion ; les autres travaux autorisés suivent leur propre état."
             }
+            "sign_in_required" if connection.engine == "claude" => {
+                "Claude ne rapporte aucun compte connecté sur ce serveur. Demander à l’utilisateur de s’y connecter avec `bridget accounts ui` ou le mécanisme officiel ; aucune copie de secrets. La prochaine observation est automatique."
+            }
             "sign_in_required" => {
-                "Codex ne rapporte aucun compte connecté sur ce serveur. Demander à l’utilisateur de s’y connecter avec le mécanisme officiel et le compte prévu ; aucune copie de secrets. La prochaine observation est automatique."
+                "Codex ne rapporte aucun compte connecté sur ce serveur. Demander à l’utilisateur de s’y connecter avec `bridget accounts ui` ou le mécanisme officiel et le compte prévu ; aucune copie de secrets. La prochaine observation est automatique."
+            }
+            "auth_reported" => {
+                "Claude rapporte une session connectée sur ce serveur (vérifiée par `claude auth status`, sans tour de modèle). Le catalogue de modèles déclaré et les gardes habituelles restent applicables ; l’admission de missions est active."
             }
             "definition_changed" => {
                 "La définition configurée pour cette connexion diffère de celle de la dernière observation. Faire qualifier la définition prévue par le responsable Bridget, puis demander une nouvelle observation sur ce serveur. Ne pas changer de compte ou de droits ni rejouer une mission pour résoudre cet écart. Les autres travaux autorisés suivent leur propre état."
@@ -486,8 +536,8 @@ fn project_connection_at(
             guidance.to_owned()
         };
         result.push(json!({"machine_id":connection.machine_id,"engine":connection.engine,"connection_id":connection.connection_id,
-            "status":status,"cause":cause,"scope":"advertised_by_program","entitlement":"unknown","provider_cache":"not_attested",
-            "auth":match status {"sign_in_required"=>"reported_absent","reported_models" if observation.and_then(|o|o.account_scope.as_ref()).is_some()=>"reported_present",_=>"not_verified"},
+            "status":status,"cause":cause,"scope":if connection.engine=="claude" {"auth_status_by_program"} else {"advertised_by_program"},"entitlement":"unknown","provider_cache":"not_attested",
+            "auth":match status {"sign_in_required"=>"reported_absent","reported_models"|"auth_reported" if observation.and_then(|o|o.account_scope.as_ref()).is_some()=>"reported_present",_=>"not_verified"},
             "model_checks":model_checks,
             "model_check_guidance":{
                 "announced_access_unverified":"Le programme annonce ce modèle pour cette connexion ; cela ne prouve pas l'accès du compte. L'admission garde ses contrôles habituels.",
@@ -507,10 +557,17 @@ fn project_connection_at(
             "expiry_basis":"local_estimate_from_remaining_source_and_receipt_budget",
             "freshness_cause":freshness_cause,
             "policy_effort_guidance":"not_announced signale un écart entre profil et liste annoncée ; ce n’est pas une preuve d’interdiction du fournisseur. Faire qualifier le programme et le profil avant toute modification autorisée. Aucun droit, compte, modèle ou effort de mission déjà admise n’est changé ; ne pas relancer automatiquement.",
-            "account_change_detection":if connection.engine=="codex" {json!({
-                "signals":["auth_file_metadata","config_file_metadata","program_metadata","definition_digest","worker_reconnection"],
-                "external_login_without_file_change":"periodic_check_only","refresh_target_secs":120,
-                "refresh_target_is_guarantee":false})} else {json!({"signals":[],"status":"unsupported_provider"})},
+            "account_change_detection":match connection.engine.as_str() {
+                "codex" => json!({
+                    "signals":["auth_file_metadata","config_file_metadata","program_metadata","definition_digest","worker_reconnection"],
+                    "external_login_without_file_change":"periodic_check_only","refresh_target_secs":120,
+                    "refresh_target_is_guarantee":false}),
+                "claude" => json!({
+                    "signals":["credentials_file_metadata","settings_file_metadata","program_metadata","definition_digest","worker_reconnection"],
+                    "external_login_without_file_change":"periodic_check_only","refresh_target_secs":120,
+                    "refresh_target_is_guarantee":false}),
+                _ => json!({"signals":[],"status":"unsupported_provider"}),
+            },
             "probe_constraint":cached.filter(|v|v.value.cause==Some(CatalogueCause::StopUnconfirmed)).map(|v|json!({"state":"stop_unconfirmed","observed_at":v.value.observed_at,"next_action":"Faire vérifier le marqueur privé probe de ce worker et son groupe de processus par le responsable Bridget. Le statut de connexion ou de serveur ne constate pas leur arrêt. Ne pas effacer le marqueur ni relancer de mission pour diagnostiquer."})),
             "models":models,"next_action":guidance,"other_work":"Ce constat porte sur cette connexion de ce serveur. Les autres travaux autorisés suivent leur propre état."}));
     }

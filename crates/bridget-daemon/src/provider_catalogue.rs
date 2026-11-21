@@ -86,6 +86,27 @@ fn config_stamp(
     digest: &str,
     source: &crate::lifecycle::SourceEnvironment,
 ) -> String {
+    if def.protocol == "claude_stream_json" {
+        let home = def
+            .claude_config_dir
+            .as_ref()
+            .map(PathBuf::from)
+            .or_else(|| {
+                source
+                    .get("CLAUDE_CONFIG_DIR")
+                    .filter(|_| def.pass_env.iter().any(|v| v == "CLAUDE_CONFIG_DIR"))
+                    .map(PathBuf::from)
+            })
+            .unwrap_or_else(|| {
+                PathBuf::from(source.get("HOME").cloned().unwrap_or_default()).join(".claude")
+            });
+        return format!(
+            "{digest}:{}:{}:{}",
+            file_stamp(Path::new(&def.command)),
+            file_stamp(&home.join(".credentials.json")),
+            file_stamp(&home.join("settings.json"))
+        );
+    }
     let home = def
         .codex_home
         .as_ref()
@@ -330,10 +351,10 @@ impl CatalogueService {
                 let Ok(resolved) = registry.resolved_definition(&connection.agent_type) else {
                     continue;
                 };
-                if !connection.enabled
-                    || connection.engine != "codex"
-                    || def.protocol != "codex_app_server"
-                {
+                let is_codex = connection.engine == "codex" && def.protocol == "codex_app_server";
+                let is_claude =
+                    connection.engine == "claude" && def.protocol == "claude_stream_json";
+                if !connection.enabled || (!is_codex && !is_claude) {
                     let inactive_stamp = format!(
                         "{}:{}:{}",
                         resolved.digest, connection.enabled, connection.engine
@@ -390,7 +411,9 @@ impl CatalogueService {
                         None,
                     ),
                 );
-                let outcome = if recovered {
+                let outcome = if is_claude {
+                    probe_claude(def, &source, &salt, self.stopping.as_ref())
+                } else if recovered {
                     probe(
                         &directory,
                         &markers,
@@ -890,6 +913,142 @@ fn schema_output_bounded(root: &Path) -> Result<(), CatalogueCause> {
         }
     }
     Ok(())
+}
+
+/// Analyse la sortie JSON de `claude auth status` (ou `gclaude auth status`).
+/// Retourne `Ok(Some(salted_account_key))` si `loggedIn == true`, `Ok(None)` si
+/// `loggedIn == false`, ou `Err(ProtocolUnavailable)` si la réponse est illisible.
+fn parse_claude_auth_status(raw: &str, salt: &[u8]) -> Result<Option<String>, CatalogueCause> {
+    use sha2::{Digest, Sha256};
+    let start = raw.find('{').ok_or(CatalogueCause::ProtocolUnavailable)?;
+    let end = raw.rfind('}').ok_or(CatalogueCause::ProtocolUnavailable)?;
+    if end < start {
+        return Err(CatalogueCause::ProtocolUnavailable);
+    }
+    let parsed: Value =
+        serde_json::from_str(&raw[start..=end]).map_err(|_| CatalogueCause::ProtocolUnavailable)?;
+    let logged_in = parsed
+        .get("loggedIn")
+        .and_then(Value::as_bool)
+        .ok_or(CatalogueCause::ProtocolUnavailable)?;
+    if !logged_in {
+        return Ok(None);
+    }
+    let mut hasher = Sha256::new();
+    hasher.update(salt);
+    hasher.update(b":claude:");
+    for field in [
+        "email",
+        "orgId",
+        "authMethod",
+        "apiKeySource",
+        "configDirectory",
+    ] {
+        hasher.update(field.as_bytes());
+        hasher.update(b"=");
+        if let Some(val) = parsed.get(field).and_then(Value::as_str) {
+            hasher.update(val.as_bytes());
+        }
+        hasher.update(b"\n");
+    }
+    Ok(Some(format!("{:x}", hasher.finalize())))
+}
+
+/// Vérifie la session Claude locale par `claude auth status` (métadonnées uniquement,
+/// aucun tour de modèle, aucune facturation, environnement isolé identique aux missions).
+fn probe_claude(
+    def: &crate::registry::AgentDefinition,
+    source: &crate::lifecycle::SourceEnvironment,
+    salt: &[u8],
+    stopping: &AtomicBool,
+) -> Result<(Vec<CatalogueModel>, Option<String>), (CatalogueCause, Option<RunningManagedChild>)> {
+    let plain = |cause| (cause, None);
+    let env = crate::lifecycle::build_environment(def, source)
+        .map_err(|_| plain(CatalogueCause::SourceUnavailable))?;
+    let mut cmd = std::process::Command::new(&def.command);
+    cmd.args(["auth", "status"])
+        .env_clear()
+        .envs(&env)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null());
+    let mut child = cmd
+        .spawn()
+        .map_err(|_| plain(CatalogueCause::ProgramUnavailable))?;
+    let mut stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| plain(CatalogueCause::SourceUnavailable))?;
+    let reader = std::thread::spawn(move || {
+        let mut buf = Vec::new();
+        let mut chunk = [0u8; 4096];
+        while buf.len() < 64 * 1024 {
+            match stdout.read(&mut chunk) {
+                Ok(0) => break,
+                Ok(n) => {
+                    let keep = n.min(64 * 1024 - buf.len());
+                    buf.extend_from_slice(&chunk[..keep]);
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+                Err(_) => break,
+            }
+        }
+        buf
+    });
+    let deadline = Instant::now() + PROBE_BUDGET;
+    loop {
+        if stopping.load(Ordering::Acquire) || Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            let _ = reader.join();
+            return Err(plain(CatalogueCause::TimedOut));
+        }
+        match child.try_wait() {
+            Ok(Some(_)) => break,
+            Ok(None) => std::thread::sleep(Duration::from_millis(25)),
+            Err(_) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                let _ = reader.join();
+                return Err(plain(CatalogueCause::SourceUnavailable));
+            }
+        }
+    }
+    let bytes = reader.join().unwrap_or_default();
+    let text = String::from_utf8_lossy(&bytes);
+    match parse_claude_auth_status(&text, salt).map_err(plain)? {
+        None => Ok((Vec::new(), None)),
+        Some(account_key) => {
+            // Conserve la compatibilité filaire ProviderCatalogue v1 (Observed exige >= 1 modèle).
+            // Le coordinateur projette les connexions Claude en `status: "auth_reported"` avec `models: []`.
+            let mut models: Vec<CatalogueModel> = def
+                .capabilities
+                .models
+                .keys()
+                .filter(|m| catalogue_token(m))
+                .map(|m| CatalogueModel {
+                    service_tiers_unavailable: false,
+                    model: m.clone(),
+                    supported_efforts: Vec::new(),
+                    default_effort: None,
+                    service_tiers: Vec::new(),
+                    default_service_tier: None,
+                })
+                .collect();
+            if models.is_empty() {
+                models.push(CatalogueModel {
+                    service_tiers_unavailable: false,
+                    model: "claude".into(),
+                    supported_efforts: Vec::new(),
+                    default_effort: None,
+                    service_tiers: Vec::new(),
+                    default_service_tier: None,
+                });
+            }
+            models.sort_by(|a, b| a.model.cmp(&b.model));
+            Ok((models, Some(account_key)))
+        }
+    }
 }
 
 fn probe(
