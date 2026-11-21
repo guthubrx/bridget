@@ -134,13 +134,27 @@ pub(crate) fn valid_machine_id(machine: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || b"._-".contains(&b))
 }
 
+/// Indique si une URL HTTPS correspond à un flux de connexion OAuth / authentification
+/// (et non à un lien de documentation ou d'aide imprimé par le CLI).
+fn is_oauth_url(url: &str) -> bool {
+    let lower = url.to_ascii_lowercase();
+    lower.contains("accounts.google.com")
+        || lower.contains("oauth")
+        || lower.contains("authorize")
+        || lower.contains("auth.openai.com")
+        || lower.contains("claude.ai/")
+        || lower.contains("console.anthropic.com")
+        || lower.contains("login")
+        || lower.contains("device")
+}
+
 /// Extrait la première URL HTTPS d'authentification présente dans une ligne texte.
 pub(crate) fn extract_auth_url(text: &str) -> Option<String> {
     let cleaned = strip_ansi(text);
     for token in cleaned.split_whitespace() {
         let candidate = token
             .trim_matches(|c: char| matches!(c, '(' | ')' | '<' | '>' | '"' | '\'' | ',' | ';'));
-        if candidate.starts_with("https://") && candidate.len() > 16 {
+        if candidate.starts_with("https://") && candidate.len() > 16 && is_oauth_url(candidate) {
             return Some(candidate.to_string());
         }
     }
@@ -273,17 +287,27 @@ pub(crate) fn load_fleet_connections(
         .map_err(|e| format!("registre local illisible ({}): {e}", local_path.display()))?;
 
     let mut by_key: BTreeMap<(String, String), ConnectionTarget> = BTreeMap::new();
+    let local_only_filter = if registry_override.is_some() {
+        None
+    } else {
+        Some(local_machine.as_str())
+    };
     for target in extract_connections_from_registry(
         &local_raw,
         &local_path,
         &local_machine,
         &local_machine,
-        Some(&local_machine),
+        local_only_filter,
     ) {
         by_key.insert(
             (target.machine_id.clone(), target.connection_id.clone()),
             target,
         );
+    }
+
+    // Si un registre explicite est fourni (--registry), ne pas interroger d'autres hôtes en SSH.
+    if registry_override.is_some() {
+        return Ok((local_machine, by_key.into_values().collect()));
     }
 
     // Découvrir les machines de la fédération depuis le registre local et/ou cartae.
@@ -383,34 +407,55 @@ pub(crate) fn load_fleet_connections(
     Ok((local_machine, by_key.into_values().collect()))
 }
 
+fn unset_auth_env_args() -> String {
+    CLEAR_AUTH_ENV
+        .iter()
+        .map(|k| format!("-u {k}"))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn env_prefix_for(engine: &str, profile: &str) -> String {
+    let unset_env = unset_auth_env_args();
+    if profile.is_empty() {
+        return format!("env {unset_env}");
+    }
+    match engine {
+        "claude" => format!(
+            "env {unset_env} CLAUDE_CONFIG_DIR={} ANTHROPIC_CONFIG_DIR={}",
+            sh_quote(profile),
+            sh_quote(&format!("{profile}/anthropic"))
+        ),
+        "codex" => format!("env {unset_env} CODEX_HOME={}", sh_quote(profile)),
+        _ => format!("env {unset_env}"),
+    }
+}
+
+fn cmd_missing_condition(raw_cmd: &str) -> String {
+    let quoted = sh_quote(raw_cmd);
+    if raw_cmd.contains('/') {
+        format!("[ ! -x {quoted} ]")
+    } else {
+        format!("! command -v {quoted} >/dev/null 2>&1")
+    }
+}
+
 /// Construit le script shell de diagnostic léger pour toutes les connexions d'une machine.
 /// Aucun secret n'est affiché : uniquement `id<TAB>state<TAB>detail`.
 fn build_probe_script(targets: &[ConnectionTarget]) -> String {
     let mut script = String::from(
         "PATH=\"$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:$PATH\"\n",
     );
-    let unset_env: String = CLEAR_AUTH_ENV
-        .iter()
-        .map(|k| format!("-u {k}"))
-        .collect::<Vec<_>>()
-        .join(" ");
     for t in targets {
         let id = sh_quote(&t.connection_id);
         let cmd = sh_quote(&t.command);
+        let missing = cmd_missing_condition(&t.command);
         let profile = t.profile_dir.as_deref().unwrap_or("");
+        let env_prefix = env_prefix_for(&t.engine, profile);
         match t.engine.as_str() {
             "claude" => {
-                let env_prefix = if profile.is_empty() {
-                    format!("env {unset_env}")
-                } else {
-                    format!(
-                        "env {unset_env} CLAUDE_CONFIG_DIR={} ANTHROPIC_CONFIG_DIR={}",
-                        sh_quote(profile),
-                        sh_quote(&format!("{profile}/anthropic"))
-                    )
-                };
                 script.push_str(&format!(
-                    "if [ ! -x {cmd} ]; then printf '%s\\tbinary_missing\\tbinaire absent\\n' {id}; else\n\
+                    "if {missing}; then printf '%s\\tbinary_missing\\tbinaire absent\\n' {id}; else\n\
                      out=$({env_prefix} {cmd} auth status 2>&1 || true)\n\
                      if printf '%s' \"$out\" | grep -qiE '\"loggedIn\"[[:space:]]*:[[:space:]]*true|logged in|authenticated'; then\n\
                        email=$(printf '%s' \"$out\" | sed -n 's/.*\"email\"[[:space:]]*:[[:space:]]*\"\\([^\"]*\\)\".*/\\1/p' | head -n 1)\n\
@@ -421,13 +466,8 @@ fn build_probe_script(targets: &[ConnectionTarget]) -> String {
                 ));
             }
             "codex" => {
-                let env_prefix = if profile.is_empty() {
-                    format!("env {unset_env}")
-                } else {
-                    format!("env {unset_env} CODEX_HOME={}", sh_quote(profile))
-                };
                 script.push_str(&format!(
-                    "if [ ! -x {cmd} ]; then printf '%s\\tbinary_missing\\tbinaire absent\\n' {id}; else\n\
+                    "if {missing}; then printf '%s\\tbinary_missing\\tbinaire absent\\n' {id}; else\n\
                      out=$({env_prefix} {cmd} login status 2>&1 || true)\n\
                      if printf '%s' \"$out\" | grep -qi 'logged in'; then\n\
                        line=$(printf '%s' \"$out\" | head -n 1 | tr '\\t\\r\\n' '   ')\n\
@@ -439,11 +479,10 @@ fn build_probe_script(targets: &[ConnectionTarget]) -> String {
             }
             "antigravity" => {
                 // Vérifie d'abord la présence du binaire puis une sonde légère de session
-                // (en mode profil isolé, vérifie la présence d'identifiants dans --gemini-dir ;
-                // sinon tente `agy models` avec timeout court).
+                // en nettoyant les variables interdites (CLEAR_AUTH_ENV).
                 let dir_check = if profile.is_empty() {
                     format!(
-                        "out=$(python3 -c 'import subprocess,sys\ntry:\n r=subprocess.run([sys.argv[1],\"models\"],stdout=subprocess.PIPE,stderr=subprocess.STDOUT,timeout=4,text=True)\n print(r.returncode)\n print(r.stdout[:400])\nexcept Exception as e:\n print(99)\n print(e)' {cmd} 2>&1)\n\
+                        "out=$({env_prefix} python3 -c 'import subprocess,sys\ntry:\n r=subprocess.run([sys.argv[1],\"models\"],stdout=subprocess.PIPE,stderr=subprocess.STDOUT,timeout=4,text=True)\n print(r.returncode)\n print(r.stdout[:400])\nexcept Exception as e:\n print(99)\n print(e)' {cmd} 2>&1)\n\
                          code=$(printf '%s\\n' \"$out\" | head -n 1)\n\
                          if [ \"$code\" = \"0\" ] && printf '%s' \"$out\" | grep -q 'gemini-'; then\n\
                            cnt=$(printf '%s\\n' \"$out\" | grep -c 'gemini-' || true)\n\
@@ -455,7 +494,7 @@ fn build_probe_script(targets: &[ConnectionTarget]) -> String {
                 } else {
                     let p = sh_quote(profile);
                     format!(
-                        "if [ -d {p} ] && [ -n \"$(find {p} -maxdepth 3 -type f -size +0c 2>/dev/null | head -n 1)\" ]; then\n\
+                        "if [ -d {p} ] && [ -n \"$(find {p} -maxdepth 3 -type f \\( -name 'oauth_creds.json' -o -name 'google_accounts.json' -o -name 'jetski_state.pbtxt' -o -name 'credentials.json' \\) -size +0c 2>/dev/null | head -n 1)\" ]; then\n\
                            printf '%s\\tauthenticated\\tprofil isole present\\n' {id}\n\
                          else\n\
                            printf '%s\\tunauthenticated\\tprofil isole vide (connexion Google requise)\\n' {id}\n\
@@ -463,7 +502,7 @@ fn build_probe_script(targets: &[ConnectionTarget]) -> String {
                     )
                 };
                 script.push_str(&format!(
-                    "if [ ! -x {cmd} ]; then printf '%s\\tbinary_missing\\tagy absent\\n' {id}; else\n{dir_check}\nfi\n"
+                    "if {missing}; then printf '%s\\tbinary_missing\\tagy absent\\n' {id}; else\n{dir_check}\nfi\n"
                 ));
             }
             _ => {
@@ -476,6 +515,33 @@ fn build_probe_script(targets: &[ConnectionTarget]) -> String {
     script
 }
 
+fn wait_child_output_bounded(
+    mut child: Child,
+    stdin_payload: Option<&[u8]>,
+    timeout_secs: u64,
+) -> std::io::Result<std::process::Output> {
+    if let Some(payload) = stdin_payload
+        && let Some(mut stdin) = child.stdin.take()
+    {
+        let _ = stdin.write_all(payload);
+    }
+    let deadline = Instant::now() + Duration::from_secs(timeout_secs);
+    loop {
+        if child.try_wait()?.is_some() {
+            return child.wait_with_output();
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                "délai dépassé",
+            ));
+        }
+        std::thread::sleep(Duration::from_millis(25));
+    }
+}
+
 fn probe_machine(machine: String, targets: Vec<ConnectionTarget>) -> Vec<ConnectionStatus> {
     let is_local = targets.first().is_some_and(|t| t.is_local);
     let script = build_probe_script(&targets);
@@ -486,7 +552,8 @@ fn probe_machine(machine: String, targets: Vec<ConnectionTarget>) -> Vec<Connect
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
-            .output()
+            .spawn()
+            .and_then(|child| wait_child_output_bounded(child, None, PROBE_TIMEOUT_SECS))
     } else if valid_machine_id(&machine) {
         Command::new("ssh")
             .args([
@@ -501,25 +568,8 @@ fn probe_machine(machine: String, targets: Vec<ConnectionTarget>) -> Vec<Connect
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
             .spawn()
-            .and_then(|mut child| {
-                if let Some(mut stdin) = child.stdin.take() {
-                    let _ = stdin.write_all(script.as_bytes());
-                }
-                let deadline = Instant::now() + Duration::from_secs(PROBE_TIMEOUT_SECS);
-                loop {
-                    if let Some(_status) = child.try_wait()? {
-                        return child.wait_with_output();
-                    }
-                    if Instant::now() >= deadline {
-                        let _ = child.kill();
-                        let _ = child.wait();
-                        return Err(std::io::Error::new(
-                            std::io::ErrorKind::TimedOut,
-                            "délai dépassé",
-                        ));
-                    }
-                    std::thread::sleep(Duration::from_millis(25));
-                }
+            .and_then(|child| {
+                wait_child_output_bounded(child, Some(script.as_bytes()), PROBE_TIMEOUT_SECS)
             })
     } else {
         Err(std::io::Error::other("identifiant machine invalide"))
@@ -661,24 +711,11 @@ fn cmd_status(args: &[String]) -> Result<(), String> {
 /// Construit la commande shell de connexion (et optionnellement déconnexion préalable)
 /// pour un moteur et un profil donné.
 pub(crate) fn build_login_shell_command(target: &ConnectionTarget, logout_first: bool) -> String {
-    let unset_env: String = CLEAR_AUTH_ENV
-        .iter()
-        .map(|k| format!("-u {k}"))
-        .collect::<Vec<_>>()
-        .join(" ");
     let cmd = sh_quote(&target.command);
     let profile = target.profile_dir.as_deref().unwrap_or("");
+    let env_prefix = env_prefix_for(&target.engine, profile);
     match target.engine.as_str() {
         "claude" => {
-            let env_prefix = if profile.is_empty() {
-                format!("env {unset_env}")
-            } else {
-                format!(
-                    "env {unset_env} CLAUDE_CONFIG_DIR={} ANTHROPIC_CONFIG_DIR={}",
-                    sh_quote(profile),
-                    sh_quote(&format!("{profile}/anthropic"))
-                )
-            };
             if logout_first {
                 format!(
                     "{env_prefix} {cmd} auth logout >/dev/null 2>&1 || true; {env_prefix} {cmd} auth login"
@@ -688,11 +725,6 @@ pub(crate) fn build_login_shell_command(target: &ConnectionTarget, logout_first:
             }
         }
         "codex" => {
-            let env_prefix = if profile.is_empty() {
-                format!("env {unset_env}")
-            } else {
-                format!("env {unset_env} CODEX_HOME={}", sh_quote(profile))
-            };
             if logout_first {
                 format!(
                     "{env_prefix} {cmd} logout >/dev/null 2>&1 || true; {env_prefix} {cmd} login"
@@ -710,13 +742,58 @@ pub(crate) fn build_login_shell_command(target: &ConnectionTarget, logout_first:
                 ));
             }
             flags.push_str(" --login");
-            format!("env {unset_env} {cmd} {flags}")
+            format!("{env_prefix} {cmd} {flags}")
         }
         _ => format!(
-            "echo 'Moteur non pris en charge : {}' && exit 1",
-            target.engine
+            "printf 'Moteur non pris en charge : %s\\n' {} && exit 1",
+            sh_quote(&target.engine)
         ),
     }
+}
+
+fn bridget_bin_quoted(is_local: bool) -> String {
+    if is_local {
+        let exe = std::env::current_exe()
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_else(|_| "bridget".to_string());
+        sh_quote(&exe)
+    } else {
+        "\"$HOME/.local/bin/bridget\"".to_string()
+    }
+}
+
+fn parse_json_payload(raw: &str) -> Result<Value, String> {
+    if let Ok(v) = serde_json::from_str::<Value>(raw.trim()) {
+        return Ok(v);
+    }
+    // Tolère une éventuelle bannière de shell avant la ligne JSON.
+    for line in raw.lines().rev() {
+        let trimmed = line.trim();
+        if trimmed.starts_with('{')
+            && let Ok(v) = serde_json::from_str::<Value>(trimmed)
+        {
+            return Ok(v);
+        }
+    }
+    Err(format!("sortie JSON illisible : {}", raw.trim()))
+}
+
+fn build_ssh_login_args(target: &ConnectionTarget, login_cmd: String) -> Vec<String> {
+    let mut ssh_args = vec![
+        "-tt".to_string(),
+        "-o".to_string(),
+        "ServerAliveInterval=15".to_string(),
+        "-o".to_string(),
+        format!("ConnectTimeout={DEFAULT_SSH_CONNECT_TIMEOUT}"),
+    ];
+    if target.engine == "codex" {
+        // Redirige le callback OAuth local de Codex (port 1455) vers le serveur distant.
+        ssh_args.push("-L".to_string());
+        ssh_args.push("1455:127.0.0.1:1455".to_string());
+    }
+    ssh_args.push(target.machine_id.clone());
+    ssh_args.push(login_cmd);
+    ssh_args
 }
 
 /// Prépare (preview + apply) un nouveau compte isolé sur la machine locale ou distante.
@@ -739,17 +816,11 @@ pub(crate) fn prepare_isolated_account(
     let reg = sh_quote(&source.registry_path);
     let from = sh_quote(&source.connection_id);
     let id = sh_quote(new_id);
-    let bin = if source.is_local {
-        std::env::current_exe()
-            .map(|p| p.to_string_lossy().into_owned())
-            .unwrap_or_else(|_| "bridget".to_string())
-    } else {
-        "$HOME/.local/bin/bridget".to_string()
-    };
+    let bin = bridget_bin_quoted(source.is_local);
     let preview_cmd = format!("{bin} accounts prepare --registry {reg} --from {from} --id {id}");
     let preview_out = run_shell_capture(source, &preview_cmd)?;
-    let parsed: Value = serde_json::from_str(preview_out.trim())
-        .map_err(|e| format!("aperçu prepare illisible : {e} ({preview_out})"))?;
+    let parsed =
+        parse_json_payload(&preview_out).map_err(|e| format!("aperçu prepare illisible : {e}"))?;
     if parsed.get("status").and_then(Value::as_str) != Some("preview") {
         let msg = parsed
             .get("next_action")
@@ -766,8 +837,8 @@ pub(crate) fn prepare_isolated_account(
         "{bin} accounts prepare --registry {reg} --from {from} --id {id} --expected {} --apply",
         sh_quote(expected)
     );
-    let apply_out = run_shell_pty_capture(source, &apply_cmd)?;
-    if !apply_out.contains("applied_local") {
+    let (ok, apply_out) = run_shell_pty_capture(source, &apply_cmd)?;
+    if !ok || !apply_out.contains("applied_local") {
         return Err(format!("application refusée : {apply_out}"));
     }
     Ok(format!("account-{new_id}"))
@@ -781,17 +852,11 @@ pub(crate) fn enable_isolated_account(target: &ConnectionTarget) -> Result<(), S
         .ok_or("seuls les comptes isolés account-* s'activent via accounts enable")?;
     let reg = sh_quote(&target.registry_path);
     let id = sh_quote(raw_id);
-    let bin = if target.is_local {
-        std::env::current_exe()
-            .map(|p| p.to_string_lossy().into_owned())
-            .unwrap_or_else(|_| "bridget".to_string())
-    } else {
-        "$HOME/.local/bin/bridget".to_string()
-    };
+    let bin = bridget_bin_quoted(target.is_local);
     let preview_cmd = format!("{bin} accounts enable --registry {reg} --id {id}");
     let preview_out = run_shell_capture(target, &preview_cmd)?;
-    let parsed: Value = serde_json::from_str(preview_out.trim())
-        .map_err(|e| format!("aperçu enable illisible : {e}"))?;
+    let parsed =
+        parse_json_payload(&preview_out).map_err(|e| format!("aperçu enable illisible : {e}"))?;
     let expected = parsed
         .get("expected")
         .and_then(Value::as_str)
@@ -800,8 +865,8 @@ pub(crate) fn enable_isolated_account(target: &ConnectionTarget) -> Result<(), S
         "{bin} accounts enable --registry {reg} --id {id} --expected {} --apply",
         sh_quote(expected)
     );
-    let apply_out = run_shell_pty_capture(target, &apply_cmd)?;
-    if !apply_out.contains("applied_local") {
+    let (ok, apply_out) = run_shell_pty_capture(target, &apply_cmd)?;
+    if !ok || !apply_out.contains("applied_local") {
         return Err(format!("activation refusée : {apply_out}"));
     }
     Ok(())
@@ -839,7 +904,10 @@ fn run_shell_capture(target: &ConnectionTarget, shell_cmd: &str) -> Result<Strin
     Ok(stdout)
 }
 
-fn run_shell_pty_capture(target: &ConnectionTarget, shell_cmd: &str) -> Result<String, String> {
+fn run_shell_pty_capture(
+    target: &ConnectionTarget,
+    shell_cmd: &str,
+) -> Result<(bool, String), String> {
     let output = if target.is_local {
         #[cfg(target_os = "macos")]
         {
@@ -875,7 +943,10 @@ fn run_shell_pty_capture(target: &ConnectionTarget, shell_cmd: &str) -> Result<S
             .output()
             .map_err(|e| e.to_string())?
     };
-    Ok(strip_ansi(&String::from_utf8_lossy(&output.stdout)))
+    Ok((
+        output.status.success(),
+        strip_ansi(&String::from_utf8_lossy(&output.stdout)),
+    ))
 }
 
 fn open_browser(url: &str) {
@@ -970,18 +1041,7 @@ fn cmd_login(args: &[String]) -> Result<(), String> {
         if !valid_machine_id(&target.machine_id) {
             return Err("machine cible invalide".into());
         }
-        let mut ssh_args = vec![
-            "-tt".to_string(),
-            "-o".to_string(),
-            "ServerAliveInterval=15".to_string(),
-        ];
-        if target.engine == "codex" {
-            // Redirige le callback OAuth local de Codex (port 1455) vers le serveur distant.
-            ssh_args.push("-L".to_string());
-            ssh_args.push("1455:127.0.0.1:1455".to_string());
-        }
-        ssh_args.push(target.machine_id.clone());
-        ssh_args.push(login_cmd);
+        let ssh_args = build_ssh_login_args(&target, login_cmd);
         Command::new("ssh")
             .args(&ssh_args)
             .status()
@@ -1035,7 +1095,7 @@ struct LoginSession {
     running: bool,
     exit_code: Option<i32>,
     stdin: Option<ChildStdin>,
-    child_pid: Option<u32>,
+    child: Arc<Mutex<Option<Child>>>,
     enable_on_success: Option<ConnectionTarget>,
     auto_enabled: bool,
 }
@@ -1110,19 +1170,7 @@ fn spawn_pty_login(target: &ConnectionTarget, logout_first: bool) -> Result<Chil
         if !valid_machine_id(&target.machine_id) {
             return Err("machine cible invalide".into());
         }
-        let mut ssh_args = vec![
-            "-tt".to_string(),
-            "-o".to_string(),
-            "ServerAliveInterval=15".to_string(),
-            "-o".to_string(),
-            format!("ConnectTimeout={DEFAULT_SSH_CONNECT_TIMEOUT}"),
-        ];
-        if target.engine == "codex" {
-            ssh_args.push("-L".to_string());
-            ssh_args.push("1455:127.0.0.1:1455".to_string());
-        }
-        ssh_args.push(target.machine_id.clone());
-        ssh_args.push(login_cmd);
+        let ssh_args = build_ssh_login_args(target, login_cmd);
         #[cfg(target_os = "macos")]
         {
             let mut c = Command::new("/usr/bin/script");
@@ -1254,10 +1302,10 @@ async fn api_login_start(
         Ok(c) => c,
         Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e}))),
     };
-    let child_pid = child.id();
     let stdin = child.stdin.take();
     let stdout = child.stdout.take();
     let stderr = child.stderr.take();
+    let child_handle = Arc::new(Mutex::new(Some(child)));
 
     let session_id = uuid::Uuid::new_v4().to_string();
     let session = Arc::new(Mutex::new(LoginSession {
@@ -1270,15 +1318,17 @@ async fn api_login_start(
         running: true,
         exit_code: None,
         stdin,
-        child_pid: Some(child_pid),
+        child: child_handle.clone(),
         enable_on_success: req.enable_on_success.then_some(target.clone()),
         auto_enabled: false,
     }));
-    state
-        .sessions
-        .lock()
-        .unwrap()
-        .insert(session_id.clone(), session.clone());
+    {
+        let mut map = state.sessions.lock().unwrap_or_else(|e| e.into_inner());
+        if map.len() >= 16 {
+            map.retain(|_, s| s.lock().unwrap_or_else(|e| e.into_inner()).running);
+        }
+        map.insert(session_id.clone(), session.clone());
+    }
 
     if let Some(out) = stdout {
         let s = session.clone();
@@ -1291,13 +1341,36 @@ async fn api_login_start(
     {
         let s = session.clone();
         std::thread::spawn(move || {
-            let exit = child.wait().ok().and_then(|st| st.code()).unwrap_or(-1);
+            // Attend la fin du processus enfant sans bloquer le verrou pendant le sommeil,
+            // ce qui garantit que `api_login_cancel` ne peut jamais cibler un PID déjà récolté.
+            let exit = loop {
+                let maybe_status = {
+                    let mut guard = child_handle.lock().unwrap_or_else(|e| e.into_inner());
+                    match guard.as_mut() {
+                        Some(c) => match c.try_wait() {
+                            Ok(Some(st)) => {
+                                *guard = None;
+                                Some(st.code().unwrap_or(-1))
+                            }
+                            Ok(None) => None,
+                            Err(_) => {
+                                *guard = None;
+                                Some(-1)
+                            }
+                        },
+                        None => Some(-1),
+                    }
+                };
+                if let Some(code) = maybe_status {
+                    break code;
+                }
+                std::thread::sleep(Duration::from_millis(80));
+            };
             let enable_target = {
-                let mut guard = s.lock().unwrap();
+                let mut guard = s.lock().unwrap_or_else(|e| e.into_inner());
                 guard.running = false;
                 guard.exit_code = Some(exit);
                 guard.stdin = None;
-                guard.child_pid = None;
                 if exit == 0 {
                     guard.log.push_str("\nConnexion terminee avec succes.\n");
                     guard.enable_on_success.clone()
@@ -1311,14 +1384,14 @@ async fn api_login_start(
             if let Some(t) = enable_target {
                 match enable_isolated_account(&t) {
                     Ok(()) => {
-                        let mut guard = s.lock().unwrap();
+                        let mut guard = s.lock().unwrap_or_else(|e| e.into_inner());
                         guard.auto_enabled = true;
                         guard
                             .log
                             .push_str("Compte isole active dans le registre.\n");
                     }
                     Err(e) => {
-                        let mut guard = s.lock().unwrap();
+                        let mut guard = s.lock().unwrap_or_else(|e| e.into_inner());
                         guard
                             .log
                             .push_str(&format!("Activation automatique echouee : {e}\n"));
@@ -1351,7 +1424,7 @@ fn pump_stream<R: std::io::Read>(reader: R, session: Arc<Mutex<LoginSession>>) {
                 let detected_url = extract_auth_url(&text);
                 let mut url_to_open = None;
                 {
-                    let mut guard = session.lock().unwrap();
+                    let mut guard = session.lock().unwrap_or_else(|e| e.into_inner());
                     if guard.log.len() < MAX_SESSION_LOG_BYTES {
                         guard.log.push_str(&text);
                     }
@@ -1388,14 +1461,21 @@ async fn api_login_poll(
             Json(json!({"error": "session requis"})),
         );
     };
-    let session = { state.sessions.lock().unwrap().get(session_id).cloned() };
+    let session = {
+        state
+            .sessions
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(session_id)
+            .cloned()
+    };
     let Some(session) = session else {
         return (
             StatusCode::NOT_FOUND,
             Json(json!({"error": "session inconnue"})),
         );
     };
-    let guard = session.lock().unwrap();
+    let guard = session.lock().unwrap_or_else(|e| e.into_inner());
     let offset = query.offset.unwrap_or(0).min(guard.log.len());
     // Assurer une frontière UTF-8 valide.
     let mut safe_offset = offset;
@@ -1428,14 +1508,21 @@ async fn api_login_input(
             Json(json!({"error": "unauthorized"})),
         );
     }
-    let session = { state.sessions.lock().unwrap().get(&req.session_id).cloned() };
+    let session = {
+        state
+            .sessions
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(&req.session_id)
+            .cloned()
+    };
     let Some(session) = session else {
         return (
             StatusCode::NOT_FOUND,
             Json(json!({"error": "session inconnue"})),
         );
     };
-    let mut guard = session.lock().unwrap();
+    let mut guard = session.lock().unwrap_or_else(|e| e.into_inner());
     let Some(stdin) = guard.stdin.as_mut() else {
         return (
             StatusCode::CONFLICT,
@@ -1467,19 +1554,34 @@ async fn api_login_cancel(
             Json(json!({"error": "unauthorized"})),
         );
     }
-    let session = { state.sessions.lock().unwrap().get(&req.session_id).cloned() };
+    let session = {
+        state
+            .sessions
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(&req.session_id)
+            .cloned()
+    };
     let Some(session) = session else {
         return (
             StatusCode::NOT_FOUND,
             Json(json!({"error": "session inconnue"})),
         );
     };
-    let pid = session.lock().unwrap().child_pid;
-    if let Some(pid) = pid {
-        // Terminaison propre SIGTERM sur notre propre processus enfant de login.
-        let _ = Command::new("kill")
-            .args(["-TERM", &pid.to_string()])
-            .status();
+    let child_handle = session
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .child
+        .clone();
+    {
+        let mut child_guard = child_handle.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(child) = child_guard.as_mut() {
+            // Envoie SIGTERM sous verrou du Child (non encore récolté -> zéro réutilisation PID).
+            let pid = child.id();
+            let _ = Command::new("kill")
+                .args(["-TERM", &pid.to_string()])
+                .status();
+        }
     }
     (StatusCode::OK, Json(json!({"status": "cancelled"})))
 }
@@ -1626,7 +1728,7 @@ const UI_HTML: &str = r###"<!doctype html>
       <button onclick="closeLoginModal()">Fermer</button>
     </div>
     <div class="url-box" id="urlBox">
-      <a id="authUrlLink" href="#" target="_blank" rel="noopener">Ouvrir la page de connexion</a>
+      <a id="authUrlLink" href="#" target="_blank" rel="noopener noreferrer">Ouvrir la page de connexion</a>
       <button class="primary" onclick="openDetectedUrl()">Ouvrir le lien</button>
     </div>
     <div class="log" id="loginLog"></div>
@@ -1665,6 +1767,9 @@ const UI_HTML: &str = r###"<!doctype html>
 
 <script>
 const TOKEN = "__BRIDGET_TOKEN__";
+if (window.location.search.includes("token=")) {
+  try { window.history.replaceState(null, "", "/"); } catch (e) {}
+}
 let fleet = null;
 let selectedMachine = "ALL";
 let currentSession = null;
@@ -1699,7 +1804,7 @@ function renderFilters() {
   const el = document.getElementById("filters");
   const all = ["ALL", ...fleet.machines];
   el.innerHTML = all.map(m =>
-    `<button class="chip ${selectedMachine===m?'active':''}" onclick="selectedMachine='${m}';renderFilters();renderCards()">${m==='ALL'?'Toutes les machines':m}</button>`
+    `<button class="chip ${selectedMachine===m?'active':''}" data-filter-machine="${esc(m)}">${m==='ALL'?'Toutes les machines':esc(m)}</button>`
   ).join("");
 }
 
@@ -1713,7 +1818,7 @@ function renderCards() {
   container.innerHTML = machines.map(m => {
     const rows = fleet.connections.filter(c => c.machine_id === m);
     return `<section class="machine-block">
-      <h2 class="machine-title"><span>${m}</span><span class="meta">${rows.length} connexion(s)</span></h2>
+      <h2 class="machine-title"><span>${esc(m)}</span><span class="meta">${rows.length} connexion(s)</span></h2>
       <div class="grid">${rows.map(c => `
         <div class="card">
           <div class="row">
@@ -1724,14 +1829,31 @@ function renderCards() {
           <div class="meta">${esc(c.detail)}</div>
           <div class="actions">
             ${c.auth_state === 'authenticated'
-              ? `<button class="warn" onclick="startLogin('${esc(c.connection_id)}','${esc(c.machine_id)}',true,false)">Changer de compte</button>`
-              : `<button class="primary" onclick="startLogin('${esc(c.connection_id)}','${esc(c.machine_id)}',false,false)">Se connecter</button>`}
+              ? `<button class="warn" data-login-conn="${esc(c.connection_id)}" data-login-machine="${esc(c.machine_id)}" data-logout-first="1">Changer de compte</button>`
+              : `<button class="primary" data-login-conn="${esc(c.connection_id)}" data-login-machine="${esc(c.machine_id)}" data-logout-first="0">Se connecter</button>`}
           </div>
         </div>`).join("")}
       </div>
     </section>`;
   }).join("");
 }
+
+document.getElementById("filters").addEventListener("click", (ev) => {
+  const btn = ev.target.closest("button[data-filter-machine]");
+  if (!btn) return;
+  selectedMachine = btn.getAttribute("data-filter-machine") || "ALL";
+  renderFilters();
+  renderCards();
+});
+
+document.getElementById("content").addEventListener("click", (ev) => {
+  const btn = ev.target.closest("button[data-login-conn]");
+  if (!btn) return;
+  const connId = btn.getAttribute("data-login-conn");
+  const machineId = btn.getAttribute("data-login-machine");
+  const logoutFirst = btn.getAttribute("data-logout-first") === "1";
+  if (connId && machineId) startLogin(connId, machineId, logoutFirst, false);
+});
 
 function esc(s) {
   return String(s || "").replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
@@ -1783,7 +1905,7 @@ async function pollSession() {
   } catch (e) {}
 }
 
-function openDetectedUrl() { if (detectedUrl) window.open(detectedUrl, "_blank", "noopener"); }
+function openDetectedUrl() { if (detectedUrl) window.open(detectedUrl, "_blank", "noopener,noreferrer"); }
 
 async function sendCode() {
   if (!currentSession) return;
@@ -1862,7 +1984,20 @@ mod tests {
             extract_auth_url(raw).as_deref(),
             Some("https://accounts.google.com/o/oauth2/v2/auth?client_id=123")
         );
+        // Une URL de documentation générique ne doit pas être confondue avec un lien OAuth.
+        assert_eq!(
+            extract_auth_url("See docs at https://antigravity.google/docs/install.md"),
+            None
+        );
         assert_eq!(extract_auth_url("no link here"), None);
+        assert_eq!(
+            cmd_missing_condition("agy"),
+            "! command -v 'agy' >/dev/null 2>&1"
+        );
+        assert_eq!(
+            cmd_missing_condition("/usr/local/bin/agy"),
+            "[ ! -x '/usr/local/bin/agy' ]"
+        );
     }
 
     #[test]

@@ -4354,7 +4354,7 @@ impl WorkerRequest {
                                 )
                             ))
                         && worker_atom(connection_id, MAX_WORKER_ATOM_BYTES)
-                        && matches!(engine.as_str(), "codex" | "claude")
+                        && matches!(engine.as_str(), "codex" | "claude" | "antigravity")
                         && worker_digest(expected_definition_digest)
                         && worker_digest(expected_permission_digest),
                 )
@@ -4370,7 +4370,10 @@ impl WorkerRequest {
                 if let Some(routing) = routing {
                     worker_require(
                         worker_atom(&routing.connection_id, MAX_WORKER_ATOM_BYTES)
-                            && matches!(routing.engine.as_str(), "codex" | "claude")
+                            && matches!(
+                                routing.engine.as_str(),
+                                "codex" | "claude" | "antigravity"
+                            )
                             && worker_digest(&routing.expected_definition_digest)
                             && worker_digest(&routing.expected_permission_digest),
                     )?;

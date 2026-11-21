@@ -5530,7 +5530,7 @@ fn launch_session_with_status(
             || interactive.is_some()
             || !matches!(
                 definition.protocol.as_str(),
-                "codex_app_server" | "claude_stream_json"
+                "codex_app_server" | "claude_stream_json" | "acp"
             )
         {
             return Err("remote_result_context_invalid".into());
@@ -6660,6 +6660,9 @@ fn apply_managed_permission_policy(protocol: &str, permissions: &str, args: &mut
         ("codex_app_server", "deny") => strip_codex_approval_bypass(args),
         ("claude_stream_json", "allow") => ensure_claude_permission_bypass(args),
         ("claude_stream_json", "deny") => strip_claude_permission_bypass(args),
+        ("acp", "deny") => {
+            args.retain(|a| a != "--dangerously-skip-permissions" && a != "--yolo");
+        }
         _ => {}
     }
 }

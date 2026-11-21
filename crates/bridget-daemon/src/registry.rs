@@ -1564,7 +1564,7 @@ impl AgentRegistry {
                     ]);
                 }
             }
-            "claude_stream_json" => {
+            "claude_stream_json" | "acp" => {
                 args.extend(["--model".into(), model.into()]);
                 if let Some(effort) = effort {
                     args.extend(["--effort".into(), effort.into()]);
