@@ -49,7 +49,7 @@ use std::ffi::OsString;
 use std::fmt;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::{Condvar, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 /// Variable d'environnement qui fixe le quota de flotte gérée au démarrage.
@@ -515,8 +515,12 @@ impl FleetSupervisor {
         self.desired.load().map_err(Into::into)
     }
 
+    pub fn desired_fleet_shared(&self) -> Result<Arc<DesiredFleet>, FleetError> {
+        self.desired.load_shared().map_err(Into::into)
+    }
+
     pub fn desired_entry(&self, name: &str) -> Result<Option<DesiredEquipier>, FleetError> {
-        Ok(self.desired.load()?.equipiers.remove(name))
+        self.desired.get(name).map_err(Into::into)
     }
 
     pub fn mark_stopped(&self, name: &str) -> Result<bool, FleetError> {
@@ -558,7 +562,7 @@ impl FleetSupervisor {
     /// Le nom seul ne suffit jamais : une saga connectée et une définition
     /// runtime complète doivent être présentes dans le store idempotent.
     pub fn adopt_stopped(&self, name: &str, now: i64) -> Result<AdoptStoppedResult, FleetError> {
-        if self.desired.load()?.equipiers.contains_key(name) {
+        if self.desired.contains_key(name)? {
             return Ok(AdoptStoppedResult::AlreadyManaged);
         }
         let historical: Option<HistoricalManagedSpawn> = self
@@ -610,7 +614,7 @@ impl FleetSupervisor {
     pub fn drain_legacy_non_persistent_named(
         &self,
     ) -> Result<Vec<(String, NamedRosterEntry)>, FleetError> {
-        let desired = self.desired.load()?;
+        let desired = self.desired.load_shared()?;
         let mut legacy = Vec::new();
         for (name, entry) in self.roster.drain_non_persistent() {
             if desired.equipiers.contains_key(&name) {
@@ -636,10 +640,10 @@ impl FleetSupervisor {
     /// exactement ce qui décidera du drain.
     pub fn named_persistence(&self) -> BTreeMap<String, bool> {
         let mut persistence = self.roster.persistence_by_name();
-        if let Ok(desired) = self.desired.load() {
-            for (name, entry) in desired.equipiers {
+        if let Ok(desired) = self.desired.load_shared() {
+            for (name, entry) in &desired.equipiers {
                 if entry.lifecycle_state != DesiredLifecycleState::Decommissioned {
-                    persistence.insert(name, entry.persistent);
+                    persistence.insert(name.clone(), entry.persistent);
                 }
             }
         }
@@ -664,13 +668,7 @@ impl FleetSupervisor {
     }
 
     pub fn desired_domain(&self, name: &str) -> Option<String> {
-        self.desired
-            .load()
-            .ok()?
-            .equipiers
-            .get(name)?
-            .domain
-            .clone()
+        self.desired.domain(name).ok().flatten()
     }
 
     pub fn set_desired_domain(&self, name: &str, domain: Option<&str>) -> Result<(), FleetError> {
@@ -948,7 +946,7 @@ impl FleetSupervisor {
                         "nom déjà actif",
                     );
                 }
-                let existing = self.desired.load()?.equipiers.remove(&command.name);
+                let existing = self.desired.get(&command.name)?;
                 let allowed = allowed_existing_state.is_some_and(|allowed_state| {
                     existing
                         .as_ref()

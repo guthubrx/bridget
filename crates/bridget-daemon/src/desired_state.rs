@@ -9,8 +9,10 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::fs;
 use std::io;
+#[cfg(unix)]
+use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 /// Schéma écrit par ce binaire. Les schémas 1 à 3 décrivaient uniquement des
 /// agents persistants à reprendre. Le schéma 4 devient l'inventaire durable du
@@ -221,18 +223,93 @@ impl std::error::Error for DesiredStateError {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct FileStamp {
+    dev: u64,
+    ino: u64,
+    len: u64,
+    mtime_sec: i64,
+    mtime_nsec: i64,
+    ctime_sec: i64,
+    ctime_nsec: i64,
+}
+
+#[derive(Default)]
+struct DesiredStateCache {
+    stamp: Option<FileStamp>,
+    fleet: Option<Arc<DesiredFleet>>,
+}
+
+#[derive(Deserialize)]
+struct FleetSchemaHeader {
+    #[serde(default)]
+    schema: Option<serde_json::Value>,
+}
+
+#[derive(Serialize)]
+struct WireDesiredFleet<'a> {
+    schema: u64,
+    equipiers: &'a BTreeMap<String, DesiredEquipier>,
+}
+
+fn file_stamp(path: &Path) -> Result<Option<FileStamp>, DesiredStateError> {
+    let metadata = match fs::metadata(path) {
+        Ok(metadata) => metadata,
+        Err(source) if source.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(source) => {
+            return Err(DesiredStateError::Io {
+                path: path.to_path_buf(),
+                source,
+            });
+        }
+    };
+    #[cfg(unix)]
+    let stamp = FileStamp {
+        dev: metadata.dev(),
+        ino: metadata.ino(),
+        len: metadata.size(),
+        mtime_sec: metadata.mtime(),
+        mtime_nsec: metadata.mtime_nsec(),
+        ctime_sec: metadata.ctime(),
+        ctime_nsec: metadata.ctime_nsec(),
+    };
+    #[cfg(not(unix))]
+    let stamp = {
+        let modified = metadata
+            .modified()
+            .ok()
+            .and_then(|ts| ts.duration_since(std::time::UNIX_EPOCH).ok())
+            .unwrap_or_default();
+        FileStamp {
+            dev: 0,
+            ino: 0,
+            len: metadata.len(),
+            mtime_sec: modified.as_secs() as i64,
+            mtime_nsec: modified.subsec_nanos() as i64,
+            ctime_sec: 0,
+            ctime_nsec: 0,
+        }
+    };
+    Ok(Some(stamp))
+}
+
 /// Écrivain unique intra-processus des transitions durables de `fleet.json`.
 ///
 /// T904 construit une seule instance au démarrage du daemon, appelle
 /// [`Self::load_at_startup`] avant d'accepter des ordres, puis conserve cet
 /// objet comme unique autorité d'écriture. Le verrou sérialise les transitions
 /// concurrentes ; aucun autre processus ne doit écrire lorsque le daemon vit.
+/// Un cache mémoire validé par empreinte fichier évite de relire et analyser
+/// l'intégralité de `fleet.json` à chaque requête de lecture.
 pub struct DesiredStateStore {
     path: PathBuf,
-    transition_lock: Mutex<()>,
+    state: Mutex<DesiredStateCache>,
     /// Nombre d'écritures réussies de `fleet.json`, pour mesurer le coût des lots en test.
     #[cfg(test)]
     writes: std::sync::atomic::AtomicUsize,
+    /// Nombre de lectures disque de `fleet.json`, pour vérifier le cache en test.
+    #[cfg(test)]
+    reads: std::sync::atomic::AtomicUsize,
 }
 
 impl DesiredStateStore {
@@ -245,15 +322,22 @@ impl DesiredStateStore {
     pub fn at_path(path: impl Into<PathBuf>) -> Self {
         Self {
             path: path.into(),
-            transition_lock: Mutex::new(()),
+            state: Mutex::new(DesiredStateCache::default()),
             #[cfg(test)]
             writes: std::sync::atomic::AtomicUsize::new(0),
+            #[cfg(test)]
+            reads: std::sync::atomic::AtomicUsize::new(0),
         }
     }
 
     #[cfg(test)]
     pub(crate) fn write_count(&self) -> usize {
         self.writes.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn read_count(&self) -> usize {
+        self.reads.load(std::sync::atomic::Ordering::Relaxed)
     }
 
     pub fn path(&self) -> &Path {
@@ -265,16 +349,48 @@ impl DesiredStateStore {
         self.load()
     }
 
+    /// Retourne un instantané partagé de la flotte, servi depuis le cache mémoire
+    /// lorsque l'empreinte fichier est inchangée. Complexité : O(1) sur hit, O(n) sur miss.
+    pub fn load_shared(&self) -> Result<Arc<DesiredFleet>, DesiredStateError> {
+        let mut cache = self.state.lock().recover_poison();
+        self.load_cached(&mut cache)
+    }
+
     /// Charge et valide le fichier en O(n), n étant le nombre d'équipiers.
     /// L'absence du fichier au premier démarrage représente une flotte vide.
     pub fn load(&self) -> Result<DesiredFleet, DesiredStateError> {
-        let _transition = self.transition_lock.lock().recover_poison();
-        self.load_unlocked()
+        Ok((*self.load_shared()?).clone())
+    }
+
+    /// Retourne une seule entrée par nom sans cloner toute la flotte.
+    pub fn get(&self, name: &str) -> Result<Option<DesiredEquipier>, DesiredStateError> {
+        let mut cache = self.state.lock().recover_poison();
+        let fleet = self.load_cached(&mut cache)?;
+        Ok(fleet.equipiers.get(name).cloned())
+    }
+
+    /// Vérifie la présence d'un nom sans cloner la flotte.
+    pub fn contains_key(&self, name: &str) -> Result<bool, DesiredStateError> {
+        let mut cache = self.state.lock().recover_poison();
+        let fleet = self.load_cached(&mut cache)?;
+        Ok(fleet.equipiers.contains_key(name))
+    }
+
+    /// Retourne le domaine d'un équipier sans cloner la flotte.
+    pub fn domain(&self, name: &str) -> Result<Option<String>, DesiredStateError> {
+        let mut cache = self.state.lock().recover_poison();
+        let fleet = self.load_cached(&mut cache)?;
+        Ok(fleet
+            .equipiers
+            .get(name)
+            .and_then(|entry| entry.domain.clone()))
     }
 
     /// Remplace durablement l'état complet en O(n).
     pub fn persist(&self, fleet: &DesiredFleet) -> Result<(), DesiredStateError> {
-        let _transition = self.transition_lock.lock().recover_poison();
+        let mut cache = self.state.lock().recover_poison();
+        cache.stamp = None;
+        cache.fleet = None;
         self.persist_unlocked(fleet)
     }
 
@@ -285,7 +401,9 @@ impl DesiredStateStore {
         fleet: &DesiredFleet,
         observer: impl FnMut(AtomicWritePhase) -> io::Result<()>,
     ) -> Result<(), DesiredStateError> {
-        let _transition = self.transition_lock.lock().recover_poison();
+        let mut cache = self.state.lock().recover_poison();
+        cache.stamp = None;
+        cache.fleet = None;
         self.persist_unlocked_observed(fleet, observer)
     }
 
@@ -295,8 +413,8 @@ impl DesiredStateStore {
         &self,
         mapping: &std::collections::BTreeMap<String, String>,
     ) -> Result<(), DesiredStateError> {
-        let _transition = self.transition_lock.lock().recover_poison();
-        let mut fleet = self.load_unlocked()?;
+        let mut cache = self.state.lock().recover_poison();
+        let mut fleet = self.take_owned_fleet(&mut cache)?;
         let mut migrated = BTreeMap::new();
         for (legacy, entry) in std::mem::take(&mut fleet.equipiers) {
             let agent_id = mapping.get(&legacy).cloned().unwrap_or(legacy);
@@ -309,7 +427,10 @@ impl DesiredStateStore {
             }
         }
         fleet.equipiers = migrated;
-        self.persist_unlocked(&fleet)
+        fleet.schema = FLEET_SCHEMA_VERSION;
+        self.persist_unlocked(&fleet)?;
+        self.store_cache(&mut cache, fleet);
+        Ok(())
     }
 
     /// Insère une génération sous sa clé stable, puis retourne l'ancienne.
@@ -318,20 +439,27 @@ impl DesiredStateStore {
         name: String,
         equipier: DesiredEquipier,
     ) -> Result<Option<DesiredEquipier>, DesiredStateError> {
-        let _transition = self.transition_lock.lock().recover_poison();
-        let mut fleet = self.load_unlocked()?;
+        let mut cache = self.state.lock().recover_poison();
+        let mut fleet = self.take_owned_fleet(&mut cache)?;
         let previous = fleet.equipiers.insert(name, equipier);
+        fleet.schema = FLEET_SCHEMA_VERSION;
         self.persist_unlocked(&fleet)?;
+        self.store_cache(&mut cache, fleet);
         Ok(previous)
     }
 
     /// Retire une entrée avant de confirmer l'arrêt à l'appelant.
     pub fn remove(&self, name: &str) -> Result<Option<DesiredEquipier>, DesiredStateError> {
-        let _transition = self.transition_lock.lock().recover_poison();
-        let mut fleet = self.load_unlocked()?;
+        let mut cache = self.state.lock().recover_poison();
+        if !self.load_cached(&mut cache)?.equipiers.contains_key(name) {
+            return Ok(None);
+        }
+        let mut fleet = self.take_owned_fleet(&mut cache)?;
         let removed = fleet.equipiers.remove(name);
         if removed.is_some() {
+            fleet.schema = FLEET_SCHEMA_VERSION;
             self.persist_unlocked(&fleet)?;
+            self.store_cache(&mut cache, fleet);
         }
         Ok(removed)
     }
@@ -343,18 +471,26 @@ impl DesiredStateStore {
         name: &str,
         lifecycle_state: DesiredLifecycleState,
     ) -> Result<Option<DesiredEquipier>, DesiredStateError> {
-        let _transition = self.transition_lock.lock().recover_poison();
-        let mut fleet = self.load_unlocked()?;
+        let mut cache = self.state.lock().recover_poison();
+        {
+            let current = self.load_cached(&mut cache)?;
+            let Some(entry) = current.equipiers.get(name) else {
+                return Ok(None);
+            };
+            if entry.lifecycle_state == lifecycle_state {
+                return Ok(Some(entry.clone()));
+            }
+        }
+        let mut fleet = self.take_owned_fleet(&mut cache)?;
         let Some(entry) = fleet.equipiers.get_mut(name) else {
             return Ok(None);
         };
-        if entry.lifecycle_state != lifecycle_state {
-            entry.lifecycle_state = lifecycle_state;
-            let updated = entry.clone();
-            self.persist_unlocked(&fleet)?;
-            return Ok(Some(updated));
-        }
-        Ok(Some(entry.clone()))
+        entry.lifecycle_state = lifecycle_state;
+        let updated = entry.clone();
+        fleet.schema = FLEET_SCHEMA_VERSION;
+        self.persist_unlocked(&fleet)?;
+        self.store_cache(&mut cache, fleet);
+        Ok(Some(updated))
     }
 
     /// Applique un état de cycle de vie à plusieurs entrées en une lecture et au plus
@@ -365,20 +501,30 @@ impl DesiredStateStore {
         names: &[&str],
         lifecycle_state: DesiredLifecycleState,
     ) -> Result<Vec<String>, DesiredStateError> {
-        let _transition = self.transition_lock.lock().recover_poison();
-        let mut fleet = self.load_unlocked()?;
+        let mut cache = self.state.lock().recover_poison();
         let mut present = Vec::new();
         let mut changed = false;
-        for name in names {
-            if let Some(entry) = fleet.equipiers.get_mut(*name) {
-                changed |= entry.lifecycle_state != lifecycle_state;
-                entry.lifecycle_state = lifecycle_state;
-                present.push((*name).to_string());
+        {
+            let current = self.load_cached(&mut cache)?;
+            for name in names {
+                if let Some(entry) = current.equipiers.get(*name) {
+                    changed |= entry.lifecycle_state != lifecycle_state;
+                    present.push((*name).to_string());
+                }
             }
         }
-        if changed {
-            self.persist_unlocked(&fleet)?;
+        if !changed {
+            return Ok(present);
         }
+        let mut fleet = self.take_owned_fleet(&mut cache)?;
+        for name in &present {
+            if let Some(entry) = fleet.equipiers.get_mut(name) {
+                entry.lifecycle_state = lifecycle_state;
+            }
+        }
+        fleet.schema = FLEET_SCHEMA_VERSION;
+        self.persist_unlocked(&fleet)?;
+        self.store_cache(&mut cache, fleet);
         Ok(present)
     }
 
@@ -391,20 +537,28 @@ impl DesiredStateStore {
         command_id: &str,
         generation: u64,
     ) -> Result<bool, DesiredStateError> {
-        let _transition = self.transition_lock.lock().recover_poison();
-        let mut fleet = self.load_unlocked()?;
-        let Some(entry) = fleet.equipiers.get_mut(name) else {
-            return Ok(false);
-        };
-        if entry.command_id != command_id
-            || entry.generation != generation
-            || entry.lifecycle_state == DesiredLifecycleState::Decommissioned
+        let mut cache = self.state.lock().recover_poison();
         {
-            return Ok(false);
+            let current = self.load_cached(&mut cache)?;
+            let Some(entry) = current.equipiers.get(name) else {
+                return Ok(false);
+            };
+            if entry.command_id != command_id
+                || entry.generation != generation
+                || entry.lifecycle_state == DesiredLifecycleState::Decommissioned
+            {
+                return Ok(false);
+            }
+            if entry.lifecycle_state == DesiredLifecycleState::Stopped {
+                return Ok(true);
+            }
         }
-        if entry.lifecycle_state != DesiredLifecycleState::Stopped {
+        let mut fleet = self.take_owned_fleet(&mut cache)?;
+        if let Some(entry) = fleet.equipiers.get_mut(name) {
             entry.lifecycle_state = DesiredLifecycleState::Stopped;
+            fleet.schema = FLEET_SCHEMA_VERSION;
             self.persist_unlocked(&fleet)?;
+            self.store_cache(&mut cache, fleet);
         }
         Ok(true)
     }
@@ -412,21 +566,32 @@ impl DesiredStateStore {
     /// Les agents non persistants ne sont pas repris après un redémarrage,
     /// mais leur identité logique demeure consultable comme arrêtée.
     pub fn stop_non_persistent_running(&self) -> Result<Vec<String>, DesiredStateError> {
-        let _transition = self.transition_lock.lock().recover_poison();
-        let mut fleet = self.load_unlocked()?;
-        let mut changed = Vec::new();
-        for (name, entry) in &mut fleet.equipiers {
-            if !entry.persistent
-                && entry.remote_placement.is_none()
-                && entry.lifecycle_state == DesiredLifecycleState::Running
-            {
+        let mut cache = self.state.lock().recover_poison();
+        let changed: Vec<String> = {
+            let current = self.load_cached(&mut cache)?;
+            current
+                .equipiers
+                .iter()
+                .filter(|(_, entry)| {
+                    !entry.persistent
+                        && entry.remote_placement.is_none()
+                        && entry.lifecycle_state == DesiredLifecycleState::Running
+                })
+                .map(|(name, _)| name.clone())
+                .collect()
+        };
+        if changed.is_empty() {
+            return Ok(changed);
+        }
+        let mut fleet = self.take_owned_fleet(&mut cache)?;
+        for name in &changed {
+            if let Some(entry) = fleet.equipiers.get_mut(name) {
                 entry.lifecycle_state = DesiredLifecycleState::Stopped;
-                changed.push(name.clone());
             }
         }
-        if !changed.is_empty() {
-            self.persist_unlocked(&fleet)?;
-        }
+        fleet.schema = FLEET_SCHEMA_VERSION;
+        self.persist_unlocked(&fleet)?;
+        self.store_cache(&mut cache, fleet);
         Ok(changed)
     }
 
@@ -434,24 +599,67 @@ impl DesiredStateStore {
     /// `upsert`/`remove`. Un load+persist disjoint écraserait les insertions
     /// concurrentes.
     pub fn set_domain(&self, name: &str, domain: Option<&str>) -> Result<bool, DesiredStateError> {
-        let _transition = self.transition_lock.lock().recover_poison();
-        let mut fleet = self.load_unlocked()?;
-        let Some(entry) = fleet.equipiers.get_mut(name) else {
-            return Ok(false);
-        };
+        let mut cache = self.state.lock().recover_poison();
         let next = domain
             .map(str::trim)
             .filter(|value| !value.is_empty())
             .map(str::to_owned);
-        if entry.domain == next {
-            return Ok(false);
+        {
+            let current = self.load_cached(&mut cache)?;
+            let Some(entry) = current.equipiers.get(name) else {
+                return Ok(false);
+            };
+            if entry.domain == next {
+                return Ok(false);
+            }
         }
-        entry.domain = next;
-        self.persist_unlocked(&fleet)?;
+        let mut fleet = self.take_owned_fleet(&mut cache)?;
+        if let Some(entry) = fleet.equipiers.get_mut(name) {
+            entry.domain = next;
+            fleet.schema = FLEET_SCHEMA_VERSION;
+            self.persist_unlocked(&fleet)?;
+            self.store_cache(&mut cache, fleet);
+        }
         Ok(true)
     }
 
-    fn load_unlocked(&self) -> Result<DesiredFleet, DesiredStateError> {
+    fn load_cached(
+        &self,
+        cache: &mut DesiredStateCache,
+    ) -> Result<Arc<DesiredFleet>, DesiredStateError> {
+        let stamp = file_stamp(&self.path)?;
+        let Some(stamp) = stamp else {
+            cache.stamp = None;
+            cache.fleet = None;
+            return Ok(Arc::new(DesiredFleet::default()));
+        };
+        if cache.stamp == Some(stamp)
+            && let Some(fleet) = &cache.fleet
+        {
+            return Ok(Arc::clone(fleet));
+        }
+        let loaded = Arc::new(self.load_from_disk_unlocked()?);
+        cache.stamp = Some(stamp);
+        cache.fleet = Some(Arc::clone(&loaded));
+        Ok(loaded)
+    }
+
+    fn take_owned_fleet(
+        &self,
+        cache: &mut DesiredStateCache,
+    ) -> Result<DesiredFleet, DesiredStateError> {
+        let shared = self.load_cached(cache)?;
+        cache.stamp = None;
+        cache.fleet = None;
+        Ok(Arc::unwrap_or_clone(shared))
+    }
+
+    fn store_cache(&self, cache: &mut DesiredStateCache, fleet: DesiredFleet) {
+        cache.stamp = file_stamp(&self.path).ok().flatten();
+        cache.fleet = Some(Arc::new(fleet));
+    }
+
+    fn load_from_disk_unlocked(&self) -> Result<DesiredFleet, DesiredStateError> {
         let bytes = match fs::read(&self.path) {
             Ok(bytes) => bytes,
             Err(source) if source.kind() == io::ErrorKind::NotFound => {
@@ -464,12 +672,17 @@ impl DesiredStateStore {
                 });
             }
         };
-        let raw: serde_json::Value =
+        #[cfg(test)]
+        self.reads
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        // Sonder d'abord le seul champ `schema` sans construire un arbre DOM complet
+        // (`serde_json::Value`) pour les milliers d'entrées de `equipiers`.
+        let header: FleetSchemaHeader =
             serde_json::from_slice(&bytes).map_err(|source| DesiredStateError::InvalidJson {
                 path: self.path.clone(),
                 source,
             })?;
-        let found_schema = raw.get("schema").and_then(serde_json::Value::as_u64);
+        let found_schema = header.schema.as_ref().and_then(serde_json::Value::as_u64);
         if !found_schema.is_some_and(schema_lisible) {
             return Err(DesiredStateError::UnsupportedSchema {
                 path: self.path.clone(),
@@ -477,7 +690,7 @@ impl DesiredStateStore {
             });
         }
         let fleet: DesiredFleet =
-            serde_json::from_value(raw).map_err(|source| DesiredStateError::InvalidJson {
+            serde_json::from_slice(&bytes).map_err(|source| DesiredStateError::InvalidJson {
                 path: self.path.clone(),
                 source,
             })?;
@@ -494,11 +707,13 @@ impl DesiredStateStore {
         fleet: &DesiredFleet,
         observer: impl FnMut(AtomicWritePhase) -> io::Result<()>,
     ) -> Result<(), DesiredStateError> {
-        let mut fleet = fleet.clone();
-        fleet.schema = FLEET_SCHEMA_VERSION;
-        validate_fleet(&self.path, &fleet)?;
+        validate_fleet_entries(&self.path, FLEET_SCHEMA_VERSION, &fleet.equipiers)?;
+        let wire = WireDesiredFleet {
+            schema: FLEET_SCHEMA_VERSION,
+            equipiers: &fleet.equipiers,
+        };
         let mut bytes =
-            serde_json::to_vec_pretty(&fleet).map_err(|source| DesiredStateError::InvalidJson {
+            serde_json::to_vec_pretty(&wire).map_err(|source| DesiredStateError::InvalidJson {
                 path: self.path.clone(),
                 source,
             })?;
@@ -518,13 +733,21 @@ impl DesiredStateStore {
 
 /// Validation O(n) de la frontière fichier, n étant le nombre d'entrées.
 fn validate_fleet(path: &Path, fleet: &DesiredFleet) -> Result<(), DesiredStateError> {
-    if !schema_lisible(fleet.schema) {
+    validate_fleet_entries(path, fleet.schema, &fleet.equipiers)
+}
+
+fn validate_fleet_entries(
+    path: &Path,
+    schema: u64,
+    equipiers: &BTreeMap<String, DesiredEquipier>,
+) -> Result<(), DesiredStateError> {
+    if !schema_lisible(schema) {
         return Err(DesiredStateError::UnsupportedSchema {
             path: path.to_path_buf(),
-            found: Some(fleet.schema),
+            found: Some(schema),
         });
     }
-    for (name, equipier) in &fleet.equipiers {
+    for (name, equipier) in equipiers {
         let reason = if name.trim().is_empty() {
             Some("nom vide")
         } else if equipier.agent_type.trim().is_empty() {
@@ -538,7 +761,7 @@ fn validate_fleet(path: &Path, fleet: &DesiredFleet) -> Result<(), DesiredStateE
         } else if equipier.created.trim().is_empty() {
             Some("date de création vide")
         } else if equipier.remote_placement.as_ref().is_some_and(|placement| {
-            fleet.schema < 5
+            schema < 5
                 || placement.validate().is_err()
                 || equipier.cwd != Path::new(&placement.execution_cwd)
                 || equipier.runtime_execution.is_some()
@@ -815,6 +1038,55 @@ mod tests {
             store.load().unwrap().equipiers["cursor6"].domain.as_deref(),
             Some("bridget")
         );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn cache_memoire_evite_les_relectures_et_invalide_sur_modification_externe() {
+        let root = test_root("cache-hit");
+        let path = root.join("fleet.json");
+        let store = DesiredStateStore::at_path(&path);
+        let mut entry = equipier("command-cache", 1);
+        entry.domain = Some("parix".to_string());
+        store.upsert("agent-cache".to_string(), entry).unwrap();
+        assert_eq!(store.read_count(), 0);
+        assert_eq!(store.write_count(), 1);
+
+        let first = store.load_shared().unwrap();
+        let second = store.load_shared().unwrap();
+        assert!(Arc::ptr_eq(&first, &second));
+        assert!(store.contains_key("agent-cache").unwrap());
+        assert_eq!(
+            store.domain("agent-cache").unwrap().as_deref(),
+            Some("parix")
+        );
+        assert_eq!(
+            store.get("agent-cache").unwrap().unwrap().command_id,
+            "command-cache"
+        );
+        // Aucun accès disque supplémentaire après l'upsert qui a rempli le cache.
+        assert_eq!(store.read_count(), 0);
+
+        // Mutation sans changement : ni lecture ni écriture disque.
+        assert!(!store.set_domain("agent-cache", Some("parix")).unwrap());
+        assert_eq!(store.write_count(), 1);
+        assert_eq!(store.read_count(), 0);
+
+        // Un second store frais charge le fichier une seule fois pour plusieurs lectures.
+        let reader = DesiredStateStore::at_path(&path);
+        let a = reader.load_shared().unwrap();
+        let b = reader.load_shared().unwrap();
+        assert!(Arc::ptr_eq(&a, &b));
+        assert_eq!(reader.get("agent-cache").unwrap().unwrap().generation, 1);
+        assert_eq!(reader.read_count(), 1);
+
+        // Une écriture externe atomique change l'inode : le cache s'invalide et relit.
+        let replacement = DesiredFleet::default();
+        store.persist(&replacement).unwrap();
+        let reloaded = reader.load_shared().unwrap();
+        assert!(reloaded.equipiers.is_empty());
+        assert_eq!(reader.read_count(), 2);
+
         fs::remove_dir_all(root).unwrap();
     }
 

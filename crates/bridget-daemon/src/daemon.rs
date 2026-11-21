@@ -5543,10 +5543,10 @@ impl DaemonState {
         }
         let listed_names: HashSet<String> =
             agents.iter().map(|agent| agent.agent_id.clone()).collect();
-        if let Ok(desired) = self.fleet.desired_fleet() {
-            for (name, entry) in desired.equipiers.into_iter().filter(|(name, entry)| {
+        if let Ok(desired) = self.fleet.desired_fleet_shared() {
+            for (name, entry) in desired.equipiers.iter().filter(|(name, entry)| {
                 entry.lifecycle_state == DesiredLifecycleState::Stopped
-                    && !listed_names.contains(name)
+                    && !listed_names.contains(*name)
             }) {
                 let (model, effort) = entry
                     .resolved_definition
@@ -5561,7 +5561,7 @@ impl DaemonState {
                     .unwrap_or_else(|| ("unknown".to_string(), None));
                 agents.push(bridget_transport::protocol::AgentInfo {
                     agent_id: name.clone(),
-                    display_name: display_name(&name),
+                    display_name: display_name(name),
                     agent_type: entry.agent_type.clone(),
                     connection_id: String::new(),
                     host: self.host.clone(),
@@ -5569,13 +5569,13 @@ impl DaemonState {
                     channel: None,
                     mode,
                     location: None,
-                    execution: execution_projection(&name),
+                    execution: execution_projection(name),
                     agent_link: None,
                     os: std::env::consts::OS.to_string(),
                     state: "stopped".to_string(),
                     last_seen_secs: 0,
                     reconnect_count: 0,
-                    domain: entry.domain,
+                    domain: entry.domain.clone(),
                     model,
                     effort,
                     rate_limits: Vec::new(),
@@ -5883,7 +5883,7 @@ fn reserve_managed_recoveries(
         }
     }
 
-    let remaining = state.fleet.desired_fleet()?;
+    let remaining = state.fleet.desired_fleet_shared()?;
     let already: HashSet<String> = absents.iter().map(|entry| entry.name.clone()).collect();
     for (name, _) in roster_persistents {
         if remaining.equipiers.contains_key(&name) || already.contains(&name) {
@@ -6801,6 +6801,7 @@ pub fn run(config: DaemonConfig) -> Result<(), Box<dyn std::error::Error>> {
             );
         }
     }
+    let _ = crate::memory::trim_allocator_memory();
 
     // Thread de surveillance des --reply sans réponse (escalade progressive)
     // Palier 1 (T/3) : rappel discret au destinataire
@@ -6817,13 +6818,19 @@ pub fn run(config: DaemonConfig) -> Result<(), Box<dyn std::error::Error>> {
     if let Err(error) = thread::Builder::new()
         .name("entretien".into())
         .spawn(move || {
-            let mut attente = MAINTENANCE_FIRST_DELAY;
+            let mut next_maintenance = Instant::now() + MAINTENANCE_FIRST_DELAY;
             loop {
-                if sleep_until_shutdown(attente) {
+                let wait = next_maintenance
+                    .saturating_duration_since(Instant::now())
+                    .min(MEMORY_TRIM_INTERVAL);
+                if sleep_until_shutdown(wait) {
                     return;
                 }
-                run_maintenance(&st_entretien, &racine_entretien);
-                attente = MAINTENANCE_INTERVAL;
+                if Instant::now() >= next_maintenance {
+                    run_maintenance(&st_entretien, &racine_entretien);
+                    next_maintenance = Instant::now() + MAINTENANCE_INTERVAL;
+                }
+                let _ = crate::memory::trim_allocator_memory();
             }
         })
     {
@@ -9724,6 +9731,8 @@ fn handle_availability_for_instance(
 /// Session 116 : cadence de l'entretien périodique du daemon.
 const MAINTENANCE_FIRST_DELAY: Duration = Duration::from_secs(120);
 const MAINTENANCE_INTERVAL: Duration = Duration::from_secs(3600);
+/// Cadence de restitution des pages libres glibc vers le noyau Linux.
+const MEMORY_TRIM_INTERVAL: Duration = Duration::from_secs(300);
 /// Marge après l'expiration d'une saga d'envoi avant sa purge : pendant elle,
 /// un rejeu tardif reçoit encore « expiré » au lieu d'être réexpédié.
 const SEND_PURGE_GRACE_SECS: i64 = 30 * 24 * 3600;

@@ -50,6 +50,7 @@ pub(crate) mod delegation_mcp;
 pub mod mcp;
 pub mod mcp_identity;
 pub(crate) mod mcp_scopes;
+pub mod memory;
 pub(crate) mod mobile;
 mod native_permission_observer;
 pub(crate) mod native_permissions;

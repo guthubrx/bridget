@@ -27,6 +27,7 @@ fn init_logging() {
 }
 
 fn main() {
+    bridget_daemon::memory::configure_allocator();
     init_logging();
     cli::run();
 }
