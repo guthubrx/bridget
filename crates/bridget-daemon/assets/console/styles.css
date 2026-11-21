@@ -183,23 +183,31 @@ code, .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas
 .feedback.err { background: var(--err-bg); border-color: var(--err-border); }
 .feedback.warn { background: var(--warn-bg); border-color: var(--warn-border); }
 
-.content { margin-top: 22px; display: flex; flex-direction: column; gap: 26px; }
-.machine-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 8px; flex-wrap: wrap; }
-.machine-title { display: flex; align-items: baseline; gap: 10px; }
-.machine-title h2 { margin: 0; font-size: 14.5px; font-weight: 600; }
+.content { margin-top: 24px; display: flex; flex-direction: column; gap: 34px; }
+.machine-block { display: flex; flex-direction: column; gap: 10px; }
+.machine-block + .machine-block { padding-top: 24px; border-top: 1px solid var(--border); }
+.machine-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.machine-title { display: flex; align-items: center; gap: 10px; }
+.machine-title h2 { margin: 0; font-size: 15.5px; font-weight: 600; letter-spacing: -0.01em; }
 .machine-meta { font-size: 12.5px; color: var(--muted); }
 .badges { display: inline-flex; gap: 6px; flex-wrap: wrap; }
 .badge { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--border); background: var(--surface); color: var(--muted); }
 .badge.guarded { color: var(--text); }
 
-.table-card { border-top: 1px solid var(--border); }
+.table-card {
+  margin-left: 14px;
+  padding-left: 14px;
+  border-left: 2px solid var(--border);
+  border-top: 1px solid var(--border);
+}
 .row {
   display: grid;
   grid-template-columns: 150px minmax(180px, 1.2fr) minmax(140px, 1fr) 150px 140px;
   align-items: center;
   gap: 12px;
-  padding: 11px 6px;
+  padding: 11px 8px;
   border-bottom: 1px solid var(--border);
+  border-radius: 4px;
 }
 .row:hover { background: var(--surface); }
 .row-label { font-weight: 500; }
@@ -212,7 +220,7 @@ code, .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas
 .status-pill.err { color: var(--err); }
 .status-pill.muted { color: var(--muted); }
 .row-actions { display: flex; justify-content: flex-end; gap: 6px; }
-.empty-box { padding: 18px 14px; border: 1px dashed var(--border); border-radius: 8px; color: var(--muted); font-size: 13px; }
+.empty-box { margin-left: 14px; padding: 14px 16px; border: 1px dashed var(--border); border-radius: 8px; color: var(--muted); font-size: 13px; }
 
 .modal-backdrop { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.58); display: flex; align-items: center; justify-content: center; padding: 16px; z-index: 40; }
 .modal-card { width: 100%; max-width: 560px; background: var(--bg); border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }

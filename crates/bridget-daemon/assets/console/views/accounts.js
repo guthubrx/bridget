@@ -99,14 +99,14 @@ export function renderAccountsView(ctx) {
       if (rows.length === 0) continue;
     }
     const okCount = rows.filter((r) => r.auth_state === "authenticated").length;
+    const offline = rows.length === 0 || rows.every((r) => r.auth_state === "machine_unreachable");
+    const mDot = machineDot(rows, !offline);
     const ownerBadges = [...new Set(rows.map((r) => r.owner_badge).filter(Boolean))];
     const writableAny = rows.some((r) => r.writable);
     const badgeHtml = (ownerBadges.length ? ownerBadges : ["Propriétaire indéterminé · Lecture seule"])
       .map((b) => `<span class="badge${writableAny ? " guarded" : ""}">${esc(b)}</span>`)
       .join("");
-    const riskBadge = writableAny
-      ? `<span class="badge guarded">Registre gardé</span>`
-      : `<span class="badge">Lecture seule</span>`;
+    const riskBadge = writableAny ? `<span class="badge guarded">Registre gardé</span>` : "";
 
     const rowsHtml = rows.length === 0
       ? `<div class="empty-box">Machine connue, aucun compte remonté ou machine injoignable.</div>`
@@ -133,6 +133,7 @@ export function renderAccountsView(ctx) {
     blocks.push(`<section class="machine-block">
       <div class="machine-head">
         <div class="machine-title">
+          <span class="dot ${mDot}" aria-hidden="true"></span>
           <h2>${esc(m)}</h2>
           <span class="machine-meta">${rows.length ? `${okCount}/${rows.length} connectés` : "0 compte"}${m === data.local_machine ? " · hôte console" : ""}</span>
         </div>
