@@ -189,6 +189,9 @@ struct Observations {
     /// prouve la visibilité d’un `turn/steer`. La clé porte le thread ET le tour
     /// afin qu’une sortie tardive ne solde jamais un autre tour actif.
     consumed_steers_by_turn: HashMap<(String, String), HashSet<String>>,
+    /// Tours dont une demande d'autorisation a reçu `cancel` (refus sans
+    /// variante `decline`) : leur fin `interrupted` vient de Bridget.
+    permission_cancelled_turns: HashSet<String>,
 }
 
 // Les deltas restent provisoires : seul le worker atteste leur présence au terminal.
@@ -4480,6 +4483,17 @@ fn spawn_reader(lines: SourceLines, context: ReaderContext) -> thread::JoinHandl
                             .active
                             .as_ref()
                             .map(|active| active.message_id.clone());
+                        if payload.get("decision").and_then(Value::as_str) == Some("cancel")
+                            && let Some(turn_id) =
+                                value.pointer("/params/turnId").and_then(Value::as_str)
+                        {
+                            observations
+                                .0
+                                .lock()
+                                .recover_poison()
+                                .permission_cancelled_turns
+                                .insert(turn_id.to_string());
+                        }
                         record_or_terminal(
                             &journal,
                             &observations,
@@ -4559,13 +4573,20 @@ fn spawn_reader(lines: SourceLines, context: ReaderContext) -> thread::JoinHandl
                                 }
                             }
                         }
-                        let terminal = codex_turn_terminal(&value, status);
-                        observations
-                            .0
-                            .lock()
-                            .recover_poison()
+                        let mut observed = observations.0.lock().recover_poison();
+                        let permission_cancelled =
+                            observed.permission_cancelled_turns.remove(turn_id);
+                        let terminal = if permission_cancelled && status == "interrupted" {
+                            ManagedTerminal::Failed {
+                                detail: PERMISSION_CANCELLED_TURN_DETAIL.to_string(),
+                            }
+                        } else {
+                            codex_turn_terminal(&value, status)
+                        };
+                        observed
                             .terminal_by_turn
                             .insert(turn_id.to_string(), terminal);
+                        drop(observed);
                         observations.1.notify_all();
                     }
                     push_source(
@@ -4800,6 +4821,17 @@ fn codex_model_not_found217(value: &Value) -> bool {
         && error.pointer("/error/type").and_then(Value::as_str) == Some("invalid_request_error")
         && error.pointer("/error/code").and_then(Value::as_str) == Some("model_not_found")
 }
+
+/// Cause d'un tour arrêté par Bridget après un refus d'autorisation.
+/// Le texte de la commande reste dans le journal de la tâche, jamais ici.
+const PERMISSION_CANCELLED_TURN_DETAIL: &str = "permission_refused_turn_stopped : une commande \
+de la mission a demandé une autorisation (item/commandExecution/requestApproval). Le profil de \
+l'agent refuse les autorisations (permissions=deny) et Codex ne proposait pas de refus limité à \
+cette commande : Bridget a donc arrêté le tour entier. Portée : cette tâche seulement ; les \
+autres travaux continuent. Les fichiers déjà écrits par l'agent restent dans son dossier de \
+travail. Action : lire la dernière commande du journal de la tâche (bridget_journal), puis \
+confier une nouvelle mission qui évite cette commande, ou l'admettre avec child_requests=forward \
+pour soumettre la demande au parent. Ne pas relancer la même mission à l'identique.";
 
 fn codex_turn_terminal(value: &Value, status: &str) -> ManagedTerminal {
     match status {

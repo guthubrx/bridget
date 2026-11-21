@@ -1439,6 +1439,7 @@ fn fake_options(_trace: &std::path::Path) -> CodexAppServerOptions {
                                         method) printf '%s\n' '{"id":"approval-native","method":"SENTINELLE-METHOD-019\u001b[2J\r\u202e","params":{"threadId":"thread-native","turnId":"turn-native","itemId":"i","command":"SENTINELLE-SECRETE-019"}}' ;;
                                         request_id) printf '%s\n' '{"id":"SENTINELLE-REQUEST-ID-019","method":"item/commandExecution/requestApproval","params":{"threadId":"thread-native","turnId":"turn-native","itemId":"i","command":"SENTINELLE-SECRETE-019","availableDecisions":["accept","decline","cancel"]}}' ;;
                                         turn_id) printf '%s\n' '{"id":"approval-native","method":"item/commandExecution/requestApproval","params":{"threadId":"thread-native","turnId":"SENTINELLE-TURN-ID-019","itemId":"i","command":"SENTINELLE-SECRETE-019","availableDecisions":["accept","decline","cancel"]}}' ;;
+                                        cancel_only) printf '%s\n' '{"id":"approval-native","method":"item/commandExecution/requestApproval","params":{"threadId":"thread-native","turnId":"turn-native","itemId":"i","command":"rm -rf /tmp/essai","availableDecisions":["accept","cancel"]}}' ;;
                                         *) printf '%s\n' '{"id":"approval-native","method":"item/commandExecution/requestApproval","params":{"threadId":"thread-native","turnId":"turn-native","itemId":"i","command":"SENTINELLE-SECRETE-019","availableDecisions":["accept","decline","cancel"]}}' ;;
                                     esac
                                     # Attend la décision JSON-RPC (présence), puis poursuit
@@ -1452,6 +1453,8 @@ fn fake_options(_trace: &std::path::Path) -> CodexAppServerOptions {
                                     done
                                     if [ "${BRIDGET_CODEX_EXIT_AFTER_REQUEST:-0}" = 1 ]; then exit 0; fi
                                     if [ "${BRIDGET_CODEX_HOLD_TURN:-0}" = 1 ]; then :;
+                                    elif [ "$saw_decision" = 1 ] && [ "${BRIDGET_CODEX_REQUEST_VARIANT:-known}" = cancel_only ]; then
+                                        printf '%s\n' '{"method":"turn/completed","params":{"threadId":"thread-native","turn":{"id":"turn-native","status":"interrupted","items":[]}}}'
                                     elif [ "$saw_decision" = 1 ]; then
                                         printf '%s\n' '{"method":"item/agentMessage/delta","params":{"threadId":"thread-native","turnId":"turn-native","itemId":"i","delta":"tour poursuivi apres autorisation"}}'
                                         printf '%s\n' '{"method":"turn/completed","params":{"threadId":"thread-native","turn":{"id":"turn-native","status":"completed","items":[]}}}'
@@ -1723,6 +1726,69 @@ fn assert_fingerprint(value: &str) {
             .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase()),
         "empreinte hexadécimale minuscule attendue"
     );
+}
+
+// Incident Parix du 21/11/2026 : Codex n'offrait que accept/cancel ; le refus
+// `cancel` arrêtait le tour et la tâche ne disait que « tour annulé par le pilote ».
+#[test]
+fn refus_cancel_d_une_autorisation_nomme_la_cause_du_tour_arrete() {
+    let root = root("cancel-only-permission");
+    let trace = root.join("trace.jsonl");
+    let mut options = fake_options(&trace);
+    options.permissions = "deny".to_string();
+    let mut transport = CodexAppServerTransport::spawn_with_environment(
+        options,
+        &[
+            (
+                "BRIDGET_CODEX_TRACE".to_string(),
+                trace.to_string_lossy().into_owned(),
+            ),
+            (
+                "BRIDGET_CODEX_REQUEST_APPROVAL".to_string(),
+                "1".to_string(),
+            ),
+            (
+                "BRIDGET_CODEX_REQUEST_VARIANT".to_string(),
+                "cancel_only".to_string(),
+            ),
+        ],
+        false,
+    )
+    .expect("session native");
+    transport
+        .deliver(&message("cancel-only"))
+        .expect("livraison");
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let mut terminal = None;
+    while Instant::now() < deadline && terminal.is_none() {
+        terminal = transport
+            .drain_events()
+            .into_iter()
+            .find_map(|event| match event.kind {
+                ManagedEventKind::TurnFinished { terminal, .. } => Some(terminal),
+                _ => None,
+            });
+        thread::sleep(Duration::from_millis(10));
+    }
+    let trace = fs::read_to_string(&trace).expect("trace");
+    assert!(
+        trace.contains(r#""decision":"cancel""#),
+        "refus cancel attendu : {trace}"
+    );
+    match terminal.expect("fin de tour") {
+        ManagedTerminal::Failed { detail } => {
+            assert!(
+                detail.starts_with("permission_refused_turn_stopped"),
+                "{detail}"
+            );
+            assert!(detail.contains("child_requests=forward"), "{detail}");
+            assert!(
+                !detail.contains("rm -rf"),
+                "la commande reste au journal : {detail}"
+            );
+        }
+        other => panic!("cause du refus perdue : {other:?}"),
+    }
 }
 
 fn assert_provider_projection_redacts(variant: &str, label: &str, sentinel: &str) {
