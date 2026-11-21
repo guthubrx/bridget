@@ -1093,6 +1093,7 @@ struct LoginSession {
     log: String,
     auth_url: Option<String>,
     browser_opened: bool,
+    open_in_browser: bool,
     code_sent: bool,
     code_auto_sent: bool,
     logged_in_as: Option<String>,
@@ -1242,6 +1243,10 @@ struct TokenQuery {
     offset: Option<usize>,
 }
 
+fn default_true() -> bool {
+    true
+}
+
 #[derive(Deserialize)]
 struct StartLoginRequest {
     connection_id: String,
@@ -1250,6 +1255,8 @@ struct StartLoginRequest {
     logout_first: bool,
     #[serde(default)]
     enable_on_success: bool,
+    #[serde(default = "default_true")]
+    open_in_browser: bool,
 }
 
 #[derive(Deserialize)]
@@ -1466,6 +1473,7 @@ async fn api_login_start(
         ),
         auth_url: None,
         browser_opened: false,
+        open_in_browser: req.open_in_browser,
         code_sent: false,
         code_auto_sent: false,
         logged_in_as: None,
@@ -1578,6 +1586,7 @@ fn pump_stream<R: std::io::Read>(reader: R, session: Arc<Mutex<LoginSession>>) {
                 let detected_url = extract_auth_url(&text);
                 let detected_account = extract_logged_in_account(&text);
                 let mut url_to_open = None;
+                let mut open_via_os = false;
                 let mut watch_engine = false;
                 {
                     let mut guard = session.lock().unwrap_or_else(|e| e.into_inner());
@@ -1592,6 +1601,7 @@ fn pump_stream<R: std::io::Read>(reader: R, session: Arc<Mutex<LoginSession>>) {
                         if !guard.browser_opened {
                             guard.browser_opened = true;
                             url_to_open = Some(url);
+                            open_via_os = guard.open_in_browser;
                             watch_engine =
                                 matches!(guard.engine.as_str(), "antigravity" | "claude");
                         }
@@ -1605,7 +1615,9 @@ fn pump_stream<R: std::io::Read>(reader: R, session: Arc<Mutex<LoginSession>>) {
                         let initial_fp = None;
                         start_clipboard_watcher(session.clone(), initial_fp);
                     }
-                    open_browser(&url);
+                    if open_via_os {
+                        open_browser(&url);
+                    }
                 }
             }
         }
@@ -1999,6 +2011,42 @@ let currentSession = null;
 let pollTimer = null;
 let logOffset = 0;
 let detectedUrl = null;
+let authPopup = null;
+
+function openManagedPopup(url) {
+  try {
+    const w = 560, h = 720;
+    const left = Math.max(40, Math.round((window.screen.width - w) / 2));
+    const top = Math.max(40, Math.round((window.screen.height - h) / 2));
+    const feats = `popup=yes,width=${w},height=${h},left=${left},top=${top}`;
+    if (authPopup && !authPopup.closed) {
+      if (url) authPopup.location.href = url;
+      authPopup.focus();
+      return authPopup;
+    }
+    const pop = window.open(url || "about:blank", "bridget_oauth_popup", feats);
+    if (pop && !url) {
+      try {
+        pop.document.title = "Connexion fournisseur - Bridget";
+        pop.document.body.style.cssText = "margin:0;background:#0f1117;color:#edf2f7;font-family:-apple-system,sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;";
+        pop.document.body.textContent = "Preparation de la page de connexion...";
+      } catch (e) {}
+    }
+    authPopup = pop;
+    return pop;
+  } catch (e) {
+    authPopup = null;
+    return null;
+  }
+}
+
+function closeAuthPopup() {
+  try {
+    if (authPopup && !authPopup.closed) authPopup.close();
+  } catch (e) {}
+  authPopup = null;
+  try { window.focus(); } catch (e) {}
+}
 
 async function api(path, opts = {}) {
   const headers = Object.assign({ "X-Bridget-Token": TOKEN }, opts.headers || {});
@@ -2092,7 +2140,10 @@ function setBanner(kind, icon, title, sub) {
 
 async function startLogin(connId, machineId, logoutFirst, enableOnSuccess) {
   if (pollTimer) clearInterval(pollTimer);
+  closeAuthPopup();
   logOffset = 0; detectedUrl = null;
+  const pop = openManagedPopup(null);
+  const popupReady = !!(pop && !pop.closed);
   document.getElementById("loginTitle").textContent = (logoutFirst ? "Changer de compte : " : "Connexion : ") + connId + " (" + machineId + ")";
   document.getElementById("loginLog").textContent = "";
   document.getElementById("logDetails").open = false;
@@ -2106,12 +2157,19 @@ async function startLogin(connId, machineId, logoutFirst, enableOnSuccess) {
   try {
     const res = await api("/api/login/start", {
       method: "POST",
-      body: JSON.stringify({ connection_id: connId, machine_id: machineId, logout_first: logoutFirst, enable_on_success: enableOnSuccess })
+      body: JSON.stringify({
+        connection_id: connId,
+        machine_id: machineId,
+        logout_first: logoutFirst,
+        enable_on_success: enableOnSuccess,
+        open_in_browser: !popupReady
+      })
     });
     currentSession = res.session_id;
     pollTimer = setInterval(pollSession, 500);
     pollSession();
   } catch (e) {
+    closeAuthPopup();
     setBanner("err", "✕", "Impossible de demarrer la connexion", e.message);
     document.getElementById("logDetails").open = true;
     document.getElementById("loginLog").textContent += "\nErreur : " + e.message;
@@ -2132,25 +2190,31 @@ async function pollSession() {
     }
     if (res.auth_url && res.auth_url !== detectedUrl) {
       detectedUrl = res.auth_url;
+      if (authPopup && !authPopup.closed) {
+        try { authPopup.location.href = detectedUrl; authPopup.focus(); } catch (e) {}
+      }
       document.getElementById("loginSteps").classList.remove("hidden");
       const needsCode = res.engine !== "codex";
       document.getElementById("stepCode").classList.toggle("hidden", !needsCode);
       document.getElementById("manualCodeBox").classList.toggle("hidden", !needsCode);
       if (needsCode) {
-        setBanner("info", "🌐", "Validez dans votre navigateur puis cliquez « Copier »", "Des que vous copiez le code, Bridget le detecte et termine la connexion tout seul.");
+        setBanner("info", "🌐", "Validez dans la fenetre ouverte puis cliquez « Copier »", "Des que vous copiez le code, Bridget ferme la fenetre fournisseur et termine la connexion tout seul.");
       } else {
-        setBanner("info", "🌐", "Validez la connexion dans votre navigateur", "La redirection locale est automatique pour Codex (aucun code a copier).");
+        setBanner("info", "🌐", "Validez la connexion dans la fenetre ouverte", "La redirection locale est automatique pour Codex et la fenetre se fermera toute seule.");
       }
     }
     if (res.running && res.code_auto_sent) {
+      closeAuthPopup();
       setBanner("info", "⚡", "Code detecte et envoye automatiquement !", "Finalisation de la connexion sur le serveur...");
       document.getElementById("manualCodeBox").classList.add("hidden");
     } else if (res.running && res.code_sent) {
+      closeAuthPopup();
       setBanner("info", "⏳", "Code envoye, validation en cours...", "Le serveur enregistre votre session.");
     }
     if (!res.running) {
       clearInterval(pollTimer);
       pollTimer = null;
+      closeAuthPopup();
       document.getElementById("loginSteps").classList.add("hidden");
       document.getElementById("manualCodeBox").classList.add("hidden");
       document.getElementById("cancelBtn").classList.add("hidden");
@@ -2168,7 +2232,7 @@ async function pollSession() {
   } catch (e) {}
 }
 
-function openDetectedUrl() { if (detectedUrl) window.open(detectedUrl, "_blank", "noopener,noreferrer"); }
+function openDetectedUrl() { if (detectedUrl) openManagedPopup(detectedUrl); }
 
 async function sendCode() {
   if (!currentSession) return;
@@ -2179,12 +2243,14 @@ async function sendCode() {
 }
 
 async function cancelSession() {
+  closeAuthPopup();
   if (!currentSession) return;
   await api("/api/login/cancel", { method: "POST", body: JSON.stringify({ session_id: currentSession }) });
 }
 
 function closeLoginModal() {
   if (pollTimer) clearInterval(pollTimer);
+  closeAuthPopup();
   document.getElementById("loginModal").classList.remove("open");
 }
 
