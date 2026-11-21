@@ -1,6 +1,6 @@
 # Spec 309 : Regroupement des comptes, auto-référencement des modèles et CLI automanaged
 
-**Statut** : En cours | **Date** : 2026-11-21
+**Statut** : Livré (`7658e08e`, `fef5e9fa`, release `317-automanaged-limit-r1`) | **Date** : 2026-11-21
 
 ## Problème
 1. **Bridget Comptes** affiche aujourd'hui 23 cartes de routage (dont des doublons historiques `-haiku213`, `-terra213`, `-models62`) alors qu'elles partagent le même binaire et le même compte fournisseur.
