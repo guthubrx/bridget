@@ -2774,11 +2774,166 @@ fn initialize_result() -> Value {
     })
 }
 
+const COMPACT_MCP_TOOLS: &[&str] = &[
+    "bridget_auto_delegate",
+    "bridget_capabilities",
+    "bridget_task_status",
+    "bridget_task_wait",
+    "bridget_task_cancel",
+    "bridget_task_continue",
+    "bridget_journal",
+    "bridget_send",
+    "bridget_delegate",
+    "bridget_cancel",
+    "bridget_specialists",
+    "bridget_who",
+    "bridget_status",
+    "bridget_read_commit_file",
+    "bridget_read_artifact",
+];
+
+const COMPACT_AUTO_DELEGATE_FIELDS: &[&str] = &[
+    "request_id",
+    "task",
+    "cwd",
+    "engine",
+    "model",
+    "effort",
+    "machine_id",
+    "connection_id",
+    "posture",
+    "expected_base_commit",
+    "workspace",
+    "brief",
+];
+
+const COMPACT_DELEGATE_FIELDS: &[&str] = &[
+    "request_id",
+    "task",
+    "agent_type",
+    "cwd",
+    "machine_id",
+    "project_id",
+    "model",
+    "effort",
+    "posture",
+    "workspace",
+    "brief",
+];
+
+fn truncate_compact_description(raw: &str, max_chars: usize) -> String {
+    let first = raw
+        .split_once(". ")
+        .map_or(raw, |(sentence, _)| sentence)
+        .trim();
+    if first.chars().count() <= max_chars {
+        first.to_owned()
+    } else {
+        first.chars().take(max_chars).collect()
+    }
+}
+
+fn compact_property_schema(schema: &Value) -> Value {
+    let ty = schema
+        .get("type")
+        .and_then(Value::as_str)
+        .unwrap_or_else(|| {
+            if schema.get("properties").is_some() {
+                "object"
+            } else if schema.get("items").is_some() {
+                "array"
+            } else {
+                "string"
+            }
+        });
+    json!({ "type": ty })
+}
+
+pub(crate) fn compact_discovery_tools(catalogue: Vec<Value>) -> Vec<Value> {
+    let mut out = Vec::new();
+    for tool in catalogue {
+        let Some(name) = tool.get("name").and_then(Value::as_str) else {
+            continue;
+        };
+        if !COMPACT_MCP_TOOLS.contains(&name) {
+            continue;
+        }
+        let desc = truncate_compact_description(
+            tool.get("description")
+                .and_then(Value::as_str)
+                .unwrap_or(""),
+            96,
+        );
+        let input_schema = if name == "bridget_specialists" {
+            json!({
+                "type": "object",
+                "properties": {
+                    "version": {"type": "integer"},
+                    "action": {"type": "string"},
+                    "role_id": {"type": "string"},
+                    "specialist_agent_id": {"type": "string"},
+                    "payload": {"type": "object"}
+                },
+                "required": ["version", "action"]
+            })
+        } else {
+            let mut props = serde_json::Map::new();
+            if let Some(src_props) = tool
+                .pointer("/inputSchema/properties")
+                .and_then(Value::as_object)
+            {
+                if name == "bridget_auto_delegate" {
+                    for &field in COMPACT_AUTO_DELEGATE_FIELDS {
+                        if let Some(val) = src_props.get(field) {
+                            props.insert(field.into(), compact_property_schema(val));
+                        }
+                    }
+                } else if name == "bridget_delegate" {
+                    for &field in COMPACT_DELEGATE_FIELDS {
+                        if let Some(val) = src_props.get(field) {
+                            props.insert(field.into(), compact_property_schema(val));
+                        }
+                    }
+                } else {
+                    for (k, val) in src_props {
+                        props.insert(k.clone(), compact_property_schema(val));
+                    }
+                }
+            }
+            let mut schema = serde_json::Map::new();
+            schema.insert("type".into(), json!("object"));
+            schema.insert("properties".into(), Value::Object(props));
+            if let Some(req) = tool
+                .pointer("/inputSchema/required")
+                .and_then(Value::as_array)
+                && !req.is_empty()
+            {
+                schema.insert("required".into(), Value::Array(req.clone()));
+            }
+            Value::Object(schema)
+        };
+        out.push(json!({
+            "name": name,
+            "description": desc,
+            "inputSchema": input_schema
+        }));
+    }
+    out
+}
+
+fn compact_schemas_requested() -> bool {
+    std::env::var("BRIDGET_MCP_COMPACT_SCHEMAS")
+        .is_ok_and(|value| value == "1" || value.eq_ignore_ascii_case("true"))
+}
+
 // Certains clients écartent les outils avec un combinateur à la racine.
 // Une référence locale garde exactement ces contraintes et les propriétés
 // lisibles, sans modifier les validateurs natifs ni leurs schémas canoniques.
 fn discovery_tools() -> Vec<Value> {
     let mut catalogue = tools();
+    if compact_schemas_requested() {
+        return compact_discovery_tools(catalogue);
+    }
     for tool in &mut catalogue {
         let schema = tool["inputSchema"].as_object_mut().expect("schéma objet");
         if !["allOf", "anyOf", "oneOf"]

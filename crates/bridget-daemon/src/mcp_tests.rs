@@ -7311,3 +7311,61 @@ fn incident304_who_limit_refusal_is_a_structured_tool_result() {
         );
     }
 }
+
+#[test]
+fn spec309_compact_discovery_tools_fits_acp_budget_and_keeps_core_delegation_fields() {
+    let compact = compact_discovery_tools(tools());
+    assert_eq!(compact.len(), COMPACT_MCP_TOOLS.len());
+    let mut total_bytes = 0usize;
+    for tool in &compact {
+        let encoded = serde_json::to_string(tool).unwrap();
+        assert!(
+            encoded.len() <= 620,
+            "outil compact trop volumineux ({} octets): {}",
+            encoded.len(),
+            tool["name"]
+        );
+        total_bytes += encoded.len();
+        assert!(tool["inputSchema"].get("$defs").is_none());
+        assert!(tool["inputSchema"].get("$ref").is_none());
+    }
+    assert!(
+        total_bytes <= 5500,
+        "budget compact depasse ({total_bytes} octets)"
+    );
+    let auto = compact
+        .iter()
+        .find(|t| t["name"] == "bridget_auto_delegate")
+        .expect("bridget_auto_delegate present");
+    for field in [
+        "request_id",
+        "task",
+        "cwd",
+        "engine",
+        "model",
+        "effort",
+        "machine_id",
+        "connection_id",
+        "posture",
+        "expected_base_commit",
+        "workspace",
+        "brief",
+    ] {
+        assert!(
+            auto["inputSchema"]["properties"].get(field).is_some(),
+            "champ manquant: {field}"
+        );
+    }
+    let specialists = compact
+        .iter()
+        .find(|t| t["name"] == "bridget_specialists")
+        .expect("bridget_specialists present");
+    assert_eq!(
+        specialists["inputSchema"]["properties"]["version"]["type"],
+        "integer"
+    );
+    assert_eq!(
+        specialists["inputSchema"]["properties"]["action"]["type"],
+        "string"
+    );
+}
