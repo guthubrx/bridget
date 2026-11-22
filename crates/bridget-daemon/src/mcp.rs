@@ -2844,7 +2844,9 @@ fn compact_property_schema(schema: &Value) -> Value {
             .or_else(|| schema.get("anyOf"))
             .and_then(Value::as_array)
         && !variants.is_empty()
-        && variants.iter().all(|v| v.get("type") == Some(&json!("object")))
+        && variants
+            .iter()
+            .all(|v| v.get("type") == Some(&json!("object")))
     {
         return json!({ "type": "object" });
     }
@@ -3779,13 +3781,18 @@ mod compact318_tests {
             match value {
                 Value::Object(map) => {
                     if map.get("type") == Some(&json!("array")) {
-                        assert!(map.get("items").is_some_and(Value::is_object), "{path} sans items");
+                        assert!(
+                            map.get("items").is_some_and(Value::is_object),
+                            "{path} sans items"
+                        );
                     }
                     for (key, child) in map {
                         arrays_have_items(child, &format!("{path}/{key}"));
                     }
                 }
-                Value::Array(list) => list.iter().enumerate()
+                Value::Array(list) => list
+                    .iter()
+                    .enumerate()
                     .for_each(|(i, child)| arrays_have_items(child, &format!("{path}[{i}]"))),
                 _ => {}
             }
@@ -3795,14 +3802,35 @@ mod compact318_tests {
         for tool in &compact {
             arrays_have_items(&tool["inputSchema"], tool["name"].as_str().unwrap());
         }
-        let wait = compact.iter().find(|t| t["name"] == "bridget_task_wait").unwrap();
-        assert_eq!(wait["inputSchema"]["properties"]["task_ids"]["items"]["type"], "string");
-        let ack = compact.iter().find(|t| t["name"] == "bridget_task_ack").unwrap();
-        assert_eq!(ack["inputSchema"]["properties"]["task_ids"]["items"]["type"], "string");
+        let wait = compact
+            .iter()
+            .find(|t| t["name"] == "bridget_task_wait")
+            .unwrap();
+        assert_eq!(
+            wait["inputSchema"]["properties"]["task_ids"]["items"]["type"],
+            "string"
+        );
+        let ack = compact
+            .iter()
+            .find(|t| t["name"] == "bridget_task_ack")
+            .unwrap();
+        assert_eq!(
+            ack["inputSchema"]["properties"]["task_ids"]["items"]["type"],
+            "string"
+        );
         assert_eq!(ack["inputSchema"]["required"], json!(["task_ids"]));
-        assert_eq!(compact_property_schema(&json!({"type":"array"}))["items"]["type"], "string");
-        let auto = compact.iter().find(|t| t["name"] == "bridget_auto_delegate").unwrap();
+        assert_eq!(
+            compact_property_schema(&json!({"type":"array"}))["items"]["type"],
+            "string"
+        );
+        let auto = compact
+            .iter()
+            .find(|t| t["name"] == "bridget_auto_delegate")
+            .unwrap();
         // Objet simple, sans propriétés imbriquées : forme gardée par Antigravity.
-        assert_eq!(auto["inputSchema"]["properties"]["workspace"], json!({"type":"object"}));
+        assert_eq!(
+            auto["inputSchema"]["properties"]["workspace"],
+            json!({"type":"object"})
+        );
     }
 }

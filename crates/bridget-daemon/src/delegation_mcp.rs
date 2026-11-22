@@ -1536,7 +1536,10 @@ mod workspace_text321_tests {
     #[test]
     fn spec321_workspace_en_texte_json_suit_la_meme_validation() {
         let text = json!("{\"strategy\":\"shared\"}");
-        assert!(matches!(parse_workspace(&text), Ok(WorkspaceRequest::Shared {})));
+        assert!(matches!(
+            parse_workspace(&text),
+            Ok(WorkspaceRequest::Shared {})
+        ));
         assert!(parse_workspace(&json!("{\"strategy\":\"shared\",\"x\":1}")).is_err());
         assert!(parse_workspace(&json!("pas du json")).is_err());
     }

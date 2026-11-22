@@ -28657,7 +28657,8 @@ fn spec325_ack_suppresses_pending_tick_notifications_and_cancels_queued_deliveri
         &result_msg_id,
     )
     .unwrap();
-    let mut held_msg = bridget_core::BridgetMessage::new(&ok_task.child, &ok_task.owner, "résultat");
+    let mut held_msg =
+        bridget_core::BridgetMessage::new(&ok_task.child, &ok_task.owner, "résultat");
     held_msg.id = result_msg_id.clone();
     let bytes = serde_json::to_vec(&held_msg).unwrap();
     let now = unix_timestamp();
@@ -28735,6 +28736,9 @@ fn spec325_ack_suppresses_pending_tick_notifications_and_cancels_queued_deliveri
     assert!(!ok_after.result_sent, "aucun native-result-* après ACK");
     assert!(!fail_after.failure_sent, "aucun native-failure-* après ACK");
     assert!(ok_after.cleanup_done, "le cleanup reste exécuté après ACK");
-    assert!(fail_after.cleanup_done, "le cleanup reste exécuté après ACK");
+    assert!(
+        fail_after.cleanup_done,
+        "le cleanup reste exécuté après ACK"
+    );
     cleanup(&config);
 }

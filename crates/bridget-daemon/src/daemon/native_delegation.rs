@@ -1915,8 +1915,14 @@ fn observe_routing_candidates_for_project(
                 .collect()
         })
     };
-    for (machine, wanted, correlation_id, candidate_connections, candidate_projects, probe_result) in
-        probe_results
+    for (
+        machine,
+        wanted,
+        correlation_id,
+        candidate_connections,
+        candidate_projects,
+        probe_result,
+    ) in probe_results
     {
         let result = match probe_result {
             Ok(result) => result,
@@ -4295,11 +4301,9 @@ fn filter_auto_candidates(
             handles
                 .into_iter()
                 .map(|(wanted, handle)| {
-                    let result = handle
-                        .join()
-                        .unwrap_or(Err(
-                            bridget_transport::protocol::WorkerRefusal::WorkerUnavailable,
-                        ));
+                    let result = handle.join().unwrap_or(Err(
+                        bridget_transport::protocol::WorkerRefusal::WorkerUnavailable,
+                    ));
                     (wanted, result)
                 })
                 .collect()
@@ -16420,10 +16424,7 @@ pub(super) fn tick(state: &Arc<Mutex<DaemonState>>) {
                             } => {
                                 task.state = "failed".into();
                                 task.error = Some(
-                                    format!("{category}:{reason}")
-                                        .chars()
-                                        .take(1024)
-                                        .collect(),
+                                    format!("{category}:{reason}").chars().take(1024).collect(),
                                 );
                             }
                             DaemonToWrapper::IdempotencyResult {
