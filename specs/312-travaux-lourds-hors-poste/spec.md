@@ -1,6 +1,6 @@
 # Spécification 312 : travaux lourds hors du poste de travail
 
-- **Statut** : spécification v4.1 ; plan du Lot 1a à écrire
+- **Statut** : spécification v4.2, prête pour le plan du Lot 1a (revue v4.1 : 8/10, aucun bloquant)
 - **Demande** : François, 22 novembre 2026. Son Mac ne doit plus être chargé par les compilations. Bridget déporte les travaux lourds en tenant compte des capacités réelles de chaque machine :
   - celles qu'aucune installation ne remplace (un binaire Mac exige un Mac) ;
   - celles qu'une installation peut apporter.
@@ -117,7 +117,11 @@
    5. **Échec de la pré-vérification (Lot 1a).**
       - Le lanceur relâche le bail et rappelle `acquire`, en excluant cette machine pour l'essai en cours et en donnant le motif : injoignable, ou prérequis absent.
       - Une autre machine ouverte est alors essayée.
-      - S'il n'en reste aucune : cas A pour une machine injoignable, cas B pour un prérequis absent, avec la cause exacte.
+      - S'il n'en reste aucune :
+        - cas A dès qu'au moins une machine ouverte qui déclare la cible est seulement injoignable ou occupée ;
+        - cas B si toutes ont échoué sur un prérequis absent.
+
+        La cause exacte est rendue dans les deux cas.
    6. **Appelant choisi.** Si la machine ouverte retenue est la machine appelante, la compilation s'exécute en local sous bail, sans SSH et sans mode discret.
 4. **Exécution distante vérifiée.**
    - **Source.** `git archive` d'un commit exact et propre, déjà ancêtre de la branche distante suivie (ou de `origin/main`), sans récupération réseau implicite.
@@ -155,7 +159,7 @@
      - Le format de `--version` est inchangé, car la console le lit.
      - Cible Linux : ABI (`scripts/check-linux-abi.py`), démarrage et `build-info` sur l'hôte Linux, puis SHA-256 avant le rapatriement.
      - Après le rapatriement : SHA-256 de nouveau.
-     - Cible macOS : `codesign --verify --strict` (et autorité si un certificat est demandé), démarrage et `build-info`.
+     - Cible macOS : `codesign --verify --strict` (et autorité si un certificat est demandé), démarrage et `build-info` **sur l'hôte macOS**, puis SHA-256 avant et après le rapatriement.
 5. **Transparence.**
    - La console affiche un tableau machines × cibles. Chaque case vaut `prête`, `à installer` (recette, durée, espace), `action manuelle requise` (geste exact) ou `impossible` (cause exacte, par exemple « glibc 2.39 > 2.36 »).
    - Chaque travail garde sa machine, la raison du choix, sa durée par phase (envoi, compilation, contrôles, retour) et ses contrôles.
@@ -175,6 +179,8 @@
    - `outils_du_catalogue` : installation sans question, limitée au catalogue.
    - `jamais` : aucune installation. La machine exécute toujours ce pour quoi elle est prête.
 2. **Utiliser le poste protégé** : selon les cas A et B et le repli. `discret` exécute en mode discret ; `refuser` rend la cause et l'action.
+   - **Garde de la compilation locale.** Le repli `discret`, le défaut sûr (sans politique ou sans daemon) et `--local` ne s'appliquent que si la machine appelante produit la cible demandée : même système et même processeur, glibc inférieure ou égale à celle de la cible. Sinon, refus immédiat avec cause et action (`--host`).
+   - Si la machine appelante est `exclue` (daemon joignable), tout repli local et `--local` sont refusés avec la cause.
 3. **Dépannage.**
    - `scripts/build.py --local` compile en local, en mode discret sur une machine `protégée`.
    - `--host <machine>` passe outre le choix du routage. Quand le daemon maître est joignable, il respecte toujours le rôle `exclue`.
@@ -253,7 +259,9 @@
 9. **Défaut sûr.** Sans `heavy-work-policy.json`, ou sans daemon joignable, aucun travail ne part hors du poste. `build.py` compile en mode discret, pour l'utilisateur comme pour une mission.
 10. **Origine.** Un appel depuis un agent, un fil T3 ou un sous-agent délégué est classé « mission ». Un appel depuis un terminal sans aucun de ces contextes est classé « utilisateur ».
 11. **Garde CLI.** Un sous-agent délégué peut appeler `build-info` et `heavy-work status | plan | acquire | renew | release`, mais pas `heavy-work policy`.
-12. **Cible étrangère.** Une compilation Linux lancée depuis le Mac n'écrase pas `$CARGO_TARGET_DIR/release/bridget`.
+12. **Cible étrangère.**
+    - Une compilation Linux lancée depuis le Mac n'écrase pas `$CARGO_TARGET_DIR/release/bridget`.
+    - `--build-target linux-x86_64-glibc2.36 --local` depuis le Mac, ou la même cible sans daemon et sans machine Linux ouverte : refus immédiat, aucune compilation locale.
 
 ## 8. Risques et parades
 
@@ -305,3 +313,9 @@
 | M1 `build.json` invalide | refus sans repli (§3.2.4) |
 | M2 appelant choisi, `--local`, cible étrangère | local sous bail, `--local` discret sur poste protégé, `--build-target` (§3.2.3, §3.2.4, §3.3.3) |
 | M3 citation T3, « comme aujourd'hui » | corrigés (§3.1) |
+
+| Réserve v4.1 | Traitement |
+|---|---|
+| I1 repli local sur une cible impossible ou une machine `exclue` | garde de la compilation locale (§3.3.2, §7.12) |
+| M1 contrôles macOS à distance | sur l'hôte macOS, SHA-256 avant et après (§3.2.4) |
+| M2 motifs mixtes de pré-vérification | cas A s'il reste une machine seulement injoignable, sinon cas B (§3.2.3) |
