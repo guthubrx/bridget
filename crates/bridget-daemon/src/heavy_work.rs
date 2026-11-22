@@ -920,7 +920,7 @@ fn query_daemon_host(socket_path: &Path) -> Option<String> {
         .exchange(&WrapperToDaemon::DaemonIdentityRequest)
         .ok()?
     {
-        DaemonToWrapper::DaemonIdentityReport { host, .. } => host,
+        DaemonToWrapper::DaemonIdentityReport { host, .. } => Some(host),
         _ => None,
     }
 }
