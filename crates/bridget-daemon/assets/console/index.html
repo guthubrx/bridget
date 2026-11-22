@@ -30,14 +30,20 @@
     </div>
     <div class="host-pill" id="hostBadge" title="Hôte exécutant cette console">Console locale</div>
     <div class="nav-group">
-      <div class="nav-label">VUES</div>
+      <div class="nav-label">CONSOLE</div>
       <button class="nav-item active" type="button" data-view="all">
-        <span>Tous les comptes</span>
+        <span>Comptes</span>
         <span class="nav-count" id="countAll">0</span>
       </button>
       <button class="nav-item" type="button" data-view="actions">
         <span>Actions requises</span>
         <span class="nav-count warn" id="countActions">0</span>
+      </button>
+      <button class="nav-item" type="button" data-view="machines">
+        <span>Machines &amp; CLI</span>
+      </button>
+      <button class="nav-item" type="button" data-view="settings">
+        <span>Paramètres</span>
       </button>
     </div>
     <div class="nav-group">
@@ -72,7 +78,7 @@
         <div class="summary" id="viewSummary">Chargement de l'état de la flotte…</div>
       </div>
       <div class="topbar-actions">
-        <button class="btn" type="button" id="prepareBtn">+ Nouveau compte</button>
+        <button class="btn" type="button" id="primaryActionBtn">+ Nouveau compte</button>
         <button class="btn primary" type="button" id="refreshBtn">Actualiser</button>
       </div>
     </header>

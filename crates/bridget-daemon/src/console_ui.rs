@@ -35,6 +35,8 @@ const STYLES_CSS: &str = include_str!("../assets/console/styles.css");
 const APP_JS: &str = include_str!("../assets/console/app.js");
 const API_JS: &str = include_str!("../assets/console/api.js");
 const VIEW_ACCOUNTS_JS: &str = include_str!("../assets/console/views/accounts.js");
+const VIEW_MACHINES_JS: &str = include_str!("../assets/console/views/machines.js");
+const VIEW_SETTINGS_JS: &str = include_str!("../assets/console/views/settings.js");
 
 const SESSION_TTL: Duration = Duration::from_secs(8 * 3600);
 const PREVIEW_TTL: Duration = Duration::from_secs(300);
@@ -69,6 +71,7 @@ pub(crate) struct ConsoleState {
     attested_default_registry: Option<PathBuf>,
     prefs_path: PathBuf,
     previews: Arc<Mutex<HashMap<String, BoundPreview>>>,
+    routing_previews: Arc<Mutex<HashMap<String, crate::console_admin::BoundRoutingPreview>>>,
     login_sessions: Arc<Mutex<HashMap<String, Arc<Mutex<crate::console_login::LoginSession>>>>>,
 }
 
@@ -76,8 +79,22 @@ impl ConsoleState {
     pub(crate) fn registry_override_ref(&self) -> Option<PathBuf> {
         self.registry_override.clone()
     }
+    pub(crate) fn attested_default_registry_ref(&self) -> Option<PathBuf> {
+        self.attested_default_registry.clone()
+    }
     pub(crate) fn session_id_ref(&self) -> &str {
         &self.session_id
+    }
+    #[cfg(test)]
+    pub(crate) fn client_token_ref(&self) -> &str {
+        &self.client_token
+    }
+    pub(crate) fn routing_previews_lock(
+        &self,
+    ) -> std::sync::MutexGuard<'_, HashMap<String, crate::console_admin::BoundRoutingPreview>> {
+        self.routing_previews
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
     }
     pub(crate) fn login_sessions_lock(
         &self,
@@ -538,6 +555,26 @@ async fn route_accounts_js(State(state): State<ConsoleState>, headers: HeaderMap
     .await
 }
 
+async fn route_machines_js(State(state): State<ConsoleState>, headers: HeaderMap) -> Response {
+    serve_asset(
+        state,
+        headers,
+        "application/javascript; charset=utf-8",
+        VIEW_MACHINES_JS,
+    )
+    .await
+}
+
+async fn route_settings_js(State(state): State<ConsoleState>, headers: HeaderMap) -> Response {
+    serve_asset(
+        state,
+        headers,
+        "application/javascript; charset=utf-8",
+        VIEW_SETTINGS_JS,
+    )
+    .await
+}
+
 async fn route_api_status(State(state): State<ConsoleState>, headers: HeaderMap) -> Response {
     if let Err((status, code, msg)) = check_private_auth(&state, &headers, false) {
         return error_response(status, code, msg, &format!("Refusé : {msg}"));
@@ -882,6 +919,8 @@ pub(crate) fn build_console_router(state: ConsoleState) -> Router {
         .route("/assets/app.js", get(route_app_js))
         .route("/assets/api.js", get(route_api_js))
         .route("/assets/views/accounts.js", get(route_accounts_js))
+        .route("/assets/views/machines.js", get(route_machines_js))
+        .route("/assets/views/settings.js", get(route_settings_js))
         .route("/api/status", get(route_api_status))
         .route("/api/ui-prefs", post(route_api_ui_prefs))
         .route("/api/accounts/preview", post(route_api_accounts_preview))
@@ -905,6 +944,42 @@ pub(crate) fn build_console_router(state: ConsoleState) -> Router {
         .route(
             "/api/login/cancel",
             post(crate::console_login::route_api_login_cancel),
+        )
+        .route(
+            "/api/settings",
+            get(crate::console_admin::route_api_settings_get),
+        )
+        .route(
+            "/api/settings/automanaged",
+            post(crate::console_admin::route_api_settings_automanaged),
+        )
+        .route(
+            "/api/settings/sync",
+            post(crate::console_admin::route_api_settings_sync),
+        )
+        .route(
+            "/api/settings/routing/preview",
+            post(crate::console_admin::route_api_routing_preview),
+        )
+        .route(
+            "/api/settings/routing/apply",
+            post(crate::console_admin::route_api_routing_apply),
+        )
+        .route(
+            "/api/machines",
+            get(crate::console_admin::route_api_machines_get),
+        )
+        .route(
+            "/api/machines/ssh-add",
+            post(crate::console_admin::route_api_machines_ssh_add),
+        )
+        .route(
+            "/api/machines/repair",
+            post(crate::console_admin::route_api_machines_repair),
+        )
+        .route(
+            "/api/clients/deploy",
+            post(crate::console_admin::route_api_clients_deploy),
         )
         .with_state(state)
 }
@@ -930,6 +1005,7 @@ pub(crate) fn new_console_state(
         attested_default_registry,
         prefs_path,
         previews: Arc::new(Mutex::new(HashMap::new())),
+        routing_previews: Arc::new(Mutex::new(HashMap::new())),
         login_sessions: Arc::new(Mutex::new(HashMap::new())),
     }
 }

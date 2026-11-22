@@ -1,8 +1,16 @@
 import { apiRequest } from "/assets/api.js";
 import { renderAccountsView } from "/assets/views/accounts.js";
+import { renderMachinesView } from "/assets/views/machines.js";
+import { renderSettingsView } from "/assets/views/settings.js";
 
 const mediaDark = window.matchMedia ? window.matchMedia("(prefers-color-scheme: dark)") : null;
-let state = { data: null, activeView: "all", themePref: document.documentElement.getAttribute("data-theme-pref") || "system" };
+let state = {
+  data: null,
+  machinesData: null,
+  settingsData: null,
+  activeView: "all",
+  themePref: document.documentElement.getAttribute("data-theme-pref") || "system",
+};
 let loginCtx = { sessionId: null, pollTimer: null, offset: 0, authUrl: null, popup: null, running: false };
 
 function esc(v) {
@@ -300,17 +308,284 @@ function handleShowCli(conn) {
   openModal("Commande CLI de référence", body, [{ label: "Fermer", primary: true, onClick: closeModal }]);
 }
 
+function handleOpenSshModal(existing) {
+  const alias = existing ? existing.machine_id : "";
+  const host = existing && existing.ssh_hostname ? existing.ssh_hostname : "";
+  const user = existing && existing.ssh_user ? existing.ssh_user : "moi";
+  const port = existing && existing.ssh_port ? existing.ssh_port : 22;
+  const body = `<p>Ajoute ou met à jour l'entrée dans <code>~/.ssh/config</code> (droits 0600) puis teste immédiatement la connexion SSH.</p>
+    <div class="field"><label for="sshAlias">Nom de la machine (alias Bridget)</label><input id="sshAlias" type="text" value="${esc(alias)}" placeholder="ex. macbook-m1, vps-gpu" autocomplete="off" /></div>
+    <div class="field-inline">
+      <div class="field"><label for="sshHost">Adresse (IP, nom .home ou Tailscale)</label><input id="sshHost" type="text" value="${esc(host)}" placeholder="ex. 192.168.1.51 ou macbook.home" autocomplete="off" /></div>
+      <div class="field"><label for="sshPort">Port</label><input id="sshPort" type="number" value="${esc(port)}" min="1" max="65535" /></div>
+    </div>
+    <div class="field"><label for="sshUser">Utilisateur SSH</label><input id="sshUser" type="text" value="${esc(user)}" autocomplete="off" /></div>
+    <label class="check-line"><input type="checkbox" id="sshIpv4" checked /> Forcer IPv4 (évite les adresses IPv6 obsolètes sur réseau local)</label>
+    <div id="sshMsg" class="row-sub"></div>`;
+  openModal(existing ? `Configurer SSH · ${alias}` : "Ajouter une machine", body, [
+    { label: "Annuler", onClick: closeModal },
+    {
+      label: "Enregistrer et tester",
+      primary: true,
+      onClick: async () => {
+        const msg = document.getElementById("sshMsg");
+        msg.textContent = "Enregistrement dans ~/.ssh/config et test SSH…";
+        try {
+          const res = await apiRequest("/api/machines/ssh-add", {
+            method: "POST",
+            body: JSON.stringify({
+              alias: document.getElementById("sshAlias").value.trim(),
+              hostname: document.getElementById("sshHost").value.trim(),
+              user: document.getElementById("sshUser").value.trim(),
+              port: Number(document.getElementById("sshPort").value) || 22,
+              ipv4_only: document.getElementById("sshIpv4").checked,
+              accept_host_key: true,
+            }),
+          });
+          if (res.status === "connected") {
+            closeModal();
+            showFeedback("ok", "✓", res.ui_state);
+            loadMachines();
+            loadStatus();
+          } else {
+            msg.innerHTML = `${esc(res.detail || res.ui_state)}${res.copy_key_hint ? `<div class="cmd-box" style="margin-top:8px"><code>${esc(res.copy_key_hint)}</code></div>` : ""}`;
+            loadMachines();
+          }
+        } catch (e) { msg.textContent = e.message; }
+      },
+    },
+  ]);
+}
+
+function handleRepairMachine(machine, repair) {
+  const body = `<p>Vérifiez l'action de maintenance avant de l'exécuter sur <strong>${esc(machine.machine_id)}</strong>.</p>
+    <dl class="kv">
+      <dt>Machine</dt><dd>${esc(machine.machine_id)} (${esc(machine.os)} ${esc(machine.arch)})</dd>
+      <dt>Action</dt><dd>${esc(repair.label)}</dd>
+      <dt>Effet</dt><dd>${esc(repair.detail)}</dd>
+    </dl>
+    <div id="repMsg" class="row-sub"></div>`;
+  openModal(`Réparer · ${machine.machine_id}`, body, [
+    { label: "Annuler", onClick: closeModal },
+    {
+      label: "Exécuter",
+      primary: true,
+      onClick: async () => {
+        const msg = document.getElementById("repMsg");
+        msg.textContent = "Opération en cours…";
+        try {
+          const res = await apiRequest("/api/machines/repair", {
+            method: "POST",
+            body: JSON.stringify({ machine_id: machine.machine_id, action: repair.action }),
+          });
+          closeModal();
+          showFeedback("ok", "✓", res.ui_state);
+          loadMachines();
+          loadStatus();
+        } catch (e) { msg.textContent = e.message; }
+      },
+    },
+  ]);
+}
+
+function handleDeployClient(machine, client, mode) {
+  const isUpdate = mode === "update";
+  const verb = isUpdate ? "Mettre à jour" : "Installer";
+  const cmdSummary = isUpdate ? client.update_summary : client.install_summary;
+  const body = `<p>Déploiement officiel sur <strong>${esc(machine.machine_id)}</strong>. Aucun compte ni service Bridget existant ne sera modifié.</p>
+    <dl class="kv">
+      <dt>Client CLI</dt><dd>${esc(client.label)} (<code>${esc(client.binary)}</code>)</dd>
+      <dt>Machine</dt><dd>${esc(machine.machine_id)}</dd>
+      <dt>Méthode officielle</dt><dd>${esc(cmdSummary)}</dd>
+      <dt>Connexion ensuite</dt><dd><code>${esc(client.login_hint)}</code> (ou bouton Connecter)</dd>
+    </dl>
+    <div id="depMsg" class="row-sub"></div>
+    <details id="depLogWrap" class="tech-log hidden"><summary>Journal d'installation</summary><pre id="depLog" class="log-pre"></pre></details>`;
+  openModal(`${verb} ${client.label}`, body, [
+    { label: "Annuler", onClick: closeModal },
+    {
+      label: `${verb} maintenant`,
+      primary: true,
+      onClick: async () => {
+        const msg = document.getElementById("depMsg");
+        msg.textContent = `${verb} en cours sur ${machine.machine_id} (peut prendre 15 à 60 secondes)…`;
+        try {
+          const res = await apiRequest("/api/clients/deploy", {
+            method: "POST",
+            body: JSON.stringify({ machine_id: machine.machine_id, client_id: client.id, mode }),
+          });
+          msg.textContent = `✓ ${res.ui_state}`;
+          if (res.log) {
+            document.getElementById("depLog").textContent = res.log;
+            document.getElementById("depLogWrap").classList.remove("hidden");
+          }
+          showFeedback("ok", "✓", res.ui_state);
+          loadMachines();
+          loadStatus();
+        } catch (e) {
+          msg.textContent = `✕ ${e.message}`;
+        }
+      },
+    },
+  ]);
+}
+
+async function handleSaveAutomanaged(payload) {
+  try {
+    const res = await apiRequest("/api/settings/automanaged", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+    const okRemotes = (res.propagated || []).filter((r) => r.propagated).length;
+    const totRemotes = (res.propagated || []).length;
+    showFeedback("ok", "✓", `Paramètres enregistrés (${okRemotes}/${totRemotes} machines distantes synchronisées).`);
+    loadSettings();
+  } catch (e) { showFeedback("err", "✕", e.message); }
+}
+
+async function handleSyncFleet() {
+  showFeedback("warn", "⏳", "Synchronisation des CLI et des modèles sur la flotte en cours…");
+  try {
+    const res = await apiRequest("/api/settings/sync", {
+      method: "POST",
+      body: JSON.stringify({ cli: true, models: true }),
+    });
+    const okRemotes = (res.remotes || []).filter((r) => r.status === "ok").length;
+    const totRemotes = (res.remotes || []).length;
+    showFeedback("ok", "✓", `Synchronisation terminée (local + ${okRemotes}/${totRemotes} machines distantes).`);
+    loadSettings();
+  } catch (e) { showFeedback("err", "✕", e.message); }
+}
+
+async function handleRoutingPreview(mutation) {
+  try {
+    const preview = await apiRequest("/api/settings/routing/preview", {
+      method: "POST",
+      body: JSON.stringify(mutation),
+    });
+    const body = `<p>Vérifiez la modification de routage avant écriture (sauvegarde automatique préalable).</p>
+      <dl class="kv">
+        <dt>Modification</dt><dd>${esc(preview.summary)}</dd>
+        <dt>Registre</dt><dd><code>${esc(preview.registry_path)}</code></dd>
+        <dt>Champs</dt><dd><code>${esc((preview.fields_touched || []).join(", "))}</code></dd>
+        <dt>SHA-256</dt><dd><code>${esc((preview.expected_sha256 || "").slice(0, 16))}…</code></dd>
+      </dl>`;
+    openModal("Confirmer la modification", body, [
+      { label: "Annuler", onClick: () => { closeModal(); loadSettings(); } },
+      {
+        label: "Appliquer",
+        primary: true,
+        onClick: async () => {
+          closeModal();
+          try {
+            const res = await apiRequest("/api/settings/routing/apply", {
+              method: "POST",
+              body: JSON.stringify({ preview_id: preview.preview_id }),
+            });
+            showFeedback("ok", "✓", res.ui_state || "Enregistré et relu");
+            loadSettings();
+            loadStatus();
+          } catch (e) {
+            const st = e.payload && e.payload.ui_state ? e.payload.ui_state : `Refusé : ${e.message}`;
+            showFeedback(e.status === 409 ? "warn" : "err", e.status === 409 ? "▲" : "✕", st);
+            loadSettings();
+          }
+        },
+      },
+    ]);
+  } catch (e) {
+    const st = e.payload && e.payload.ui_state ? e.payload.ui_state : `Refusé : ${e.message}`;
+    showFeedback("err", "✕", st);
+    loadSettings();
+  }
+}
+
+function updateTopbarAction() {
+  const btn = document.getElementById("primaryActionBtn");
+  if (!btn) return;
+  if (state.activeView === "machines") {
+    btn.textContent = "+ Ajouter une machine";
+    btn.classList.remove("hidden");
+    btn.onclick = () => handleOpenSshModal(null);
+  } else if (state.activeView === "settings") {
+    btn.classList.add("hidden");
+  } else {
+    btn.textContent = "+ Nouveau compte";
+    btn.classList.remove("hidden");
+    btn.onclick = handleOpenPrepare;
+  }
+}
+
+function selectView(view) {
+  state.activeView = view;
+  for (const b of document.querySelectorAll(".sidebar [data-view]")) {
+    b.classList.toggle("active", b.getAttribute("data-view") === view);
+  }
+  updateTopbarAction();
+  render();
+  if (view === "machines" && !state.machinesData) loadMachines();
+  if (view === "settings" && !state.settingsData) loadSettings();
+}
+
 function render() {
+  updateTopbarAction();
+  if (state.data) {
+    document.getElementById("hostBadge").textContent = `Hôte console : ${state.data.local_machine}`;
+  }
+  if (state.activeView === "machines") {
+    renderMachinesView({
+      data: state.machinesData,
+      onAddSsh: () => handleOpenSshModal(null),
+      onEditSsh: (m) => handleOpenSshModal(m),
+      onRepair: handleRepairMachine,
+      onDeployClient: handleDeployClient,
+    });
+    return;
+  }
+  if (state.activeView === "settings") {
+    renderSettingsView({
+      data: state.settingsData,
+      onSaveAutomanaged: handleSaveAutomanaged,
+      onSyncFleet: handleSyncFleet,
+      onRoutingPreview: handleRoutingPreview,
+    });
+    return;
+  }
   if (!state.data) return;
-  document.getElementById("hostBadge").textContent = `Hôte console : ${state.data.local_machine}`;
   renderAccountsView({
     data: state.data,
     activeView: state.activeView,
-    onSelectView: (v) => { state.activeView = v; render(); },
+    onSelectView: selectView,
     onLogin: handleLogin,
     onTogglePreview: handleTogglePreview,
     onShowCli: handleShowCli,
   });
+}
+
+async function loadMachines() {
+  const btn = document.getElementById("refreshBtn");
+  btn.disabled = true;
+  try {
+    state.machinesData = await apiRequest("/api/machines");
+    if (state.activeView === "machines") render();
+  } catch (e) {
+    showFeedback("err", "✕", `Machines : ${e.message}`);
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+async function loadSettings() {
+  const btn = document.getElementById("refreshBtn");
+  btn.disabled = true;
+  try {
+    state.settingsData = await apiRequest("/api/settings");
+    if (state.activeView === "settings") render();
+  } catch (e) {
+    showFeedback("err", "✕", `Paramètres : ${e.message}`);
+  } finally {
+    btn.disabled = false;
+  }
 }
 
 async function loadStatus() {
@@ -326,6 +601,15 @@ async function loadStatus() {
   }
 }
 
+function refreshCurrentView() {
+  if (state.activeView === "machines") return loadMachines();
+  if (state.activeView === "settings") return loadSettings();
+  return loadStatus();
+}
+
+for (const btn of document.querySelectorAll(".sidebar [data-view]")) {
+  btn.onclick = () => selectView(btn.getAttribute("data-view"));
+}
 for (const btn of document.querySelectorAll(".theme-opt")) {
   btn.onclick = async () => {
     const value = btn.getAttribute("data-theme-value");
@@ -338,10 +622,10 @@ for (const btn of document.querySelectorAll(".theme-opt")) {
   };
 }
 if (mediaDark) mediaDark.addEventListener("change", () => { if (state.themePref === "system") applyTheme("system"); });
-document.getElementById("refreshBtn").onclick = loadStatus;
+document.getElementById("refreshBtn").onclick = refreshCurrentView;
 document.getElementById("modalCloseBtn").onclick = closeModal;
-document.getElementById("prepareBtn").onclick = handleOpenPrepare;
 document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeModal(); });
 
 applyTheme(state.themePref);
+updateTopbarAction();
 loadStatus();

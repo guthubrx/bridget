@@ -92,6 +92,7 @@ pub(crate) mod origin_proof;
 
 mod accounts_connect;
 mod client_compatibility;
+mod console_admin;
 mod console_login;
 mod console_ui;
 mod provider_accounts;
