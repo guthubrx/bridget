@@ -1324,3 +1324,34 @@ fn spec221_sender_and_prepare_guidance_preserves_unknown_cause_and_task_bytes() 
     drop(st);
     super::tests::cleanup(&config);
 }
+
+/// Livraison 329 : une mission lancée juste avant un redémarrage échouait sur
+/// `primary_absent` pendant les secondes où le fil parent se rattachait.
+#[test]
+fn spec329_parent_momentanement_absent_la_mission_attend_puis_echoue() {
+    assert!(parent_relink_pending(
+        "native_sender_primary_absent",
+        1_000,
+        1_030
+    ));
+    assert!(parent_relink_pending(
+        "native_sender_not_live",
+        1_000,
+        1_119
+    ));
+    assert!(!parent_relink_pending(
+        "native_sender_primary_absent",
+        1_000,
+        1_120
+    ));
+    assert!(!parent_relink_pending(
+        "native_sender_instance_changed",
+        1_000,
+        1_001
+    ));
+    assert!(!parent_relink_pending(
+        "identité expéditeur non attestée : rattachement auxiliaire requis",
+        1_000,
+        1_001
+    ));
+}

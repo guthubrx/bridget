@@ -13154,6 +13154,18 @@ pub(super) fn admitted_mission_exchange(
     Ok(true)
 }
 
+/// 329 : pendant un redémarrage du daemon ou du pont T3, le fil parent se
+/// rattache en quelques secondes. Sa mission attend ce retour au lieu d'échouer
+/// sur `primary_absent`. Au-delà de la grâce, le refus reste rendu tel quel.
+const PARENT_RELINK_GRACE_SECS: i64 = 120;
+
+fn parent_relink_pending(reason: &str, first_attempt_at: i64, now: i64) -> bool {
+    matches!(
+        reason,
+        "native_sender_primary_absent" | "native_sender_not_live"
+    ) && now.saturating_sub(first_attempt_at) < PARENT_RELINK_GRACE_SECS
+}
+
 pub(super) fn send_as(
     st: &mut DaemonState,
     owner: &str,
@@ -16280,6 +16292,14 @@ pub(super) fn tick(state: &Arc<Mutex<DaemonState>>) {
                         task.error = Some(format!("{category}:{reason}"));
                     }
                     DaemonToWrapper::Nack { reason, .. } => {
+                        if parent_relink_pending(
+                            &reason,
+                            task.mission_issued_at.unwrap_or(task.created_at),
+                            unix_timestamp(),
+                        ) {
+                            // Mission conservée en attente : nouvel essai au tick suivant.
+                            continue;
+                        }
                         task.state = "failed".into();
                         task.error = Some(reason);
                     }
