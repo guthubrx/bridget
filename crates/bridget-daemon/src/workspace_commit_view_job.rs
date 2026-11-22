@@ -28,7 +28,9 @@ pub(crate) fn failure(error: &str) -> ExportFailure {
         _ => {}
     }
     match error.strip_prefix("workspace_commit_view_unavailable:cause=") {
-        Some("git_timeout" | "view_link_timeout" | "view_audit_timeout") => ExportFailure::TimedOut,
+        Some("git_timeout" | "view_link_timeout" | "view_audit_timeout" | "view_sync_timeout") => {
+            ExportFailure::TimedOut
+        }
         Some("preparation_expired") => ExportFailure::PreparationExpired,
         Some("git_object_unavailable" | "commit_unavailable") => ExportFailure::ObjectUnavailable,
         Some("destination_inside_source") => ExportFailure::DestinationInsideRepository,
@@ -37,11 +39,19 @@ pub(crate) fn failure(error: &str) -> ExportFailure {
         Some("destination_invalid") => ExportFailure::DestinationUnsafe,
         Some("storage_space_unavailable") => ExportFailure::StorageSpaceUnknown,
         Some("link_outside_view") => ExportFailure::LinkOutsideView,
-        Some("link_cycle") => ExportFailure::LinkCycle,
-        Some("path_unsupported" | "link_unsupported") => ExportFailure::UnsupportedPath,
-        Some("view_integrity_failed" | "view_identity_changed" | "git_object_integrity_failed") => {
-            ExportFailure::IntegrityFailed
-        }
+        Some("link_cycle" | "link_depth_limit") => ExportFailure::LinkCycle,
+        Some(
+            "path_unsupported"
+            | "link_unsupported"
+            | "object_type_unsupported"
+            | "cwd_not_in_commit",
+        ) => ExportFailure::UnsupportedPath,
+        Some(
+            "view_integrity_failed"
+            | "view_identity_changed"
+            | "view_device_changed"
+            | "git_object_integrity_failed",
+        ) => ExportFailure::IntegrityFailed,
         Some(
             "byte_count_overflow"
             | "byte_limit"
@@ -49,20 +59,38 @@ pub(crate) fn failure(error: &str) -> ExportFailure {
             | "link_metadata_limit"
             | "proof_byte_limit"
             | "tree_limit"
-            | "entry_limit",
+            | "entry_limit"
+            | "view_sync_limit",
         ) => ExportFailure::ByteLimit,
         Some("export_busy") => ExportFailure::OperationCapacity,
         Some("source_identity_changed") => ExportFailure::SourceIdentityChanged,
-        Some("source_unavailable" | "source_inventory_unavailable") => {
-            ExportFailure::SourceUnavailable
-        }
+        Some(
+            "source_unavailable"
+            | "source_inventory_unavailable"
+            | "tree_unavailable"
+            | "empty_tree"
+            | "tree_invalid"
+            | "commit_required"
+            | "git_pipe_unavailable"
+            | "git_poll_failed"
+            | "git_write_failed"
+            | "git_read_failed"
+            | "git_object_header_invalid"
+            | "git_object_invalid"
+            | "git_diagnostic_limit"
+            | "view_read_failed"
+            | "view_sync_unavailable",
+        ) => ExportFailure::SourceUnavailable,
         Some(
             "proof_unavailable"
             | "proof_invalid"
             | "proof_binding_mismatch"
+            | "proof_binding_invalid"
+            | "manifest_invalid"
             | "preparation_incomplete"
             | "view_closed",
         ) => ExportFailure::ProofUnavailable,
+        Some("managed_context_required") => ExportFailure::StartupUnavailable,
         Some("git_stop_unconfirmed") => ExportFailure::StopUnconfirmed,
         _ => ExportFailure::Unknown,
     }
@@ -119,11 +147,9 @@ impl ViewJobRequest {
     pub(crate) fn identity(&self, intent: &ViewIntent) -> Result<ManagedIdentity, String> {
         let identity = self.identity_for_binding(&intent.binding)?;
         if let Self::Materialize { path, .. } = self
-            && !intent
-                .manifest
-                .entries
-                .iter()
-                .any(|entry| entry.path == *path && entry.mode != "120000")
+            && !intent.manifest.entries.iter().any(|entry| {
+                entry.path == *path && entry.mode != "120000" && entry.mode != "160000"
+            })
         {
             return Err(refusal("proof_binding_invalid"));
         }

@@ -310,6 +310,21 @@ pub(super) fn plan(source: &Path, base: &str) -> Result<Manifest, String> {
             return Err(refusal("path_unsupported"));
         }
         let fields = meta.split_ascii_whitespace().collect::<Vec<_>>();
+        if fields.len() == 4
+            && fields[0] == "160000"
+            && fields[1] == "commit"
+            && sha(fields[2])
+            && fields[3] == "-"
+        {
+            entries.push(Entry {
+                path: path.into(),
+                mode: "160000".into(),
+                oid: fields[2].into(),
+                bytes: 0,
+                selected: false,
+            });
+            continue;
+        }
         if fields.len() != 4
             || fields[1] != "blob"
             || !matches!(fields[0], "100644" | "100755" | "120000")
@@ -491,7 +506,13 @@ fn notice(manifest: &Manifest, links: &BTreeMap<String, String>) -> Result<Vec<u
         .entries
         .iter()
         .filter(|e| !e.selected)
-        .map(|e| serde_json::json!({"path":e.path,"bytes":e.bytes,"reason":"compact_selection"}))
+        .map(|e| {
+            if e.mode == "160000" {
+                serde_json::json!({"path":e.path,"bytes":0,"reason":"submodule_gitlink","commit":e.oid})
+            } else {
+                serde_json::json!({"path":e.path,"bytes":e.bytes,"reason":"compact_selection"})
+            }
+        })
         .collect::<Vec<_>>();
     let (all, initial) = manifest_paths(manifest)?;
     let mut link_notes = Vec::new();
@@ -956,7 +977,7 @@ pub(super) fn export(source: &Path, manifest: &Manifest, destination: &Path) -> 
     for entry in manifest
         .entries
         .iter()
-        .filter(|e| e.selected && e.mode != "120000")
+        .filter(|e| e.selected && e.mode != "120000" && e.mode != "160000")
     {
         let (parent, name) = root.parent(&entry.path, true, &mut created)?;
         let mut file = parent.file(&name, true)?;
@@ -1030,13 +1051,19 @@ fn validate_manifest(manifest: &Manifest) -> Result<(), String> {
     let mut total = 0u64;
     let mut link_bytes = 0u64;
     for entry in &manifest.entries {
+        let valid_mode = if entry.mode == "160000" {
+            entry.bytes == 0 && !entry.selected
+        } else {
+            matches!(entry.mode.as_str(), "100644" | "100755" | "120000")
+                && entry.selected
+                    == compact::selected(&entry.path, entry.bytes, entry.mode == "120000")
+                && !(entry.mode == "120000" && entry.bytes > MAX_LINK)
+        };
         if !path_valid(&entry.path)
             || entry.path.split('/').count() > 64
             || !sha(&entry.oid)
             || !paths.insert(&entry.path)
-            || !matches!(entry.mode.as_str(), "100644" | "100755" | "120000")
-            || entry.selected != compact::selected(&entry.path, entry.bytes, entry.mode == "120000")
-            || (entry.mode == "120000" && entry.bytes > MAX_LINK)
+            || !valid_mode
         {
             return Err(refusal("manifest_invalid"));
         }
@@ -1192,6 +1219,9 @@ fn audit_inventory(manifest: &Manifest, root: &Path) -> Result<Audit, String> {
             let names = child.names()?;
             stack.push((child, relative.clone(), names.into_iter()));
         } else if let Some(entry) = entries.get(relative.as_str()) {
+            if entry.mode == "160000" {
+                return Err(refusal("view_integrity_failed"));
+            }
             if kind
                 != if entry.mode == "120000" {
                     libc::S_IFLNK
@@ -1241,6 +1271,9 @@ pub(super) fn materialize(
         .ok_or_else(|| refusal("path_not_in_commit"))?;
     if inventory.found.contains(path) {
         return Ok(false);
+    }
+    if entry.mode == "160000" {
+        return Err(refusal("object_type_unsupported"));
     }
     if entry.selected || entry.mode == "120000" {
         return Err(refusal("view_integrity_failed"));
@@ -2286,7 +2319,7 @@ impl ViewProofs {
             .manifest
             .entries
             .iter()
-            .any(|entry| entry.path == path && entry.mode != "120000")
+            .any(|entry| entry.path == path && entry.mode != "120000" && entry.mode != "160000")
         {
             return Err(refusal("proof_binding_invalid"));
         }

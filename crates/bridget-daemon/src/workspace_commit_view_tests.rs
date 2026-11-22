@@ -2331,3 +2331,58 @@ fn spec263_wide_view_audit_keeps_a_bounded_number_of_open_directories() {
     audit(&manifest, &destination).unwrap();
     assert_eq!(f.snapshot(), before);
 }
+
+#[test]
+fn spec331_commit_view_omits_submodule_gitlinks_and_classifies_object_type_failure() {
+    let f = Fixture::new();
+    let head = f.git(&["rev-parse", "HEAD"]);
+    f.git(&[
+        "update-index",
+        "--add",
+        "--cacheinfo",
+        &format!("160000,{head},submodules/ext"),
+    ]);
+    f.git(&["commit", "-qm", "add gitlink submodule"]);
+    let commit = f.git(&["rev-parse", "HEAD"]);
+    let manifest = plan(&f.repo, &commit).expect("les gitlinks 160000 ne bloquent pas la vue");
+    let gitlink = manifest
+        .entries
+        .iter()
+        .find(|e| e.path == "submodules/ext")
+        .expect("gitlink présent dans le manifeste");
+    assert_eq!(gitlink.mode, "160000");
+    assert_eq!(gitlink.oid, head);
+    assert_eq!(gitlink.bytes, 0);
+    assert!(!gitlink.selected);
+
+    let destination = f.root.join("view-gitlink");
+    export(&f.repo, &manifest, &destination).expect("export réussit avec gitlink");
+    audit(&manifest, &destination).expect("audit réussit avec gitlink");
+    assert!(!destination.join("submodules/ext").exists());
+
+    let card: serde_json::Value =
+        serde_json::from_slice(&fs::read(destination.join(NOTICE)).unwrap()).unwrap();
+    assert!(
+        card["omitted_at_export"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|item| {
+                item["path"] == "submodules/ext"
+                    && item["reason"] == "submodule_gitlink"
+                    && item["commit"] == head
+            }),
+        "la carte doit indiquer l'omission du sous-module"
+    );
+
+    let mat_err = materialize(&f.repo, &manifest, &destination, "submodules/ext").unwrap_err();
+    assert_eq!(job::failure(&mat_err), ExportFailure::UnsupportedPath);
+    assert_eq!(
+        job::failure("workspace_commit_view_unavailable:cause=object_type_unsupported"),
+        ExportFailure::UnsupportedPath
+    );
+    assert_eq!(
+        job::failure("workspace_commit_view_unavailable:cause=tree_unavailable"),
+        ExportFailure::SourceUnavailable
+    );
+}

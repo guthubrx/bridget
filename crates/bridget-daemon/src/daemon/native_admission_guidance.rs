@@ -100,6 +100,36 @@ pub(super) fn refusal(code: &str) -> Option<Value> {
             "reply_timeout borne la durée de la mission, pas l'attente de la réponse de cet outil. Ce refus concerne cette demande. Lire detail.admission : si un refus durable sans tâche est enregistré, corriger la durée dans une nouvelle demande identifiée ; un rejeu identique conserve ce refus. Une demande en cours ou d'issue inconnue garde sa clé et son enveloppe. Les autres travaux autorisés suivent leur propre état. Aucun changement de droits ni décision humaine n'est nécessaire pour corriger ce paramètre dans le périmètre déjà autorisé.",
             Some("reply_timeout"),
         ),
+        "project_preparation_destination_occupied" => (
+            "Faire vérifier le dossier destination et son identité Git (remote.origin.url) face à expected_git_identity du mapping de cette machine.",
+            "Le chemin destination sur la machine cible est déjà occupé par un fichier, un dépôt ou un worktree dont l’identité Git ne correspond pas à expected_git_identity déclarée dans le registre. Le responsable Bridget doit comparer git config --local --get remote.origin.url dans ce dossier avec expected_git_identity sur le maître et le worker cible, puis corriger le mapping si l’identité déclarée est obsolète. Ne jamais écraser ni réinitialiser un dépôt existant. Conserver la clé et l’enveloppe ; lire detail.admission avant toute reprise. Les autres travaux autorisés suivent leur propre état.",
+            Some("cwd"),
+        ),
+        "project_preparation_git_identity_mismatch" => (
+            "Faire vérifier le rattachement Git du dossier source et de son worktree au mapping déclaré.",
+            "Le dossier ou le worktree source ne partage pas le même répertoire Git commun (git-common-dir) que la racine du mapping retenu. Le responsable Bridget doit vérifier les chemins et les mappings déclarés sur la source et la cible, sans modifier le dépôt. Conserver la clé et lire detail.admission avant toute reprise.",
+            Some("cwd"),
+        ),
+        "project_preparation_destination_missing" => (
+            "Faire vérifier la présence du dossier destination déclaré pour ce projet sur la machine cible.",
+            "Le chemin remote_root déclaré dans le mapping de cette machine n’existe pas ou n’est pas un dossier accessible. Le responsable Bridget doit vérifier le volume monté et le mapping sur la cible, sans créer de dossier arbitraire. Conserver la clé et lire detail.admission avant toute reprise.",
+            Some("cwd"),
+        ),
+        "project_preparation_commit_missing" => (
+            "Faire vérifier que le commit exact demandé est disponible et importé dans le dépôt cible.",
+            "Après synchronisation, le SHA exact expected_base_commit reste introuvable dans le dépôt cible. Ne pas substituer HEAD ou une autre base. Le responsable Bridget doit vérifier la présence du commit sur la source et le transfert vers la cible, puis relire detail.admission avant toute reprise.",
+            Some("expected_base_commit"),
+        ),
+        "project_preparation_mapping_changed" => (
+            "Faire aligner la correspondance de ce projet entre les registres source, maître et worker cible.",
+            "Le mapping du projet a changé ou diverge entre le registre source, le maître et le worker cible. Le responsable Bridget doit comparer leurs entrées sans déplacer de dossier actif. Conserver la clé et lire detail.admission avant toute reprise.",
+            None,
+        ),
+        "project_preparation_checkout_incomplete" => (
+            "Faire inspecter le worktree lié déjà présent sur la machine cible avant toute nouvelle préparation.",
+            "Le worktree lié cible porte un reçu incomplet ou des fichiers suivis modifiés ou manquants. Conserver son contenu pour diagnostic ; ne pas le réinitialiser ni l’effacer à l’aveugle. Le responsable Bridget doit qualifier son état avant toute reprise.",
+            Some("workspace"),
+        ),
         "project_preparation_context_missing" => (
             "Faire charger la correction du raccordement de projet sur le worker source et le maître.",
             "La préparation a répondu sans transmettre de correspondance utilisable au maître. Ce refus concerne cette admission ; l'identité et le projet ne sont pas déclarés inconnus. Le responsable Bridget doit vérifier les images chargées et le retour du contexte natif de préparation. Conserver la clé et l'enveloppe ; lire l'admission durable avant une reprise, sans mission de remplacement. Les autres travaux autorisés suivent leur propre état. Si la maintenance nécessaire n'est pas autorisée, demander seulement l'accord pour charger cette correction.",
@@ -380,6 +410,26 @@ mod tests {
                 .contains("inconnue")
         );
         assert!(refusal("project_preparation_output_limit").is_some());
+    }
+
+    #[test]
+    fn spec331_project_preparation_destination_occupied_has_actionable_guidance() {
+        let view = refusal("project_preparation_destination_occupied").unwrap();
+        assert_eq!(view["code"], "project_preparation_destination_occupied");
+        let recovery = view["detail"]["recovery"].as_str().unwrap();
+        assert!(recovery.contains("expected_git_identity"));
+        assert!(recovery.contains("remote.origin.url"));
+        for code in [
+            "project_preparation_git_identity_mismatch",
+            "project_preparation_destination_missing",
+            "project_preparation_commit_missing",
+            "project_preparation_mapping_changed",
+            "project_preparation_checkout_incomplete",
+        ] {
+            let v = refusal(code).unwrap_or_else(|| panic!("guidage manquant pour {code}"));
+            assert_eq!(v["code"], code);
+            assert!(!v.to_string().contains("sans fournir de diagnostic"));
+        }
     }
 
     use super::*;

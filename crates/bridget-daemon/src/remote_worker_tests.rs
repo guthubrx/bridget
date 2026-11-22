@@ -813,6 +813,7 @@ while not stop.exists(): time.sleep(.01)
         permissions: "plan".into(),
         claude_config_dir: None,
         codex_home: None,
+        antigravity_home: None,
         queue_capacity: 1,
         notify_timeout_secs: 60,
         mcp: bridget_transport::protocol::ResolvedMcpDefinition {

@@ -1341,6 +1341,204 @@ fn workload_command_writes(name: &str, args: &[String]) -> bool {
     }
 }
 
+fn is_inline_command_invocation(clause_before: &str, after: &str, prev_was_command: bool) -> bool {
+    let before_trim = clause_before.trim_end();
+    let after_trim = after.trim_start();
+    // Citation explicite entre guillemets : « `git archive` » ou "`git archive`".
+    if before_trim.ends_with('«')
+        || after_trim.starts_with('»')
+        || (before_trim.ends_with('"') && after_trim.starts_with('"'))
+    {
+        return false;
+    }
+    let cleaned = clause_before.trim();
+    let cleaned = cleaned
+        .strip_prefix("- ")
+        .or_else(|| cleaned.strip_prefix("* "))
+        .or_else(|| cleaned.strip_prefix("• "))
+        .unwrap_or(cleaned)
+        .trim();
+    let lower = cleaned.to_lowercase();
+    let after_lower = after_trim.to_lowercase();
+    let prose_continuation = [
+        "qui ",
+        "que ",
+        "qu'",
+        "qu’",
+        "casse",
+        "est ",
+        "sont ",
+        "était ",
+        "étaient ",
+        "a ",
+        "ont ",
+        "fait ",
+        "font ",
+        "produit ",
+        "échoue",
+        "echoue",
+        "retourne ",
+        "renvoie ",
+        "refuse ",
+        "bloque ",
+        "permet ",
+        "doit ",
+        "peut ",
+        "reste ",
+        "breaks",
+        "fails",
+        "returns",
+        "is ",
+        "are ",
+        "was ",
+        "were ",
+        "does ",
+        "causes ",
+        "par ",
+        "dans la spec",
+        "dans le ",
+        "dans la ",
+    ]
+    .iter()
+    .any(|prefix| after_lower.starts_with(prefix));
+
+    if prev_was_command
+        && matches!(
+            lower.as_str(),
+            "" | "," | "puis" | "ensuite" | "et" | "ou" | "then" | "and" | "or"
+        )
+        && !prose_continuation
+    {
+        return true;
+    }
+
+    let clause_ends_after = after_trim.is_empty()
+        || after_trim.starts_with(['.', ';', ',', ')', ']', ':'])
+        || ["puis ", "et ", "ou ", "then ", "and ", "or "]
+            .iter()
+            .any(|word| after_lower.starts_with(word));
+    if lower.is_empty() {
+        return clause_ends_after;
+    }
+
+    let citation_intro = [
+        "listait",
+        "liste",
+        "cite",
+        "citait",
+        "mentionne",
+        "mentionnait",
+        "notait",
+        "décrit",
+        "decrit",
+        "exemple",
+        "exemples",
+        "défaut",
+        "defaut",
+        "erreur",
+        "problème",
+        "probleme",
+        "constat",
+        "pourquoi",
+        "comment",
+        "comportement",
+        "remplace",
+        "au lieu de",
+        "instead of",
+        "replace",
+        "sans exécuter",
+        "sans executer",
+        "sans lancer",
+        "ne pas utiliser",
+        "n'exécute pas",
+        "n'execute pas",
+        "ne lance pas",
+        "ne pas appeler",
+        "aucune commande",
+        "don't run",
+        "do not execute",
+        "never run",
+    ]
+    .iter()
+    .any(|cue| lower.contains(cue));
+    if citation_intro {
+        return false;
+    }
+
+    if lower.ends_with(':') {
+        return !prose_continuation;
+    }
+
+    let words: Vec<&str> = lower
+        .split(|c: char| !c.is_alphanumeric() && c != '\'' && c != '’')
+        .filter(|w| !w.is_empty())
+        .collect();
+    let last = words.last().copied().unwrap_or("");
+    let last_two = if words.len() >= 2 {
+        Some((words[words.len() - 2], last))
+    } else {
+        None
+    };
+    matches!(
+        last,
+        "exécute"
+            | "execute"
+            | "exécuter"
+            | "executer"
+            | "exécutez"
+            | "executez"
+            | "exécutant"
+            | "executant"
+            | "lance"
+            | "lancer"
+            | "lancez"
+            | "lançant"
+            | "lancant"
+            | "lis"
+            | "lire"
+            | "lisez"
+            | "teste"
+            | "tester"
+            | "testez"
+            | "compile"
+            | "compiler"
+            | "compilez"
+            | "construis"
+            | "construire"
+            | "joue"
+            | "jouer"
+            | "rejoue"
+            | "rejouer"
+            | "run"
+            | "running"
+            | "exec"
+            | "invoke"
+            | "read"
+    ) || matches!(
+        last_two,
+        Some((
+            "vérifie"
+                | "verifie"
+                | "vérifier"
+                | "verifier"
+                | "vérifiez"
+                | "verifiez"
+                | "valide"
+                | "valider"
+                | "validez"
+                | "mesure"
+                | "mesurer"
+                | "reproduis"
+                | "reproduire"
+                | "check"
+                | "verify"
+                | "test"
+                | "build",
+            "avec" | "with" | "via"
+        ))
+    )
+}
+
 /// Exigences tirées uniquement de commandes, jamais d'une mention du produit.
 fn identified_workload_requirements(
     task: &str,
@@ -1359,27 +1557,57 @@ fn identified_workload_requirements(
     };
     let mut required = std::collections::BTreeSet::new();
     let mut writes = false;
+    let mut in_fence = false;
     for line in task.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("```") {
+            in_fence = !in_fence;
+            continue;
+        }
         let parts: Vec<_> = line.split('`').collect();
-        // La prose contenant des backticks n'est pas une commande shell.
-        let commands: Vec<_> = if parts.len() == 1 {
-            vec![(line.trim().trim_start_matches("$ "), "")]
+        // La prose contenant des backticks n'est pas une commande shell ; une
+        // commande citée dans la prose n'est pas non plus un ordre d'exécution.
+        let commands: Vec<(&str, &str, &str, bool)> = if parts.len() == 1 {
+            if in_fence || trimmed.starts_with("$ ") {
+                vec![(trimmed.trim_start_matches("$ "), "", "", false)]
+            } else {
+                Vec::new()
+            }
         } else {
             (1..parts.len())
                 .step_by(2)
-                .map(|i| (parts[i], parts[i - 1]))
+                .map(|i| {
+                    (
+                        parts[i],
+                        parts[i - 1],
+                        parts.get(i + 1).copied().unwrap_or(""),
+                        true,
+                    )
+                })
                 .collect()
         };
-        for (command, context) in commands {
-            let context = context
+        let mut prev_was_command = false;
+        for (command, before, after, inline) in commands {
+            if inline {
+                if before.contains(['.', ';']) {
+                    prev_was_command = false;
+                }
+                let clause_before = before.rsplit([';', '.', '\n']).next().unwrap_or(before);
+                if !is_inline_command_invocation(clause_before, after, prev_was_command) {
+                    prev_was_command = false;
+                    continue;
+                }
+            }
+            let context = before
                 .rsplit([';', '.', ',', '\n'])
                 .next()
-                .unwrap_or(context)
+                .unwrap_or(before)
                 .to_lowercase();
             let named: Vec<_> = context
                 .split(|c: char| !c.is_alphanumeric())
                 .filter(|name| tool(name).is_some())
                 .collect();
+            let mut matched_any = false;
             for segment in workload_command_segments(command) {
                 let Some(words) = shlex::split(segment) else {
                     continue;
@@ -1412,8 +1640,12 @@ fn identified_workload_requirements(
                             "facultative",
                             "optional",
                             "ne pas exécuter",
+                            "ne pas executer",
                             "ne pas lancer",
+                            "ne pas utiliser",
                             "do not run",
+                            "do not execute",
+                            "don't run",
                         ]
                         .iter()
                         .any(|word| context.contains(word)))
@@ -1423,9 +1655,13 @@ fn identified_workload_requirements(
                 let args = &words[i + 1..];
                 writes |= workload_command_writes(name, args);
                 required.insert(kind);
+                matched_any = true;
                 if kind == T::Docker && args.first().is_some_and(|a| a == "compose") {
                     required.insert(T::DockerCompose);
                 }
+            }
+            if inline {
+                prev_was_command = matched_any;
             }
         }
     }
@@ -17719,6 +17955,41 @@ fn spec241_tool_requirements_follow_commands_not_mentions() {
     assert_eq!(
         identified_workload_requirements("Lis `cargo --version`"),
         (vec![T::Cargo], false)
+    );
+}
+
+#[cfg(test)]
+#[test]
+fn spec331_prose_command_citations_do_not_trigger_command_execution_requirement() {
+    use bridget_transport::protocol::WorkloadTool as T;
+    for task in [
+        "Ta première revue notait 4,5/10 et listait : `git archive` qui casse `BRIDGET_BUILD_ID`, le cache de build.py et les tests ; contrôles ABI.",
+        "Quand le texte cite « `git archive` », Bridget ne doit pas exiger son exécution.",
+        "Vérifie la section sur `cargo build --release` et `docker compose build` dans la spec.",
+        "Remplace `git archive` par `git bundle` dans la documentation.",
+        "La commande `git archive` est mentionnée ligne 93.",
+        "Lecture de fichiers uniquement, aucune commande. La spec mentionne : `cargo build`.",
+        "Analyse le comportement de `npm install` et `pnpm build`.",
+        "Ne pas utiliser `git archive` dans le script.",
+        "make sure the specification covers every edge case.",
+    ] {
+        assert_eq!(
+            identified_workload_requirements(task),
+            (vec![], false),
+            "faux positif sur citation en prose : {task}"
+        );
+    }
+    assert_eq!(
+        identified_workload_requirements("Vérifie avec `cargo test` que la suite passe."),
+        (vec![T::Cargo], true)
+    );
+    assert_eq!(
+        identified_workload_requirements("Exécute `docker compose build` puis `cargo test`."),
+        (vec![T::Cargo, T::Docker, T::DockerCompose], true)
+    );
+    assert_eq!(
+        identified_workload_requirements("$ git status"),
+        (vec![T::Git], false)
     );
 }
 
