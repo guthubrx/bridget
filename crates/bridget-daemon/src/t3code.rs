@@ -15,7 +15,7 @@ use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -55,6 +55,11 @@ const JOURNAL_BLOCK_GRACE: Duration = Duration::from_secs(30);
 const BATCH_BOUND: usize = 8;
 const BATCH_BODY_BOUND: usize = 32 * 1024;
 const RECONNECT_BACKOFF: Duration = Duration::from_secs(5);
+/// Première reprise après la perte d'un lien vivant : le daemon redémarré
+/// répond en moins de 4 s. Un échec d'ouverture garde RECONNECT_BACKOFF.
+const LINK_LOST_BACKOFF: Duration = Duration::from_secs(1);
+/// Cadence de la boucle tant que des ouvertures sont en cours.
+const OPEN_COLLECT_POLL: Duration = Duration::from_millis(500);
 const AUTH_FAILED_PAUSE: Duration = Duration::from_secs(60);
 const DETAIL_PAGE: u32 = 20;
 const DETAIL_PAGE_MAX: u32 = 320;
@@ -62,6 +67,10 @@ const SEEN_BOUND: usize = 1000;
 /// Une reprise durable ne doit jamais recréer le pic de descripteurs qu'elle
 /// répare. Les obligations suivantes restent planifiées pour un cycle futur.
 const DRAIN_REOPEN_BOUND: usize = 32;
+/// Enregistrements de fils menés en même temps. Chacun traverse socat et SSH,
+/// puis peut attendre jusqu'à 10 s la réponse du daemon. En série, 72 fils
+/// mettaient 30 à 50 s à revenir après un redémarrage (livraison 328).
+const OPEN_PARALLEL_BOUND: usize = 8;
 /// Lectures successives avant de signaler une corrélation incertaine. L'attente
 /// reste conservée : ce seuil ne prouve ni l'absence du tour ni sa clôture.
 const SETTLE_ATTEMPTS: u32 = 5;
@@ -134,6 +143,7 @@ fn invoke(arguments: &[String]) -> Result<i32, String> {
 // ---------------------------------------------------------------------------
 
 /// Chemins de l'état du pont : tout sous `<racine Bridget>/t3code`, 0700/0600.
+#[derive(Clone)]
 pub(crate) struct Paths {
     pub root: PathBuf,
     pub socket: PathBuf,
@@ -1227,6 +1237,10 @@ fn serve(paths: &Paths) -> Result<(), String> {
 
     let mut links: BTreeMap<String, Link> = BTreeMap::new();
     let mut retry_after: BTreeMap<String, Instant> = BTreeMap::new();
+    // Ouvertures en cours hors de la boucle : un fil lent n'en retarde plus d'autres.
+    let mut pending_opens: BTreeMap<String, thread::JoinHandle<Result<Link, String>>> =
+        BTreeMap::new();
+    let open_slots = Arc::new(OpenSlots::new(OPEN_PARALLEL_BOUND));
     let mut obligations: HashSet<String> = HashSet::new();
     let mut attempted_obligations: HashSet<String> = HashSet::new();
     let mut drain_reopens: HashSet<String> = HashSet::new();
@@ -1385,6 +1399,18 @@ fn serve(paths: &Paths) -> Result<(), String> {
         attempted_obligations.retain(|thread_id| summaries.contains_key(thread_id.as_str()));
         drain_reopens.retain(|thread_id| summaries.contains_key(thread_id.as_str()));
         retry_after.retain(|thread_id, _| summaries.contains_key(thread_id.as_str()));
+        // Un fil disparu pendant son ouverture ne doit pas garder sa présence.
+        for thread_id in pending_opens
+            .iter()
+            .filter(|(id, handle)| !summaries.contains_key(id.as_str()) && handle.is_finished())
+            .map(|(id, _)| id.clone())
+            .collect::<Vec<_>>()
+        {
+            if let Some(Ok(Ok(link))) = pending_opens.remove(&thread_id).map(|h| h.join()) {
+                info!("fil {thread_id} absent du snapshot : agent retiré");
+                link.close();
+            }
+        }
 
         // Un worker mort ne doit jamais abandonner son lecteur. Une obligation
         // créée après le scan initial obtient une seule reprise par processus.
@@ -1415,9 +1441,9 @@ fn serve(paths: &Paths) -> Result<(), String> {
             drain_reopens.remove(&thread_id);
             if retry_active || retry_obligation {
                 warn!(
-                    "lien du fil {thread_id} terminé ; nouvelle tentative dans {RECONNECT_BACKOFF:?}"
+                    "lien du fil {thread_id} terminé ; nouvelle tentative dans {LINK_LOST_BACKOFF:?}"
                 );
-                retry_after.insert(thread_id, Instant::now() + RECONNECT_BACKOFF);
+                retry_after.insert(thread_id, Instant::now() + LINK_LOST_BACKOFF);
             }
         }
 
@@ -1442,10 +1468,35 @@ fn serve(paths: &Paths) -> Result<(), String> {
         // O(fils) par tour : la décision pure sépare présence T3, exposition et
         // drain. Une racine ou un fork neuf reste ouvrable dès qu'un
         // fournisseur est connu. Un sous-agent attend sa première activité.
-        for summary in &snapshot.threads {
+        // Les fils en plein tour d'abord : leurs appels MCP attendent ce lien.
+        // Tri stable O(n log n) ; l'ordre T3 est gardé à priorité égale.
+        let mut ordered: Vec<&ThreadSummary> = snapshot.threads.iter().collect();
+        ordered.sort_by_key(|summary| open_priority(summary));
+        for summary in ordered {
             // Un fil sans worktree travaille dans la racine publiée du projet.
             // Nécessaire aux chemins relatifs des écritures, jamais à l'identité.
             let mut summary = summary.clone();
+            if pending_opens
+                .get(&summary.id)
+                .is_some_and(|handle| handle.is_finished())
+            {
+                match pending_opens
+                    .remove(&summary.id)
+                    .map(|handle| handle.join())
+                {
+                    Some(Ok(Ok(link))) => {
+                        links.insert(summary.id.clone(), link);
+                    }
+                    Some(Ok(Err(e))) => {
+                        warn!("fil {} non exposé : {e}", summary.id);
+                        retry_after.insert(summary.id.clone(), Instant::now() + RECONNECT_BACKOFF);
+                    }
+                    _ => {
+                        warn!("fil {} non exposé : ouverture interrompue", summary.id);
+                        retry_after.insert(summary.id.clone(), Instant::now() + RECONNECT_BACKOFF);
+                    }
+                }
+            }
             if summary.worktree_path.is_none() {
                 summary.worktree_path = snapshot
                     .projects
@@ -1510,10 +1561,37 @@ fn serve(paths: &Paths) -> Result<(), String> {
                 if persisted_reopen && !selected_reopens.contains(&summary.id) {
                     continue;
                 }
-                if retry_after
-                    .get(&summary.id)
-                    .is_some_and(|until| Instant::now() < *until)
+                if pending_opens.contains_key(&summary.id)
+                    || retry_after
+                        .get(&summary.id)
+                        .is_some_and(|until| Instant::now() < *until)
                 {
+                    continue;
+                }
+                if !persisted_reopen {
+                    // Le lien rejoint `links` au cycle qui suit sa fin ; ses
+                    // remises démarrent dès l'enregistrement, dans son worker.
+                    let (paths, session, slots) =
+                        (paths.clone(), session.clone(), open_slots.clone());
+                    let thread_summary = summary.clone();
+                    match thread::Builder::new()
+                        .name(format!(
+                            "t3-open-{}",
+                            &summary.id[..summary.id.len().min(8)]
+                        ))
+                        .spawn(move || {
+                            let _slot = slots.acquire();
+                            Link::open(&paths, session, &thread_summary)
+                        }) {
+                        Ok(handle) => {
+                            pending_opens.insert(summary.id.clone(), handle);
+                        }
+                        Err(e) => {
+                            warn!("fil {} non exposé : {e}", summary.id);
+                            retry_after
+                                .insert(summary.id.clone(), Instant::now() + RECONNECT_BACKOFF);
+                        }
+                    }
                     continue;
                 }
                 match Link::open(paths, session.clone(), &summary) {
@@ -1587,7 +1665,53 @@ fn serve(paths: &Paths) -> Result<(), String> {
             &mut foreign_runtime,
         );
         publish_status(paths, "running", &session.base_url(), links.len());
-        thread::sleep(poll);
+        thread::sleep(if pending_opens.is_empty() {
+            poll
+        } else {
+            poll.min(OPEN_COLLECT_POLL)
+        });
+    }
+}
+
+/// 0 : tour en cours ; 1 : session fournisseur ouverte ; 2 : le reste.
+fn open_priority(summary: &ThreadSummary) -> u8 {
+    match summary.session.as_ref() {
+        Some(session) if session.active_turn_id.is_some() => 0,
+        Some(_) => 1,
+        None => 2,
+    }
+}
+
+/// Sémaphore des enregistrements simultanés. O(1) par prise et par rendu.
+struct OpenSlots {
+    free: Mutex<usize>,
+    released: Condvar,
+}
+
+struct OpenSlot(Arc<OpenSlots>);
+
+impl OpenSlots {
+    fn new(bound: usize) -> Self {
+        Self {
+            free: Mutex::new(bound.max(1)),
+            released: Condvar::new(),
+        }
+    }
+
+    fn acquire(self: &Arc<Self>) -> OpenSlot {
+        let mut free = self.free.lock().recover_poison();
+        while *free == 0 {
+            free = self.released.wait(free).recover_poison();
+        }
+        *free -= 1;
+        OpenSlot(self.clone())
+    }
+}
+
+impl Drop for OpenSlot {
+    fn drop(&mut self) {
+        *self.0.free.lock().recover_poison() += 1;
+        self.0.released.notify_one();
     }
 }
 

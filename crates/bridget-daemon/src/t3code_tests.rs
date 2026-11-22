@@ -1,5 +1,5 @@
 use super::*;
-use crate::t3code_contract::{LatestTurn, Message};
+use crate::t3code_contract::{LatestTurn, Message, SessionSummary};
 use bridget_transport::poison::RecoverPoison;
 
 fn waiting_listener282(worker: &LinkWorker) -> std::net::TcpListener {
@@ -4609,4 +4609,76 @@ fn spec307_t3_persists_journal_offsets_and_resumes_incrementally() {
         "le lecteur reprend directement à l'offset persisté sans relire depuis 0"
     );
     worker.relay.shutdown();
+}
+
+/// Livraison 328 : 72 fils réenregistrés en série mettaient 30 à 50 s.
+/// Les ouvertures parallèles restent bornées : jamais plus de N à la fois.
+#[test]
+fn ouvertures_paralleles_bornees_par_le_semaphore() {
+    let slots = Arc::new(OpenSlots::new(3));
+    let active = Arc::new(AtomicUsize::new(0));
+    let peak = Arc::new(AtomicUsize::new(0));
+    let handles: Vec<_> = (0..12)
+        .map(|_| {
+            let (slots, active, peak) = (slots.clone(), active.clone(), peak.clone());
+            thread::spawn(move || {
+                let _slot = slots.acquire();
+                let now = active.fetch_add(1, Ordering::SeqCst) + 1;
+                peak.fetch_max(now, Ordering::SeqCst);
+                thread::sleep(Duration::from_millis(20));
+                active.fetch_sub(1, Ordering::SeqCst);
+            })
+        })
+        .collect();
+    for handle in handles {
+        handle.join().expect("ouverture simulée");
+    }
+    assert_eq!(
+        peak.load(Ordering::SeqCst),
+        3,
+        "le parallélisme doit atteindre la borne sans la dépasser"
+    );
+    assert_eq!(
+        *slots.free.lock().recover_poison(),
+        3,
+        "chaque place est rendue"
+    );
+}
+
+#[test]
+fn place_rendue_meme_si_l_ouverture_panique() {
+    let slots = Arc::new(OpenSlots::new(1));
+    let worker = slots.clone();
+    let _ = thread::spawn(move || {
+        let _slot = worker.acquire();
+        panic!("ouverture interrompue");
+    })
+    .join();
+    let _slot = slots.acquire();
+    assert_eq!(*slots.free.lock().recover_poison(), 0);
+}
+
+#[test]
+fn fils_en_plein_tour_ouverts_en_premier() {
+    let thread = |id: &str, turn: Option<&str>, session: bool| {
+        let mut thread = summary(None);
+        thread.id = id.to_string();
+        thread.session = session.then(|| SessionSummary {
+            provider_name: "codex".to_string(),
+            provider_instance_id: None,
+            status: "ready".to_string(),
+            active_turn_id: turn.map(str::to_string),
+        });
+        thread
+    };
+    let threads = [
+        thread("repos", None, false),
+        thread("session", None, true),
+        thread("tour", Some("t1"), true),
+        thread("repos-2", None, false),
+    ];
+    let mut ordered: Vec<&ThreadSummary> = threads.iter().collect();
+    ordered.sort_by_key(|summary| open_priority(summary));
+    let ids: Vec<&str> = ordered.iter().map(|summary| summary.id.as_str()).collect();
+    assert_eq!(ids, ["tour", "session", "repos", "repos-2"]);
 }
