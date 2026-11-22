@@ -1524,7 +1524,11 @@ pub(crate) async fn route_api_machines_repair(
     }
     if !matches!(
         req.action.as_str(),
-        "fix_codex_link" | "restart_worker" | "sync_bridget" | "macos_keychain_no_autolock"
+        "fix_codex_link"
+            | "restart_worker"
+            | "sync_bridget"
+            | "macos_keychain_no_autolock"
+            | "macos_keychain_open_terminal"
     ) {
         return error_response(
             StatusCode::BAD_REQUEST,
@@ -1582,6 +1586,52 @@ pub(crate) async fn route_api_machines_repair(
         };
 
         match req.action.as_str() {
+            "macos_keychain_open_terminal" => {
+                #[cfg(target_os = "macos")]
+                {
+                    let home = std::env::var("HOME").map_err(|_| "variable HOME absente".to_string())?;
+                    let tmp_dir = PathBuf::from(&home).join(".cache/bridget-core/tmp");
+                    crate::environment::ensure_private_directory(&tmp_dir)?;
+                    let script_path = tmp_dir.join(format!(
+                        "unlock-{}-{}.command",
+                        m,
+                        uuid::Uuid::new_v4().simple()
+                    ));
+                    let quoted_m = crate::accounts_connect::sh_quote(&m);
+                    let content = format!(
+                        "#!/bin/sh\nrm -f \"$0\"\nprintf '\\nDéverrouillage du trousseau macOS sur %s (et désactivation du verrouillage auto)...\\n\\n' {quoted_m}\nssh -t {quoted_m} 'security unlock-keychain ~/Library/Keychains/login.keychain-db && security set-keychain-settings ~/Library/Keychains/login.keychain-db && printf \"\\n✓ Trousseau déverrouillé et verrouillage auto désactivé ! Vous pouvez fermer cette fenêtre.\\n\"'\n"
+                    );
+                    let mut file = OpenOptions::new()
+                        .write(true)
+                        .create_new(true)
+                        .mode(0o700)
+                        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
+                        .open(&script_path)
+                        .map_err(|e| format!("création script temporaire impossible : {e}"))?;
+                    file.write_all(content.as_bytes())
+                        .and_then(|_| file.sync_all())
+                        .map_err(|e| format!("écriture script temporaire impossible : {e}"))?;
+                    drop(file);
+                    let status = Command::new("/usr/bin/open")
+                        .args(["-a", "Terminal"])
+                        .arg(&script_path)
+                        .status()
+                        .map_err(|e| format!("ouverture de Terminal impossible : {e}"))?;
+                    if !status.success() {
+                        let _ = fs::remove_file(&script_path);
+                        return Err("impossible d'ouvrir l'application Terminal".into());
+                    }
+                    Ok(json!({
+                        "status": "ok",
+                        "action": "macos_keychain_open_terminal",
+                        "ui_state": format!("Terminal ouvert pour déverrouiller {m} — tapez votre mot de passe macOS puis actualisez")
+                    }))
+                }
+                #[cfg(not(target_os = "macos"))]
+                {
+                    Err("L'ouverture automatique de Terminal est disponible uniquement sur macOS ; copiez la commande dans votre terminal.".into())
+                }
+            }
             "macos_keychain_no_autolock" => {
                 let script = "security set-keychain-settings \"$HOME/Library/Keychains/login.keychain-db\" && \
                     security show-keychain-info \"$HOME/Library/Keychains/login.keychain-db\" 2>&1";

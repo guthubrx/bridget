@@ -373,14 +373,13 @@ function handleRepairMachine(machine, repair) {
   if (repair.action === "macos_keychain_unlock_guide") {
     const cmd = `ssh -t ${machine.machine_id} 'security unlock-keychain ~/Library/Keychains/login.keychain-db && security set-keychain-settings ~/Library/Keychains/login.keychain-db'`;
     const body = `<p>Sur <strong>${esc(machine.machine_id)}</strong> (macOS), le trousseau est actuellement verrouillé. Par sécurité, Apple demande votre mot de passe de session une fois pour le déverrouiller — aucun mot de passe ne transite par cette page.</p>
-      <p>Exécutez cette commande unique dans votre terminal : elle <strong>déverrouille le trousseau</strong> et <strong>désactive son verrouillage automatique</strong> jusqu'au prochain redémarrage du Mac.</p>
-      <div class="cmd-box"><code>${esc(cmd)}</code></div>
+      <p>Cliquez sur <strong>Ouvrir dans Terminal</strong> : une fenêtre Terminal s'ouvre directement sur la demande de mot de passe, déverrouille le trousseau et <strong>désactive son verrouillage automatique</strong> jusqu'au prochain redémarrage du Mac.</p>
+      <details class="tech-log"><summary>Voir ou copier la commande manuellement</summary><div class="cmd-box" style="margin:8px"><code>${esc(cmd)}</code></div></details>
       <div id="copyKcMsg" class="row-sub"></div>`;
     openModal(`Déverrouiller macOS · ${machine.machine_id}`, body, [
       { label: "Fermer", onClick: closeModal },
       {
         label: "Copier la commande",
-        primary: true,
         onClick: async () => {
           try {
             await navigator.clipboard.writeText(cmd);
@@ -389,6 +388,29 @@ function handleRepairMachine(machine, repair) {
           } catch {
             const el = document.getElementById("copyKcMsg");
             if (el) el.textContent = "Sélectionnez la commande ci-dessus et faites ⌘C.";
+          }
+        },
+      },
+      {
+        label: "Ouvrir dans Terminal",
+        primary: true,
+        onClick: async (ev) => {
+          const btn = ev.currentTarget;
+          btn.disabled = true;
+          const el = document.getElementById("copyKcMsg");
+          if (el) el.textContent = "Ouverture de Terminal…";
+          try {
+            const res = await apiRequest("/api/machines/repair", {
+              method: "POST",
+              body: JSON.stringify({ machine_id: machine.machine_id, action: "macos_keychain_open_terminal" }),
+            });
+            if (el) el.textContent = `✓ ${res.ui_state}`;
+            btn.disabled = false;
+            btn.textContent = "Vérifier maintenant";
+            btn.onclick = () => { closeModal(); loadMachines(); loadStatus(); };
+          } catch (e) {
+            btn.disabled = false;
+            if (el) el.textContent = `✕ ${e.message}`;
           }
         },
       },
