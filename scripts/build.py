@@ -1498,7 +1498,10 @@ def call_bridget_heavy_work(subcommand, extra_args=()):
         return False, f"bridget_cli_error:{error}"
     if res.returncode != 0:
         err = (res.stderr or res.stdout or "").strip()
-        return False, err or f"bridget_cli_exit_{res.returncode}"
+        first_line = next((line.strip() for line in err.splitlines() if line.strip()), "")
+        if len(first_line) > 160:
+            first_line = first_line[:157] + "..."
+        return False, first_line or f"bridget_cli_exit_{res.returncode}"
     try:
         return True, json.loads(res.stdout)
     except json.JSONDecodeError as error:
@@ -2474,7 +2477,12 @@ def main():
     inspect.add_argument("--repo", required=True)
     inspect.add_argument("--base-ref", default="main")
     inspect.add_argument("--json", action="store_true")
-    args = parser.parse_args()
+    # Contourner le bogue Python 3.9 d'argparse.REMAINDER sur une option en tête
+    # (ex: `build.py cargo --local build --release`).
+    if len(sys.argv) >= 2 and sys.argv[1] == "cargo":
+        args = argparse.Namespace(action="cargo", arguments=sys.argv[2:])
+    else:
+        args = parser.parse_args()
     repo = Path(__file__).resolve().parent.parent
     if args.action == "target-dir":
         try:

@@ -354,13 +354,12 @@ class HeavyWork312Tests(unittest.TestCase):
         self.assertEqual(code, 2)
         self.assertIn("--ssh-host", stderr.getvalue())
 
-        # Cible étrangère --build-target linux-x86_64-glibc2.36 --local refusée sur macOS
+        # Cible étrangère --build-target linux-x86_64-glibc2.36 --local refusée sur macOS (y compris via main() Python 3.9)
         stderr2 = io.StringIO()
         with contextlib.redirect_stderr(stderr2), \
+             patch.object(sys, "argv", ["build.py", "cargo", "--local", "--build-target", "linux-x86_64-glibc2.36", "build", "--release"]), \
              patch.object(build, "check_local_target_compatible", return_value=(False, "impossible en local --host")):
-            code2 = build.run_cargo_action(
-                self.root, ["--local", "--build-target", "linux-x86_64-glibc2.36", "build", "--release"], parser
-            )
+            code2 = build.main()
         self.assertEqual(code2, 2)
         self.assertIn("--host", stderr2.getvalue())
 
