@@ -1110,6 +1110,10 @@ for pair in "claude:claude" "codex:codex" "antigravity:agy" "cursor:cursor-agent
   p=$(command -v "$bin" 2>/dev/null || true)
   if [ -n "$p" ]; then
     v=$("$p" --version 2>/dev/null | head -n 1 | tr '\t\r\n' '   ' || true)
+    if [ -z "$v" ] && [ "$cid" = "cursor" ]; then
+      target=$(readlink "$p" 2>/dev/null || true)
+      [ -n "$target" ] && v=$(basename "$(dirname "$target")" 2>/dev/null || true)
+    fi
     printf 'CLI\t%s\tpresent\t%s\t%s\n' "$cid" "$p" "$v"
   else
     printf 'CLI\t%s\tabsent\t\t\n' "$cid"
@@ -1686,7 +1690,7 @@ pub(crate) fn build_client_deploy_script(
             "echo '::step::2::Téléchargement et installation d’Antigravity'\ntmp=$(mktemp)\ntrap 'rm -f \"$tmp\"' EXIT\ncurl -fsSL https://antigravity.google/cli/install.sh -o \"$tmp\"\nsh \"$tmp\" </dev/null\nexport PATH=\"$HOME/.local/bin:$PATH\"\necho '::step::3::Vérification de la version'\nagy --version"
         }
         ("cursor", _) => {
-            "echo '::step::2::Téléchargement et installation de Cursor CLI'\ntmp=$(mktemp)\ntrap 'rm -f \"$tmp\"' EXIT\ncurl -fsSL https://cursor.com/install -o \"$tmp\"\nbash \"$tmp\" </dev/null\nexport PATH=\"$HOME/.local/bin:$PATH\"\necho '::step::3::Vérification de la version'\ncursor-agent --version"
+            "echo '::step::2::Téléchargement et installation de Cursor CLI'\ntmp=$(mktemp)\ntrap 'rm -f \"$tmp\"' EXIT\ncurl -fsSL https://cursor.com/install -o \"$tmp\"\nbash \"$tmp\" </dev/null\nexport PATH=\"$HOME/.local/bin:$PATH\"\necho '::step::3::Vérification de la version'\np=$(command -v cursor-agent)\nv=$(\"$p\" --version 2>/dev/null | head -n 1 || true)\nif [ -z \"$v\" ]; then target=$(readlink \"$p\" 2>/dev/null || true); v=$(basename \"$(dirname \"$target\")\" 2>/dev/null || echo 'installé'); fi\nprintf '%s\\n' \"$v\""
         }
         ("gemini", update) => {
             let pkg = if update {
