@@ -145,7 +145,19 @@ export function renderSettingsView(ctx) {
     routingHtml = `<div class="empty-box">Politique de routage non disponible sur ce registre local.</div>`;
   }
 
-  root.innerHTML = autoHtml + routingHtml;
+  const macHelpHtml = `<section class="settings-card">
+    <div class="machine-head">
+      <div class="machine-title">
+        <h2>Machines macOS utilisées à distance</h2>
+      </div>
+    </div>
+    <p style="margin:0;color:var(--muted);font-size:13px;line-height:1.5">
+      Sur un Mac contrôlé en SSH (comme un MacBook fermé), macOS verrouille automatiquement le trousseau en veille, ce qui bloque les connexions <strong>Claude Code</strong> et <strong>Cursor CLI</strong> (Codex, Antigravity et Gemini ne sont pas concernés).
+      L'onglet <strong>Machines &amp; CLI</strong> détecte automatiquement cet état et vous propose soit de désactiver le verrouillage auto en un clic, soit la commande SSH unique de déverrouillage.
+    </p>
+  </section>`;
+
+  root.innerHTML = autoHtml + routingHtml + macHelpHtml;
 
   document.getElementById("saveAutoBtn").onclick = () => {
     onSaveAutomanaged({

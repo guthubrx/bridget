@@ -370,6 +370,31 @@ function handleOpenSshModal(existing) {
 }
 
 function handleRepairMachine(machine, repair) {
+  if (repair.action === "macos_keychain_unlock_guide") {
+    const cmd = `ssh -t ${machine.machine_id} 'security unlock-keychain ~/Library/Keychains/login.keychain-db && security set-keychain-settings ~/Library/Keychains/login.keychain-db'`;
+    const body = `<p>Sur <strong>${esc(machine.machine_id)}</strong> (macOS), le trousseau est actuellement verrouillé. Par sécurité, Apple demande votre mot de passe de session une fois pour le déverrouiller — aucun mot de passe ne transite par cette page.</p>
+      <p>Exécutez cette commande unique dans votre terminal : elle <strong>déverrouille le trousseau</strong> et <strong>désactive son verrouillage automatique</strong> jusqu'au prochain redémarrage du Mac.</p>
+      <div class="cmd-box"><code>${esc(cmd)}</code></div>
+      <div id="copyKcMsg" class="row-sub"></div>`;
+    openModal(`Déverrouiller macOS · ${machine.machine_id}`, body, [
+      { label: "Fermer", onClick: closeModal },
+      {
+        label: "Copier la commande",
+        primary: true,
+        onClick: async () => {
+          try {
+            await navigator.clipboard.writeText(cmd);
+            const el = document.getElementById("copyKcMsg");
+            if (el) el.textContent = "✓ Commande copiée. Collez-la dans un terminal puis cliquez sur Actualiser.";
+          } catch {
+            const el = document.getElementById("copyKcMsg");
+            if (el) el.textContent = "Sélectionnez la commande ci-dessus et faites ⌘C.";
+          }
+        },
+      },
+    ]);
+    return;
+  }
   const body = `<p>Vérifiez l'action de maintenance avant de l'exécuter sur <strong>${esc(machine.machine_id)}</strong>.</p>
     <dl class="kv">
       <dt>Machine</dt><dd>${esc(machine.machine_id)} (${esc(machine.os)} ${esc(machine.arch)})</dd>

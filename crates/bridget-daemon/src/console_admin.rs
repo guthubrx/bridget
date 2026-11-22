@@ -1103,7 +1103,18 @@ codex_brew="ok"
 if [ "$os" = "Darwin" ] && [ -d /opt/homebrew/bin ] && [ ! -e /opt/homebrew/bin/codex ] && [ -x "$HOME/.local/bin/codex" ]; then
   codex_brew="missing_link"
 fi
-printf 'META\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$os" "$arch" "$hn" "$bpath" "$bver" "$worker" "$codex_brew"
+kc="na"
+if [ "$os" = "Darwin" ]; then
+  kout=$(security show-keychain-info "$HOME/Library/Keychains/login.keychain-db" 2>&1 || true)
+  if printf '%s' "$kout" | grep -qiE 'not allowed|locked|error'; then
+    kc="locked"
+  elif printf '%s' "$kout" | grep -qiE 'lock-on-sleep|timeout=[0-9]'; then
+    kc="autolock_enabled"
+  elif printf '%s' "$kout" | grep -qi 'keychain'; then
+    kc="ok"
+  fi
+fi
+printf 'META\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$os" "$arch" "$hn" "$bpath" "$bver" "$worker" "$codex_brew" "$kc"
 for pair in "claude:claude" "codex:codex" "antigravity:agy" "cursor:cursor-agent" "gemini:gemini"; do
   cid=${pair%%:*}
   bin=${pair#*:}
@@ -1179,6 +1190,7 @@ fn probe_one_machine(
     let mut bridget_version = String::new();
     let mut worker_state = "unknown".to_string();
     let mut codex_brew_status = "ok".to_string();
+    let mut macos_keychain_state = "na".to_string();
     let mut clients: Vec<Value> = Vec::new();
 
     if let Ok(output) = out
@@ -1197,6 +1209,9 @@ fn probe_one_machine(
                     bridget_version = parts[5].to_string();
                     worker_state = parts[6].to_string();
                     codex_brew_status = parts[7].to_string();
+                    if parts.len() >= 9 {
+                        macos_keychain_state = parts[8].to_string();
+                    }
                 }
                 Some("CLI") if parts.len() >= 5 => {
                     let cid = parts[1];
@@ -1265,6 +1280,22 @@ fn probe_one_machine(
         }));
     }
 
+    if !is_local && reachable && os == "Darwin" {
+        if macos_keychain_state == "autolock_enabled" {
+            suggested_repairs.push(json!({
+                "action": "macos_keychain_no_autolock",
+                "label": "Désactiver le verrouillage auto du trousseau",
+                "detail": "Empêche macOS de reverrouiller le trousseau en veille (évite les blocages Claude Code et Cursor en SSH)."
+            }));
+        } else if macos_keychain_state == "locked" {
+            suggested_repairs.push(json!({
+                "action": "macos_keychain_unlock_guide",
+                "label": "Déverrouiller le trousseau macOS",
+                "detail": "Trousseau macOS verrouillé en SSH : commande unique pour déverrouiller et désactiver le verrouillage automatique."
+            }));
+        }
+    }
+
     json!({
         "machine_id": machine_id,
         "is_local": is_local,
@@ -1279,6 +1310,7 @@ fn probe_one_machine(
         "bridget_path": bridget_path,
         "bridget_version": bridget_version,
         "worker_state": worker_state,
+        "macos_keychain_state": macos_keychain_state,
         "can_sync_bridget": can_sync_bridget,
         "suggested_repairs": suggested_repairs,
         "clients": clients
@@ -1492,7 +1524,7 @@ pub(crate) async fn route_api_machines_repair(
     }
     if !matches!(
         req.action.as_str(),
-        "fix_codex_link" | "restart_worker" | "sync_bridget"
+        "fix_codex_link" | "restart_worker" | "sync_bridget" | "macos_keychain_no_autolock"
     ) {
         return error_response(
             StatusCode::BAD_REQUEST,
@@ -1550,6 +1582,25 @@ pub(crate) async fn route_api_machines_repair(
         };
 
         match req.action.as_str() {
+            "macos_keychain_no_autolock" => {
+                let script = "security set-keychain-settings \"$HOME/Library/Keychains/login.keychain-db\" && \
+                    security show-keychain-info \"$HOME/Library/Keychains/login.keychain-db\" 2>&1";
+                let detail = run_remote(script).map_err(|e| {
+                    if e.contains("User interaction is not allowed") {
+                        format!(
+                            "Le trousseau est actuellement verrouillé sur {m}. Déverrouillez-le d'abord une fois en SSH avec : ssh -t {m} 'security unlock-keychain ~/Library/Keychains/login.keychain-db && security set-keychain-settings ~/Library/Keychains/login.keychain-db'"
+                        )
+                    } else {
+                        e
+                    }
+                })?;
+                Ok(json!({
+                    "status": "ok",
+                    "action": "macos_keychain_no_autolock",
+                    "detail": detail,
+                    "ui_state": format!("Verrouillage automatique du trousseau désactivé sur {m}")
+                }))
+            }
             "fix_codex_link" => {
                 let script = "if [ -d /opt/homebrew/bin ] && [ -x \"$HOME/.local/bin/codex\" ]; then \
                     ln -sfn \"$HOME/.local/bin/codex\" /opt/homebrew/bin/codex && /opt/homebrew/bin/codex --version; \

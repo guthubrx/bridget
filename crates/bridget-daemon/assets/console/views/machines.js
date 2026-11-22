@@ -37,8 +37,17 @@ export function renderMachinesView(ctx) {
         : `<span class="badge">Hors ligne</span>`;
 
     const repairs = (m.suggested_repairs || []).map((r, idx) =>
-      `<button class="btn${r.action === "configure_ssh" || r.action === "fix_codex_link" ? " primary" : ""}" type="button" data-repair-m="${esc(m.machine_id)}" data-repair-idx="${idx}">${esc(r.label)}</button>`
+      `<button class="btn${r.action === "configure_ssh" || r.action === "fix_codex_link" || r.action === "macos_keychain_no_autolock" || r.action === "macos_keychain_unlock_guide" ? " primary" : ""}" type="button" data-repair-m="${esc(m.machine_id)}" data-repair-idx="${idx}">${esc(r.label)}</button>`
     ).join("");
+
+    let macNote = "";
+    if (!m.is_local && m.reachable && m.os === "Darwin") {
+      if (m.macos_keychain_state === "locked") {
+        macNote = `<div class="macos-note"><strong>macOS distant détecté · Trousseau verrouillé</strong>Sur un Mac utilisé à distance, macOS verrouille automatiquement le trousseau en veille, ce qui bloque les connexions <strong>Claude Code</strong> et <strong>Cursor CLI</strong> (Codex, Antigravity et Gemini ne sont pas concernés). Cliquez sur « Déverrouiller le trousseau macOS » pour copier la commande unique à lancer une fois.</div>`;
+      } else if (m.macos_keychain_state === "autolock_enabled") {
+        macNote = `<div class="macos-note"><strong>macOS distant détecté · Verrouillage auto actif</strong>Le trousseau est ouvert mais macOS le reverrouillera automatiquement en veille, ce qui coupera Claude Code et Cursor CLI. Vous pouvez désactiver ce verrouillage auto en un clic ci-dessous.</div>`;
+      }
+    }
 
     const sshBtn = !m.is_local
       ? `<button class="btn subtle" type="button" data-edit-ssh="${esc(m.machine_id)}">SSH</button>`
@@ -76,6 +85,7 @@ export function renderMachinesView(ctx) {
         </div>
         <div class="badges">${workerBadge}${sshBtn}</div>
       </div>
+      ${macNote}
       ${repairs ? `<div class="repair-bar">${repairs}</div>` : ""}
       <div class="table-card">${cliRows}</div>
     </section>`;
