@@ -1405,6 +1405,91 @@ fn spec217_failed_terminal_reaches_real_transport_and_journal() {
     fs::remove_dir_all(root).unwrap();
 }
 
+#[test]
+fn codex_structured_model_not_found_code_maps_without_message_parsing() {
+    let value = json!({"params":{"turn":{"error":{"codexErrorInfo":"modelNotFound",
+            "message":"PRIVATE_PROVIDER_MESSAGE","additionalDetails":"PRIVATE_DETAIL"}}}});
+    assert_eq!(
+        codex_turn_stop_reason(&value, "failed"),
+        "terminal Codex: failed:cause=model_not_found"
+    );
+    assert!(
+        matches!(codex_turn_terminal(&value, "failed"), ManagedTerminal::Failed { detail }
+            if detail == "terminal Codex: failed:cause=model_not_found")
+    );
+    assert_eq!(codex_turn_stop_reason(&value, "completed"), "completed");
+    assert_eq!(codex_turn_stop_reason(&value, "interrupted"), "interrupted");
+    assert!(matches!(
+        codex_turn_terminal(&value, "completed"),
+        ManagedTerminal::Completed
+    ));
+    assert!(matches!(
+        codex_turn_terminal(&value, "interrupted"),
+        ManagedTerminal::Cancelled
+    ));
+    for error in [
+        json!({"message":"modelNotFound"}),
+        json!({"codexErrorInfo":"model_not_found"}),
+        json!({"codexErrorInfo":{"modelNotFound":"PRIVATE"}}),
+    ] {
+        let bad = json!({"params":{"turn":{"error":error}}});
+        assert_eq!(codex_turn_stop_reason(&bad, "failed"), "failed");
+    }
+}
+
+#[test]
+fn codex_structured_model_not_found_reaches_real_transport_and_journal() {
+    let root = root("codex-model-not-found-structured");
+    let trace = root.join("trace.jsonl");
+    let mut options = fake_options(&trace);
+    let old = r#""id":"turn-native","status":"completed","items":[]"#;
+    let new = r#""id":"turn-native","status":"failed","items":[],"error":{"codexErrorInfo":"modelNotFound","message":"PRIVATE_PROVIDER_MESSAGE"}"#;
+    assert!(options.args[1].contains(old));
+    options.args[1] = options.args[1].replace(old, new);
+    let mut transport = CodexAppServerTransport::spawn_with_environment(
+        options,
+        &[(
+            "BRIDGET_CODEX_TRACE".into(),
+            trace.to_string_lossy().into_owned(),
+        )],
+        false,
+    )
+    .unwrap();
+    transport
+        .activate_journal(&root, "codex-native", None)
+        .unwrap();
+    transport.deliver(&message("model-not-found-structured")).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(4);
+    let mut finished = false;
+    while Instant::now() < deadline && !finished {
+        for event in transport.drain_events() {
+            if let ManagedEventKind::TurnFinished { terminal, .. } = event.kind {
+                assert!(matches!(terminal, ManagedTerminal::Failed { detail }
+                    if detail == "terminal Codex: failed:cause=model_not_found"));
+                finished = true;
+            }
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+    assert!(finished);
+    transport.stop();
+    let journal_path = fs::read_dir(root.join("codex-native"))
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap()
+        .path();
+    let events = crate::journal::valid_events(&journal_path);
+    assert!(events.iter().any(|event| event["event"] == "turn_end"
+        && event["payload"]["stop_reason"] == "terminal Codex: failed:cause=model_not_found"));
+    assert!(
+        !serde_json::to_string(&events)
+            .unwrap()
+            .contains("PRIVATE_PROVIDER_MESSAGE")
+    );
+    fs::remove_dir_all(root).unwrap();
+}
+
 fn fake_options(_trace: &std::path::Path) -> CodexAppServerOptions {
     CodexAppServerOptions {
             command: "sh".to_string(),

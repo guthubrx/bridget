@@ -4789,6 +4789,7 @@ fn codex_turn_stop_reason<'a>(value: &Value, status: &'a str) -> &'a str {
     {
         Some("usageLimitExceeded") => "usage_limit",
         Some("serverOverloaded") => "terminal Codex: failed:cause=server_overloaded",
+        Some("modelNotFound") => "terminal Codex: failed:cause=model_not_found",
         Some("other") if codex_model_not_found217(value) => {
             "terminal Codex: failed:cause=model_not_found"
         }
