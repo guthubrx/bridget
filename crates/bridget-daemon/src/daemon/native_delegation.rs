@@ -7259,6 +7259,20 @@ fn current_task_view(st: &DaemonState, task: &Task, full: bool) -> Result<Value,
         });
     }
 
+    if matches!(task.state.as_str(), "cancelled" | "cancelling")
+        && st.delegation_store.has_human_cancel_receipt(&task.task_id)
+    {
+        if !view["detail"].is_object() {
+            view["detail"] = json!({});
+        }
+        view["detail"]["cancellation"] = json!({
+            "source": "human_cancel",
+            "ack_required": false,
+            "message": "Cette tâche a été annulée par une demande d’annulation humaine (arrêt depuis l’interface ou interruption du fil parent), et non par un crash du fournisseur ni par bridget_task_cancel de l’agent.",
+            "recovery": "Aucun bridget_task_ack n’est attendu sur une tâche annulée. Vérifiez les fichiers ou branches éventuellement conservés avant de décider d’une nouvelle mission distincte."
+        });
+    }
+
     let mut rows = st.delegation_store.child_requests_for_task(&task.task_id)?;
     view["pending_requests"]=json!(rows.iter().filter(|row|row.state=="open").map(|row|
         json!({"request_id":row.request_id,"kind":row.kind,"summary":row.summary,"verdict":row.verdict,"deadline_at":row.deadline_at})).collect::<Vec<_>>());
@@ -12350,7 +12364,7 @@ fn handle_locked_with_remote_proof(
                 })
                 .collect();
             if !not_ready.is_empty() {
-                let recovery = "Relisez les états de ces tâches, puis accusez seulement les résultats ou échecs disponibles que vous avez lus. Une continuation peut avoir ouvert une nouvelle ronde entre la lecture et cet ACK. Aucun accusé de ce groupe n’a été enregistré ; les tâches et les autres travaux autorisés suivent leur propre état.";
+                let recovery = task_ack_not_ready_recovery(&not_ready);
                 return Ok(
                     json!({"version":1,"status":"refused","code":"task_not_ready",
                     "scope":"this_request","message":recovery,
@@ -18251,4 +18265,38 @@ fn spec241_routing_qualifies_required_host_tool_before_selection_without_admissi
     assert!(rx.try_recv().is_err());
     drop(state);
     tests::cleanup(&config);
+}
+
+fn task_ack_not_ready_recovery(not_ready: &[Value]) -> &'static str {
+    let all_cancelled = not_ready
+        .iter()
+        .all(|entry| entry["state"].as_str() == Some("cancelled"));
+    let any_cancelled = not_ready
+        .iter()
+        .any(|entry| entry["state"].as_str() == Some("cancelled"));
+    if all_cancelled {
+        "Ces tâches sont déjà annulées (état terminal `cancelled`) : aucun bridget_task_ack n’est attendu ni nécessaire (bridget_task_ack s’applique uniquement aux états `result_available` ou `failed`). Conservez leur bilan et poursuivez les autres travaux autorisés."
+    } else if any_cancelled {
+        "Relisez les états de ces tâches, puis accusez seulement les résultats ou échecs disponibles (`result_available` ou `failed`) : les tâches déjà `cancelled` n’attendent aucun bridget_task_ack. Une continuation peut avoir ouvert une nouvelle ronde entre la lecture et cet ACK. Aucun accusé de ce groupe n’a été enregistré ; les autres travaux autorisés suivent leur propre état."
+    } else {
+        "Relisez les états de ces tâches, puis accusez seulement les résultats ou échecs disponibles que vous avez lus. Une continuation peut avoir ouvert une nouvelle ronde entre la lecture et cet ACK. Aucun accusé de ce groupe n’a été enregistré ; les tâches et les autres travaux autorisés suivent leur propre état."
+    }
+}
+
+#[cfg(test)]
+#[test]
+fn spec334_task_ack_not_ready_distinguishes_cancelled_from_working() {
+    let only_cancelled =
+        task_ack_not_ready_recovery(&[json!({"task_id":"t1","state":"cancelled"})]);
+    assert!(only_cancelled.contains("aucun bridget_task_ack"));
+    assert!(!only_cancelled.contains("Une continuation peut avoir ouvert"));
+
+    let mixed = task_ack_not_ready_recovery(&[
+        json!({"task_id":"t1","state":"cancelled"}),
+        json!({"task_id":"t2","state":"working"}),
+    ]);
+    assert!(mixed.contains("n’attendent aucun bridget_task_ack"));
+
+    let only_working = task_ack_not_ready_recovery(&[json!({"task_id":"t2","state":"working"})]);
+    assert!(only_working.contains("Une continuation peut avoir ouvert"));
 }

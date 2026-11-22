@@ -1219,6 +1219,8 @@ fn delegation149_cancel_rejeu_mismatch_etats_et_plafond() {
     assert!(moteur4);
     assert_eq!(recu4["status"], "cancelling");
     assert_eq!(meta(&store).seq, 4);
+    assert!(store.has_human_cancel_receipt("t-c1"));
+    assert!(!store.has_human_cancel_receipt("t-absent"));
 
     // Racines étrangères et tâches absentes : même refus.
     assert!(matches!(

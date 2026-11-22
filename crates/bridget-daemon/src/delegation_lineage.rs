@@ -1046,6 +1046,19 @@ impl DelegationStore {
         Ok(())
     }
 
+    pub(crate) fn has_human_cancel_receipt(&self, task_id: &str) -> bool {
+        self.conn
+            .query_row(
+                "SELECT 1 FROM native_delegation_cancel_receipts WHERE task_id = ?1 LIMIT 1",
+                [task_id],
+                |_| Ok(true),
+            )
+            .optional()
+            .ok()
+            .flatten()
+            .unwrap_or(false)
+    }
+
     /// La clé d'appareil doit rester liée à une seule racine et une seule tâche.
     pub(crate) fn human_cancel_scoped_receipt(
         &self,
