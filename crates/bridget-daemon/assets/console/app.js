@@ -12,6 +12,11 @@ let state = {
   themePref: document.documentElement.getAttribute("data-theme-pref") || "system",
 };
 let loginCtx = { sessionId: null, pollTimer: null, offset: 0, authUrl: null, popup: null, running: false };
+let deployCtx = { jobId: null, pollTimer: null, offset: 0, running: false };
+
+function stopDeployPolling() {
+  if (deployCtx.pollTimer) { clearInterval(deployCtx.pollTimer); deployCtx.pollTimer = null; }
+}
 
 function esc(v) {
   return String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -79,6 +84,13 @@ function closeModal() {
     apiRequest("/api/login/cancel", { method: "POST", body: JSON.stringify({ session_id: sid }) }).catch(() => {});
   }
   loginCtx.sessionId = null;
+  stopDeployPolling();
+  if (deployCtx.running && deployCtx.jobId) {
+    const jid = deployCtx.jobId;
+    deployCtx.running = false;
+    apiRequest("/api/clients/deploy/cancel", { method: "POST", body: JSON.stringify({ job_id: jid }) }).catch(() => {});
+  }
+  deployCtx.jobId = null;
   document.getElementById("modalBackdrop").classList.add("hidden");
 }
 
@@ -389,6 +401,8 @@ function handleRepairMachine(machine, repair) {
 }
 
 function handleDeployClient(machine, client, mode) {
+  stopDeployPolling();
+  deployCtx = { jobId: null, pollTimer: null, offset: 0, running: false };
   const isUpdate = mode === "update";
   const verb = isUpdate ? "Mettre à jour" : "Installer";
   const cmdSummary = isUpdate ? client.update_summary : client.install_summary;
@@ -399,31 +413,112 @@ function handleDeployClient(machine, client, mode) {
       <dt>Méthode officielle</dt><dd>${esc(cmdSummary)}</dd>
       <dt>Connexion ensuite</dt><dd><code>${esc(client.login_hint)}</code> (ou bouton Connecter)</dd>
     </dl>
-    <div id="depMsg" class="row-sub"></div>
-    <details id="depLogWrap" class="tech-log hidden"><summary>Journal d'installation</summary><pre id="depLog" class="log-pre"></pre></details>`;
+    <div id="depProgress" class="deploy-progress hidden">
+      <div class="deploy-head">
+        <span id="depStepText"><span class="spinner" aria-hidden="true"></span> Démarrage…</span>
+        <span id="depTimer" class="deploy-timer mono">00:00</span>
+      </div>
+      <div class="step-pills">
+        <div id="depPill1" class="step-pill active">1. Préparation</div>
+        <div id="depPill2" class="step-pill">2. Installation</div>
+        <div id="depPill3" class="step-pill">3. Vérification</div>
+      </div>
+      <div class="progress-bar"><div id="depFill" class="progress-fill running" style="width:15%"></div></div>
+      <details id="depLogDetails" class="tech-log"><summary>Voir les commandes et la sortie en direct</summary><pre id="depLog" class="live-terminal"></pre></details>
+    </div>
+    <div id="depResult" class="login-banner hidden"></div>`;
+
   openModal(`${verb} ${client.label}`, body, [
     { label: "Annuler", onClick: closeModal },
     {
       label: `${verb} maintenant`,
       primary: true,
-      onClick: async () => {
-        const msg = document.getElementById("depMsg");
-        msg.textContent = `${verb} en cours sur ${machine.machine_id} (peut prendre 15 à 60 secondes)…`;
+      onClick: async (ev) => {
+        if (deployCtx.running) return;
+        const btn = ev.currentTarget;
+        btn.disabled = true;
+        btn.innerHTML = `<span class="spinner" aria-hidden="true"></span> ${isUpdate ? "Mise à jour…" : "Installation…"}`;
+        document.getElementById("depProgress").classList.remove("hidden");
+        const setPills = (idx, failed, doneAll) => {
+          for (let n = 1; n <= 3; n++) {
+            const p = document.getElementById(`depPill${n}`);
+            if (!p) continue;
+            p.className = "step-pill";
+            if (doneAll) p.classList.add("done");
+            else if (failed && n === idx) p.classList.add("err");
+            else if (n < idx) p.classList.add("done");
+            else if (n === idx) p.classList.add("active");
+          }
+        };
+        const fmtSec = (s) => `${String(Math.floor(s / 60)).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`;
         try {
-          const res = await apiRequest("/api/clients/deploy", {
+          const started = await apiRequest("/api/clients/deploy", {
             method: "POST",
             body: JSON.stringify({ machine_id: machine.machine_id, client_id: client.id, mode }),
           });
-          msg.textContent = `✓ ${res.ui_state}`;
-          if (res.log) {
-            document.getElementById("depLog").textContent = res.log;
-            document.getElementById("depLogWrap").classList.remove("hidden");
-          }
-          showFeedback("ok", "✓", res.ui_state);
-          loadMachines();
-          loadStatus();
+          deployCtx.jobId = started.job_id;
+          deployCtx.running = true;
+          const poll = async () => {
+            if (!deployCtx.jobId) return;
+            try {
+              const res = await apiRequest(`/api/clients/deploy/poll?job=${encodeURIComponent(deployCtx.jobId)}&offset=${deployCtx.offset}`);
+              deployCtx.offset = res.next_offset || deployCtx.offset;
+              const pre = document.getElementById("depLog");
+              if (res.chunk && pre) { pre.textContent += res.chunk; pre.scrollTop = pre.scrollHeight; }
+              const timer = document.getElementById("depTimer");
+              if (timer) timer.textContent = fmtSec(res.elapsed_secs || 0);
+              const fill = document.getElementById("depFill");
+              if (fill) fill.style.width = `${res.percent || 20}%`;
+              const stepTxt = document.getElementById("depStepText");
+              if (res.running) {
+                if (stepTxt) stepTxt.innerHTML = `<span class="spinner" aria-hidden="true"></span> ${esc(res.step_label || "En cours…")}`;
+                setPills(res.step_index || 1, false, false);
+              } else {
+                deployCtx.running = false;
+                stopDeployPolling();
+                const ok = res.exit_code === 0;
+                if (stepTxt) stepTxt.textContent = ok ? "✓ Terminé" : `✕ ${res.step_label || "Échec"}`;
+                if (fill) { fill.classList.remove("running"); fill.classList.add(ok ? "ok" : "err"); fill.style.width = "100%"; }
+                setPills(res.step_index || 2, !ok, ok);
+                const resBox = document.getElementById("depResult");
+                if (resBox) {
+                  resBox.className = `login-banner ${ok ? "ok" : "err"}`;
+                  resBox.innerHTML = ok
+                    ? `<strong>✓ ${esc(res.ui_state)}</strong>Vous pouvez fermer cette fenêtre ou connecter le compte.`
+                    : `<strong>✕ ${esc(res.ui_state)}</strong>Consultez le détail déplié ci-dessus pour voir la cause exacte.`;
+                  resBox.classList.remove("hidden");
+                }
+                if (!ok) {
+                  const det = document.getElementById("depLogDetails");
+                  if (det) det.open = true;
+                }
+                const foot = document.getElementById("modalFoot");
+                if (foot) {
+                  foot.innerHTML = "";
+                  const closeB = document.createElement("button");
+                  closeB.type = "button";
+                  closeB.className = "btn primary";
+                  closeB.textContent = "Fermer";
+                  closeB.onclick = closeModal;
+                  foot.appendChild(closeB);
+                }
+                if (ok) showFeedback("ok", "✓", res.ui_state);
+                loadMachines();
+                loadStatus();
+              }
+            } catch {}
+          };
+          deployCtx.pollTimer = setInterval(poll, 450);
+          poll();
         } catch (e) {
-          msg.textContent = `✕ ${e.message}`;
+          btn.disabled = false;
+          btn.textContent = `${verb} maintenant`;
+          const resBox = document.getElementById("depResult");
+          if (resBox) {
+            resBox.className = "login-banner err";
+            resBox.innerHTML = `<strong>✕ Impossible de démarrer</strong>${esc(e.message)}`;
+            resBox.classList.remove("hidden");
+          }
         }
       },
     },

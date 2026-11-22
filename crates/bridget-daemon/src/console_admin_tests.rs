@@ -175,6 +175,26 @@ async fn spec311_admin_routes_require_hardened_auth_and_reject_bad_inputs() {
     assert_eq!(st, 401);
     let (st, _) = raw_http(port, "GET", "/api/machines", &[("Cookie", &cookie)], None).await;
     assert_eq!(st, 401);
+    let (st, _) = raw_http(
+        port,
+        "GET",
+        "/api/clients/deploy/poll?job=missing",
+        &[("Cookie", &cookie)],
+        None,
+    )
+    .await;
+    assert_eq!(st, 401);
+
+    // Job inconnu authentifié -> 404
+    let (st, _) = raw_http(
+        port,
+        "GET",
+        "/api/clients/deploy/poll?job=missing",
+        &[("Cookie", &cookie), ("x-bridget-token", &token)],
+        None,
+    )
+    .await;
+    assert_eq!(st, 404);
 
     // POST sans Origin -> 403
     let (st, _) = raw_http(

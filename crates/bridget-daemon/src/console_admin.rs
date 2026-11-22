@@ -9,7 +9,7 @@ use crate::console_ui::{
     ConsoleState, check_private_auth, error_response, json_with_headers, resolve_registry_authority,
 };
 use crate::registry::AgentRegistry;
-use axum::extract::State;
+use axum::extract::{Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{Json, Response};
 use serde::{Deserialize, Serialize};
@@ -17,19 +17,48 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File, OpenOptions};
-use std::io::Write;
+use std::io::{BufRead, BufReader, Write};
 use std::os::fd::AsRawFd;
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 const SSH_CONNECT_TIMEOUT: &str = "4";
 const PROBE_TIMEOUT_SECS: u64 = 10;
 const INSTALL_TIMEOUT_SECS: u64 = 240;
+const MAX_DEPLOY_LOG_BYTES: usize = 256 * 1024;
 const MIN_INTERVAL_SECS: u64 = 900;
 const MAX_INTERVAL_SECS: u64 = 604_800;
 const PREVIEW_TTL: Duration = Duration::from_secs(300);
+
+pub(crate) struct DeployJob {
+    pub owner_session_id: String,
+    pub machine_id: String,
+    pub label: String,
+    pub update_mode: bool,
+    pub login_hint: String,
+    pub started_at: Instant,
+    pub step_index: u8,
+    pub step_label: String,
+    pub log: String,
+    pub last_stdout_line: String,
+    pub running: bool,
+    pub exit_code: Option<i32>,
+    pub child: Arc<Mutex<Option<Child>>>,
+}
+
+#[derive(Deserialize)]
+pub(crate) struct DeployPollQuery {
+    pub job: Option<String>,
+    pub offset: Option<usize>,
+}
+
+#[derive(Deserialize)]
+pub(crate) struct DeployCancelRequest {
+    pub job_id: String,
+}
 
 #[derive(Debug, Clone)]
 pub(crate) struct BoundRoutingPreview {
@@ -1632,28 +1661,32 @@ pub(crate) fn build_client_deploy_script(
     client_id: &str,
     update_mode: bool,
 ) -> Result<String, String> {
-    let header = "set -e\nexport PATH=\"$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:$PATH\"\n";
+    let header = "set -e\nexport PATH=\"$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:$PATH\"\necho '::step::1::Préparation de l’environnement'\n";
     let body = match (client_id, update_mode) {
-        ("claude", true) => "claude update && claude --version",
+        ("claude", true) => {
+            "echo '::step::2::Mise à jour officielle de Claude Code'\nclaude update\necho '::step::3::Vérification de la version'\nclaude --version"
+        }
         ("claude", false) => {
-            "tmp=$(mktemp)\ntrap 'rm -f \"$tmp\"' EXIT\ncurl -fsSL https://claude.ai/install.sh -o \"$tmp\"\nbash \"$tmp\" </dev/null\nexport PATH=\"$HOME/.local/bin:$PATH\"\nclaude --version"
+            "echo '::step::2::Téléchargement et installation de Claude Code'\ntmp=$(mktemp)\ntrap 'rm -f \"$tmp\"' EXIT\ncurl -fsSL https://claude.ai/install.sh -o \"$tmp\"\nbash \"$tmp\" </dev/null\nexport PATH=\"$HOME/.local/bin:$PATH\"\necho '::step::3::Vérification de la version'\nclaude --version"
         }
         ("codex", true) => {
-            "if [ \"$(uname -s)\" = Darwin ] && command -v brew >/dev/null 2>&1 && brew list --cask codex >/dev/null 2>&1; then \
+            "echo '::step::2::Mise à jour officielle de Codex'\nif [ \"$(uname -s)\" = Darwin ] && command -v brew >/dev/null 2>&1 && brew list --cask codex >/dev/null 2>&1; then \
                brew upgrade --cask codex; \
              else \
                codex update; \
-             fi && codex --version"
+             fi\necho '::step::3::Vérification de la version'\ncodex --version"
         }
         ("codex", false) => {
-            "tmp=$(mktemp)\ntrap 'rm -f \"$tmp\"' EXIT\ncurl -fsSL https://chatgpt.com/codex/install.sh -o \"$tmp\"\nsh \"$tmp\" </dev/null\nexport PATH=\"$HOME/.local/bin:/opt/homebrew/bin:$PATH\"\nif [ \"$(uname -s)\" = Darwin ] && [ -d /opt/homebrew/bin ] && [ ! -e /opt/homebrew/bin/codex ] && [ -x \"$HOME/.local/bin/codex\" ]; then ln -s \"$HOME/.local/bin/codex\" /opt/homebrew/bin/codex; fi\ncodex --version"
+            "echo '::step::2::Téléchargement et installation de Codex'\ntmp=$(mktemp)\ntrap 'rm -f \"$tmp\"' EXIT\ncurl -fsSL https://chatgpt.com/codex/install.sh -o \"$tmp\"\nsh \"$tmp\" </dev/null\nexport PATH=\"$HOME/.local/bin:/opt/homebrew/bin:$PATH\"\nif [ \"$(uname -s)\" = Darwin ] && [ -d /opt/homebrew/bin ] && [ ! -e /opt/homebrew/bin/codex ] && [ -x \"$HOME/.local/bin/codex\" ]; then ln -s \"$HOME/.local/bin/codex\" /opt/homebrew/bin/codex; fi\necho '::step::3::Vérification de la version'\ncodex --version"
         }
-        ("antigravity", true) => "agy update && agy --version",
+        ("antigravity", true) => {
+            "echo '::step::2::Mise à jour officielle d’Antigravity'\nagy update\necho '::step::3::Vérification de la version'\nagy --version"
+        }
         ("antigravity", false) => {
-            "tmp=$(mktemp)\ntrap 'rm -f \"$tmp\"' EXIT\ncurl -fsSL https://antigravity.google/cli/install.sh -o \"$tmp\"\nsh \"$tmp\" </dev/null\nexport PATH=\"$HOME/.local/bin:$PATH\"\nagy --version"
+            "echo '::step::2::Téléchargement et installation d’Antigravity'\ntmp=$(mktemp)\ntrap 'rm -f \"$tmp\"' EXIT\ncurl -fsSL https://antigravity.google/cli/install.sh -o \"$tmp\"\nsh \"$tmp\" </dev/null\nexport PATH=\"$HOME/.local/bin:$PATH\"\necho '::step::3::Vérification de la version'\nagy --version"
         }
         ("cursor", _) => {
-            "tmp=$(mktemp)\ntrap 'rm -f \"$tmp\"' EXIT\ncurl -fsSL https://cursor.com/install -o \"$tmp\"\nbash \"$tmp\" </dev/null\nexport PATH=\"$HOME/.local/bin:$PATH\"\ncursor-agent --version"
+            "echo '::step::2::Téléchargement et installation de Cursor CLI'\ntmp=$(mktemp)\ntrap 'rm -f \"$tmp\"' EXIT\ncurl -fsSL https://cursor.com/install -o \"$tmp\"\nbash \"$tmp\" </dev/null\nexport PATH=\"$HOME/.local/bin:$PATH\"\necho '::step::3::Vérification de la version'\ncursor-agent --version"
         }
         ("gemini", update) => {
             let pkg = if update {
@@ -1664,7 +1697,9 @@ pub(crate) fn build_client_deploy_script(
             return Ok(format!(
                 "{header}command -v node >/dev/null 2>&1 || {{ echo 'Node.js 20+ requis pour Gemini CLI' >&2; exit 1; }}\n\
                  node -e 'process.exit(Number(process.versions.node.split(\".\")[0]) >= 20 ? 0 : 1)' || {{ echo 'Node.js 20+ requis pour Gemini CLI' >&2; exit 1; }}\n\
-                 npm install --global --prefix \"$HOME/.local\" {pkg} </dev/null\n\
+                 echo '::step::2::Installation npm de {pkg}'\n\
+                 npm install --global --prefix \"$HOME/.local\" --no-fund --no-audit {pkg} </dev/null\n\
+                 echo '::step::3::Vérification de la version'\n\
                  gemini --version\n"
             ));
         }
@@ -1675,6 +1710,39 @@ pub(crate) fn build_client_deploy_script(
         }
     };
     Ok(format!("{header}{body}\n"))
+}
+
+fn pump_deploy_stream<R: std::io::Read>(reader: R, job: Arc<Mutex<DeployJob>>, is_stdout: bool) {
+    let mut buf = BufReader::new(reader);
+    let mut line = Vec::new();
+    loop {
+        line.clear();
+        match buf.read_until(b'\n', &mut line) {
+            Ok(0) | Err(_) => break,
+            Ok(_) => {
+                let text = crate::accounts_connect::strip_ansi(&String::from_utf8_lossy(&line));
+                let trimmed = text.trim();
+                let mut guard = job.lock().unwrap_or_else(|e| e.into_inner());
+                if let Some(rest) = trimmed.strip_prefix("::step::")
+                    && let Some((num_s, lbl)) = rest.split_once("::")
+                    && let Ok(idx) = num_s.parse::<u8>()
+                {
+                    guard.step_index = idx;
+                    guard.step_label = lbl.to_string();
+                    if guard.log.len() < MAX_DEPLOY_LOG_BYTES {
+                        guard.log.push_str(&format!("\n▸ [{idx}/3] {lbl}\n"));
+                    }
+                    continue;
+                }
+                if is_stdout && !trimmed.is_empty() {
+                    guard.last_stdout_line = trimmed.to_string();
+                }
+                if guard.log.len() < MAX_DEPLOY_LOG_BYTES {
+                    guard.log.push_str(&text);
+                }
+            }
+        }
+    }
 }
 
 pub(crate) async fn route_api_clients_deploy(
@@ -1715,106 +1783,289 @@ pub(crate) async fn route_api_clients_deploy(
     };
 
     let machine = req.machine_id.clone();
-    let label = cat.label;
-    let login_hint = cat.login_hint;
-    let res = tokio::task::spawn_blocking(move || -> Result<Value, String> {
-        let local_m = local_machine_name();
-        let is_local = machine == local_m;
-        let out = if is_local {
-            Command::new("bash")
-                .args(["-lc", &script])
-                .stdin(Stdio::null())
-                .stdout(Stdio::piped())
-                .stderr(Stdio::piped())
-                .spawn()
-                .map_err(|e| e.to_string())
-                .and_then(|c| wait_child_bounded(c, INSTALL_TIMEOUT_SECS))?
-        } else {
-            Command::new("ssh")
-                .args([
-                    "-o",
-                    "BatchMode=yes",
-                    "-o",
-                    &format!("ConnectTimeout={SSH_CONNECT_TIMEOUT}"),
-                    &machine,
-                    "bash -s",
-                ])
-                .stdin(Stdio::piped())
-                .stdout(Stdio::piped())
-                .stderr(Stdio::piped())
-                .spawn()
-                .map_err(|e| e.to_string())
-                .and_then(|mut c| {
-                    if let Some(mut stdin) = c.stdin.take() {
-                        let _ = stdin.write_all(script.as_bytes());
-                    }
-                    wait_child_bounded(c, INSTALL_TIMEOUT_SECS)
-                })?
-        };
-        let stdout = String::from_utf8_lossy(&out.stdout).trim().to_string();
-        let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
-        let tail_log = format!("{stdout}\n{stderr}")
-            .chars()
-            .rev()
-            .take(4000)
-            .collect::<String>()
-            .chars()
-            .rev()
-            .collect::<String>();
-        if out.status.success() {
-            let version_line = stdout
-                .lines()
-                .last()
-                .unwrap_or("installé")
-                .trim()
-                .to_string();
-            let verb = if update_mode {
-                "mis à jour"
-            } else {
-                "installé"
-            };
-            Ok(json!({
-                "status": "ok",
-                "machine_id": machine,
-                "client_id": cat.id,
-                "version": version_line,
-                "login_hint": login_hint,
-                "log": tail_log,
-                "ui_state": format!("{label} {verb} sur {machine} ({version_line})")
-            }))
-        } else {
-            Err(format!(
-                "échec {} de {label} sur {machine} : {}",
-                if update_mode {
-                    "mise à jour"
-                } else {
-                    "installation"
-                },
-                if !stderr.is_empty() {
-                    stderr.lines().last().unwrap_or(&stderr).to_string()
-                } else {
-                    format!("code {:?}", out.status.code())
-                }
-            ))
-        }
-    })
-    .await;
+    let local_m = local_machine_name();
+    let is_local = machine == local_m;
+    let spawn_res = if is_local {
+        Command::new("bash")
+            .args(["-lc", &script])
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+    } else {
+        Command::new("ssh")
+            .args([
+                "-o",
+                "BatchMode=yes",
+                "-o",
+                &format!("ConnectTimeout={SSH_CONNECT_TIMEOUT}"),
+                &machine,
+                "bash -s",
+            ])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+    };
 
-    match res {
-        Ok(Ok(val)) => json_with_headers(StatusCode::OK, val),
-        Ok(Err(e)) => error_response(
-            StatusCode::BAD_REQUEST,
-            "client_deploy_failed",
-            &e,
-            &format!("Refusé : {e}"),
-        ),
-        Err(e) => error_response(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "client_deploy_join",
-            &e.to_string(),
-            "Refusé : déploiement interrompu",
-        ),
+    let mut child = match spawn_res {
+        Ok(c) => c,
+        Err(e) => {
+            return error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "deploy_spawn_failed",
+                &e.to_string(),
+                "Refusé : impossible de démarrer le déploiement",
+            );
+        }
+    };
+    if !is_local && let Some(mut stdin) = child.stdin.take() {
+        let payload = script.into_bytes();
+        std::thread::spawn(move || {
+            let _ = stdin.write_all(&payload);
+        });
     }
+    let stdout = child.stdout.take();
+    let stderr = child.stderr.take();
+    let child_handle = Arc::new(Mutex::new(Some(child)));
+    let job_id = uuid::Uuid::new_v4().simple().to_string();
+    let job = Arc::new(Mutex::new(DeployJob {
+        owner_session_id: state.session_id_ref().to_string(),
+        machine_id: machine.clone(),
+        label: cat.label.to_string(),
+        update_mode,
+        login_hint: cat.login_hint.to_string(),
+        started_at: Instant::now(),
+        step_index: 1,
+        step_label: format!("Connexion à {machine}…"),
+        log: format!(
+            "Démarrage {} de {} sur {}…\n",
+            if update_mode {
+                "de la mise à jour"
+            } else {
+                "de l'installation"
+            },
+            cat.label,
+            machine
+        ),
+        last_stdout_line: String::new(),
+        running: true,
+        exit_code: None,
+        child: child_handle.clone(),
+    }));
+    {
+        let mut map = state.deploy_jobs_lock();
+        if map.len() >= 16 {
+            map.retain(|_, j| j.lock().unwrap_or_else(|e| e.into_inner()).running);
+        }
+        map.insert(job_id.clone(), job.clone());
+    }
+    if let Some(out) = stdout {
+        let j = job.clone();
+        std::thread::spawn(move || pump_deploy_stream(out, j, true));
+    }
+    if let Some(err) = stderr {
+        let j = job.clone();
+        std::thread::spawn(move || pump_deploy_stream(err, j, false));
+    }
+    {
+        let j = job.clone();
+        std::thread::spawn(move || {
+            let deadline = Instant::now() + Duration::from_secs(INSTALL_TIMEOUT_SECS);
+            let exit = loop {
+                let status = {
+                    let mut g = child_handle.lock().unwrap_or_else(|e| e.into_inner());
+                    match g.as_mut() {
+                        Some(c) => match c.try_wait() {
+                            Ok(Some(st)) => {
+                                *g = None;
+                                Some(st.code().unwrap_or(-1))
+                            }
+                            Ok(None) if Instant::now() >= deadline => {
+                                let _ = c.kill();
+                                let _ = c.wait();
+                                *g = None;
+                                Some(-2)
+                            }
+                            Ok(None) => None,
+                            Err(_) => {
+                                *g = None;
+                                Some(-1)
+                            }
+                        },
+                        None => Some(-1),
+                    }
+                };
+                if let Some(code) = status {
+                    break code;
+                }
+                std::thread::sleep(Duration::from_millis(80));
+            };
+            let mut guard = j.lock().unwrap_or_else(|e| e.into_inner());
+            guard.running = false;
+            guard.exit_code = Some(exit);
+            if exit == 0 {
+                guard.step_index = 3;
+                guard.step_label = "Terminé avec succès".into();
+                guard.log.push_str("\n✓ Opération terminée avec succès.\n");
+            } else if exit == -2 {
+                guard.step_label = "Délai dépassé".into();
+                guard.log.push_str("\n✕ Délai maximal dépassé.\n");
+            } else {
+                guard.step_label = format!("Échec (code {exit})");
+                guard.log.push_str(&format!("\n✕ Échec (code {exit}).\n"));
+            }
+        });
+    }
+
+    json_with_headers(
+        StatusCode::OK,
+        json!({
+            "job_id": job_id,
+            "machine_id": machine,
+            "client_id": cat.id,
+            "label": cat.label,
+            "login_hint": cat.login_hint
+        }),
+    )
+}
+
+pub(crate) async fn route_api_clients_deploy_poll(
+    State(state): State<ConsoleState>,
+    headers: HeaderMap,
+    Query(query): Query<DeployPollQuery>,
+) -> Response {
+    if let Err((status, code, msg)) = check_private_auth(&state, &headers, false) {
+        return error_response(status, code, msg, &format!("Refusé : {msg}"));
+    }
+    let Some(job_id) = query.job.as_deref() else {
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            "job_required",
+            "Identifiant job requis.",
+            "Refusé : job absent",
+        );
+    };
+    let job = state.deploy_jobs_lock().get(job_id).cloned();
+    let Some(job) = job else {
+        return error_response(
+            StatusCode::NOT_FOUND,
+            "job_unknown",
+            "Tâche de déploiement inconnue.",
+            "Refusé : tâche inconnue",
+        );
+    };
+    let guard = job.lock().unwrap_or_else(|e| e.into_inner());
+    if guard.owner_session_id != state.session_id_ref() {
+        return error_response(
+            StatusCode::FORBIDDEN,
+            "job_forbidden",
+            "Cette tâche appartient à une autre session.",
+            "Refusé : tâche étrangère",
+        );
+    }
+    let mut safe_offset = query.offset.unwrap_or(0).min(guard.log.len());
+    while safe_offset > 0 && !guard.log.is_char_boundary(safe_offset) {
+        safe_offset -= 1;
+    }
+    let chunk = &guard.log[safe_offset..];
+    let elapsed_secs = guard.started_at.elapsed().as_secs();
+    let percent = if !guard.running {
+        100
+    } else {
+        match guard.step_index {
+            0 | 1 => 18,
+            2 => (45 + (elapsed_secs.min(40) as u8)).min(88),
+            _ => 92,
+        }
+    };
+    let version = if guard.last_stdout_line.is_empty() {
+        "installé".to_string()
+    } else {
+        guard.last_stdout_line.clone()
+    };
+    let verb = if guard.update_mode {
+        "mis à jour"
+    } else {
+        "installé"
+    };
+    let ui_state = if guard.running {
+        guard.step_label.clone()
+    } else if guard.exit_code == Some(0) {
+        format!(
+            "{} {verb} sur {} ({version})",
+            guard.label, guard.machine_id
+        )
+    } else {
+        format!(
+            "Échec {} de {} sur {} (code {})",
+            if guard.update_mode {
+                "mise à jour"
+            } else {
+                "installation"
+            },
+            guard.label,
+            guard.machine_id,
+            guard.exit_code.unwrap_or(-1)
+        )
+    };
+    json_with_headers(
+        StatusCode::OK,
+        json!({
+            "running": guard.running,
+            "exit_code": guard.exit_code,
+            "elapsed_secs": elapsed_secs,
+            "step_index": guard.step_index,
+            "step_label": guard.step_label,
+            "percent": percent,
+            "version": version,
+            "login_hint": guard.login_hint,
+            "ui_state": ui_state,
+            "chunk": chunk,
+            "next_offset": guard.log.len()
+        }),
+    )
+}
+
+pub(crate) async fn route_api_clients_deploy_cancel(
+    State(state): State<ConsoleState>,
+    headers: HeaderMap,
+    Json(req): Json<DeployCancelRequest>,
+) -> Response {
+    if let Err((status, code, msg)) = check_private_auth(&state, &headers, true) {
+        return error_response(status, code, msg, &format!("Refusé : {msg}"));
+    }
+    let job = state.deploy_jobs_lock().get(&req.job_id).cloned();
+    let Some(job) = job else {
+        return error_response(
+            StatusCode::NOT_FOUND,
+            "job_unknown",
+            "Tâche inconnue.",
+            "Refusé : tâche inconnue",
+        );
+    };
+    let child_handle = {
+        let guard = job.lock().unwrap_or_else(|e| e.into_inner());
+        if guard.owner_session_id != state.session_id_ref() {
+            return error_response(
+                StatusCode::FORBIDDEN,
+                "job_forbidden",
+                "Tâche étrangère.",
+                "Refusé : tâche étrangère",
+            );
+        }
+        guard.child.clone()
+    };
+    {
+        let mut g = child_handle.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(c) = g.as_mut() {
+            let pid = c.id();
+            let _ = Command::new("kill")
+                .args(["-TERM", &pid.to_string()])
+                .status();
+        }
+    }
+    json_with_headers(StatusCode::OK, json!({ "status": "cancelled" }))
 }
 
 #[cfg(test)]

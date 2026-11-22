@@ -72,6 +72,7 @@ pub(crate) struct ConsoleState {
     prefs_path: PathBuf,
     previews: Arc<Mutex<HashMap<String, BoundPreview>>>,
     routing_previews: Arc<Mutex<HashMap<String, crate::console_admin::BoundRoutingPreview>>>,
+    deploy_jobs: Arc<Mutex<HashMap<String, Arc<Mutex<crate::console_admin::DeployJob>>>>>,
     login_sessions: Arc<Mutex<HashMap<String, Arc<Mutex<crate::console_login::LoginSession>>>>>,
 }
 
@@ -95,6 +96,12 @@ impl ConsoleState {
         self.routing_previews
             .lock()
             .unwrap_or_else(|e| e.into_inner())
+    }
+    pub(crate) fn deploy_jobs_lock(
+        &self,
+    ) -> std::sync::MutexGuard<'_, HashMap<String, Arc<Mutex<crate::console_admin::DeployJob>>>>
+    {
+        self.deploy_jobs.lock().unwrap_or_else(|e| e.into_inner())
     }
     pub(crate) fn login_sessions_lock(
         &self,
@@ -981,6 +988,14 @@ pub(crate) fn build_console_router(state: ConsoleState) -> Router {
             "/api/clients/deploy",
             post(crate::console_admin::route_api_clients_deploy),
         )
+        .route(
+            "/api/clients/deploy/poll",
+            get(crate::console_admin::route_api_clients_deploy_poll),
+        )
+        .route(
+            "/api/clients/deploy/cancel",
+            post(crate::console_admin::route_api_clients_deploy_cancel),
+        )
         .with_state(state)
 }
 
@@ -1006,6 +1021,7 @@ pub(crate) fn new_console_state(
         prefs_path,
         previews: Arc::new(Mutex::new(HashMap::new())),
         routing_previews: Arc::new(Mutex::new(HashMap::new())),
+        deploy_jobs: Arc::new(Mutex::new(HashMap::new())),
         login_sessions: Arc::new(Mutex::new(HashMap::new())),
     }
 }

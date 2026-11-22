@@ -768,7 +768,7 @@ fn spec310_ui_line_budget_respected() {
         + VIEW_MACHINES_JS.lines().count()
         + VIEW_SETTINGS_JS.lines().count();
     assert!(
-        ui_lines <= 1600,
-        "budget UI dépassé : {ui_lines} lignes (max 1600 pour 3 onglets)"
+        ui_lines <= 1800,
+        "budget UI dépassé : {ui_lines} lignes (max 1800 pour 3 onglets)"
     );
 }

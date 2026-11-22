@@ -256,6 +256,23 @@ details.tech-log summary { cursor: pointer; padding: 7px 11px; font-size: 12px; 
 .settings-foot { display: flex; justify-content: flex-end; gap: 8px; padding-top: 4px; }
 .field-inline { display: grid; grid-template-columns: 1fr 110px; gap: 10px; }
 .check-line { display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--muted); cursor: pointer; }
+@keyframes spin { to { transform: rotate(360deg); } }
+@keyframes pulseBar { 0%, 100% { opacity: 1; } 50% { opacity: 0.65; } }
+.spinner { width: 13px; height: 13px; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; display: inline-block; animation: spin 0.7s linear infinite; vertical-align: -2px; }
+.deploy-progress { display: flex; flex-direction: column; gap: 10px; padding: 12px 14px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface); }
+.deploy-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; font-size: 12.5px; font-weight: 500; }
+.deploy-timer { color: var(--muted); font-size: 12px; }
+.step-pills { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+.step-pill { padding: 5px 8px; border-radius: 6px; border: 1px solid var(--border); font-size: 11.5px; color: var(--muted); text-align: center; background: var(--bg); }
+.step-pill.active { color: var(--text); border-color: var(--focus); font-weight: 600; }
+.step-pill.done { color: var(--ok); border-color: var(--ok-border); background: var(--ok-bg); font-weight: 500; }
+.step-pill.err { color: var(--err); border-color: var(--err-border); background: var(--err-bg); }
+.progress-bar { height: 7px; border-radius: 999px; background: var(--bg); border: 1px solid var(--border); overflow: hidden; }
+.progress-fill { height: 100%; width: 15%; background: var(--focus); border-radius: 999px; transition: width 0.35s ease; }
+.progress-fill.running { animation: pulseBar 1.4s ease-in-out infinite; }
+.progress-fill.ok { background: var(--ok); animation: none; }
+.progress-fill.err { background: var(--err); animation: none; }
+.live-terminal { margin: 0; padding: 10px 12px; border-radius: 7px; border: 1px solid var(--border); background: var(--bg); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11.5px; line-height: 1.45; white-space: pre-wrap; word-break: break-word; max-height: 190px; overflow-y: auto; color: var(--muted); }
 
 @media (max-width: 920px) {
   .shell { grid-template-columns: 1fr; }
