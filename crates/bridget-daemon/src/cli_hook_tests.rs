@@ -175,7 +175,7 @@ fn spec163_auto_delegate_cli_conserve_le_payload_ferme_du_handler_mcp() {
         format!(r#"{{"objective":"{}"}}"#, "x".repeat(512 * 1024)),
     ];
     assert!(parse_auto_delegate_args(&canon_trop_long).is_err());
-    assert!(command_requires_principal("auto-delegate"));
+    assert!(command_requires_principal("auto-delegate", None));
 }
 
 #[test]
@@ -626,17 +626,17 @@ fn spec133_cli_sensible_refuse_le_contexte_enfant_avant_dispatch() {
         "delegate",
         "task",
     ] {
-        assert!(command_requires_principal(command), "{command}");
+        assert!(command_requires_principal(command, None), "{command}");
         assert_eq!(
-            delegated_cli_guard(command, Err(IdentityError::DelegatedMcpOnly)),
+            delegated_cli_guard(command, None, Err(IdentityError::DelegatedMcpOnly)),
             Err(IdentityError::DelegatedMcpOnly),
             "{command} doit être refusé avant son handler"
         );
     }
     for command in ["mcp", "status", "version", "help"] {
-        assert!(!command_requires_principal(command), "{command}");
+        assert!(!command_requires_principal(command, None), "{command}");
         assert_eq!(
-            delegated_cli_guard(command, Err(IdentityError::DelegatedMcpOnly)),
+            delegated_cli_guard(command, None, Err(IdentityError::DelegatedMcpOnly)),
             Ok(()),
             "{command} ne porte pas l'autorité d'un agent"
         );

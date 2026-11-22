@@ -983,6 +983,7 @@ impl Drop for FixtureRoot {
 
 struct DaemonState {
     update_gate: Arc<crate::updates::Gate>,
+    heavy_work_leases: crate::heavy_work::HeavyWorkLeaseManager,
     /// Quotas observés, volatils et bornés par type de fournisseur.
     provider_limits: crate::provider_limits::ProviderLimits,
     host_resources: crate::host_resources::HostResourceCollector,
@@ -4809,6 +4810,7 @@ impl DaemonState {
             update_gate: crate::updates::Gate::open(
                 config.db_path.parent().ok_or("update_root_missing")?,
             )?,
+            heavy_work_leases: crate::heavy_work::HeavyWorkLeaseManager::default(),
             provider_limits,
             host_resources: Default::default(),
             held_ids,
@@ -17289,6 +17291,21 @@ fn handle_wrapper_message_with_peer(
 
         WrapperToDaemon::DaemonIdentityRequest => {
             wrapper_dispatch::on_daemon_identity_request(state)
+        }
+
+        WrapperToDaemon::HeavyWork { request } => {
+            let mut st = state.lock().recover_poison();
+            let ns_root = st
+                .db_path
+                .parent()
+                .map(std::path::Path::to_path_buf)
+                .unwrap_or_default();
+            let host = st.host.clone();
+            let registry = st.registry.clone();
+            let response = st
+                .heavy_work_leases
+                .handle_request(request, &ns_root, &host, &registry);
+            Some(DaemonToWrapper::HeavyWorkResult { response })
         }
 
         WrapperToDaemon::SentinelStatusRead => {

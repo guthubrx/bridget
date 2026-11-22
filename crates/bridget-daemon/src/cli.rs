@@ -131,6 +131,7 @@ fn command_initializes_namespace(command: &str) -> bool {
             | "federation"
             | "completions"
             | "managed-bootstrap"
+            | "build-info"
             | "version"
             | "--version"
             | "-v"
@@ -142,7 +143,15 @@ fn command_initializes_namespace(command: &str) -> bool {
 
 /// Un sous-agent interne accède à Bridget par la façade MCP bornée. Toute
 /// commande CLI qui agit au nom d'un agent doit donc s'arrêter avant effet.
-fn command_requires_principal(command: &str) -> bool {
+/// Vérifiée sur le couple (commande, sous-commande) pour ouvrir uniquement
+/// les opérations de travaux lourds bornées tout en gardant `heavy-work policy` fermé.
+fn command_requires_principal(command: &str, subcommand: Option<&str>) -> bool {
+    if command == "heavy-work" {
+        return !matches!(
+            subcommand,
+            Some("status" | "plan" | "acquire" | "renew" | "release")
+        );
+    }
     !matches!(
         command,
         "daemon"
@@ -158,6 +167,7 @@ fn command_requires_principal(command: &str) -> bool {
             | "mcp"
             | "discover"
             | "status"
+            | "build-info"
             | "version"
             | "--version"
             | "-v"
@@ -169,9 +179,10 @@ fn command_requires_principal(command: &str) -> bool {
 
 fn delegated_cli_guard(
     command: &str,
+    subcommand: Option<&str>,
     resolved: Result<crate::mcp_identity::ResolvedIdentity, crate::mcp_identity::IdentityError>,
 ) -> Result<(), crate::mcp_identity::IdentityError> {
-    if !command_requires_principal(command) {
+    if !command_requires_principal(command, subcommand) {
         return Ok(());
     }
     match resolved {
@@ -355,7 +366,11 @@ fn run_with_args(args: Vec<String>) {
         exit_argument_error(&error);
     }
 
-    if let Err(error) = delegated_cli_guard(cmd, crate::mcp_identity::resolve_current_identity()) {
+    if let Err(error) = delegated_cli_guard(
+        cmd,
+        args.get(2).map(String::as_str),
+        crate::mcp_identity::resolve_current_identity(),
+    ) {
         eprintln!("bridget {cmd} : {} : {}", error.code(), error.remediation());
         crate::cli_table::exit(1);
     }
@@ -516,6 +531,17 @@ fn run_with_args(args: Vec<String>) {
         "ledger" => cmd_ledger(&args[2..]),
         "reprise" => cmd_reprise(&args[2..]),
         "reaper" => cmd_reaper(&args[2..]),
+        "build-info" => match crate::heavy_work::run_build_info(&args[2..]) {
+            Ok(json) => println!("{json}"),
+            Err(error) => exit_argument_error(&error),
+        },
+        "heavy-work" => match crate::heavy_work::run_cli(&args[2..]) {
+            Ok(output) => println!("{output}"),
+            Err(error) => {
+                eprintln!("bridget heavy-work : {error}");
+                crate::cli_table::exit(1);
+            }
+        },
         "version" | "--version" | "-v" => {
             println!("bridget {}", env!("CARGO_PKG_VERSION"));
         }
@@ -9102,6 +9128,36 @@ mod worker188_tests {
             diagnostic_cli_guard(Err(E::IdentityNotFound), false, false).is_ok(),
             "lecture locale sans principal, sous UID propriétaire"
         );
+    }
+
+    #[test]
+    fn spec312_delegated_cli_guard_allows_heavy_work_ops_and_blocks_policy() {
+        use crate::mcp_identity::IdentityError as E;
+        assert!(!command_initializes_namespace("build-info"));
+        assert!(!command_requires_principal("build-info", Some("--json")));
+        assert!(
+            delegated_cli_guard("build-info", Some("--json"), Err(E::DelegatedMcpOnly)).is_ok()
+        );
+        for sub in ["status", "plan", "acquire", "renew", "release"] {
+            assert!(
+                !command_requires_principal("heavy-work", Some(sub)),
+                "heavy-work {sub} doit être ouvert aux sous-agents délégués"
+            );
+            assert!(
+                delegated_cli_guard("heavy-work", Some(sub), Err(E::DelegatedMcpOnly)).is_ok(),
+                "heavy-work {sub} ne doit pas être bloqué par DelegatedMcpOnly"
+            );
+        }
+        for blocked in [Some("policy"), Some("unknown"), None] {
+            assert!(
+                command_requires_principal("heavy-work", blocked),
+                "heavy-work {blocked:?} doit rester fermé aux sous-agents délégués"
+            );
+            assert_eq!(
+                delegated_cli_guard("heavy-work", blocked, Err(E::DelegatedMcpOnly)),
+                Err(E::DelegatedMcpOnly)
+            );
+        }
     }
 }
 

@@ -452,6 +452,10 @@ pub enum ServiceCapability {
 mod project_registry_protocol;
 pub use project_registry_protocol::*;
 
+#[path = "heavy_work_protocol.rs"]
+mod heavy_work_protocol;
+pub use heavy_work_protocol::*;
+
 /// Version du contrat local de politique de ronde par projet.
 pub const PROJECT_ROUND_POLICY_CONTRACT_VERSION: u16 = 1;
 
@@ -6235,6 +6239,11 @@ pub enum WrapperToDaemon {
         item_id: String,
         reason: String,
     },
+    /// Coordination des travaux lourds hors poste (Spécification 312).
+    #[serde(rename = "heavy_work")]
+    HeavyWork {
+        request: HeavyWorkRequest,
+    },
 }
 
 /// Origine d'une observation de runtime. Énumération fermée : une valeur
@@ -7148,6 +7157,10 @@ pub enum DaemonToWrapper {
     HumanInboxClosed {
         item_id: String,
         closed: bool,
+    },
+    #[serde(rename = "heavy_work_result")]
+    HeavyWorkResult {
+        response: HeavyWorkResponse,
     },
 }
 

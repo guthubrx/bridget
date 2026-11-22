@@ -33,6 +33,7 @@ pub mod fleet;
 pub mod greffe_policy_refresh;
 pub(crate) mod guidance;
 pub mod handoff;
+pub(crate) mod heavy_work;
 pub mod host_resources;
 pub mod human_inbox;
 pub mod idempotency;

@@ -3698,7 +3698,8 @@ pub(super) fn service_refusal(
                 | WrapperToDaemon::ControlHistory { .. }
                 | WrapperToDaemon::ControlStateSet { .. }
                 | WrapperToDaemon::HumanInboxList { .. }
-                | WrapperToDaemon::HumanInboxResolve { .. } => {
+                | WrapperToDaemon::HumanInboxResolve { .. }
+                | WrapperToDaemon::HeavyWork { .. } => {
                     Some(ServiceRefusal::MessageOutsideServiceRole)
                 }
             },
@@ -4000,7 +4001,8 @@ pub(super) fn client_refusal(
                 | WrapperToDaemon::HumanInboxDeposit { .. }
                 | WrapperToDaemon::HumanInboxDecisions { .. }
                 | WrapperToDaemon::HumanInboxAck { .. }
-                | WrapperToDaemon::HumanInboxClose { .. } => {
+                | WrapperToDaemon::HumanInboxClose { .. }
+                | WrapperToDaemon::HeavyWork { .. } => {
                     Some(ClientRefusal::MessageOutsideClientRole)
                 }
             },
