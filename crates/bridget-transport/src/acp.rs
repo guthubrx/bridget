@@ -463,13 +463,32 @@ impl AcpTransport {
                     )
                 })?
                 .to_string();
-            if let Some(mode_id) = context.session_config.session_mode.as_deref() {
+            if let Some(requested_mode) = context.session_config.session_mode.as_deref() {
+                let available_modes: Vec<&str> = session
+                    .pointer("/modes/availableModes")
+                    .and_then(Value::as_array)
+                    .map(|items| {
+                        items
+                            .iter()
+                            .filter_map(|item| item.get("id").and_then(Value::as_str))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                let effective_mode = if requested_mode == "yolo"
+                    && !available_modes.is_empty()
+                    && !available_modes.contains(&"yolo")
+                    && available_modes.contains(&"auto")
+                {
+                    "auto"
+                } else {
+                    requested_mode
+                };
                 let _ = request(
                     &writer,
                     &waiters,
                     &next_id,
                     "session/set_mode",
-                    json!({ "sessionId": session_id, "modeId": mode_id }),
+                    json!({ "sessionId": session_id, "modeId": effective_mode }),
                 );
             }
             let config_options = session
@@ -1223,7 +1242,9 @@ fn finish_turn(
                 if stop_reason != "end_turn" {
                     return AcpEvent::DeliveryRejected {
                         message_id: message.id,
-                        reason: format!("acp_empty_response : réponse vide (stop_reason={stop_reason})"),
+                        reason: format!(
+                            "acp_empty_response : réponse vide (stop_reason={stop_reason})"
+                        ),
                     };
                 }
             }
@@ -1435,9 +1456,7 @@ fn spawn_reader(
                         let message_id = active_message_id(&queue);
                         if !cancelled
                             && (permissions != "allow"
-                                || payload
-                                    .pointer("/decision/outcome")
-                                    .and_then(Value::as_str)
+                                || payload.pointer("/decision/outcome").and_then(Value::as_str)
                                     == Some("cancelled"))
                         {
                             record_denied_permission(&denied_permissions, &payload);

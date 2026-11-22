@@ -1469,7 +1469,17 @@ impl AgentRegistry {
             return Err("effort_unavailable".into());
         }
         let mut definition = source.clone();
-        definition.permissions = "deny".into();
+        // Pour ACP, le transport filtre aussi `session/request_permission` et le
+        // préfixe de contrainte selon `definition.permissions`. Une délégation
+        // héritée en `full-access` (posture development depuis un parent attesté
+        // full-access) doit donc porter `"allow"`, tandis que `plan` reste `"deny"`.
+        definition.permissions = if definition.protocol == "acp"
+            && policy["permission_mode"].as_str() == Some("full-access")
+        {
+            "allow".into()
+        } else {
+            "deny".into()
+        };
         crate::native_permissions::apply_child_arguments_in_operation(
             &definition.protocol,
             policy,

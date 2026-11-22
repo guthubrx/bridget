@@ -2651,8 +2651,47 @@ fn acp_permissions_bidirectional_translation_and_arguments_preserve_ceiling() {
     );
 
     assert!(permits_command_execution(&to_acp_dev, true));
-    assert!(permits_command_execution(&to_acp_ro, false));
+    assert!(!permits_command_execution(&to_acp_ro, false));
     assert!(!permits_command_execution(&to_acp_ro, true));
+
+    // 6. for_inherited_delegation conserve permissions=allow pour ACP full-access
+    // et permissions=deny pour ACP plan ; le wrapper projette auto vs plan.
+    let acp_reg = crate::registry::AgentRegistry::from_json(
+        r#"{"agents":{"antigravity":{"command":"/usr/local/bin/agy","args":["acp"],"protocol":"acp","permissions":"allow","capabilities":{"execution_paths":["acp"],"models":{"gemini-4-neon-high":{"efforts":[]}}}}}}"#,
+        "/tmp/agents-acp333.json",
+    )
+    .unwrap();
+    let scoped_dev = acp_reg
+        .for_inherited_delegation("antigravity", "gemini-4-neon-high", None, &to_acp_dev)
+        .unwrap();
+    let dev_def = scoped_dev.get("antigravity").unwrap();
+    assert_eq!(dev_def.permissions, "allow");
+    assert!(
+        dev_def
+            .args
+            .iter()
+            .any(|a| a == "--dangerously-skip-permissions")
+    );
+    assert_eq!(
+        crate::wrapper::resolve_acp_runtime_permissions_and_mode(true, Some(&to_acp_dev), "deny"),
+        ("allow".to_string(), Some("auto".to_string()))
+    );
+
+    let scoped_ro = acp_reg
+        .for_inherited_delegation("antigravity", "gemini-4-neon-high", None, &to_acp_ro)
+        .unwrap();
+    let ro_def = scoped_ro.get("antigravity").unwrap();
+    assert_eq!(ro_def.permissions, "deny");
+    assert!(
+        !ro_def
+            .args
+            .iter()
+            .any(|a| a == "--dangerously-skip-permissions")
+    );
+    assert_eq!(
+        crate::wrapper::resolve_acp_runtime_permissions_and_mode(true, Some(&to_acp_ro), "allow"),
+        ("deny".to_string(), Some("plan".to_string()))
+    );
 
     fs::remove_dir_all(root).unwrap();
 }

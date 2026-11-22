@@ -31,10 +31,7 @@ pub(crate) fn permits_command_execution(policy: &Value, requires_workspace_write
                     })
                 })
         }
-        Some("acp") => {
-            policy["permission_mode"] == "full-access"
-                || (!requires_workspace_write && policy["permission_mode"] == "plan")
-        }
+        Some("acp") => policy["permission_mode"] == "full-access",
         _ => false,
     }
 }

@@ -4335,6 +4335,32 @@ fn record_attention(
     }
 }
 
+/// Résout les permissions du transport ACP et le mode de session Antigravity
+/// (`auto` en full-access, `plan` en lecture seule) à partir de la politique
+/// enfant attestée (`child_policy`) ou, à défaut, de `definition.permissions`.
+pub(crate) fn resolve_acp_runtime_permissions_and_mode(
+    is_antigravity: bool,
+    child_policy: Option<&serde_json::Value>,
+    definition_permissions: &str,
+) -> (String, Option<String>) {
+    let allow_full = match child_policy.and_then(|policy| policy["permission_mode"].as_str()) {
+        Some("full-access") => true,
+        Some(_) => false,
+        None => definition_permissions == "allow",
+    };
+    let permissions = if allow_full {
+        "allow".to_string()
+    } else {
+        "deny".to_string()
+    };
+    let mode = if is_antigravity {
+        Some(if allow_full { "auto" } else { "plan" }.to_string())
+    } else {
+        None
+    };
+    (permissions, mode)
+}
+
 /// Point d'entrée du wrapper supervisé. Le FD `managed-status` est fermé
 /// uniquement après Register, transport ACP, journal et relais initialisés.
 #[allow(clippy::too_many_arguments)]
@@ -4381,20 +4407,15 @@ fn spawn_managed_session_transport(
             let mut acp_args = Vec::with_capacity(native_args.len() + 4);
             let mut session_config = bridget_transport::acp::AcpSessionConfig::default();
             let mut acp_mcp_servers = mcp_servers.to_vec();
+            let (acp_permissions, antigravity_mode) = resolve_acp_runtime_permissions_and_mode(
+                is_antigravity,
+                child_policy.as_ref(),
+                &definition.permissions,
+            );
             if is_antigravity {
                 session_config.client_info = Some(("zed".to_string(), "0.0.0".to_string()));
                 session_config.auth_method_id = Some("oauth-personal".to_string());
-                let allow_yolo = match child_policy
-                    .as_ref()
-                    .and_then(|policy| policy["permission_mode"].as_str())
-                {
-                    Some("full-access") => true,
-                    Some(_) => false,
-                    None => definition.permissions == "allow",
-                };
-                if allow_yolo {
-                    session_config.session_mode = Some("yolo".to_string());
-                }
+                session_config.session_mode = antigravity_mode;
                 for server in &mut acp_mcp_servers {
                     if server.get("name").and_then(serde_json::Value::as_str) == Some("bridget")
                         && let Some(env_list) = server
@@ -4446,7 +4467,7 @@ fn spawn_managed_session_transport(
                 command: definition.command.clone(),
                 args: acp_args,
                 queue_capacity: definition.queue_capacity,
-                permissions: definition.permissions.clone(),
+                permissions: acp_permissions,
                 notify_timeout_secs: definition.notify_timeout_secs,
                 provider_observation: definition.capabilities.observed.clone(),
             };

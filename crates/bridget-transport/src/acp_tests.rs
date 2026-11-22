@@ -2255,3 +2255,38 @@ fn spec325_acp_deny_prompt_warns_against_shell_and_preserves_body() {
     assert!(!allowed.contains("Contraintes ACP actives"));
     assert_eq!(allowed, prompt_for(&msg));
 }
+
+#[test]
+fn spec333_acp_session_mode_maps_legacy_yolo_to_auto_when_advertised() {
+    let script = r#"
+read initialize
+echo '{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":1}}'
+read session
+echo '{"jsonrpc":"2.0","id":2,"result":{"sessionId":"agy-333","modes":{"currentModeId":"default","availableModes":[{"id":"default"},{"id":"auto"},{"id":"plan"}]}}}'
+read set_mode
+echo "$set_mode" | grep -q '"method":"session/set_mode"' || exit 14
+echo "$set_mode" | grep -q '"modeId":"auto"' || exit 15
+echo '{"jsonrpc":"2.0","id":3,"result":{}}'
+sleep 5
+"#;
+    let transport = AcpTransport::spawn_with_session_config(
+        AcpOptions {
+            command: "/bin/sh".into(),
+            args: vec!["-c".into(), script.into()],
+            queue_capacity: 4,
+            permissions: "allow".into(),
+            notify_timeout_secs: 5,
+            provider_observation: None,
+        },
+        false,
+        &[],
+        vec![],
+        AcpSessionConfig {
+            session_mode: Some("yolo".into()),
+            ..Default::default()
+        },
+    )
+    .expect("session ACP initialisée avec mode auto");
+    assert_eq!(transport.session_id, "agy-333");
+    transport.shutdown();
+}
