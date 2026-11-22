@@ -2951,9 +2951,130 @@ fn compact_schemas_requested() -> bool {
         .is_ok_and(|value| value == "1" || value.eq_ignore_ascii_case("true"))
 }
 
-// Certains clients écartent les outils avec un combinateur à la racine.
-// Une référence locale garde exactement ces contraintes et les propriétés
-// lisibles, sans modifier les validateurs natifs ni leurs schémas canoniques.
+// Certains clients et API fournisseurs (notamment OpenAI / Codex) exigent un
+// schéma racine `type: "object"` sans combinateur ni `$ref` résolu en
+// combinateur (`oneOf`/`anyOf`/`allOf`/`enum`/`const`/`not`) au sommet.
+// On expose donc un objet plat avec toutes ses propriétés et champs toujours
+// requis, sans modifier les schémas canoniques de `tools()` ni les validateurs
+// natifs qui appliquent l'ensemble des contraintes croisées.
+fn json_value_schema_type(value: &Value) -> Option<&'static str> {
+    match value {
+        Value::Null => Some("null"),
+        Value::Bool(_) => Some("boolean"),
+        Value::Number(n) if n.is_i64() || n.is_u64() => Some("integer"),
+        Value::Number(_) => Some("number"),
+        Value::String(_) => Some("string"),
+        Value::Array(_) => Some("array"),
+        Value::Object(_) => Some("object"),
+    }
+}
+
+fn normalized_const_property(prop: &Value) -> Value {
+    let Some(obj) = prop.as_object() else {
+        return prop.clone();
+    };
+    let Some(const_val) = obj.get("const") else {
+        return prop.clone();
+    };
+    let mut out = obj.clone();
+    out.remove("const");
+    if !out.contains_key("type")
+        && let Some(ty) = json_value_schema_type(const_val)
+    {
+        out.insert("type".into(), json!(ty));
+    }
+    out.insert("enum".into(), json!([const_val.clone()]));
+    Value::Object(out)
+}
+
+fn merge_branch_property(existing: &mut Value, incoming: &Value) {
+    let normalized = normalized_const_property(incoming);
+    if let (Some(dst), Some(src)) = (existing.as_object_mut(), normalized.as_object())
+        && let (Some(dst_enum), Some(src_enum)) = (
+            dst.get_mut("enum").and_then(Value::as_array_mut),
+            src.get("enum").and_then(Value::as_array),
+        )
+    {
+        for val in src_enum {
+            if !dst_enum.contains(val) {
+                dst_enum.push(val.clone());
+            }
+        }
+    }
+}
+
+fn flatten_top_level_schema_for_discovery(schema: &mut serde_json::Map<String, Value>) {
+    let has_forbidden_top = ["allOf", "anyOf", "oneOf", "enum", "const", "not", "$ref"]
+        .iter()
+        .any(|key| schema.contains_key(*key));
+    if !has_forbidden_top {
+        return;
+    }
+    if !schema.contains_key("properties")
+        && let Some(branches) = schema
+            .get("oneOf")
+            .or_else(|| schema.get("anyOf"))
+            .and_then(Value::as_array)
+            .cloned()
+    {
+        let mut merged_props = serde_json::Map::new();
+        let mut common_required: Option<Vec<String>> = None;
+        let mut all_closed = !branches.is_empty();
+        for branch in &branches {
+            let Some(branch_obj) = branch.as_object() else {
+                all_closed = false;
+                continue;
+            };
+            if branch_obj.get("additionalProperties") != Some(&json!(false)) {
+                all_closed = false;
+            }
+            if let Some(props) = branch_obj.get("properties").and_then(Value::as_object) {
+                for (name, prop_schema) in props {
+                    if let Some(existing) = merged_props.get_mut(name) {
+                        merge_branch_property(existing, prop_schema);
+                    } else {
+                        merged_props.insert(name.clone(), normalized_const_property(prop_schema));
+                    }
+                }
+            }
+            let branch_req: Vec<String> = branch_obj
+                .get("required")
+                .and_then(Value::as_array)
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(Value::as_str)
+                        .map(str::to_owned)
+                        .collect()
+                })
+                .unwrap_or_default();
+            common_required = Some(match common_required {
+                None => branch_req,
+                Some(prev) => prev
+                    .into_iter()
+                    .filter(|field| branch_req.contains(field))
+                    .collect(),
+            });
+        }
+        schema.insert("properties".into(), Value::Object(merged_props));
+        if let Some(req) = common_required
+            && !req.is_empty()
+        {
+            schema.insert(
+                "required".into(),
+                Value::Array(req.into_iter().map(Value::String).collect()),
+            );
+        }
+        if all_closed {
+            schema.insert("additionalProperties".into(), json!(false));
+        }
+    }
+    for key in ["allOf", "anyOf", "oneOf", "enum", "const", "not", "$ref"] {
+        schema.remove(key);
+    }
+    schema.entry("type".to_owned()).or_insert_with(|| json!("object"));
+    schema.entry("properties".to_owned()).or_insert_with(|| json!({}));
+}
+
 fn discovery_tools() -> Vec<Value> {
     let mut catalogue = tools();
     if compact_schemas_requested() {
@@ -2961,29 +3082,7 @@ fn discovery_tools() -> Vec<Value> {
     }
     for tool in &mut catalogue {
         let schema = tool["inputSchema"].as_object_mut().expect("schéma objet");
-        if !["allOf", "anyOf", "oneOf"]
-            .iter()
-            .any(|key| schema.contains_key(*key))
-        {
-            continue;
-        }
-        // Le schéma COMPLET reste dans la référence : les anciens validateurs
-        // qui ignorent les voisins de $ref gardent aussi champs requis et fermeture.
-        let original = Value::Object(schema.clone());
-        for key in ["allOf", "anyOf", "oneOf"] {
-            schema.remove(key);
-        }
-        let definitions = schema
-            .entry("$defs")
-            .or_insert_with(|| json!({}))
-            .as_object_mut()
-            .expect("définitions objet");
-        let mut key = "bridget_constraints".to_owned();
-        while definitions.contains_key(&key) {
-            key.push('_');
-        }
-        definitions.insert(key.clone(), original);
-        schema.insert("$ref".into(), json!(format!("#/$defs/{key}")));
+        flatten_top_level_schema_for_discovery(schema);
     }
     catalogue
 }
@@ -3319,12 +3418,12 @@ pub(crate) fn tools() -> Vec<Value> {
         }),
         json!({
             "name": "bridget_domain",
-            "description": "Définir le domaine propre de l’agent ou revenir au domaine dérivé. La sauvegarde locale est confirmée séparément de l’application en mémoire.",
+            "description": "Définir le domaine propre de l’agent (domain) ou revenir au domaine dérivé (reset=true) ; fournir exactement l’un des deux. La sauvegarde locale est confirmée séparément de l’application en mémoire.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "domain": { "type": "string", "minLength": 1, "maxLength": 100 },
-                    "reset": { "const": true }
+                    "reset": { "type": "boolean", "const": true, "description": "Passer true pour revenir au domaine dérivé (exclusif avec domain)." }
                 },
                 "oneOf": [
                     { "required": ["domain"] },

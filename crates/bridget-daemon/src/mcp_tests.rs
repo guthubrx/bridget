@@ -151,40 +151,54 @@ fn spec228_catalogue_input_schemas_are_objects_before_identity() {
         .clone();
     assert!(!catalogue.is_empty());
     for tool in &catalogue {
-        assert_eq!(tool["inputSchema"]["type"], "object", "{}", tool["name"]);
-        for key in ["allOf", "anyOf", "oneOf"] {
+        let schema = &tool["inputSchema"];
+        assert_eq!(schema["type"], "object", "{}", tool["name"]);
+        assert!(
+            schema["properties"].is_object(),
+            "propriétés absentes au sommet pour {}",
+            tool["name"]
+        );
+        for key in ["allOf", "anyOf", "oneOf", "enum", "const", "not", "$ref"] {
             assert!(
-                tool["inputSchema"].get(key).is_none(),
-                "racine de {} : {key}",
+                schema.get(key).is_none(),
+                "racine de {} contient {key}",
                 tool["name"]
             );
         }
+        assert!(
+            schema.pointer("/$defs/bridget_constraints").is_none(),
+            "racine de {} ne doit pas référencer bridget_constraints",
+            tool["name"]
+        );
     }
     let canonical = tools();
     assert_eq!(catalogue.len(), canonical.len());
-    let mut referenced = BTreeSet::new();
+    let mut flattened = BTreeSet::new();
     for (wire, original) in catalogue.iter().zip(&canonical) {
         assert_eq!(wire["name"], original["name"]);
-        let schema = &wire["inputSchema"];
-        let restored = if let Some(reference) = schema.get("$ref") {
-            let key = reference
-                .as_str()
-                .unwrap()
-                .strip_prefix("#/$defs/")
-                .unwrap();
-            referenced.insert(wire["name"].as_str().unwrap());
-            &schema["$defs"][key]
+        let orig_has_combinator = ["allOf", "anyOf", "oneOf", "enum", "const", "not", "$ref"]
+            .iter()
+            .any(|key| original["inputSchema"].get(key).is_some());
+        if orig_has_combinator {
+            flattened.insert(wire["name"].as_str().unwrap());
+            if let Some(orig_props) = original["inputSchema"]["properties"].as_object() {
+                assert_eq!(
+                    wire["inputSchema"]["properties"].as_object().unwrap(),
+                    orig_props,
+                    "propriétés conservées pour {}",
+                    wire["name"]
+                );
+            }
         } else {
-            schema
-        };
-        assert_eq!(
-            *restored, original["inputSchema"],
-            "contraintes de {}",
-            wire["name"]
-        );
+            assert_eq!(
+                wire["inputSchema"], original["inputSchema"],
+                "schéma inchangé pour {}",
+                wire["name"]
+            );
+        }
     }
     assert_eq!(
-        referenced,
+        flattened,
         BTreeSet::from([
             "bridget_auto_delegate",
             "bridget_domain",
@@ -194,6 +208,27 @@ fn spec228_catalogue_input_schemas_are_objects_before_identity() {
             "bridget_wake"
         ])
     );
+    let domain = catalogue
+        .iter()
+        .find(|t| t["name"] == "bridget_domain")
+        .unwrap();
+    assert_eq!(domain["inputSchema"]["properties"]["domain"]["type"], "string");
+    assert_eq!(domain["inputSchema"]["properties"]["reset"]["type"], "boolean");
+    let specialists = catalogue
+        .iter()
+        .find(|t| t["name"] == "bridget_specialists")
+        .unwrap();
+    assert_eq!(specialists["inputSchema"]["required"], json!(["version", "action"]));
+    assert_eq!(
+        specialists["inputSchema"]["properties"]["version"],
+        json!({"type": "integer", "enum": [1]})
+    );
+    let actions = specialists["inputSchema"]["properties"]["action"]["enum"]
+        .as_array()
+        .unwrap();
+    assert!(actions.contains(&json!("search")));
+    assert!(actions.contains(&json!("list")));
+    assert!(actions.contains(&json!("request_temporary")));
 }
 
 #[test]
