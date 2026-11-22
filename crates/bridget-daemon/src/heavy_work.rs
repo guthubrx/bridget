@@ -912,9 +912,39 @@ fn parse_install_policy(raw: &str) -> Result<HeavyWorkInstallPolicy, String> {
     }
 }
 
-fn require_local_master_authority(namespace_root: &Path) -> Result<(), String> {
-    let registry_path = namespace_root.join("agents.json");
+fn query_daemon_host(socket_path: &Path) -> Option<String> {
+    let mut conn =
+        DaemonConnection::connect_until(socket_path, Instant::now() + Duration::from_secs(3))
+            .ok()?;
+    match conn
+        .exchange(&WrapperToDaemon::DaemonIdentityRequest)
+        .ok()?
+    {
+        DaemonToWrapper::DaemonIdentityReport { host, .. } => host,
+        _ => None,
+    }
+}
+
+fn check_daemon_master_matches_local(
+    local_machine: &str,
+    daemon_host: Option<&str>,
+) -> Result<(), String> {
+    if let Some(host) = daemon_host
+        && bridget_core::host_is_attested(host)
+        && host != local_machine
+    {
+        return Err(format!(
+            "heavy_work_policy_master_only : écriture réservée au maître local « {host} » (machine locale : « {local_machine} »). Exécutez heavy-work policy sur {host}."
+        ));
+    }
+    Ok(())
+}
+
+fn require_local_master_authority(namespace_root: &Path, socket_path: &Path) -> Result<(), String> {
     let local_machine = crate::build_info::local_host();
+    let daemon_host = query_daemon_host(socket_path);
+    check_daemon_master_matches_local(&local_machine, daemon_host.as_deref())?;
+    let registry_path = namespace_root.join("agents.json");
     let authority = crate::console_ui::resolve_registry_authority(
         &registry_path,
         &local_machine,
@@ -949,7 +979,7 @@ fn run_policy_cli(args: &[String]) -> Result<String, String> {
             serde_json::to_string_pretty(&out).map_err(|e| e.to_string())
         }
         "init" | "set-machine" | "set-global" => {
-            require_local_master_authority(namespace_root)?;
+            require_local_master_authority(namespace_root, &config.socket_path)?;
             let mut apply = false;
             let mut policy = load_policy(namespace_root)?.unwrap_or_default();
             let mut i = 1usize;
@@ -1709,5 +1739,14 @@ mod tests {
         ));
 
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn spec312_policy_master_only_rejects_non_master_daemon_host() {
+        let err = check_daemon_master_matches_local("monordinateur", Some("cartae")).unwrap_err();
+        assert!(err.contains("heavy_work_policy_master_only"), "{err}");
+        assert!(err.contains("cartae"), "{err}");
+        assert!(check_daemon_master_matches_local("cartae", Some("cartae")).is_ok());
+        assert!(check_daemon_master_matches_local("cartae", None).is_ok());
     }
 }
