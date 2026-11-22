@@ -1,6 +1,6 @@
 # Spécification 312 : travaux lourds hors du poste de travail
 
-- **Statut** : spécification v4 ; plan à écrire après revue
+- **Statut** : spécification v4.1 ; plan du Lot 1a à écrire
 - **Demande** : François, 22 novembre 2026. Son Mac ne doit plus être chargé par les compilations. Bridget déporte les travaux lourds en tenant compte des capacités réelles de chaque machine :
   - celles qu'aucune installation ne remplace (un binaire Mac exige un Mac) ;
   - celles qu'une installation peut apporter.
@@ -9,7 +9,8 @@
 - **Revues Neon** (gemini-4-neon-high) :
   - v1 : 4,5/10 (tâche `3b000932`) ;
   - v2 : 6/10 (tâche `077d5b8b`) ;
-  - v3 : 7/10 (tâche `b3c3f0d5`).
+  - v3 : 7/10 (tâche `b3c3f0d5`) ;
+  - v4 : 7,5/10, aucun bloquant (tâche `07563ff2`).
 
   Ses corrections sont reprises ici. Le §10 trace chaque défaut.
 
@@ -69,7 +70,7 @@
 - Les workers ne le reçoivent pas et ne le lisent pas. Les clients (`scripts/build.py`, console) interrogent le daemon maître par la socket locale ou fédérée.
 
 **Défaut sûr.**
-- Si `heavy-work-policy.json` est absent (migration ou retour arrière), ou si le daemon maître est injoignable, le déport est inactif. Aucun travail ne part hors du poste. Toute origine, utilisateur comme mission, compile en local en mode discret, comme aujourd'hui.
+- Si `heavy-work-policy.json` est absent (migration ou retour arrière), ou si le daemon maître est injoignable, le déport est inactif. Aucun travail ne part hors du poste. Toute origine, utilisateur comme mission, compile en local en mode discret.
 - Une fois le fichier présent, toute machine non déclarée est `protégée`, et les cas A et B du tableau s'appliquent.
 - L'initialisation explicite déclare le poste de travail `protégée` et les machines de compilation `ouverte`, avec leurs cibles et leur profil SSH.
 
@@ -89,11 +90,13 @@
 
 - L'**origine** est résolue sans option. Elle vaut « mission d'agent » si l'un de ces éléments est présent :
   - une identité agent (`resolve_current_identity`) ;
-  - une session T3 (`resolve_current_mcp_identity`, `t3code_mcp.rs:40-60`) ;
+  - une session T3 (`resolve_current_mcp_identity`, `mcp_identity.rs:288-315`, et `t3code_mcp::resolve_current`, `t3code_mcp.rs:40-60`) ;
   - un marqueur de sous-agent délégué (`delegated-pids`).
 
   L'authentification passe par le rattachement auxiliaire quand il est disponible. Seule l'absence de tout contexte agent, T3 ou délégué vaut « utilisateur ».
-- Le **profil SSH** suit le format de `scripts/federate-ssh.sh` : `-F /dev/null`, clé et `known_hosts` explicites, `BatchMode`. Aucun alias de `~/.ssh/config` n'est nécessaire.
+- Le **profil SSH** déclare l'hôte, l'utilisateur et le port. Les chemins de la clé et de `known_hosts` sont **relatifs à `$HOME`**, sans `..` ni lien symbolique.
+  - Ils sont résolus et vérifiés (`0600`) sur la **machine appelante**, car la politique vit sur le maître Linux alors que l'appelant peut être un Mac.
+  - SSH est lancé comme dans `scripts/federate-ssh.sh` : `-F /dev/null`, `BatchMode=yes`. Aucun alias de `~/.ssh/config` n'est utilisé.
 - `compilation_capacity` reste un poids entre machines ouvertes. La console est alignée sur 0 à 10.
 
 ### 3.2 Fonctionnement normal (aucun réglage)
@@ -111,6 +114,11 @@
       - le poids `compilation_capacity` ;
       - l'ordre alphabétique de `machine_id`.
    4. Si une machine ouverte capable existe mais n'est pas disponible : cas A du tableau. Si aucune n'existe : cas B.
+   5. **Échec de la pré-vérification (Lot 1a).**
+      - Le lanceur relâche le bail et rappelle `acquire`, en excluant cette machine pour l'essai en cours et en donnant le motif : injoignable, ou prérequis absent.
+      - Une autre machine ouverte est alors essayée.
+      - S'il n'en reste aucune : cas A pour une machine injoignable, cas B pour un prérequis absent, avec la cause exacte.
+   6. **Appelant choisi.** Si la machine ouverte retenue est la machine appelante, la compilation s'exécute en local sous bail, sans SSH et sans mode discret.
 4. **Exécution distante vérifiée.**
    - **Source.** `git archive` d'un commit exact et propre, déjà ancêtre de la branche distante suivie (ou de `origin/main`), sans récupération réseau implicite.
      - Fichier suivi modifié ou commit non poussé : refus avec cause et action (pousser, ou relancer avec `--local`).
@@ -128,13 +136,20 @@
        - Il attend un battement toutes les 10 s sur l'entrée standard SSH. À la fin de l'entrée ou après 30 s sans battement, il envoie `SIGTERM` au groupe, puis `SIGKILL` 10 s plus tard.
      - Sur macOS distant, `caffeinate -i` empêche la mise en veille par inactivité. La fermeture du capot reste possible : la machine devient alors injoignable et le travail échoue avec sa cause.
    - **Cache.**
-     - `scripts/build.py` gagne une résolution dédiée de la racine de cache distante : racine externe de `~/.config/bridget/build.json` si elle existe, sinon `~/.cache`. `target-dir`, utilisé par `Makefile`, est inchangé.
+     - `scripts/build.py` gagne une résolution dédiée de la racine de cache distante.
+       - Si `~/.config/bridget/build.json` est présent : sa racine externe. Si le fichier ou le volume est invalide, refus sans repli, comme `external_staging_parent` (`build.py:84-109`).
+       - Si le fichier est absent : `~/.cache`.
+       - `target-dir`, utilisé par `Makefile`, est inchangé.
      - Le dossier distant s'appelle `bridget-build-<dépôt>-<cible>`. C'est un enfant direct de cette racine, donc accepté par `configure_build_target` (`build.py:136-143`).
-     - L'identifiant de propriétaire est le même en local et à distance : `BRIDGET_BUILD_OWNER`, identifiant canonique du dépôt. `build.py` l'utilise de préférence au chemin `.git` (`build.py:57-62`), pour que marqueurs et purge coïncident quel que soit le mode.
+     - **Identifiant de propriétaire canonique**, calculé de la même façon en local et à distance : le SHA du commit racine du dépôt.
+       - En local, `build.py` le calcule depuis `.git`.
+       - À distance, sans `.git`, le lanceur le transmet dans `BRIDGET_BUILD_OWNER`.
+       - `owned_staging` (`build.py:185-198`) reconnaît cet identifiant **et** l'ancien chemin `.git`, pour ne pas rendre orphelins les caches locaux existants.
+       - La clé locale de `configure_build_target` (`build.py:132`) est conservée.
      - Seul le dossier source temporaire est retiré.
    - **Résultat.**
      - Cible native du poste appelant : le binaire est posé à `$CARGO_TARGET_DIR/release/bridget`, puis le staging local est enregistré (`register_staging`). `make install` et `build.py installed` fonctionnent donc comme aujourd'hui.
-     - Autre cible : le binaire est posé à `$CARGO_TARGET_DIR/<cible>/release/bridget`, sans écraser le binaire local.
+     - Autre cible, demandée par l'option `--build-target <cible>` de `build.py` (distincte de `--target` de Cargo) : le binaire est posé à `$CARGO_TARGET_DIR/<cible>/release/bridget`, sans écraser le binaire local.
    - **Contrôles.**
      - Nouvelle sous-commande `bridget build-info --json`, aux arguments stricts. Elle rend `{"version", "build_id", "os", "arch"}`, sans daemon et sans initialiser de namespace : exemptée dans `command_initializes_namespace` et `command_requires_principal` (`cli.rs:127-168`).
      - Le format de `--version` est inchangé, car la console le lit.
@@ -160,7 +175,10 @@
    - `outils_du_catalogue` : installation sans question, limitée au catalogue.
    - `jamais` : aucune installation. La machine exécute toujours ce pour quoi elle est prête.
 2. **Utiliser le poste protégé** : selon les cas A et B et le repli. `discret` exécute en mode discret ; `refuser` rend la cause et l'action.
-3. **Dépannage.** `scripts/build.py --local` ou `--host <machine>` passe outre le choix, jamais le rôle `exclue`. Sans daemon, `--host` reste sérialisé par `flock`.
+3. **Dépannage.**
+   - `scripts/build.py --local` compile en local, en mode discret sur une machine `protégée`.
+   - `--host <machine>` passe outre le choix du routage. Quand le daemon maître est joignable, il respecte toujours le rôle `exclue`.
+   - Sans daemon joignable, `--host` exige des paramètres SSH explicites (hôte, utilisateur, port, clé, `known_hosts`). Il ne peut pas vérifier `exclue` et le dit. Il reste sérialisé par le verrou de la machine cible.
 
 ## 4. Architecture
 
@@ -278,3 +296,12 @@
 | I4 build-id, périmètre Cargo, poussé, staging | `sha12`, `build --release` seul, ancêtre de la branche suivie, `register_staging` (§3.2.4) |
 | I5 propriétaire mixte, mission sans daemon | `BRIDGET_BUILD_OWNER` partout, sans daemon = mode discret (§3.2.4, §4.3) |
 | M1, M2 | constat corrigé (§1.2), `policy` local au maître, sonde SSH minimale gardée (§3.1, §5) |
+
+| Défaut v4 | Traitement |
+|---|---|
+| I1 profil SSH multi-plateforme, `--host` sans daemon | chemins relatifs à `$HOME` résolus sur l'appelant ; `--host` sans daemon avec paramètres explicites (§3.1, §3.3.3) |
+| I2 propriétaire canonique et migration | SHA du commit racine, double reconnaissance de l'ancien chemin `.git` (§3.2.4) |
+| I3 échec de la pré-vérification | relâche, exclusion pour l'essai, machine suivante, puis cas A ou B (§3.2.3) |
+| M1 `build.json` invalide | refus sans repli (§3.2.4) |
+| M2 appelant choisi, `--local`, cible étrangère | local sous bail, `--local` discret sur poste protégé, `--build-target` (§3.2.3, §3.2.4, §3.3.3) |
+| M3 citation T3, « comme aujourd'hui » | corrigés (§3.1) |
