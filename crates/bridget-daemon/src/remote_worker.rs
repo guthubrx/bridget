@@ -4339,6 +4339,41 @@ fn refuse_fenced_workspace(error: WorkerStoreError) -> WorkerRefusal {
         error => refuse(error),
     }
 }
+fn check_worker_executable(
+    executable: std::io::Result<std::path::PathBuf>,
+) -> Result<std::path::PathBuf, WorkerRefusal> {
+    let path = executable.map_err(|_| WorkerRefusal::WorkerUnavailable)?;
+    if !path.is_file() {
+        return Err(WorkerRefusal::WorkerUnavailable);
+    }
+    Ok(path)
+}
+fn refuse_managed_spawn(error: &crate::managed_process::ManagedProcessError) -> WorkerRefusal {
+    match error {
+        crate::managed_process::ManagedProcessError::Io(io_err)
+            if matches!(io_err.raw_os_error(), Some(libc::ENOSPC | libc::EDQUOT)) =>
+        {
+            WorkerRefusal::DiskFull
+        }
+        crate::managed_process::ManagedProcessError::Io(io_err)
+            if matches!(
+                io_err.raw_os_error(),
+                Some(libc::EACCES | libc::EPERM | libc::EROFS)
+            ) =>
+        {
+            WorkerRefusal::FilesystemAccessDenied
+        }
+        crate::managed_process::ManagedProcessError::Io(io_err)
+            if io_err.kind() == std::io::ErrorKind::NotFound =>
+        {
+            WorkerRefusal::WorkerUnavailable
+        }
+        crate::managed_process::ManagedProcessError::InvalidArgument(_) => {
+            WorkerRefusal::InvalidEnvelope
+        }
+        _ => WorkerRefusal::StoreUnavailable,
+    }
+}
 #[cfg(test)]
 mod refuse243_tests {
     use super::*;
@@ -4365,6 +4400,57 @@ mod refuse243_tests {
         ] {
             assert_eq!(refuse(error), WorkerRefusal::StoreUnavailable);
         }
+    }
+
+    #[test]
+    fn worker_executable_missing_or_deleted_refuses_as_worker_unavailable() {
+        assert_eq!(
+            check_worker_executable(Err(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "deleted"
+            ))),
+            Err(WorkerRefusal::WorkerUnavailable)
+        );
+        assert_eq!(
+            check_worker_executable(Ok(std::path::PathBuf::from(
+                "/nonexistent/334-cancel-guidance-r1/bin/bridget (deleted)"
+            ))),
+            Err(WorkerRefusal::WorkerUnavailable)
+        );
+        let current = std::env::current_exe().unwrap();
+        assert_eq!(check_worker_executable(Ok(current.clone())), Ok(current));
+    }
+
+    #[test]
+    fn managed_spawn_error_classification_preserves_specific_refusals() {
+        use crate::managed_process::ManagedProcessError;
+        assert_eq!(
+            refuse_managed_spawn(&ManagedProcessError::Io(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "enoent"
+            ))),
+            WorkerRefusal::WorkerUnavailable
+        );
+        assert_eq!(
+            refuse_managed_spawn(&ManagedProcessError::Io(
+                std::io::Error::from_raw_os_error(libc::ENOSPC)
+            )),
+            WorkerRefusal::DiskFull
+        );
+        assert_eq!(
+            refuse_managed_spawn(&ManagedProcessError::Io(
+                std::io::Error::from_raw_os_error(libc::EACCES)
+            )),
+            WorkerRefusal::FilesystemAccessDenied
+        );
+        assert_eq!(
+            refuse_managed_spawn(&ManagedProcessError::InvalidArgument("bad".into())),
+            WorkerRefusal::InvalidEnvelope
+        );
+        assert_eq!(
+            refuse_managed_spawn(&ManagedProcessError::InvalidStatus("err".into())),
+            WorkerRefusal::StoreUnavailable
+        );
     }
 }
 fn marker_key(command: &WorkerCommandIdentity) -> String {
@@ -8288,7 +8374,17 @@ impl WorkerRuntime {
                     .map_err(unavailable)?,
                 ),
             );
-            let executable = std::env::current_exe().map_err(unavailable)?;
+            let executable = check_worker_executable(std::env::current_exe()).inspect_err(|_| {
+                eprintln!(
+                    "bridget_remote_start_error {}",
+                    serde_json::json!({
+                        "command_id": command.command_id,
+                        "stage": "current_exe",
+                        "reason": "worker_executable_missing",
+                        "refusal": "worker_unavailable"
+                    })
+                );
+            })?;
             let managed = ManagedLaunch {
                 bootstrap_executable: executable.clone(),
                 wrapper_executable: executable,
@@ -8317,7 +8413,25 @@ impl WorkerRuntime {
                 &managed,
                 std::process::Stdio::from(stderr),
             )
-            .map_err(unavailable)?;
+            .map_err(|error| {
+                let refusal = refuse_managed_spawn(&error);
+                let io_kind = match &error {
+                    crate::managed_process::ManagedProcessError::Io(io_err) => {
+                        Some(format!("{:?}", io_err.kind()))
+                    }
+                    _ => None,
+                };
+                eprintln!(
+                    "bridget_remote_start_error {}",
+                    serde_json::json!({
+                        "command_id": command.command_id,
+                        "stage": "spawn_managed_bootstrap",
+                        "io_kind": io_kind,
+                        "refusal": refusal
+                    })
+                );
+                refusal
+            })?;
             Ok::<_, WorkerRefusal>((child, cancel_key))
         })();
         let (child, cancel_key) = match launch_result {
