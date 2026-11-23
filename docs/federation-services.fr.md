@@ -100,6 +100,20 @@ un appel non interactif exige `--label`. Dans un double terminal, Bridget affich
 le label, l'hôte réellement enregistré et le port, puis exige la réponse littérale
 `oui`. Une destination et un label divergents sont refusés sans mutation.
 
+## Fermer les sessions SSH après une perte de réseau
+
+Lors d’une coupure réseau côté client, une session SSH peut rester ouverte
+sur le serveur et conserver sa connexion à Bridget. Les sondes côté client
+ne peuvent plus fermer cette session. Configurer le serveur SSH qui reçoit
+le relais pour qu’il vérifie que ses clients répondent. Sur Cartae,
+l’exploitant règle `ClientAliveInterval 30` et `ClientAliveCountMax 3`
+pour le compte du relais sur le port 2222. Limiter la règle au compte et
+au port concernés, vérifier la configuration avec `sshd -t` et
+`sshd -T -C`, puis recharger SSH. Les sessions déjà ouvertes prennent
+le réglage à leur reconnexion. Sur Cartae, le serveur a fermé une session
+de test dont le client était suspendu après environ deux minutes.
+Bridget est resté disponible pendant le test.
+
 ## Recette et limites
 
 Les tests de scripts couvrent les contrats des deux gestionnaires aux frontières système. La recette réseau `scripts/tests/federation_095_roundtrip.py` utilise deux clients de test distincts, pas deux modèles : elle vérifie inscription, annuaire et messages dans les deux sens. Les résultats de service réels, chemins d'installation et procédure de retour arrière sont consignés dans `specs/095-federation-services/implementation.md` lors du déploiement.

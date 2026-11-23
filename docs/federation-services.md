@@ -60,6 +60,19 @@ On Linux, check `loginctl show-user USER -p Linger` if the user manager must
 survive logout. The script does not change this policy or request sudo.
 A macOS LaunchAgent starts at login, not before it. The master must remain on.
 
+### Close SSH sessions after a client loses its network
+
+For a socket relay over SSH, an abrupt client disconnect can leave the remote
+SSH session and its Bridget socket open. Client-side probes do not close
+those sessions when the client has already lost its network. Configure the
+SSH server receiving the relay to probe its clients. On Cartae, the operator
+sets `ClientAliveInterval 30` and `ClientAliveCountMax 3` for the relay account
+on port 2222. Scope the rule to the account and port, validate the effective
+configuration with `sshd -t` and `sshd -T -C`, then reload SSH. Existing SSH
+sessions pick up the rule when they reconnect. A suspended test client on
+Cartae was disconnected by the server after about two minutes while Bridget
+remained available.
+
 ## Client and master are different roles
 
 The default communication namespace is `.cache/bridget-core` under the
