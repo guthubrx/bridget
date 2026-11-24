@@ -28888,3 +28888,121 @@ fn spec325_ack_suppresses_pending_tick_notifications_and_cancels_queued_deliveri
     );
     cleanup(&config);
 }
+
+#[test]
+fn spec340_factual_summary_projects_authoritative_execution_git_and_warnings() {
+    let (mut st, config, _rx, _reader) = fixture("factual340");
+    let mut task = tache_soldee_150(&mut st, "factual340");
+    task.state = "result_available".into();
+    task.started_at = Some(1_000);
+    task.completed_at = Some(1_258);
+    task.cleanup_done = true;
+    task.result = Some("OK complet".into());
+    task.workspace_report_mission = Some(task.mission.clone());
+
+    // 1. Worktree propre avec 2 commits : zéro alerte, ligne Commits présente.
+    task.workspace = Some(crate::delegation::WorkspaceRecord {
+        strategy: crate::delegation::WorkspaceStrategy::Worktree,
+        state: crate::delegation::WorkspaceState::Kept,
+        toplevel: "/tmp/repo".into(),
+        path: "/tmp/repo/.worktrees/f340".into(),
+        branch: "bridget/f340".into(),
+        base_commit: "1111111111111111111111111111111111111111".into(),
+        head_commit: Some("2222222222222222222222222222222222222222".into()),
+        branch_commit: Some("2222222222222222222222222222222222222222".into()),
+        head_on_branch: Some(true),
+        commit_count: Some(2),
+        commits: vec![
+            crate::delegation::WorkspaceCommit {
+                sha: "2222222222222222222222222222222222222222".into(),
+                subject: "fix: second".into(),
+            },
+            crate::delegation::WorkspaceCommit {
+                sha: "3333333333333333333333333333333333333333".into(),
+                subject: "feat: first".into(),
+            },
+        ],
+        truncated: false,
+        dirty: Some(false),
+        commit_view: None,
+    });
+    let view = task_view(&task, None, true);
+    let fs = &view["factual_summary"];
+    assert_eq!(fs["authority"], "bridget");
+    assert_eq!(fs["duration_secs"], 258);
+    assert_eq!(fs["stop_confirmed"], true);
+    assert_eq!(fs["fallback"]["used"], false);
+    assert_eq!(fs["git"]["commit_count"], 2);
+    assert_eq!(fs["git"]["uncommitted_changes"], false);
+    assert_eq!(fs["warnings"].as_array().unwrap().len(), 0);
+    let lines: Vec<&str> = fs["lines"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(Value::as_str)
+        .collect();
+    assert!(lines.iter().any(|l| l.contains("4 min 18 s")), "{lines:?}");
+    assert!(
+        lines
+            .iter()
+            .any(|l| l.contains("worktree bridget/f340 · 2 commits (11111111..22222222) · arbre propre")),
+        "{lines:?}"
+    );
+    assert!(lines.iter().any(|l| l.contains("22222222 fix: second")), "{lines:?}");
+
+    // 2. Worktree sale + bascule de secours + arrêt non confirmé → 3 alertes factuelles.
+    task.cleanup_done = false;
+    task.substitution = Some(crate::delegation::Substitution {
+        requested: bridget_transport::protocol::FallbackTarget {
+            agent_type: "codex".into(),
+            model: "gpt-6.2-sol".into(),
+            effort: None,
+        },
+        selected: bridget_transport::protocol::FallbackTarget {
+            agent_type: "antigravity".into(),
+            model: "gemini-4-neon-high".into(),
+            effort: None,
+        },
+        reason: "fallback".into(),
+        tried: vec![],
+    });
+    task.workspace.as_mut().unwrap().dirty = Some(true);
+    let dirty = task_view(&task, None, true);
+    let dirty_fs = &dirty["factual_summary"];
+    assert_eq!(dirty_fs["fallback"]["used"], true);
+    let warnings: Vec<&str> = dirty_fs["warnings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(Value::as_str)
+        .collect();
+    assert!(warnings.iter().any(|w| w.contains("Modifications non commitées")));
+    assert!(warnings.iter().any(|w| w.contains("Bascule de secours")));
+    assert!(warnings.iter().any(|w| w.contains("Arrêt du processus enfant")));
+
+    // 3. Worktree vide malgré result_available → alerte dédiée.
+    task.cleanup_done = true;
+    task.substitution = None;
+    let ws = task.workspace.as_mut().unwrap();
+    ws.dirty = Some(false);
+    ws.commit_count = Some(0);
+    ws.commits.clear();
+    let empty = task_view(&task, None, true);
+    assert!(
+        empty["factual_summary"]["warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|w| w.as_str().unwrap().contains("Aucun commit ni modification locale"))
+    );
+
+    // 4. Dossier partagé → strategy=shared, report_status=not_applicable.
+    task.workspace = None;
+    let shared_view = task_view(&task, None, true);
+    assert_eq!(shared_view["factual_summary"]["git"]["strategy"], "shared");
+    assert_eq!(
+        shared_view["factual_summary"]["git"]["report_status"],
+        "not_applicable"
+    );
+    cleanup(&config);
+}

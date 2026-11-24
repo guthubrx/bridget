@@ -378,6 +378,7 @@ private fun DelegateDirectory(vm: MobileViewModel, owner: JSONObject, onSelected
                             TextButton(onClick = { vm.showTask(task.getString("task_id")) }, enabled = !vm.busy) { Text(stringResource(R.string.delegate_result)) }
                         }
                         if (vm.taskDetail?.optString("task_id") == task.optString("task_id")) {
+                            vm.taskDetail?.let { FactualSummaryBox(it) }
                             SelectionContainer { Text(vm.taskResult.ifEmpty { stringResource(R.string.no_result) }) }
                             if (vm.resultOffset != null) TextButton(onClick = { vm.showTask(task.getString("task_id"), true) }, enabled = !vm.busy) { Text(stringResource(R.string.more_result)) }
                         }
@@ -387,6 +388,28 @@ private fun DelegateDirectory(vm: MobileViewModel, owner: JSONObject, onSelected
             }
         },
         confirmButton = { TextButton(onClick = { vm.closeDelegates() }) { Text(stringResource(R.string.dismiss)) } })
+}
+
+@Composable
+private fun FactualSummaryBox(task: JSONObject) {
+    val summary = task.optJSONObject("factual_summary") ?: return
+    val lines = summary.optJSONArray("lines") ?: return
+    if (lines.length() == 0) return
+    val warnings = summary.optJSONArray("warnings")
+    Surface(tonalElevation = 2.dp, shape = MaterialTheme.shapes.small, modifier = Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            for (i in 0 until lines.length()) {
+                val line = lines.optString(i)
+                if (line.isBlank()) continue
+                val isAlert = line.startsWith("Alertes :")
+                Text(
+                    line,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (isAlert && (warnings?.length() ?: 0) > 0) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+    }
 }
 
 @Composable
@@ -802,6 +825,7 @@ private fun TaskPanel(vm: MobileViewModel, onInstruction: () -> Unit) {
                         Text(task.getString("title"), style = MaterialTheme.typography.titleMedium)
                         Text(task.getString("task_id"), style = MaterialTheme.typography.labelSmall)
                         Text(stateText(task.getString("status")))
+                        FactualSummaryBox(task)
                         task.optString("error").takeIf { it.isNotBlank() && it != "null" }?.let { Text(it, color = MaterialTheme.colorScheme.error) }
                         SelectionContainer { Text(vm.taskResult.ifEmpty { stringResource(R.string.no_result) }) }
                         if (vm.resultOffset != null) TextButton(onClick = { vm.showTask(task.getString("task_id"), true) }, enabled = !vm.busy) { Text(stringResource(R.string.more_result)) }

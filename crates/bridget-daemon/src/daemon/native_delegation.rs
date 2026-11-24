@@ -6431,6 +6431,271 @@ pub(super) fn provider_error_recovery(error: &str) -> Option<&'static str> {
     (error == "api_error:oauth_session_expired").then_some("Reconnectez la session Claude sur la machine de cette tâche, avec le compte existant : sa session OAuth a expiré et son renouvellement a échoué. Le code fournisseur api_error est conservé. Cette connexion doit être réauthentifiée ; ce constat ne prouve aucun arrêt global. Conservez la tâche, sa clé et ses fichiers. Ne rejouez pas une tâche failed et ne créez pas de remplacement avant la reconnexion, la confirmation de son arrêt natif et la vérification du dossier. Une suite distincte reste soumise à son autorisation. Les autres travaux autorisés suivent leur propre état.")
 }
 
+fn format_duration_fr(secs: i64) -> String {
+    let secs = secs.max(0);
+    let h = secs / 3600;
+    let m = (secs % 3600) / 60;
+    let s = secs % 60;
+    if h > 0 {
+        format!("{h} h {m:02} min {s:02} s")
+    } else if m > 0 {
+        format!("{m} min {s:02} s")
+    } else {
+        format!("{s} s")
+    }
+}
+
+fn short_sha(sha: &str) -> &str {
+    sha.get(..8).unwrap_or(sha)
+}
+
+/// Fiche de contrôle factuelle produite uniquement depuis l’état durable Bridget
+/// (aucune donnée issue du texte libre de l’agent), O(1) et sans I/O.
+pub(super) fn factual_summary(task: &Task, result_bytes: Option<usize>) -> Value {
+    let (agent_type, model, effort, request_posture, request_machine) = match &task.request {
+        NativeDelegationRequest::Delegate {
+            agent_type,
+            model,
+            effort,
+            posture,
+            machine_id,
+            ..
+        } => (
+            agent_type.as_str(),
+            model.as_str(),
+            effort.as_deref(),
+            *posture,
+            machine_id.as_deref(),
+        ),
+        _ => ("inconnu", "inconnu", None, None, None),
+    };
+    let machine_id = task
+        .remote_placement
+        .as_ref()
+        .map(|p| p.machine_id.as_str())
+        .or(request_machine)
+        .unwrap_or("local");
+    let protocol = task.definition.protocol.as_str();
+    let posture_str = match task.effective_posture.or(request_posture) {
+        Some(SpawnPosture::Discovery) => "discovery",
+        Some(SpawnPosture::Development) => "development",
+        None => "inherited",
+    };
+    let duration_secs = task
+        .completed_at
+        .or_else(|| task.terminal().then_some(task.updated_at))
+        .map(|end| end.saturating_sub(task.started_at.unwrap_or(task.created_at)).max(0));
+    let rounds_used = task.round_no();
+    let mut warnings: Vec<String> = Vec::new();
+
+    let fallback = if let Some(sub) = &task.substitution {
+        warnings.push(format!(
+            "Bascule de secours appliquée ({}/{} → {}/{})",
+            sub.requested.agent_type,
+            sub.requested.model,
+            sub.selected.agent_type,
+            sub.selected.model
+        ));
+        json!({
+            "used": true,
+            "reason": sub.reason,
+            "requested_agent_type": sub.requested.agent_type,
+            "requested_model": sub.requested.model,
+            "selected_agent_type": sub.selected.agent_type,
+            "selected_model": sub.selected.model,
+        })
+    } else {
+        json!({ "used": false })
+    };
+
+    let (git_value, repo_line, commits_line) = if let Some(ws) = &task.workspace {
+        let is_view = matches!(ws.strategy, crate::delegation::WorkspaceStrategy::CommitView);
+        let report_observed = workspace_report_ready(task) && ws.dirty.is_some();
+        if !report_observed {
+            if task.terminal() {
+                warnings.push("Rapport Git indisponible ou incomplet".into());
+            }
+            let strat = if is_view { "commit_view" } else { "worktree" };
+            (
+                json!({
+                    "strategy": strat,
+                    "report_status": "unavailable",
+                    "branch": (!ws.branch.is_empty()).then_some(ws.branch.as_str()),
+                    "base_commit": ws.base_commit,
+                    "head_commit": ws.head_commit,
+                    "head_on_branch": ws.head_on_branch,
+                    "commit_count": ws.commit_count,
+                    "commits": [],
+                    "uncommitted_changes": ws.dirty,
+                }),
+                format!("Dépôt : {strat} · rapport Git indisponible"),
+                None,
+            )
+        } else if is_view {
+            let diverged = ws.dirty == Some(true);
+            if diverged {
+                warnings.push("Divergence de fichiers détectée dans la vue de commit".into());
+            }
+            (
+                json!({
+                    "strategy": "commit_view",
+                    "report_status": "observed",
+                    "base_commit": ws.base_commit,
+                    "uncommitted_changes": ws.dirty,
+                }),
+                format!(
+                    "Dépôt : vue de commit ({}) · {}",
+                    short_sha(&ws.base_commit),
+                    if diverged { "divergence détectée" } else { "intacte" }
+                ),
+                None,
+            )
+        } else {
+            let dirty = ws.dirty == Some(true);
+            let commit_count = ws.commit_count.unwrap_or(0);
+            if dirty {
+                warnings.push(
+                    "Modifications non commitées présentes dans le worktree".into(),
+                );
+            }
+            if ws.head_on_branch == Some(false) {
+                warnings.push("HEAD n’est plus sur la branche attendue du worktree".into());
+            }
+            if commit_count == 0 && !dirty && task.state == "result_available" {
+                warnings.push(
+                    "Aucun commit ni modification locale produit dans le worktree".into(),
+                );
+            }
+            let top_commits: Vec<String> = ws
+                .commits
+                .iter()
+                .take(5)
+                .map(|c| format!("{} {}", short_sha(&c.sha), c.subject))
+                .collect();
+            let range_part = match ws.head_commit.as_deref() {
+                Some(head) if commit_count > 0 => {
+                    format!(" ({}..{})", short_sha(&ws.base_commit), short_sha(head))
+                }
+                _ => String::new(),
+            };
+            let branch_label = if ws.branch.is_empty() {
+                "détachée"
+            } else {
+                ws.branch.as_str()
+            };
+            let dirty_label = if dirty {
+                "modifications non commitées présentes"
+            } else {
+                "arbre propre"
+            };
+            let commits_label = if commit_count == 1 {
+                "1 commit".to_string()
+            } else {
+                format!("{commit_count} commits")
+            };
+            let commits_line = (!top_commits.is_empty()).then(|| {
+                let shown: Vec<&str> = top_commits.iter().take(3).map(String::as_str).collect();
+                let suffix = if commit_count as usize > shown.len() {
+                    format!(" (+{} autre(s))", commit_count as usize - shown.len())
+                } else {
+                    String::new()
+                };
+                format!("Commits : {}{suffix}", shown.join(" ; "))
+            });
+            (
+                json!({
+                    "strategy": "worktree",
+                    "report_status": "observed",
+                    "branch": ws.branch,
+                    "base_commit": ws.base_commit,
+                    "head_commit": ws.head_commit,
+                    "head_on_branch": ws.head_on_branch,
+                    "commit_count": commit_count,
+                    "commits": top_commits,
+                    "uncommitted_changes": dirty,
+                }),
+                format!(
+                    "Dépôt : worktree {branch_label} · {commits_label}{range_part} · {dirty_label}"
+                ),
+                commits_line,
+            )
+        }
+    } else {
+        (
+            json!({
+                "strategy": "shared",
+                "report_status": "not_applicable",
+            }),
+            "Dépôt : dossier partagé (pas de rapport Git isolé)".into(),
+            None,
+        )
+    };
+
+    if task.terminal() && !task.cleanup_done {
+        warnings.push("Arrêt du processus enfant non encore confirmé".into());
+    }
+
+    let effort_part = effort
+        .filter(|e| !e.trim().is_empty())
+        .map(|e| format!(" [effort {e}]"))
+        .unwrap_or_default();
+    let duration_part = duration_secs
+        .map(|d| format!(" · {}", format_duration_fr(d)))
+        .unwrap_or_default();
+    let state_fr = match task.state.as_str() {
+        "result_available" => "résultat disponible",
+        "failed" => "échec",
+        "cancelled" => "annulée",
+        "cancelling" => "annulation en cours",
+        "waiting_for_children" => "attente des sous-tâches",
+        _ => "en cours",
+    };
+    let stop_fr = if task.cleanup_done {
+        "arrêt confirmé"
+    } else if task.terminal() {
+        "arrêt non confirmé"
+    } else {
+        "en exécution"
+    };
+    let result_part = result_bytes
+        .map(|b| format!(" · réponse {b} octets"))
+        .unwrap_or_default();
+
+    let mut lines = vec![
+        format!(
+            "Exécution : {machine_id} · {agent_type} / {model}{effort_part} ({protocol}, {posture_str}){duration_part} · ronde {rounds_used}"
+        ),
+        repo_line,
+    ];
+    if let Some(c_line) = commits_line {
+        lines.push(c_line);
+    }
+    lines.push(format!("Clôture : {state_fr} · {stop_fr}{result_part}"));
+    if !warnings.is_empty() {
+        lines.push(format!("Alertes : {}", warnings.join(" | ")));
+    }
+
+    json!({
+        "version": 1,
+        "authority": "bridget",
+        "outcome": task.state,
+        "machine_id": machine_id,
+        "agent_type": agent_type,
+        "model": model,
+        "effort": effort,
+        "protocol": protocol,
+        "posture": posture_str,
+        "duration_secs": duration_secs,
+        "rounds_used": rounds_used,
+        "stop_confirmed": task.cleanup_done,
+        "result_bytes": result_bytes,
+        "fallback": fallback,
+        "git": git_value,
+        "warnings": warnings,
+        "lines": lines,
+    })
+}
+
 fn task_view(task: &Task, phase: Option<&str>, full: bool) -> Value {
     let (agent_type, model, effort, posture) = match &task.request {
         NativeDelegationRequest::Delegate {
@@ -7091,6 +7356,7 @@ fn task_view(task: &Task, phase: Option<&str>, full: bool) -> Value {
     if !full {
         view.as_object_mut().unwrap().remove("result");
     }
+    view["factual_summary"] = factual_summary(task, body.map(str::len));
     view
 }
 

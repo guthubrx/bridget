@@ -148,6 +148,11 @@ pub(super) fn handle(
                         ) {
                             Ok(mut page) => {
                                 decorate(&mut page["task"], &st, &device);
+                                page["task"]["factual_summary"] =
+                                    native_delegation::factual_summary(
+                                        &task,
+                                        task.result.as_deref().map(str::len),
+                                    );
                                 page
                             }
                             Err(e) => native_error(e),

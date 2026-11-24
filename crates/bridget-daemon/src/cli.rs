@@ -3287,6 +3287,18 @@ fn render_native_cli_result(result: &serde_json::Value, json_output: bool) -> St
             lines.push(format!("{label} : {value}"));
         }
     }
+    if let Some(summary_lines) = result
+        .pointer("/factual_summary/lines")
+        .and_then(serde_json::Value::as_array)
+        .filter(|arr| !arr.is_empty())
+    {
+        lines.push("fiche factuelle :".into());
+        for line in summary_lines {
+            if let Some(text) = line.as_str() {
+                lines.push(format!("  - {text}"));
+            }
+        }
+    }
     if let Some(value) = result.get("result").filter(|value| !value.is_null()) {
         lines.push(format!(
             "résultat : {}",

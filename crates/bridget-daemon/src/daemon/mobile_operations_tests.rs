@@ -631,6 +631,13 @@ fn mobile177_task_projection_cancel_receipt_and_late_result_keep_native_state() 
     });
     assert_eq!(shown["task"]["status"], "result_available");
     assert_eq!(shown["result"], "Résultat conservé");
+    assert_eq!(shown["task"]["factual_summary"]["authority"], "bridget");
+    assert!(
+        !shown["task"]["factual_summary"]["lines"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
     assert_eq!(
         f.state
             .lock()
