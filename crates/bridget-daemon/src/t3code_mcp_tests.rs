@@ -421,3 +421,29 @@ fn local_binding_requires_current_daemon_admission() {
     server.join().unwrap();
     std::fs::remove_dir_all(socket.parent().unwrap()).unwrap();
 }
+
+#[test]
+fn spec348_namespace_permission_error_is_not_masked_as_t3_session_unavailable() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = std::env::temp_dir().join(format!(
+        "bridget-t3-ns-perm-{}",
+        uuid::Uuid::new_v4().simple()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let agents = dir.join("agents.json");
+    std::fs::write(&agents, "{}\n").unwrap();
+    std::fs::set_permissions(&agents, std::fs::Permissions::from_mode(0o644)).unwrap();
+
+    let err = crate::environment::Namespace::resolve(Some(dir.clone()), None, None)
+        .map_err(|_| IdentityError::NamespaceConfiguration)
+        .unwrap_err();
+    assert_eq!(err.code(), "namespace_configuration_invalid");
+    assert!(err.remediation().contains("0600"));
+    assert!(err.remediation().contains("agents.json"));
+
+    std::fs::set_permissions(&agents, std::fs::Permissions::from_mode(0o600)).unwrap();
+    assert!(crate::environment::Namespace::resolve(Some(dir.clone()), None, None).is_ok());
+
+    let _ = std::fs::remove_dir_all(&dir);
+}

@@ -44,19 +44,38 @@ pub(crate) fn resolve_current() -> Option<Result<ResolvedIdentity, IdentityError
         return None;
     }
     Some((|| {
-        let denied = || IdentityError::T3SessionUnavailable;
-        let endpoint = endpoint
-            .and_then(|v| v.into_string().ok())
-            .ok_or_else(denied)?;
-        let authorization = authorization
-            .and_then(|v| v.into_string().ok())
-            .ok_or_else(denied)?;
-        let runtime = read_runtime(&base_dir().map_err(|_| denied())?).map_err(|_| denied())?;
+        let endpoint = endpoint.and_then(|v| v.into_string().ok()).ok_or(
+            IdentityError::T3SessionUnavailableAt(
+                "t3_endpoint_missing : variable BRIDGET_T3_MCP_ENDPOINT absente ou non UTF-8",
+            ),
+        )?;
+        let authorization = authorization.and_then(|v| v.into_string().ok()).ok_or(
+            IdentityError::T3SessionUnavailableAt(
+                "t3_authorization_missing : variable BRIDGET_T3_MCP_AUTHORIZATION absente ou non UTF-8",
+            ),
+        )?;
+        let runtime = read_runtime(&base_dir().map_err(|_| {
+            IdentityError::T3SessionUnavailableAt(
+                "t3_runtime_unavailable : répertoire T3 introuvable (T3CODE_HOME / HOME)",
+            )
+        })?)
+        .map_err(|_| {
+            IdentityError::T3SessionUnavailableAt(
+                "t3_runtime_unavailable : server-runtime.json T3 absent, périmé ou illisible",
+            )
+        })?;
         let url = validate_endpoint(&runtime, &endpoint, &authorization)?;
         let proof = attest_http(&url, &authorization)?;
-        let namespace = crate::environment::Namespace::from_environment().map_err(|_| denied())?;
+        // Ne jamais masquer un refus du namespace local (ex. permissions 0600 sur agents.json)
+        // en `t3_session_unavailable` : la session T3 vient d'être attestée avec succès.
+        let namespace = resolve_t3_namespace()?;
         resolve_binding(&proof.thread_id, &namespace.socket)
     })())
+}
+
+fn resolve_t3_namespace() -> Result<crate::environment::Namespace, IdentityError> {
+    crate::environment::Namespace::from_environment()
+        .map_err(|_| IdentityError::NamespaceConfiguration)
 }
 
 fn resolve_binding(
