@@ -536,6 +536,11 @@ fn dispatch_with_executor(
             }
             let identity = match resolve_identity() {
                 Ok(identity) => identity,
+                Err(_) if name == "bridget_usage" => crate::mcp_identity::ResolvedIdentity {
+                    name: "local-usage-reader".to_string(),
+                    instance_id: "local-usage-reader".to_string(),
+                    delegated_origin: None,
+                },
                 Err(identity_error) => {
                     return id.map(|id| identity_error_result(id, &identity_error));
                 }

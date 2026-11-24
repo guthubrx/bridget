@@ -2185,6 +2185,7 @@ pub(crate) struct UsageQuery {
 #[derive(Deserialize, Default)]
 pub(crate) struct UsageRefreshRequest {
     pub provider: Option<String>,
+    pub subscription_id: Option<String>,
 }
 
 pub(crate) async fn route_api_usage_get(
@@ -2227,9 +2228,17 @@ pub(crate) async fn route_api_usage_refresh(
         return error_response(status, code, msg, &format!("Refusé : {msg}"));
     }
     let reg = state.registry_override_ref();
-    let provider = payload.and_then(|Json(p)| p.provider);
+    let (provider, sub_id) = match payload {
+        Some(Json(p)) => (p.provider, p.subscription_id),
+        None => (None, None),
+    };
     let res = tokio::task::spawn_blocking(move || {
-        crate::usage_quotas::usage_api_payload(provider.as_deref(), true, reg.as_deref())
+        crate::usage_quotas::usage_api_payload_targeted(
+            provider.as_deref(),
+            sub_id.as_deref(),
+            true,
+            reg.as_deref(),
+        )
     })
     .await;
     match res {

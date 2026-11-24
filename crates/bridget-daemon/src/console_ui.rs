@@ -117,6 +117,7 @@ impl ConsoleState {
 #[derive(Deserialize)]
 struct BootstrapQuery {
     token: Option<String>,
+    view: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -505,7 +506,13 @@ async fn route_index(
         )) {
             resp_headers.insert(header::SET_COOKIE, cookie);
         }
-        if let Ok(loc) = HeaderValue::from_str(&format!("/#bt={}", state.client_token)) {
+        let view_q = query
+            .view
+            .as_deref()
+            .and_then(|v| normalize_console_view(v).ok())
+            .map(|v| format!("?view={v}"))
+            .unwrap_or_default();
+        if let Ok(loc) = HeaderValue::from_str(&format!("/{view_q}#bt={}", state.client_token)) {
             resp_headers.insert(header::LOCATION, loc);
         }
         return (StatusCode::SEE_OTHER, resp_headers, "").into_response();
@@ -1066,9 +1073,16 @@ pub(crate) fn cmd_ui(args: &[String]) -> Result<(), String> {
     let mut no_open = false;
     let mut port: u16 = 0;
     let mut registry: Option<PathBuf> = None;
+    let mut initial_view: Option<String> = None;
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
+            "-h" | "--help" => {
+                println!(
+                    "bridget ui [usage|accounts|machines|settings] [--port N] [--no-open] [--registry CHEMIN]\n  Ouvre la console web locale unifiée Bridget (Quotas, Comptes, Machines & CLI, Paramètres et Mises à jour)."
+                );
+                return Ok(());
+            }
             "--no-open" => {
                 no_open = true;
                 i += 1;
@@ -1086,6 +1100,15 @@ pub(crate) fn cmd_ui(args: &[String]) -> Result<(), String> {
                     args.get(i + 1).ok_or("--registry exige un chemin")?,
                 ));
                 i += 2;
+            }
+            "--view" => {
+                let raw = args.get(i + 1).ok_or("--view exige une vue")?;
+                initial_view = Some(normalize_console_view(raw)?);
+                i += 2;
+            }
+            other if !other.starts_with('-') && initial_view.is_none() => {
+                initial_view = Some(normalize_console_view(other)?);
+                i += 1;
             }
             other => return Err(format!("option inconnue : {other}")),
         }
@@ -1112,8 +1135,15 @@ pub(crate) fn cmd_ui(args: &[String]) -> Result<(), String> {
             prefs_path,
             SESSION_TTL,
         );
-        let url = format!("http://127.0.0.1:{}/?token={launch_token}", addr.port());
-        println!("Console Bridget Comptes prete sur : {url}");
+        let view_suffix = initial_view
+            .as_deref()
+            .map(|v| format!("&view={v}"))
+            .unwrap_or_default();
+        let url = format!(
+            "http://127.0.0.1:{}/?token={launch_token}{view_suffix}",
+            addr.port()
+        );
+        println!("Console Bridget prete sur : {url}");
         println!("Ctrl+C pour fermer cette console locale.");
         if !no_open {
             let open_url = url.clone();
@@ -1126,6 +1156,19 @@ pub(crate) fn cmd_ui(args: &[String]) -> Result<(), String> {
             .await
             .map_err(|e| e.to_string())
     })
+}
+
+fn normalize_console_view(raw: &str) -> Result<String, String> {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "usage" | "quotas" | "quota" => Ok("usage".to_string()),
+        "accounts" | "comptes" | "all" => Ok("all".to_string()),
+        "actions" => Ok("actions".to_string()),
+        "machines" | "cli" => Ok("machines".to_string()),
+        "settings" | "parametres" | "updates" => Ok("settings".to_string()),
+        other => Err(format!(
+            "vue inconnue '{other}' (attendues : usage, accounts, actions, machines, settings)"
+        )),
+    }
 }
 
 #[cfg(test)]

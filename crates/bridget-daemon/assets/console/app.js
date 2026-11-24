@@ -13,6 +13,7 @@ let state = {
   usageData: null,
   usageFilter: "all",
   usageRefreshing: false,
+  usageRefreshingId: null,
   activeView: "all",
   themePref: document.documentElement.getAttribute("data-theme-pref") || "system",
 };
@@ -702,8 +703,9 @@ function render() {
       data: state.usageData,
       filter: state.usageFilter,
       refreshing: state.usageRefreshing,
+      refreshingId: state.usageRefreshingId,
       onFilter: (f) => { state.usageFilter = f || "all"; render(); },
-      onRefresh: (force) => loadUsage(Boolean(force)),
+      onRefresh: (force, subId) => loadUsage(Boolean(force), false, subId || null),
     });
     return;
   }
@@ -742,26 +744,31 @@ function render() {
   });
 }
 
-async function loadUsage(forceRefresh = false, silent = false) {
+async function loadUsage(forceRefresh = false, silent = false, subscriptionId = null) {
   const btn = document.getElementById("refreshBtn");
   state.usageRefreshing = true;
+  state.usageRefreshingId = subscriptionId || null;
   if (!silent && btn) btn.disabled = true;
   if (state.activeView === "usage") render();
   try {
     state.usageData = forceRefresh
-      ? await apiRequest("/api/usage/refresh", { method: "POST", body: JSON.stringify({}) })
+      ? await apiRequest("/api/usage/refresh", {
+          method: "POST",
+          body: JSON.stringify(subscriptionId ? { subscription_id: subscriptionId } : {}),
+        })
       : await apiRequest("/api/usage");
     const usageBadge = document.getElementById("countUsage");
     if (usageBadge && state.usageData && state.usageData.summary) {
-      usageBadge.textContent = `${state.usageData.summary.with_live_quota}/${state.usageData.summary.total_subscriptions}`;
+      usageBadge.textContent = `${state.usageData.summary.with_live_quota}`;
     }
     if (!silent && forceRefresh) {
-      showFeedback("ok", "✓", "Quotas actualisés (0 jeton LLM consommé).");
+      showFeedback("ok", "✓", subscriptionId ? "Abonnement actualisé (0 jeton LLM)." : "Quotas actualisés (0 jeton LLM consommé).");
     }
   } catch (e) {
     if (!silent) showFeedback("err", "✕", `Quotas : ${e.message}`);
   } finally {
     state.usageRefreshing = false;
+    state.usageRefreshingId = null;
     if (!silent && btn) btn.disabled = false;
     if (state.activeView === "usage") render();
   }
@@ -890,6 +897,12 @@ document.getElementById("modalCloseBtn").onclick = closeModal;
 document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeModal(); });
 
 applyTheme(state.themePref);
-updateTopbarAction();
+const initialParamView = new URLSearchParams(window.location.search).get("view");
+const allowedInitViews = new Set(["usage", "all", "actions", "machines", "settings"]);
+if (initialParamView && allowedInitViews.has(initialParamView)) {
+  selectView(initialParamView);
+} else {
+  updateTopbarAction();
+}
 loadStatus();
 loadUsage(false, true);

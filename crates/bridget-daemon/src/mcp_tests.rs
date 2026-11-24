@@ -3188,6 +3188,33 @@ fn spec174_identite_absente_guide_montage_t3_sans_execution() {
 }
 
 #[test]
+fn spec345_bridget_usage_works_without_agent_identity() {
+    let calls = Cell::new(0);
+    let execute = |_: &crate::mcp_identity::ResolvedIdentity, name: &str, _: &Value| {
+        assert_eq!(name, "bridget_usage");
+        calls.set(calls.get() + 1);
+        Ok(json!({ "subscriptions": [] }))
+    };
+    let request = json!({
+        "jsonrpc": "2.0", "id": 345, "method": "tools/call",
+        "params": { "name": "bridget_usage", "arguments": {} }
+    });
+    let mut session = Session {
+        initialize_seen: true,
+        initialized: true,
+    };
+    let response = dispatch_with_executor(
+        &request,
+        &mut session,
+        &|| Err(crate::mcp_identity::IdentityError::IdentityNotFound),
+        &execute,
+    )
+    .unwrap();
+    assert_eq!(calls.get(), 1);
+    assert_ne!(response["result"]["isError"], true);
+}
+
+#[test]
 fn identite_mcp_unicode_est_refusee_avant_toute_execution() {
     let root = test_socket("identity-unicode").with_extension("identity");
     std::fs::create_dir_all(&root).unwrap();

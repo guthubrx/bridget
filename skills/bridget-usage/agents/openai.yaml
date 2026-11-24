@@ -1,0 +1,4 @@
+interface:
+  display_name: "Bridget Usage"
+  short_description: "Afficher les quotas restants (Codex, Antigravity, Claude) à 0 jeton"
+  default_prompt: "Affiche les quotas restants de tous les abonnements Bridget via bridget_usage."

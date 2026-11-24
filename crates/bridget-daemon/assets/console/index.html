@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>Bridget · Comptes</title>
+<title>Bridget · Console</title>
 <script>
 (function(){
   var d=document.documentElement,p=d.getAttribute("data-theme-pref")||"system";
@@ -25,12 +25,16 @@
       <div class="brand-text">
         <span class="brand-name">Bridget</span>
         <span class="brand-sep" aria-hidden="true">|</span>
-        <span class="brand-section">Comptes</span>
+        <span class="brand-section">Console</span>
       </div>
     </div>
     <div class="host-pill" id="hostBadge" title="Hôte exécutant cette console">Console locale</div>
     <div class="nav-group">
       <div class="nav-label">CONSOLE</div>
+      <button class="nav-item" type="button" data-view="usage">
+        <span>Quotas</span>
+        <span class="nav-count" id="countUsage">—</span>
+      </button>
       <button class="nav-item active" type="button" data-view="all">
         <span>Comptes</span>
         <span class="nav-count" id="countAll">0</span>
@@ -38,10 +42,6 @@
       <button class="nav-item" type="button" data-view="actions">
         <span>Actions requises</span>
         <span class="nav-count warn" id="countActions">0</span>
-      </button>
-      <button class="nav-item" type="button" data-view="usage">
-        <span>Quotas</span>
-        <span class="nav-count" id="countUsage">—</span>
       </button>
       <button class="nav-item" type="button" data-view="machines">
         <span>Machines &amp; CLI</span>

@@ -2312,12 +2312,21 @@ fn rate_limit_event(value: &Value) -> Option<ManagedEventKind> {
         window: window.to_string(),
         status: status.to_string(),
         resets_at: info.get("resetsAt").and_then(Value::as_i64),
-        used_percent: percent_0_100(info.get("usedPercent").or_else(|| info.get("utilization"))),
+        used_percent: info
+            .get("usedPercent")
+            .and_then(|v| percent_0_100(Some(v), false))
+            .or_else(|| percent_0_100(info.get("utilization"), true)),
     })
 }
 
-fn percent_0_100(value: Option<&Value>) -> Option<u8> {
+fn percent_0_100(value: Option<&Value>, allow_unit_fraction: bool) -> Option<u8> {
     let pct = value.and_then(|v| v.as_f64().or_else(|| v.as_i64().map(|n| n as f64)))?;
+    if !pct.is_finite() || pct < 0.0 {
+        return None;
+    }
+    if allow_unit_fraction && pct > 0.0 && pct <= 1.0 && value.is_some_and(|v| v.is_f64()) {
+        return Some((pct * 100.0).round().clamp(0.0, 100.0) as u8);
+    }
     if (0.0..=100.0).contains(&pct) {
         Some(pct.round() as u8)
     } else {
