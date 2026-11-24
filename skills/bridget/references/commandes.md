@@ -41,6 +41,7 @@ de couverture.
 | `daemon` | CLI humain | Aucun | Démarre l'autorité Bridget au premier plan. Un agent ne démarre pas un nouveau daemon pour réparer un envoi ou changer de namespace. |
 | `mcp` | Interne | Serveur stdio, pas outil auto-appelable | Point d'entrée lancé par le client MCP configuré. Il n'est ni un second daemon ni une permission globale. |
 | `mobile` | CLI humain | Aucun outil MCP d’administration | Configure et sert le compagnon Android, associe un appareil et gère ses révocations (session 177). Ces opérations ne créent pas une identité agent. |
+| `usage` | MCP exposé (342) | `bridget_usage` | Lit les quotas restants par abonnement à 0 jeton LLM (sonde JSON-RPC gratuite Codex + observations passives Claude ; signale honnêtement les fournisseurs non exposés). Accepte un filtre/alias (`claude`/`anthropic`, `codex`/`openai`, `antigravity`/`agy`/`google`, `cursor`), `--refresh`, `--json`, `--html`. |
 | `attach` | CLI humain | Aucun outil MCP de terminal | Observe le journal et permet une saisie humaine dans un double-TTY ; ce n'est ni la TUI fournisseur ni un écran d'approbation. |
 | `journal` | MCP exposé (100) | `bridget_journal` | Extrait exact borné du journal ; `to` partage, `reply` suit une réponse. Source UUID, séquences, lacunes et reprise explicites. |
 | `events` | MCP exposé (100/101) | `bridget_events` | types/sub/list/unsub, capacités sources, propriétaire attesté, once/TTL et interruption visible ; notification d'un fait, sans obligation métier ni exécution de script. |

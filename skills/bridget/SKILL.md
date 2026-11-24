@@ -1,9 +1,23 @@
 ---
 name: bridget
-description: "Communiquer, déléguer et coordonner avec Bridget : missions natives, annuaire, messages, fils partagés et passations. À utiliser pour créer un sous-agent, contacter un agent, demander une revue ou transmettre un résultat."
+description: "Communiquer, déléguer, consulter les quotas restants (`usage`) et coordonner avec Bridget : missions natives, annuaire, messages, fils partagés, passations et console web. À utiliser pour `/bridget usage`, créer un sous-agent, contacter un agent, demander une revue ou transmettre un résultat."
 ---
 
 # Communication entre agents
+
+## Commandes directes `/bridget ...` (exécution immédiate)
+
+Quand l’utilisateur invoque `/bridget <sous-commande>` dans une conversation, **exécuter directement la sous-commande demandée** au lieu d’afficher une aide générique :
+
+- **`/bridget usage [fournisseur] [--refresh]`** (quotas restants par abonnement, 0 jeton LLM) :
+  1. Si l’outil MCP `bridget_usage` est chargé : appeler `bridget_usage` (`provider` si fourni : `claude`/`anthropic`, `codex`/`openai`, `antigravity`/`agy`/`google`, `cursor` ou omis pour tous ; `refresh: true` si `--refresh` est demandé ; `format: "html"` si `html_render` est disponible dans la session).
+  2. Sinon (session avec ancienne façade MCP ou shell disponible) : exécuter directement `~/.local/bin/bridget usage [fournisseur] [--refresh] --html` (ou sans `--html` hors interface capable de `html_render`).
+  3. Si `html_render` est disponible : prévisualiser rapidement la hauteur avec `html_preview` (largeur `728`) puis afficher directement les jauges inline avec `html_render` (ne pas paraphraser les chiffres déjà visibles dans la carte). Sans `html_render`, afficher la sortie texte de `bridget usage`.
+  4. Rester strictement honnête : ne jamais inventer de pourcentage ; les fournisseurs sans compteur libre (`antigravity`, `cursor`) sont affichés comme non exposés.
+- **`/bridget status`** : appeler `bridget_status` (ou `bridget status`).
+- **`/bridget who`** : appeler `bridget_who` (ou `bridget who`).
+- **`/bridget updates ...`** : consulter `bridget updates status` ou régler un serveur (`bridget updates mode <serveur> auto|manual|default`).
+- **`/bridget` seul (sans sous-commande)** : présenter un résumé court des commandes utiles (`bridget usage`, `bridget who`, `bridget status`, `bridget accounts ui`, `bridget updates status`, `bridget delegate --help`).
 
 Utiliser `bridget` pour les échanges, `bridget-loop` pour la surveillance et
 les relances, et `bridget-handoff` pour le registre de passation.
