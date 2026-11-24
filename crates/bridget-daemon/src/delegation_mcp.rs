@@ -5,7 +5,8 @@ use crate::communication::client::{
 };
 use crate::mcp_identity::ResolvedIdentity;
 use bridget_transport::protocol::{
-    AutoDelegateV2, AutoDelegateWorkload, ChildRequestDecision, FallbackTarget,
+    AutoDelegateV2, AutoDelegateWorkload, ChildRequestDecision, DelegateGraphRequest,
+    DelegateGraphStep, FallbackTarget, GraphFailurePolicy, GraphNotifyPolicy,
     NativeDelegationRequest, SpawnPosture, WorkspaceRequest,
 };
 use bridget_transport::{DaemonToWrapper, WrapperToDaemon};
@@ -125,6 +126,276 @@ fn parse_task_ids(args: &Value) -> Result<Vec<String>, ClientError> {
         .collect()
 }
 
+/// Parse la charge MCP de `bridget_delegate_graph` (1 à 16 étapes DAG).
+fn parse_delegate_graph(args: &Value) -> Result<DelegateGraphRequest, ClientError> {
+    let request_id = args
+        .get("request_id")
+        .and_then(Value::as_str)
+        .filter(|s| !s.trim().is_empty() && s.len() <= 128)
+        .ok_or_else(|| {
+            ClientError::InvalidParams(
+                "request_id doit être une chaîne non vide (1 à 128 caractères)".into(),
+            )
+        })?
+        .to_string();
+    let title = match args.get("title") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(s)) if !s.trim().is_empty() && s.len() <= 256 => Some(s.clone()),
+        _ => return Err(ClientError::InvalidParams("title invalide (1..=256 caractères)".into())),
+    };
+    let on_failure = match args.get("on_failure") {
+        None => GraphFailurePolicy::StopDependents,
+        Some(Value::String(s)) if s == "stop_dependents" => GraphFailurePolicy::StopDependents,
+        Some(Value::String(s)) if s == "cancel_graph" => GraphFailurePolicy::CancelGraph,
+        _ => {
+            return Err(ClientError::InvalidParams(
+                "on_failure invalide (stop_dependents | cancel_graph)".into(),
+            ));
+        }
+    };
+    let notify_policy = match args.get("notify_policy") {
+        None => GraphNotifyPolicy::OnGraphDoneOrFailure,
+        Some(Value::String(s)) if s == "on_graph_done_or_failure" => {
+            GraphNotifyPolicy::OnGraphDoneOrFailure
+        }
+        Some(Value::String(s)) if s == "each_step" => GraphNotifyPolicy::EachStep,
+        _ => {
+            return Err(ClientError::InvalidParams(
+                "notify_policy invalide (on_graph_done_or_failure | each_step)".into(),
+            ));
+        }
+    };
+    let raw_steps = args
+        .get("steps")
+        .and_then(Value::as_array)
+        .filter(|arr| (1..=16).contains(&arr.len()))
+        .ok_or_else(|| {
+            ClientError::InvalidParams("steps doit être un tableau de 1 à 16 étapes".into())
+        })?;
+
+    let mut steps = Vec::with_capacity(raw_steps.len());
+    for (idx, item) in raw_steps.iter().enumerate() {
+        let step_obj = item.as_object().ok_or_else(|| {
+            ClientError::InvalidParams(format!("steps[{idx}] doit être un objet"))
+        })?;
+        for k in step_obj.keys() {
+            if !matches!(
+                k.as_str(),
+                "step_id" | "depends_on" | "pass_dependency_results" | "delegation"
+            ) {
+                return Err(ClientError::InvalidParams(format!(
+                    "steps[{idx}] : champ inconnu '{k}'"
+                )));
+            }
+        }
+        let step_id = step_obj
+            .get("step_id")
+            .and_then(Value::as_str)
+            .filter(|s| !s.trim().is_empty() && s.len() <= 64)
+            .ok_or_else(|| {
+                ClientError::InvalidParams(format!("steps[{idx}].step_id requis (1..=64)"))
+            })?
+            .to_string();
+        let depends_on = match step_obj.get("depends_on") {
+            None => Vec::new(),
+            Some(Value::Array(arr)) => arr
+                .iter()
+                .map(|v| {
+                    v.as_str()
+                        .filter(|s| !s.trim().is_empty())
+                        .map(str::to_string)
+                        .ok_or_else(|| {
+                            ClientError::InvalidParams(format!(
+                                "steps[{idx}].depends_on doit contenir des chaînes non vides"
+                            ))
+                        })
+                })
+                .collect::<Result<Vec<_>, _>>()?,
+            _ => {
+                return Err(ClientError::InvalidParams(format!(
+                    "steps[{idx}].depends_on doit être un tableau de chaînes"
+                )));
+            }
+        };
+        let pass_dependency_results = match step_obj.get("pass_dependency_results") {
+            None => true,
+            Some(Value::Bool(b)) => *b,
+            _ => {
+                return Err(ClientError::InvalidParams(format!(
+                    "steps[{idx}].pass_dependency_results doit être un booléen"
+                )));
+            }
+        };
+        let raw_del = step_obj.get("delegation").ok_or_else(|| {
+            ClientError::InvalidParams(format!("steps[{idx}].delegation requis"))
+        })?;
+        let decoded_del = raw_del
+            .as_str()
+            .and_then(|txt| serde_json::from_str::<Value>(txt).ok())
+            .filter(Value::is_object);
+        let del_val = decoded_del.as_ref().unwrap_or(raw_del);
+        let del_obj = del_val.as_object().ok_or_else(|| {
+            ClientError::InvalidParams(format!("steps[{idx}].delegation doit être un objet"))
+        })?;
+        if del_obj.contains_key("agent_type") {
+            return Err(ClientError::InvalidParams(format!(
+                "steps[{idx}].delegation : agent_type est interdit ; utiliser engine / connection_id"
+            )));
+        }
+        let del_str = |key: &str| -> Result<String, ClientError> {
+            del_obj
+                .get(key)
+                .and_then(Value::as_str)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string)
+                .ok_or_else(|| {
+                    ClientError::InvalidParams(format!(
+                        "steps[{idx}].delegation.{key} doit être une chaîne non vide"
+                    ))
+                })
+        };
+        let step_req_id = match del_obj.get("request_id") {
+            None => format!("{request_id}:{step_id}"),
+            Some(_) => del_str("request_id")?,
+        };
+        let expected_base_commit = match del_obj.get("expected_base_commit") {
+            None => None,
+            Some(_) => {
+                let value = del_str("expected_base_commit")?;
+                if value.len() != 40 || !value.bytes().all(|b| b.is_ascii_hexdigit()) {
+                    return Err(ClientError::InvalidParams(format!(
+                        "steps[{idx}].delegation.expected_base_commit exige un SHA Git complet (40 hex)"
+                    )));
+                }
+                Some(value)
+            }
+        };
+        let delegation = AutoDelegateV2 {
+            quota_fallback_authorized: del_obj
+                .get("quota_fallback_authorized")
+                .map(|v| {
+                    v.as_bool().ok_or_else(|| {
+                        ClientError::InvalidParams(format!(
+                            "steps[{idx}].delegation.quota_fallback_authorized doit être un booléen"
+                        ))
+                    })
+                })
+                .transpose()?,
+            service_tier: del_obj
+                .get("service_tier")
+                .map(|_| del_str("service_tier"))
+                .transpose()?,
+            request_id: step_req_id,
+            machine_id: del_obj
+                .get("machine_id")
+                .map(|_| del_str("machine_id"))
+                .transpose()?,
+            project_id: del_obj
+                .get("project_id")
+                .map(|_| del_str("project_id"))
+                .transpose()?,
+            engine: del_obj
+                .get("engine")
+                .map(|_| del_str("engine"))
+                .transpose()?,
+            connection_id: del_obj
+                .get("connection_id")
+                .map(|_| del_str("connection_id"))
+                .transpose()?,
+            agent_type: None,
+            model: del_obj
+                .get("model")
+                .map(|_| del_str("model"))
+                .transpose()?,
+            effort: del_obj
+                .get("effort")
+                .map(|_| del_str("effort"))
+                .transpose()?,
+            workload: match del_obj.get("workload") {
+                None => AutoDelegateWorkload::General,
+                Some(Value::String(v)) if v == "general" => AutoDelegateWorkload::General,
+                Some(Value::String(v)) if v == "compilation" => AutoDelegateWorkload::Compilation,
+                _ => {
+                    return Err(ClientError::InvalidParams(format!(
+                        "steps[{idx}].delegation.workload invalide"
+                    )));
+                }
+            },
+            expected_base_commit,
+            task: del_str("task")?,
+            cwd: del_str("cwd")?,
+            posture: match del_obj.get("posture") {
+                None => None,
+                Some(Value::String(v)) if v == "discovery" => Some(SpawnPosture::Discovery),
+                Some(Value::String(v)) if v == "development" => Some(SpawnPosture::Development),
+                _ => {
+                    return Err(ClientError::InvalidParams(format!(
+                        "steps[{idx}].delegation.posture invalide"
+                    )));
+                }
+            },
+            reply_timeout: match del_obj.get("reply_timeout") {
+                None => None,
+                Some(Value::Number(v)) if v.is_u64() => v.as_u64(),
+                _ => {
+                    return Err(ClientError::InvalidParams(format!(
+                        "steps[{idx}].delegation.reply_timeout invalide"
+                    )));
+                }
+            },
+            workspace: del_obj.get("workspace").map(parse_workspace).transpose()?,
+            keep_alive_secs: match del_obj.get("keep_alive_secs") {
+                None => None,
+                Some(Value::Number(v)) if v.is_u64() => v.as_u64(),
+                _ => {
+                    return Err(ClientError::InvalidParams(format!(
+                        "steps[{idx}].delegation.keep_alive_secs invalide"
+                    )));
+                }
+            },
+            brief: del_obj.get("brief").cloned(),
+            child_requests: match del_obj.get("child_requests") {
+                None => None,
+                Some(Value::String(m)) if matches!(m.as_str(), "deny" | "forward") => {
+                    Some(m.clone())
+                }
+                _ => {
+                    return Err(ClientError::InvalidParams(format!(
+                        "steps[{idx}].delegation.child_requests invalide"
+                    )));
+                }
+            },
+            urgent: match del_obj.get("urgent") {
+                None => None,
+                Some(Value::Bool(b)) => Some(*b),
+                _ => {
+                    return Err(ClientError::InvalidParams(format!(
+                        "steps[{idx}].delegation.urgent invalide"
+                    )));
+                }
+            },
+            deliverable: del_obj
+                .get("deliverable")
+                .map(|_| del_str("deliverable"))
+                .transpose()?,
+        };
+        steps.push(DelegateGraphStep {
+            step_id,
+            depends_on,
+            pass_dependency_results,
+            delegation,
+        });
+    }
+
+    Ok(DelegateGraphRequest {
+        request_id,
+        title,
+        on_failure,
+        notify_policy,
+        steps,
+    })
+}
+
 pub(crate) fn tools(brief_schema: &Value) -> Vec<Value> {
     let workspace_schema = json!({"oneOf":[
         {"type":"object","properties":{"strategy":{"const":"shared","description":"Dossier partagé : strategy est le seul champ autorisé. Le SHA source appartient à expected_base_commit ; ne pas ajouter base_ref ou branch."}},"required":["strategy"],"additionalProperties":false},
@@ -147,6 +418,9 @@ pub(crate) fn tools(brief_schema: &Value) -> Vec<Value> {
         json!({"name":"bridget_task_wait","description":"Attend le résultat d'une ou plusieurs de ses tâches natives, sans polling ni modification de la remise. Une expiration n'annule aucun enfant. Le message de résultat peut arriver après ce retour.","inputSchema":{"type":"object","properties":{"task_ids":{"type":"array","minItems":1,"maxItems":16,"uniqueItems":true,"items":{"type":"string","minLength":1}},"wait_timeout":{"type":"integer","minimum":1,"maximum":WAIT_TIMEOUT_MAX_SECS,"default":WAIT_TIMEOUT_DEFAULT_SECS}},"required":["task_ids"],"additionalProperties":false},"annotations":{"readOnlyHint":true,"destructiveHint":false,"idempotentHint":true}}),
         json!({"name":"bridget_task_ack","description":"Déclare avoir lu le résultat ou l'échec de ses tâches natives et annule les avis asynchrones encore en attente (native-result-*, native-failure-*) pour éviter tout doublon en fin de tour. Ne modifie ni nettoyage ni rétention. Tout le groupe est refusé sans ACK partiel si une tâche n’est pas prête ; le refus identifie ses task_id, ronde et état après contrôle de propriété du groupe.","inputSchema":{"type":"object","properties":{"task_ids":{"type":"array","minItems":1,"maxItems":16,"uniqueItems":true,"items":{"type":"string","minLength":1}}},"required":["task_ids"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":false,"idempotentHint":true}}),
         json!({"name":"bridget_task_cancel","description":"Annule sa mission native et sa descendance ; aucune mission d'un autre parent n'est accessible.","inputSchema":{"type":"object","properties":{"task_id":{"type":"string"}},"required":["task_id"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":true,"idempotentHint":true}}),
+        json!({"name":"bridget_delegate_graph","description":"Enchaîne des missions A->B+C avec dépendances, sans ronde de garde. Déclarez 1 à 16 étapes (step_id, depends_on, delegation au format bridget_auto_delegate) ; Bridget déclenche automatiquement les étapes suivantes en parallèle avec les résultats factuels des dépendances et réveille le parent une seule fois en fin de graphe.","inputSchema":{"type":"object","properties":{"request_id":{"type":"string","minLength":1,"maxLength":128},"title":{"type":"string","minLength":1,"maxLength":256},"on_failure":{"type":"string","enum":["stop_dependents","cancel_graph"],"default":"stop_dependents","description":"stop_dependents (défaut) saute les étapes dépendantes et laisse finir les branches indépendantes ; cancel_graph annule tout le graphe dès le premier échec."},"notify_policy":{"type":"string","enum":["on_graph_done_or_failure","each_step"],"default":"on_graph_done_or_failure","description":"on_graph_done_or_failure (défaut) réveille le parent une seule fois en fin de graphe ; each_step conserve aussi chaque avis intermédiaire."},"steps":{"type":"array","minItems":1,"maxItems":16,"items":{"type":"object","properties":{"step_id":{"type":"string","minLength":1,"maxLength":64},"depends_on":{"type":"array","items":{"type":"string"}},"pass_dependency_results":{"type":"boolean","default":true},"delegation":{"type":"object"}},"required":["step_id","delegation"],"additionalProperties":false}}},"required":["request_id","steps"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":true,"idempotentHint":true,"openWorldHint":true}}),
+        json!({"name":"bridget_graph_status","description":"Lit l'état d'un graphe de missions Bridget. Sans effet ni polling obligatoire.","inputSchema":{"type":"object","properties":{"graph_id":{"type":"string","minLength":1,"maxLength":128}},"required":["graph_id"],"additionalProperties":false},"annotations":{"readOnlyHint":true,"destructiveHint":false,"idempotentHint":true}}),
+        json!({"name":"bridget_graph_cancel","description":"Annule un graphe de missions Bridget. Stoppe les étapes actives et annule celles en attente.","inputSchema":{"type":"object","properties":{"graph_id":{"type":"string","minLength":1,"maxLength":128}},"required":["graph_id"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":true,"idempotentHint":true}}),
     ];
     for tool in &mut definitions {
         if tool["name"] == "bridget_auto_delegate" {
@@ -320,6 +594,8 @@ fn execute_with_proof(
         "bridget_task_continue" => &["task_id", "request_id", "task", "brief"],
         "bridget_task_respond" => &["task_id", "request_id", "decision", "answer"],
         "bridget_task_status" | "bridget_task_cancel" => &["task_id"],
+        "bridget_delegate_graph" => &["request_id", "title", "on_failure", "notify_policy", "steps"],
+        "bridget_graph_status" | "bridget_graph_cancel" => &["graph_id"],
         "bridget_admission_cancel" => &["request_id"],
         "bridget_task_wait" => &["task_ids", "wait_timeout"],
         "bridget_task_ack" => &["task_ids"],
@@ -627,6 +903,13 @@ fn execute_with_proof(
         },
         "bridget_task_ack" => NativeDelegationRequest::Ack {
             task_ids: parse_task_ids(args)?,
+        },
+        "bridget_delegate_graph" => NativeDelegationRequest::DelegateGraph(parse_delegate_graph(args)?),
+        "bridget_graph_status" => NativeDelegationRequest::GraphStatus {
+            graph_id: string("graph_id")?,
+        },
+        "bridget_graph_cancel" => NativeDelegationRequest::GraphCancel {
+            graph_id: string("graph_id")?,
         },
         _ => unreachable!(),
     };

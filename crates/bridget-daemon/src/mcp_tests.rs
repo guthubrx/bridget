@@ -2678,6 +2678,9 @@ fn catalogue_mcp_expose_exactement_les_quatre_verbes_du_greffe() {
         "bridget_task_repair_workspace",
         "bridget_delegate",
         "bridget_auto_delegate",
+        "bridget_delegate_graph",
+        "bridget_graph_status",
+        "bridget_graph_cancel",
         "bridget_task_continue",
         "bridget_task_respond",
         "bridget_task_status",
@@ -2702,6 +2705,7 @@ fn catalogue_mcp_expose_exactement_les_quatre_verbes_du_greffe() {
         "bridget_specialists",
         "bridget_status",
         "bridget_thread",
+        "bridget_usage",
         "bridget_wake",
         "bridget_who",
         "guichet_delegate",
@@ -7391,8 +7395,9 @@ fn spec309_compact_discovery_tools_fits_acp_budget_and_keeps_core_delegation_fie
         assert!(tool["inputSchema"].get("$defs").is_none());
         assert!(tool["inputSchema"].get("$ref").is_none());
     }
+    // Budget compact ACP (20 outils incluant bridget_usage et les 3 outils de graphe natif).
     assert!(
-        total_bytes <= 5500,
+        total_bytes <= 6500,
         "budget compact depasse ({total_bytes} octets)"
     );
     let auto = compact

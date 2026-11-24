@@ -2016,6 +2016,73 @@ pub enum NativeDelegationRequest {
         #[serde(default)]
         revoke: bool,
     },
+    /// Soumission d'un graphe orienté acyclique (DAG) de missions avec dépendances
+    /// (`A -> B + C -> D`) exécuté de façon autonome par le daemon sans ronde de garde.
+    DelegateGraph(DelegateGraphRequest),
+    /// Lecture durable de l'état d'un graphe de missions appartenant au parent.
+    GraphStatus {
+        graph_id: String,
+    },
+    /// Annulation d'un graphe de missions appartenant au parent (étapes actives + en attente).
+    GraphCancel {
+        graph_id: String,
+    },
+}
+
+/// Politique de gestion d'échec dans un graphe de missions Bridget.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum GraphFailurePolicy {
+    /// Marque les étapes dépendantes transitives en `skipped_dependency_failed` et laisse
+    /// les branches indépendantes encore en cours se terminer.
+    #[default]
+    StopDependents,
+    /// Annule immédiatement les autres étapes en cours et toutes les étapes en attente.
+    CancelGraph,
+}
+
+/// Politique de réveil du parent pour un graphe de missions Bridget.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum GraphNotifyPolicy {
+    /// Réveille le parent une seule fois en fin de graphe (ou sur échec terminal) avec
+    /// le bilan consolidé de toutes les étapes. Supprime les avis intermédiaires.
+    #[default]
+    OnGraphDoneOrFailure,
+    /// Conserve aussi les avis individuels de chaque étape au fil de l'eau.
+    EachStep,
+}
+
+/// Étape déclarée dans un graphe de missions Bridget (`bridget_delegate_graph`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DelegateGraphStep {
+    pub step_id: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub depends_on: Vec<String>,
+    /// Si vrai (défaut), Bridget préfixe la consigne de cette étape par un bloc court
+    /// factuel résumant les étapes préalables terminées (`task_id`, commit, fichiers, résumé).
+    #[serde(default = "default_true")]
+    pub pass_dependency_results: bool,
+    pub delegation: AutoDelegateV2,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+/// Charge de l'opération native `bridget_delegate_graph`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DelegateGraphRequest {
+    pub request_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    #[serde(default)]
+    pub on_failure: GraphFailurePolicy,
+    #[serde(default)]
+    pub notify_policy: GraphNotifyPolicy,
+    pub steps: Vec<DelegateGraphStep>,
 }
 
 /// Charge v1 de l'opération native `auto_delegate`. Elle reste séparée de

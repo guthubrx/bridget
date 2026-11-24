@@ -5,6 +5,7 @@ mod dispatch_diagnostics;
 mod late_worker_prepares;
 mod native_child_requests;
 mod native_delegation;
+mod native_graphs;
 mod native_provider_catalogue;
 pub(crate) use native_delegation::catalogue_entries;
 mod agent_tracking;
@@ -1088,6 +1089,19 @@ struct DaemonState {
     conn_hosts: HashMap<String, String>,
     conn_operating_systems: HashMap<String, String>,
     conn_instances: HashMap<String, String>,
+    /// Identités éphémères internes utilisées uniquement par le moteur de graphes
+    /// (`graph-exec:<graph_id>:<step_id>`) lorsqu'un parent est endormi/déconnecté
+    /// au moment où une étape dépendante se débloque. Jamais accessibles depuis le réseau.
+    graph_exec_identities: HashMap<
+        String,
+        (
+            String,
+            String,
+            Option<bridget_transport::protocol::CommunicationProject>,
+        ),
+    >,
+    /// Verrou anti-doublon des étapes de graphes en cours d'admission asynchrone.
+    graph_launching_steps: HashSet<String>,
     /// Connexions MCP filles : elles portent le principal canonique pour les
     /// gardes, sans devenir propriétaires de la présence du wrapper.
     auxiliary_connections: HashSet<String>,
@@ -4881,6 +4895,8 @@ impl DaemonState {
             conn_hosts: HashMap::new(),
             conn_operating_systems: HashMap::new(),
             conn_instances: HashMap::new(),
+            graph_exec_identities: HashMap::new(),
+            graph_launching_steps: HashSet::new(),
             auxiliary_connections: HashSet::new(),
             identity_credentials: HashMap::new(),
             connection_roles: HashMap::new(),
@@ -10772,6 +10788,9 @@ impl crate::threads::Directory for DaemonDirectory<'_> {
 /// route vivante, ou connexion MCP auxiliaire déjà reconnue pour cette même
 /// instance. Le client n'élargit jamais sa portée en fournissant un identifiant.
 fn live_connection_identity(st: &DaemonState, conn_id: &str) -> Option<(String, String)> {
+    if let Some((owner, instance, _)) = st.graph_exec_identities.get(conn_id) {
+        return Some((owner.clone(), instance.clone()));
+    }
     let agent = st.conn_names.get(conn_id)?;
     let instance = st.conn_instances.get(conn_id)?;
     let route = st.router.get_agent(agent)?;
@@ -10793,6 +10812,9 @@ fn connection_communication_project(
     st: &DaemonState,
     conn_id: &str,
 ) -> Option<bridget_transport::protocol::CommunicationProject> {
+    if let Some((_, _, project)) = st.graph_exec_identities.get(conn_id) {
+        return project.clone();
+    }
     let owner = if let Some((agent, _)) = live_connection_identity(st, conn_id) {
         st.router.get_agent(&agent)?.connection_id.as_str()
     } else if st.conn_names.contains_key(conn_id) {

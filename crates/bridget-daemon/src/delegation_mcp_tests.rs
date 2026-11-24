@@ -929,7 +929,12 @@ fn closed_arguments_reject_forged_parent_without_connecting() {
         .find(|tool| tool["name"] == "bridget_handoff")
         .unwrap()["inputSchema"]["properties"]["draft"];
     let native_tools = tools(brief_schema);
-    assert_eq!(native_tools.len(), 13);
+    assert_eq!(native_tools.len(), 16);
+    assert!(
+        native_tools
+            .iter()
+            .any(|tool| tool["name"] == "bridget_delegate_graph")
+    );
     assert!(
         native_tools
             .iter()

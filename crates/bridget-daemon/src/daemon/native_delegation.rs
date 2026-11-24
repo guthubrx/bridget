@@ -8608,7 +8608,82 @@ fn handle_with_fact(
     response
 }
 
+pub(super) fn handle_with_fact_pub(
+    conn: &str,
+    request: NativeDelegationRequest,
+    fact: Option<bridget_transport::protocol::ProviderPermissions>,
+    thread: Option<&str>,
+    permission_proof: Option<&bridget_transport::protocol::NativePermissionProof>,
+    state: &Arc<Mutex<DaemonState>>,
+    peer: Option<&UnixStream>,
+) -> DaemonToWrapper {
+    handle_with_fact(conn, request, fact, thread, permission_proof, state, peer)
+}
+
+pub(super) fn recheck_attested_thread_pub(
+    st: &DaemonState,
+    conn: &str,
+    thread: Option<&str>,
+) -> Result<(), String> {
+    recheck_attested_thread(st, conn, thread)
+}
+
+pub(super) fn parent_fact_pub(
+    st: &DaemonState,
+    owner: &str,
+    instance: &str,
+    request_id: Option<&str>,
+    attested: Option<&bridget_transport::protocol::ProviderPermissions>,
+) -> Result<Option<bridget_transport::protocol::ProviderPermissions>, String> {
+    parent_fact(st, owner, instance, request_id, attested)
+}
+
 fn handle_with_fact_inner(
+    conn: &str,
+    request: NativeDelegationRequest,
+    fact: Option<bridget_transport::protocol::ProviderPermissions>,
+    thread: Option<&str>,
+    permission_proof: Option<&bridget_transport::protocol::NativePermissionProof>,
+    state: &Arc<Mutex<DaemonState>>,
+    peer: Option<&UnixStream>,
+) -> DaemonToWrapper {
+    match request {
+        NativeDelegationRequest::DelegateGraph(graph_req) => {
+            let result = super::native_graphs::handle_submit(
+                conn,
+                graph_req,
+                fact,
+                thread,
+                permission_proof,
+                state,
+                peer,
+            );
+            return DaemonToWrapper::NativeDelegationResult { result };
+        }
+        NativeDelegationRequest::GraphStatus { graph_id } => {
+            let result = super::native_graphs::handle_status(conn, &graph_id, thread, state);
+            return DaemonToWrapper::NativeDelegationResult { result };
+        }
+        NativeDelegationRequest::GraphCancel { graph_id } => {
+            let result = super::native_graphs::handle_cancel(conn, &graph_id, thread, state);
+            return DaemonToWrapper::NativeDelegationResult { result };
+        }
+        other => {
+            let request = other;
+            return handle_with_fact_inner_core(
+                conn,
+                request,
+                fact,
+                thread,
+                permission_proof,
+                state,
+                peer,
+            );
+        }
+    }
+}
+
+fn handle_with_fact_inner_core(
     conn: &str,
     request: NativeDelegationRequest,
     fact: Option<bridget_transport::protocol::ProviderPermissions>,
@@ -13062,7 +13137,11 @@ fn handle_locked_with_remote_proof(
         NativeDelegationRequest::RepairWorkspace { .. } => {
             Err("workspace_repair_requires_coordinator".into())
         }
-        NativeDelegationRequest::Grant { .. } | NativeDelegationRequest::Specialists { .. } => {
+        NativeDelegationRequest::Grant { .. }
+        | NativeDelegationRequest::Specialists { .. }
+        | NativeDelegationRequest::DelegateGraph(_)
+        | NativeDelegationRequest::GraphStatus { .. }
+        | NativeDelegationRequest::GraphCancel { .. } => {
             unreachable!()
         }
     }
@@ -16224,6 +16303,8 @@ pub(super) fn tick(state: &Arc<Mutex<DaemonState>>) {
     }
     // Les demandes sont fermées AVANT le skip de pause et les arrêts de flotte.
     super::native_child_requests::tick(state);
+    // Avancement autonome des graphes de missions (DAG) sans ronde de garde.
+    super::native_graphs::tick(state);
     let mut controls = Vec::new();
     let mut cancellations = Vec::new();
     let mut cleanups = Vec::new();
@@ -16571,6 +16652,16 @@ pub(super) fn tick(state: &Arc<Mutex<DaemonState>>) {
                         .and_then(|route| st.conn_instances.get(&route.connection_id))
                         == Some(&task.owner_instance);
                 if !task.failure_sent
+                    && task.acknowledged_at.is_none()
+                    && workspace_report_ready(&task)
+                    && st
+                        .delegation_store
+                        .graph_suppresses_step_notice(&task.task_id)
+                        .unwrap_or(false)
+                {
+                    task.failure_sent = true;
+                    let _ = st.delegation_store.save(&task);
+                } else if !task.failure_sent
                     && task.acknowledged_at.is_none()
                     && workspace_report_ready(&task)
                     && parent_live
@@ -16936,7 +17027,15 @@ pub(super) fn tick(state: &Arc<Mutex<DaemonState>>) {
             }
             if task.state == "result_available" && !task.result_sent {
                 super::specialist_requests::capture_task(&st, &task);
-                if task.acknowledged_at.is_none() {
+                if st
+                    .delegation_store
+                    .graph_suppresses_step_notice(&task.task_id)
+                    .unwrap_or(false)
+                {
+                    task.result_sent = true;
+                    task.error = None;
+                    let _ = st.delegation_store.save(&task);
+                } else if task.acknowledged_at.is_none() {
                     let Some(child_instance) = task.child_instance.as_deref() else {
                         task.state = "failed".into();
                         task.error = Some("native_result_invalid".into());

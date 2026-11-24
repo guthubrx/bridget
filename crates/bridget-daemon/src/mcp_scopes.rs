@@ -89,6 +89,24 @@ pub(crate) const TOOL_SCOPES: &[ToolScope] = &[
         own_state_actions: &[],
     },
     ToolScope {
+        tool: "bridget_delegate_graph",
+        base: Scope::Delegates,
+        read_actions: &[],
+        own_state_actions: &[],
+    },
+    ToolScope {
+        tool: "bridget_graph_status",
+        base: Scope::Reads,
+        read_actions: &[],
+        own_state_actions: &[],
+    },
+    ToolScope {
+        tool: "bridget_graph_cancel",
+        base: Scope::Delegates,
+        read_actions: &[],
+        own_state_actions: &[],
+    },
+    ToolScope {
         tool: "bridget_delegate",
         base: Scope::Delegates,
         read_actions: &[],

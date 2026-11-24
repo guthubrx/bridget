@@ -905,7 +905,10 @@ fn execute_tool_at_with_identity_once(
         | "bridget_task_status"
         | "bridget_task_wait"
         | "bridget_task_ack"
-        | "bridget_task_cancel" => crate::delegation_mcp::execute(
+        | "bridget_task_cancel"
+        | "bridget_delegate_graph"
+        | "bridget_graph_status"
+        | "bridget_graph_cancel" => crate::delegation_mcp::execute(
             identity,
             name,
             &Value::Object(arguments.clone()),
@@ -2827,6 +2830,9 @@ fn initialize_result() -> Value {
 
 const COMPACT_MCP_TOOLS: &[&str] = &[
     "bridget_auto_delegate",
+    "bridget_delegate_graph",
+    "bridget_graph_status",
+    "bridget_graph_cancel",
     "bridget_capabilities",
     "bridget_task_status",
     "bridget_task_wait",

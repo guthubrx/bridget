@@ -807,6 +807,7 @@ l'annuaire ; demander une précision seulement si plusieurs cibles conviennent.
 |---|---|
 | « Fais relire ce travail par B » | Envoyer à B le périmètre, les questions et les références utiles, avec `reply:true` et un délai adapté. Ne pas lancer un nouvel agent implicitement. |
 | « Fais corriger puis relire par le même enfant » | Poser la garde à la délégation, puis ouvrir une ronde après chaque résultat avec une clé distincte. Terminer avec `bridget_task_cancel`. Pour une contre-revue indépendante, créer une nouvelle délégation. |
+| « Enchaîne A puis B et C en parallèle, puis D (sans ronde de garde) » | Utiliser `bridget_delegate_graph` avec `step_id`, `depends_on` et `delegation` (format `bridget_auto_delegate`). Bridget lance A, débloque automatiquement B et C dès la fin de A avec ses résultats factuels, puis réveille le parent une seule fois en fin de graphe (`bridget_graph_status` / `bridget_graph_cancel`). |
 | « Partage les dernières étapes de A avec B » | `bridget_journal` sur A, extrait borné avec `to:B`. Ajouter `reply:true` seulement si un retour est demandé. |
 | « Préviens-moi quand A finit, maximum 15 minutes » | Vérifier les sources dans `types`, puis `sub` sur A : `turn_ended`, `once:true`, `ttl_secs:900`. |
 | « Prolonge de 10 minutes » / « Arrête la surveillance » | Retrouver l'abonnement par `list`, puis suivre la procédure de remplacement ou `unsub` de la référence. Il n'existe pas d'action `renew`. |
@@ -828,6 +829,29 @@ Une notification `[Bridget observation]` s'explique à l'utilisateur si utile :
 aucun accusé inter-agent, nouvel abonnement ou travail supplémentaire implicite.
 Une fin de tour peut être une erreur ou une interruption ; ce n'est ni une
 validation de mission ni la réponse exigée par un `reply`.
+
+## Enchaînements et graphes de missions (`bridget_delegate_graph`)
+
+Pour tout chef d'orchestre ayant un enchaînement ou un fan-out avec dépendances
+(`A -> B + C -> D`), **préférer `bridget_delegate_graph` à une ronde de garde
+périodique** : le parent soumet le graphe une fois, rend la main et n'est réveillé
+qu'à la fin du graphe ou en cas d'échec/blocage.
+
+- **Déclaration** : `request_id`, `title` (optionnel), `on_failure` (`stop_dependents`
+  par défaut — saute uniquement les descendants transitifs et laisse finir les branches
+  indépendantes — ou `cancel_graph`), `notify_policy` (`on_graph_done_or_failure` par
+  défaut — supprime les réveils intermédiaires et envoie un seul bilan final — ou
+  `each_step`), et `steps` (1 à 16 étapes : `step_id`, `depends_on`,
+  `pass_dependency_results` par défaut `true`, et `delegation` au format
+  `bridget_auto_delegate` avec `request_id` facultatif).
+- **Garanties natives** : Bridget rejette immédiatement tout cycle (`graph_cycle_detected`),
+  persiste le graphe en SQLite, détecte l'état terminal de chaque tâche côté daemon,
+  injecte automatiquement le résumé factuel (`task_id`, commit, fichiers, extrait) des
+  dépendances terminées dans la consigne des étapes suivantes, et déclenche les étapes
+  prêtes en parallèle même si le parent est endormi.
+- **Suivi et arrêt** : `bridget_graph_status(graph_id)` pour un point ponctuel sans
+  polling obligatoire ; `bridget_graph_cancel(graph_id)` pour annuler toutes les étapes
+  actives et en attente.
 
 ## Choisir l'accès sans inventer de capacité
 

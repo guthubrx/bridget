@@ -1414,6 +1414,27 @@ ON auto_admission_receipts(task_id) WHERE task_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS auto_admission_receipts_refused_purge
 ON auto_admission_receipts(state, task_id, updated_at, owner, request_id)
 WHERE state='refused' AND task_id IS NULL;
+CREATE TABLE IF NOT EXISTS native_delegation_graphs(
+  graph_id TEXT PRIMARY KEY,
+  owner TEXT NOT NULL,
+  owner_instance TEXT NOT NULL,
+  request_id TEXT NOT NULL,
+  state TEXT NOT NULL,
+  canonical BLOB NOT NULL,
+  payload TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS native_delegation_graphs_owner_request
+ON native_delegation_graphs(owner, request_id);
+CREATE INDEX IF NOT EXISTS native_delegation_graphs_state
+ON native_delegation_graphs(state, updated_at);
+CREATE TABLE IF NOT EXISTS native_delegation_graph_tasks(
+  task_id TEXT PRIMARY KEY,
+  graph_id TEXT NOT NULL,
+  step_id TEXT NOT NULL,
+  suppress_notice INTEGER NOT NULL DEFAULT 1
+);
 ")?;
         migrate_auto_admission_receipts_168(&tx)?;
         const LEGACY_INDEX: &str = "CREATE INDEX native_delegations_state ON native_delegations(json_extract(payload,'$.state'))";
@@ -3058,6 +3079,171 @@ WHERE state='refused' AND task_id IS NULL;
     pub fn revoked(&self, owner: &str) -> Result<bool, String> {
         self.conn.query_row("SELECT EXISTS(SELECT 1 FROM native_delegation_grants WHERE owner_instance=?1 AND posture='revoked')",[owner],|row|row.get(0)).map_err(|error|error.to_string())
     }
+
+    /// Sauvegarde durable d'un graphe de délégation natif (DAG).
+    pub fn save_graph(&self, graph: &NativeGraphRecord) -> Result<(), String> {
+        let payload = serde_json::to_string(graph).map_err(|e| e.to_string())?;
+        self.conn
+            .execute(
+                "INSERT INTO native_delegation_graphs(graph_id,owner,owner_instance,request_id,state,canonical,payload,created_at,updated_at)
+                 VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)
+                 ON CONFLICT(graph_id) DO UPDATE SET
+                   state=excluded.state,
+                   payload=excluded.payload,
+                   updated_at=excluded.updated_at",
+                params![
+                    &graph.graph_id,
+                    &graph.owner,
+                    &graph.owner_instance,
+                    &graph.request_id,
+                    &graph.state,
+                    &graph.canonical,
+                    &payload,
+                    graph.created_at,
+                    graph.updated_at,
+                ],
+            )
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    /// Associe une tâche native à une étape de graphe pour le suivi O(1) et la suppression
+    /// des avis intermédiaires lorsque `notify_policy == OnGraphDoneOrFailure`.
+    pub fn bind_graph_step_task(
+        &self,
+        task_id: &str,
+        graph_id: &str,
+        step_id: &str,
+        suppress_notice: bool,
+    ) -> Result<(), String> {
+        self.conn
+            .execute(
+                "INSERT OR REPLACE INTO native_delegation_graph_tasks(task_id,graph_id,step_id,suppress_notice)
+                 VALUES(?1,?2,?3,?4)",
+                params![task_id, graph_id, step_id, i64::from(suppress_notice)],
+            )
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    /// O(1) : indique si l'avis individuel d'une tâche (`native-result-*` / `native-failure-*`)
+    /// est remplacé par l'avis consolidé de son graphe parent.
+    pub fn graph_suppresses_step_notice(&self, task_id: &str) -> Result<bool, String> {
+        self.conn
+            .query_row(
+                "SELECT suppress_notice FROM native_delegation_graph_tasks WHERE task_id=?1",
+                [task_id],
+                |row| Ok(row.get::<_, i64>(0)? != 0),
+            )
+            .optional()
+            .map(|v| v.unwrap_or(false))
+            .map_err(|e| e.to_string())
+    }
+
+    pub fn get_graph(&self, graph_id: &str) -> Result<Option<NativeGraphRecord>, String> {
+        self.conn
+            .query_row(
+                "SELECT payload FROM native_delegation_graphs WHERE graph_id=?1",
+                [graph_id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .map_err(|e| e.to_string())?
+            .map(|raw| serde_json::from_str(&raw).map_err(|e| e.to_string()))
+            .transpose()
+    }
+
+    pub fn graph_by_owner_request(
+        &self,
+        owner: &str,
+        request_id: &str,
+    ) -> Result<Option<NativeGraphRecord>, String> {
+        self.conn
+            .query_row(
+                "SELECT payload FROM native_delegation_graphs WHERE owner=?1 AND request_id=?2",
+                params![owner, request_id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .map_err(|e| e.to_string())?
+            .map(|raw| serde_json::from_str(&raw).map_err(|e| e.to_string()))
+            .transpose()
+    }
+
+    /// Retourne les graphes encore en cours ou dont l'avis final n'a pas encore été remis.
+    pub fn active_graphs(&self) -> Result<Vec<NativeGraphRecord>, String> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT payload FROM native_delegation_graphs
+                 WHERE state='running' OR json_extract(payload,'$.notice_sent')=0
+                 ORDER BY created_at ASC, graph_id ASC",
+            )
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map([], |row| row.get::<_, String>(0))
+            .map_err(|e| e.to_string())?;
+        let mut out = Vec::new();
+        for row in rows {
+            let raw = row.map_err(|e| e.to_string())?;
+            if let Ok(record) = serde_json::from_str::<NativeGraphRecord>(&raw) {
+                out.push(record);
+            }
+        }
+        Ok(out)
+    }
+}
+
+/// Enregistrement durable d'une étape dans un graphe de missions Bridget.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NativeGraphStepRecord {
+    pub step_id: String,
+    pub depends_on: Vec<String>,
+    pub pass_dependency_results: bool,
+    pub delegation: bridget_transport::protocol::AutoDelegateV2,
+    /// `waiting_dependencies` | `launching` | `running` | `completed` | `failed` | `cancelled` | `skipped_dependency_failed`
+    pub state: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub result_excerpt: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub factual_summary: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub started_at: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub finished_at: Option<i64>,
+}
+
+/// Enregistrement durable d'un graphe orienté acyclique (DAG) de missions Bridget.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NativeGraphRecord {
+    pub graph_id: String,
+    pub owner: String,
+    pub owner_instance: String,
+    pub request_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    pub on_failure: bridget_transport::protocol::GraphFailurePolicy,
+    pub notify_policy: bridget_transport::protocol::GraphNotifyPolicy,
+    /// `running` | `completed` | `partial_failure` | `failed` | `cancelled`
+    pub state: String,
+    pub topological_order: Vec<String>,
+    pub steps: Vec<NativeGraphStepRecord>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attested_permissions: Option<bridget_transport::protocol::ProviderPermissions>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_thread: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub communication_project: Option<bridget_transport::protocol::CommunicationProject>,
+    #[serde(default)]
+    pub notice_sent: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub canonical: Vec<u8>,
+    pub created_at: i64,
+    pub updated_at: i64,
 }
 
 #[cfg(test)]

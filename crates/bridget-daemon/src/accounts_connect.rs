@@ -555,12 +555,16 @@ fn build_probe_script(targets: &[ConnectionTarget]) -> String {
             "cursor" => {
                 script.push_str(&format!(
                     "if {missing}; then printf '%s\\tbinary_missing\\tcursor-agent absent\\n' {id}; else\n\
-                     out=$({env_prefix} {cmd} status 2>&1 || true)\n\
-                     if printf '%s' \"$out\" | grep -qi 'logged in'; then\n\
-                       line=$(printf '%s' \"$out\" | grep -i 'logged in' | head -n 1 | tr '\\t\\r\\n' '   ')\n\
-                       printf '%s\\tauthenticated\\t%s\\n' {id} \"$line\"\n\
+                     out=$({env_prefix} {cmd} --list-models 2>&1 || true)\n\
+                     if printf '%s' \"$out\" | grep -qiE 'Authentication required|not logged in|run .?agent login'; then\n\
+                       printf '%s\\tunauthenticated\\tsession expiree ou non connectee (cursor-agent login)\\n' {id}\n\
                      else\n\
-                       printf '%s\\tunauthenticated\\tnon connecte\\n' {id}\n\
+                       cnt=$(printf '%s\\n' \"$out\" | grep -E '^[[:space:]]*(auto|[a-z0-9]+-[a-z0-9._-]+)' | wc -l | tr -d ' ')\n\
+                       if [ \"${{cnt:-0}}\" -gt 0 ]; then\n\
+                         printf '%s\\tauthenticated\\t%s modeles visibles\\n' {id} \"$cnt\"\n\
+                       else\n\
+                         printf '%s\\tunauthenticated\\tsession Cursor non authentifiee\\n' {id}\n\
+                       fi\n\
                      fi; fi\n"
                 ));
             }
