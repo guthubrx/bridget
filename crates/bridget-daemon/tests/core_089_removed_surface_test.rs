@@ -34,11 +34,9 @@ fn ui_est_refusee_avant_namespace_socket_endpoint_ou_execution() {
     let socket = fixture.0.join("s");
     let listener = UnixListener::bind(&socket).unwrap();
     listener.set_nonblocking(true).unwrap();
-    for args in [
-        vec!["ui"],
-        vec!["ui", "endpoint", "--json"],
-        vec!["ui", "--port", "12345"],
-    ] {
+    // L'ancienne sous-commande `ui endpoint` retirée en 089 reste strictement refusée
+    // avant tout accès au namespace, au socket ou au fichier BRIDGET_UI_ENDPOINT.
+    for args in [vec!["ui", "endpoint", "--json"], vec!["ui", "endpoint"]] {
         let stdout = fixture.0.join("stdout");
         let stderr = fixture.0.join("stderr");
         let output = fs::OpenOptions::new()
@@ -107,8 +105,31 @@ fn ui_est_refusee_avant_namespace_socket_endpoint_ou_execution() {
             matches!(listener.accept(), Err(error) if error.kind() == std::io::ErrorKind::WouldBlock)
         );
     }
-    // Mutation : rétablir le dispatch UI, ou déplacer initialize_process avant
-    // le refus, casse respectivement le code/timeout ou l'absence de namespace.
+
+    // La nouvelle commande unifiée `bridget ui --help` expose la console locale
+    // sans toucher BRIDGET_UI_ENDPOINT ni ouvrir de socket ou créer de namespace.
+    let help = Command::new(env!("CARGO_BIN_EXE_bridget"))
+        .args(["ui", "--help"])
+        .env_clear()
+        .env("HOME", fixture.0.join("home-absent"))
+        .env("BRIDGET_HOME", fixture.0.join("namespace-absent"))
+        .env("BRIDGET_SOCKET", &socket)
+        .env("BRIDGET_UI_ENDPOINT", &endpoint)
+        .env("PATH", "/usr/bin:/bin")
+        .output()
+        .unwrap();
+    assert_eq!(help.status.code(), Some(0));
+    let help_stdout = String::from_utf8_lossy(&help.stdout);
+    assert!(
+        help_stdout.contains("bridget ui [usage|accounts|machines|settings]"),
+        "aide ui inattendue : {help_stdout}"
+    );
+    assert_eq!(fs::read(&endpoint).unwrap(), sentinel);
+    assert!(!fixture.0.join("namespace-absent").exists());
+    assert!(!fixture.0.join("home-absent").exists());
+    assert!(
+        matches!(listener.accept(), Err(error) if error.kind() == std::io::ErrorKind::WouldBlock)
+    );
 }
 
 #[test]
@@ -129,8 +150,10 @@ fn le_noyau_ne_compile_plus_de_serveur_http_ni_de_renderer() {
                 .any(|line| line.trim_start().starts_with(&format!("{dependency} =")))
         );
     }
-    // Session 177 : axum sert uniquement le compagnon mobile authentifié et borné.
-    // L'ancienne interface web retirée en 089 ne doit pas revenir par ce biais.
+    // Session 177 : axum sert le compagnon mobile authentifié et borné.
+    // Sessions 300+ : axum sert aussi la console web locale authentifiée par jeton
+    // sur loopback (127.0.0.1) dans `console_{ui,admin,login}*.rs`.
+    // L'ancienne interface web retirée en 089 ne doit pas revenir ailleurs.
     fn sources(dir: &std::path::Path, found: &mut Vec<std::path::PathBuf>) {
         for entry in fs::read_dir(dir).unwrap() {
             let path = entry.unwrap().path();
@@ -147,10 +170,21 @@ fn le_noyau_ne_compile_plus_de_serveur_http_ni_de_renderer() {
     let outside: Vec<_> = files
         .iter()
         .filter(|path| !path.starts_with(src.join("mobile")))
+        .filter(|path| {
+            let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+            !matches!(
+                name,
+                "console_ui.rs"
+                    | "console_ui_tests.rs"
+                    | "console_admin.rs"
+                    | "console_admin_tests.rs"
+                    | "console_login.rs"
+            )
+        })
         .filter(|path| fs::read_to_string(path).unwrap().contains("axum::"))
         .collect();
     assert!(
         outside.is_empty(),
-        "axum hors du compagnon mobile : {outside:?}"
+        "axum hors du compagnon mobile et de la console locale : {outside:?}"
     );
 }

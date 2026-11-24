@@ -347,12 +347,19 @@ fn run_with_args(args: Vec<String>) {
         exit_argument_error(&error);
     }
 
-    // Refus avant même l'ouverture du namespace : une ancienne commande UI
-    // ne doit ni lancer un programme homonyme ni relire un endpoint historique.
-    if cmd == "ui" {
+    // Refus avant même l'ouverture du namespace : l'ancienne sous-commande
+    // `ui endpoint` retirée en 089 ne doit jamais relire BRIDGET_UI_ENDPOINT
+    // ni ouvrir un socket. La nouvelle console locale unifiée (`bridget ui`)
+    // s'ouvre ci-dessous via `console_ui::cmd_ui`.
+    if cmd == "ui" && args.get(2).is_some_and(|sub| sub == "endpoint") {
         exit_argument_error(
-            "ui : interface retirée du noyau de communication ; utiliser who, ledger et attach",
+            "ui endpoint : interface retirée du noyau de communication ; utiliser bridget ui [usage|accounts|machines|settings]",
         );
+    }
+
+    if cmd == "ui" && args.len() == 3 && matches!(args[2].as_str(), "--help" | "-h" | "help") {
+        let _ = crate::console_ui::cmd_ui(&[String::from("--help")]);
+        return;
     }
 
     if cmd == "send" && args.len() == 3 && matches!(args[2].as_str(), "--help" | "-h" | "help") {
@@ -6209,36 +6216,40 @@ fn hook_claude_statusline() {
 
     // Mémoriser localement les jauges 5h/7j officielles pour `bridget usage` et la console web
     // même lors d'une session Claude interactive hors agent Bridget (0 appel réseau, 0 jeton).
-    let local_machine = crate::accounts_connect::local_machine_name();
-    let profile_dir = std::env::var("CLAUDE_CONFIG_DIR")
-        .ok()
-        .filter(|s| !s.trim().is_empty());
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs() as i64;
-    for limit in &facts {
-        let fact = bridget_transport::protocol::RateLimitFact {
-            window: limit.window.clone(),
-            status: if limit.used_percent.is_some_and(|p| p >= 100) {
-                "rejected".to_string()
-            } else {
-                "allowed".to_string()
-            },
-            resets_at: limit.resets_at,
-            used_percent: limit.used_percent,
-            credits: None,
-        };
-        crate::usage_quotas::record_passive_observation(
-            "claude",
-            &local_machine,
-            "claude",
-            None,
-            profile_dir.as_deref(),
-            &fact,
-            bridget_transport::protocol::RateLimitSource::ClaudeStatusLine,
-            now,
-        );
+    // En test unitaire sans BRIDGET_HOME dédié, on n'écrit pas dans le cache utilisateur réel.
+    #[cfg(not(test))]
+    {
+        let local_machine = crate::accounts_connect::local_machine_name();
+        let profile_dir = std::env::var("CLAUDE_CONFIG_DIR")
+            .ok()
+            .filter(|s| !s.trim().is_empty());
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs() as i64;
+        for limit in &facts {
+            let fact = bridget_transport::protocol::RateLimitFact {
+                window: limit.window.clone(),
+                status: if limit.used_percent.is_some_and(|p| p >= 100) {
+                    "rejected".to_string()
+                } else {
+                    "allowed".to_string()
+                },
+                resets_at: limit.resets_at,
+                used_percent: limit.used_percent,
+                credits: None,
+            };
+            crate::usage_quotas::record_passive_observation(
+                "claude",
+                &local_machine,
+                "claude",
+                None,
+                profile_dir.as_deref(),
+                &fact,
+                bridget_transport::protocol::RateLimitSource::ClaudeStatusLine,
+                now,
+            );
+        }
     }
 
     // Hors d'un agent Bridget, le hook n'envoie rien au daemon : les sessions Claude
