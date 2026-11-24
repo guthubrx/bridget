@@ -2803,6 +2803,8 @@ const COMPACT_AUTO_DELEGATE_FIELDS: &[&str] = &[
     "machine_id",
     "connection_id",
     "posture",
+    "reply_timeout",
+    "keep_alive_secs",
     "expected_base_commit",
     "workspace",
     "brief",
@@ -2818,6 +2820,8 @@ const COMPACT_DELEGATE_FIELDS: &[&str] = &[
     "model",
     "effort",
     "posture",
+    "reply_timeout",
+    "keep_alive_secs",
     "workspace",
     "brief",
 ];
@@ -3930,6 +3934,28 @@ mod compact318_tests {
         assert_eq!(
             auto["inputSchema"]["properties"]["workspace"],
             json!({"type":"object"})
+        );
+        // 339 : reply_timeout et keep_alive_secs doivent rester visibles en mode compact
+        // pour éviter qu'une mission longue ne reste bloquée sur le défaut de 3600 s.
+        assert_eq!(
+            auto["inputSchema"]["properties"]["reply_timeout"],
+            json!({"type":"integer"})
+        );
+        assert_eq!(
+            auto["inputSchema"]["properties"]["keep_alive_secs"],
+            json!({"type":"integer"})
+        );
+        let delegate = compact
+            .iter()
+            .find(|t| t["name"] == "bridget_delegate")
+            .unwrap();
+        assert_eq!(
+            delegate["inputSchema"]["properties"]["reply_timeout"],
+            json!({"type":"integer"})
+        );
+        assert_eq!(
+            delegate["inputSchema"]["properties"]["keep_alive_secs"],
+            json!({"type":"integer"})
         );
     }
 }

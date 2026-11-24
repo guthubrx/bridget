@@ -22,7 +22,10 @@ use std::thread;
 use std::time::{Duration, SystemTime};
 
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
+#[cfg(test)]
 const CANCEL_GRACE: Duration = Duration::from_millis(250);
+#[cfg(not(test))]
+const CANCEL_GRACE: Duration = Duration::from_secs(3);
 const CANCEL_POLL: Duration = Duration::from_millis(20);
 
 #[derive(Debug, Clone)]
@@ -165,6 +168,7 @@ struct ActiveTurn {
     message_id: String,
     cancellation: mpsc::Sender<String>,
     cancelled: Arc<AtomicBool>,
+    frame_observed: Arc<AtomicBool>,
 }
 
 struct QueueState {
@@ -983,7 +987,7 @@ fn message_expired_at(message: &BridgetMessage, now: SystemTime) -> bool {
 fn spawn_worker(worker: TurnWorker) -> thread::JoinHandle<()> {
     thread::spawn(move || {
         loop {
-            let (message, cancellation, cancelled) = {
+            let (message, cancellation, cancelled, frame_observed) = {
                 let (queue, wakeup) = &*worker.queue;
                 let mut queue = queue.lock().recover_poison();
                 while queue.messages.is_empty() && !queue.closed {
@@ -995,12 +999,14 @@ fn spawn_worker(worker: TurnWorker) -> thread::JoinHandle<()> {
                 let message = queue.messages.pop_front().expect("file ACP non vide");
                 let (cancellation, cancellation_receiver) = mpsc::channel();
                 let cancelled = Arc::new(AtomicBool::new(false));
+                let frame_observed = Arc::new(AtomicBool::new(false));
                 queue.active = Some(ActiveTurn {
                     message_id: message.id.clone(),
                     cancellation,
                     cancelled: cancelled.clone(),
+                    frame_observed: frame_observed.clone(),
                 });
-                (message, cancellation_receiver, cancelled)
+                (message, cancellation_receiver, cancelled, frame_observed)
             };
             if !worker.alive.load(Ordering::SeqCst) {
                 worker
@@ -1077,6 +1083,7 @@ deadline_at: message.deadline_at,
 clock: &worker.clock,
 cancellation: &cancellation,
 cancelled: &cancelled,
+frame_observed: &frame_observed,
 session_id: &worker.session_id,
 child: &worker.child,
 queue: &worker.queue,
@@ -1088,6 +1095,8 @@ cancel_grace: worker.cancel_grace,
 poll_interval: worker.poll_interval,
 });
             let collected = worker.response.lock().recover_poison().clone();
+            let partial_response_bytes = collected.len();
+            let active_frames_observed = frame_observed.load(Ordering::SeqCst);
             let denied = std::mem::take(&mut *worker.denied_permissions.lock().recover_poison());
             *worker.state.lock().recover_poison() = TurnState::Idle;
             clear_active_turn(&worker.queue);
@@ -1128,12 +1137,19 @@ poll_interval: worker.poll_interval,
                         Some(message_id),
                         reasoning,
                     );
+                    let mut payload = json!({
+                        "reason": reason,
+                        "active_frames_observed": active_frames_observed,
+                    });
+                    if partial_response_bytes > 0 {
+                        payload["partial_response_bytes"] = json!(partial_response_bytes);
+                    }
                     record_or_terminal(
                         &worker.journal,
                         &worker.events,
                         "error",
                         Some(message_id),
-                        with_turn_failed_kind(json!({ "reason": reason })),
+                        with_turn_failed_kind(payload),
                     );
                 }
                 _ => {}
@@ -1390,6 +1406,7 @@ fn spawn_reader(
                             raw_line.clone(),
                         );
                     } else if let Some(text) = update_text(&value, session_id.as_deref()) {
+                        mark_active_turn_frame_observed(&queue);
                         let message_id = active_message_id(&queue);
                         record_or_terminal(
                             &journal,
@@ -1408,6 +1425,7 @@ fn spawn_reader(
                             .push_source(event, raw_line.clone());
                     } else if let Some(thought) = update_thought_text(&value, session_id.as_deref())
                     {
+                        mark_active_turn_frame_observed(&queue);
                         // Variante standard SessionUpdate (effect-acp) : on
                         // accumule pour la ligne terminale event=reasoning.
                         // Pas de journal par chunk — alignement C3 / L3.
@@ -1424,6 +1442,7 @@ fn spawn_reader(
                             .and_then(Value::as_str),
                         Some("tool_call") | Some("tool_call_update")
                     ) {
+                        mark_active_turn_frame_observed(&queue);
                         let message_id = active_message_id(&queue);
                         let payload = tool_call_journal_payload(&value, &mut tool_memory);
                         if let Some(path) =
@@ -1446,9 +1465,12 @@ fn spawn_reader(
                             message_id.as_deref(),
                             payload,
                         );
+                    } else {
+                        mark_active_turn_frame_observed(&queue);
                     }
                 }
                 Some("session/request_permission") => {
+                    mark_active_turn_frame_observed(&queue);
                     let cancelled = active_turn_is_cancelled(&queue);
                     if let Some((reply, payload)) =
                         permission_response(&value, &permissions, cancelled)
@@ -1590,6 +1612,7 @@ struct PromptRequestArgs<'a> {
     pub clock: &'a Clock,
     pub cancellation: &'a mpsc::Receiver<String>,
     pub cancelled: &'a AtomicBool,
+    pub frame_observed: &'a AtomicBool,
     pub session_id: &'a str,
     pub child: &'a Arc<Mutex<Child>>,
     pub queue: &'a Arc<(Mutex<QueueState>, Condvar)>,
@@ -1614,6 +1637,7 @@ fn prompt_request(args: PromptRequestArgs<'_>) -> Result<Value, TransportError> 
         clock,
         cancellation,
         cancelled,
+        frame_observed,
         session_id,
         child,
         queue,
@@ -1658,10 +1682,15 @@ fn prompt_request(args: PromptRequestArgs<'_>) -> Result<Value, TransportError> 
                 .map(|now| now.as_secs() >= deadline)
                 .unwrap_or(false)
         }) || timeout.is_some_and(|timeout| started.elapsed() >= timeout);
-        let cancellation_reason = cancellation
-            .try_recv()
-            .ok()
-            .or_else(|| timed_out.then(|| format!("timeout ACP pour {method}")));
+        let cancellation_reason = cancellation.try_recv().ok().or_else(|| {
+            timed_out.then(|| {
+                if frame_observed.load(Ordering::SeqCst) {
+                    format!("timeout ACP pour {method}")
+                } else {
+                    format!("timeout ACP pour {method}:provider_output_unobserved")
+                }
+            })
+        });
         if let Some(reason) = cancellation_reason {
             cancelled.store(true, Ordering::SeqCst);
             waiters.lock().recover_poison().remove(&key);
@@ -1722,6 +1751,12 @@ fn active_turn_is_cancelled(queue: &Arc<(Mutex<QueueState>, Condvar)>) -> bool {
         .active
         .as_ref()
         .is_some_and(|active| active.cancelled.load(Ordering::SeqCst))
+}
+
+fn mark_active_turn_frame_observed(queue: &Arc<(Mutex<QueueState>, Condvar)>) {
+    if let Some(active) = queue.0.lock().recover_poison().active.as_ref() {
+        active.frame_observed.store(true, Ordering::SeqCst);
+    }
 }
 
 // L'arrêt forcé touche explicitement chaque propriétaire de ressource afin de

@@ -22746,7 +22746,10 @@ fn native174_delai_transport_statut_failed_guide_sans_reouvrir() {
     for error in [
         "mission_reply_timeout",
         "échéance Claude dépassée",
+        "échéance Codex dépassée",
         "échéance du tour dépassée",
+        "livraison échouée: timeout ACP pour session/prompt",
+        "timeout ACP pour session/prompt",
     ] {
         task.error = Some(error.into());
         task.cleanup_done = false;
@@ -22755,14 +22758,23 @@ fn native174_delai_transport_statut_failed_guide_sans_reouvrir() {
             waiting["error_recovery"]
                 .as_str()
                 .unwrap()
-                .contains("Attendez")
+                .contains("Attendez"),
+            "error={error}"
         );
         task.cleanup_done = true;
         task.workspace_report_mission = Some(task.mission.clone());
         let closed = task_view(&task, None, true);
         let advice = closed["error_recovery"].as_str().unwrap();
         assert!(
-            advice.contains("nouvelle request_id") && advice.contains("réutiliser ces sorties")
+            advice.contains("nouvelle request_id") && advice.contains("réutiliser ces sorties"),
+            "error={error}, advice={advice}"
+        );
+        assert!(
+            closed["future_mission_duration"]
+                .as_str()
+                .unwrap()
+                .contains("reply_timeout"),
+            "error={error}"
         );
         assert_eq!(closed["status"], "failed");
         assert_eq!(closed["continuable"], false);
@@ -22776,6 +22788,47 @@ fn native174_delai_transport_statut_failed_guide_sans_reouvrir() {
             "la projection ne modifie aucune tâche"
         );
     }
+    // Variante ACP silencieuse : doit guider vers le diagnostic, pas vers un délai plus long seul.
+    task.error = Some("livraison échouée: timeout ACP pour session/prompt:provider_output_unobserved".into());
+    let silent = task_view(&task, None, true);
+    assert!(
+        silent["error_diagnostic"]
+            .as_str()
+            .unwrap()
+            .contains("Augmenter le délai seul ne corrige pas ce défaut")
+    );
+    assert!(
+        silent["future_mission_duration"]
+            .as_str()
+            .unwrap()
+            .contains("Diagnostiquez d’abord")
+    );
+    // Variante ACP active avec worktree sale conservé (incident ad12784c).
+    task.error = Some("livraison échouée: timeout ACP pour session/prompt".into());
+    task.workspace = Some(crate::delegation::WorkspaceRecord {
+        strategy: crate::delegation::WorkspaceStrategy::Worktree,
+        state: crate::delegation::WorkspaceState::Kept,
+        toplevel: "/tmp/repo".into(),
+        path: "/tmp/repo/.worktrees/ad12784c".into(),
+        branch: "bridget/ad12784c".into(),
+        base_commit: "f5f5b58f3012974703a54e739fc3e4647770c997".into(),
+        head_commit: Some("f5f5b58f3012974703a54e739fc3e4647770c997".into()),
+        branch_commit: Some("f5f5b58f3012974703a54e739fc3e4647770c997".into()),
+        head_on_branch: Some(false),
+        commit_count: Some(0),
+        commits: vec![],
+        truncated: false,
+        dirty: Some(true),
+        commit_view: None,
+    });
+    let dirty = task_view(&task, None, true);
+    let dirty_advice = dirty["error_recovery"].as_str().unwrap();
+    assert!(
+        dirty_advice.contains("/tmp/repo/.worktrees/ad12784c")
+            && dirty_advice.contains("bridget/ad12784c")
+            && dirty_advice.contains("modifications non commitées"),
+        "dirty_advice={dirty_advice}"
+    );
     cleanup(&config);
 }
 

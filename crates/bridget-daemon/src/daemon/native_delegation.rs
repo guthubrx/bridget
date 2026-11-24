@@ -6775,26 +6775,45 @@ fn task_view(task: &Task, phase: Option<&str>, full: bool) -> Value {
             "Si la source de l’échec ne peut pas être rétablie dans votre mandat, demandez au responsable ou à l’utilisateur la décision précise sur les fichiers à archiver ou le stockage à ajouter. Aucun arrêt d’autrui, déplacement d’un dossier vivant ou redémarrage forcé."
         );
     }
-    if task.state == "failed"
-        && matches!(
-            task.error.as_deref(),
-            Some(
-                "mission_reply_timeout"
-                    | "échéance Claude dépassée"
-                    | "échéance du tour dépassée"
-                    | "échéance du tour dépassée:provider_output_unobserved"
-            )
+    fn strip_delivery_prefix(error: &str) -> &str {
+        error.strip_prefix("livraison échouée: ").unwrap_or(error)
+    }
+    fn is_mission_timeout_error(error: &str) -> bool {
+        matches!(
+            strip_delivery_prefix(error),
+            "mission_reply_timeout"
+                | "échéance Claude dépassée"
+                | "échéance Codex dépassée"
+                | "échéance du tour dépassée"
+                | "échéance du tour dépassée:provider_output_unobserved"
+                | "échéance de livraison dépassée"
+                | "timeout ACP pour session/prompt"
+                | "timeout ACP pour session/prompt:provider_output_unobserved"
         )
+    }
+    fn is_unobserved_timeout_error(error: &str) -> bool {
+        matches!(
+            strip_delivery_prefix(error),
+            "échéance du tour dépassée:provider_output_unobserved"
+                | "timeout ACP pour session/prompt:provider_output_unobserved"
+        )
+    }
+    if task.state == "failed"
+        && task
+            .projected_error()
+            .is_some_and(is_mission_timeout_error)
     {
         let duration = task.reply_timeout.unwrap_or(MISSION_REPLY_LIMIT_SECS);
+        let unobserved = task
+            .projected_error()
+            .is_some_and(is_unobserved_timeout_error);
         view["mission_reply_timeout_secs"] = json!(duration);
         view["error_message"] = json!(format!(
             "La durée maximale de cette mission ({duration} secondes) est dépassée. La tâche est terminée ; ses effets et ses fichiers sont conservés."
         ));
-        if task.error.as_deref() == Some("échéance du tour dépassée:provider_output_unobserved")
-        {
+        if unobserved {
             view["error_message"] = json!(
-                "La durée de cette mission est dépassée sans aucune trame JSON du programme observée pendant le tour. La consigne a été écrite localement ; sa réception par le fournisseur et le début du travail ne sont pas attestés."
+                "La durée de cette mission est dépassée sans aucune trame fournisseur observée pendant le tour. La consigne a été écrite localement ; sa réception par le fournisseur et le début du travail ne sont pas attestés."
             );
             view["error_diagnostic"] = json!(
                 "Corrélez tâche, mission, instance et génération avec les diagnostics du lanceur et du client. La cause reste inconnue : lancement bloqué, initialisation du client et attente fournisseur ne sont pas distingués par cette absence. Augmenter le délai seul ne corrige pas ce défaut. Les autres tâches suivent leur propre état."
@@ -6803,16 +6822,33 @@ fn task_view(task: &Task, phase: Option<&str>, full: bool) -> Value {
         view["future_mission_duration"] = json!(
             "Pour une future admission longue, fixer reply_timeout avant le premier appel, par exemple 14400 pour 4 h (maximum 86400, sous la limite du parent). Le défaut est 3600, y compris development. Ne pas modifier la clé ou l’enveloppe de cette tâche terminée ; suivre les contrôles d’arrêt et de dossier indiqués ci-dessous."
         );
-        if task.error.as_deref() == Some("échéance du tour dépassée:provider_output_unobserved")
-        {
+        if unobserved {
             view["future_mission_duration"] = json!(
                 "Diagnostiquez d’abord l’absence de retour du programme pour cette exécution. Une durée plus longue n’établit pas que le fournisseur reçoit la consigne ; ne relancez pas cette mission pour tester le lien."
             );
         }
         view["error_recovery"] = if task.cleanup_done && workspace_report_ready(task) {
-            json!(
-                "bridget_task_continue ne reprend pas une tâche failed ; rejouer sa request_id ne la redémarre pas. Conservez les commits, le worktree et les sorties. Vérifiez aussi l’arrêt des calculs métier détachés. Une nouvelle mission de reprise, avec une nouvelle request_id, doit réutiliser ces sorties et ne faire que le travail restant."
-            )
+            let dirty_hint = task
+                .workspace
+                .as_ref()
+                .filter(|w| {
+                    w.state == crate::delegation::WorkspaceState::Kept && w.dirty == Some(true)
+                })
+                .map(|w| {
+                    let branch = if w.branch.trim().is_empty() {
+                        "détachée"
+                    } else {
+                        w.branch.as_str()
+                    };
+                    format!(
+                        " Le worktree conservé contient des modifications non commitées (chemin={}, branche={branch}) : inspectez-le et réutilisez-le ou commitez-le avant une reprise avec un reply_timeout plus grand.",
+                        w.path
+                    )
+                })
+                .unwrap_or_default();
+            json!(format!(
+                "bridget_task_continue ne reprend pas une tâche failed ; rejouer sa request_id ne la redémarre pas. Conservez les commits, le worktree et les sorties. Vérifiez aussi l’arrêt des calculs métier détachés. Une nouvelle mission de reprise, avec une nouvelle request_id, doit réutiliser ces sorties et ne faire que le travail restant.{dirty_hint}"
+            ))
         } else {
             json!(
                 "Attendez la confirmation d’arrêt et le rapport du dossier dans bridget_task_status. Conservez la tâche et ses sorties ; ne lancez pas de remplacement pendant ce contrôle. bridget_task_continue ne reprend pas une tâche failed."

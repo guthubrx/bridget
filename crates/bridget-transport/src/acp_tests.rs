@@ -1526,6 +1526,7 @@ cat >/dev/null
             message_id: promoted.id,
             cancellation,
             cancelled: cancelled.clone(),
+            frame_observed: Arc::new(AtomicBool::new(false)),
         });
         drop(queue);
         assert!(
@@ -1735,9 +1736,11 @@ while :; do :; done
         matches!(
             observed_events.recv_timeout(Duration::from_secs(2)),
             Ok(AcpEvent::DeliveryRejected { message_id, reason })
-                if message_id == "deadline-active" && reason.contains("timeout ACP")
+                if message_id == "deadline-active"
+                    && reason.contains("timeout ACP pour session/prompt")
+                    && !reason.contains("provider_output_unobserved")
         ),
-        "l'échéance injectée n'a pas interrompu le prompt ACP"
+        "l'échéance injectée après une activité ACP observée ne doit pas marquer provider_output_unobserved"
     );
     let terminal_events = transport.drain_events();
     assert!(
@@ -1830,7 +1833,7 @@ sleep 2
     thread::sleep(CANCEL_GRACE + Duration::from_millis(100));
     assert!(!transport.is_alive());
     let events = transport.drain_events();
-    assert!(events.iter().any(|event| matches!(event, AcpEvent::DeliveryRejected { message_id, reason } if message_id == "timeout-active" && reason.contains("timeout ACP"))));
+    assert!(events.iter().any(|event| matches!(event, AcpEvent::DeliveryRejected { message_id, reason } if message_id == "timeout-active" && reason.contains("timeout ACP pour session/prompt:provider_output_unobserved"))));
     assert!(events.iter().any(|event| matches!(event, AcpEvent::DeliveryRejected { message_id, .. } if message_id == "timeout-queued")));
 }
 
