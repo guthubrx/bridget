@@ -482,6 +482,18 @@ def process_inventory():
         child.stderr.close()
 
 
+def host_automatic(policy, host):
+    """Résout le mode de mise à jour d'un serveur (`auto` / `manual`), avec repli global."""
+    modes = policy.get("host_modes")
+    if isinstance(modes, dict):
+        override = modes.get(host)
+        if override == "auto":
+            return True
+        if override == "manual":
+            return False
+    return bool(policy.get("automatic", False))
+
+
 class Updater:
     def __init__(self, home, root):
         self.home, self.root = Path(home), Path(root)
@@ -552,7 +564,7 @@ class Updater:
             version(target)
         manual = target is not None and version(target) > version(binary_version(self.link))
         requested = policy.get("check_generation", 0) != self.state.get("check_generation", 0)
-        automatic = policy.get("automatic", False)
+        automatic = host_automatic(policy, self.host)
         if not automatic and not manual and not requested and not force:
             self.report("disabled", self.state.get("available"))
             return
@@ -630,7 +642,7 @@ class Updater:
 
     def activate(self, executable, v, manual=False):
         current = rpc(self.binary, "status")
-        if not current.get("automatic", False) and not (manual and current.get("install_target") == v):
+        if not host_automatic(current, self.host) and not (manual and current.get("install_target") == v):
             self.report("disabled", v)
             return
         if not services_running(self.system, self.services):
@@ -693,7 +705,7 @@ class Updater:
         switched = False
         try:
             current = rpc(self.binary, "status")
-            if not current.get("automatic", False) and not (manual and current.get("install_target") == v):
+            if not host_automatic(current, self.host) and not (manual and current.get("install_target") == v):
                 return
             self.report("installing", v)
             self.save(rollback=str(old), activation={"token": token, "old": str(old), "new": str(executable), "version": v})

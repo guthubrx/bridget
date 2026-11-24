@@ -2173,6 +2173,224 @@ pub(crate) async fn route_api_clients_deploy_cancel(
     json_with_headers(StatusCode::OK, json!({ "status": "cancelled" }))
 }
 
+// ---------------------------------------------------------------------------
+// Lot 3 — Quotas restants par abonnement (0 jeton LLM)
+// ---------------------------------------------------------------------------
+
+#[derive(Deserialize)]
+pub(crate) struct UsageQuery {
+    pub provider: Option<String>,
+}
+
+#[derive(Deserialize, Default)]
+pub(crate) struct UsageRefreshRequest {
+    pub provider: Option<String>,
+}
+
+pub(crate) async fn route_api_usage_get(
+    State(state): State<ConsoleState>,
+    headers: HeaderMap,
+    axum::extract::Query(query): axum::extract::Query<UsageQuery>,
+) -> Response {
+    if let Err((status, code, msg)) = check_private_auth(&state, &headers, false) {
+        return error_response(status, code, msg, &format!("Refusé : {msg}"));
+    }
+    let reg = state.registry_override_ref();
+    let provider = query.provider;
+    let res = tokio::task::spawn_blocking(move || {
+        crate::usage_quotas::usage_api_payload(provider.as_deref(), false, reg.as_deref())
+    })
+    .await;
+    match res {
+        Ok(Ok(val)) => json_with_headers(StatusCode::OK, val),
+        Ok(Err(e)) => error_response(
+            StatusCode::BAD_REQUEST,
+            "usage_unavailable",
+            &e,
+            &format!("Refusé : {e}"),
+        ),
+        Err(e) => error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "usage_join_error",
+            &e.to_string(),
+            "Lecture des quotas interrompue",
+        ),
+    }
+}
+
+pub(crate) async fn route_api_usage_refresh(
+    State(state): State<ConsoleState>,
+    headers: HeaderMap,
+    payload: Option<Json<UsageRefreshRequest>>,
+) -> Response {
+    if let Err((status, code, msg)) = check_private_auth(&state, &headers, true) {
+        return error_response(status, code, msg, &format!("Refusé : {msg}"));
+    }
+    let reg = state.registry_override_ref();
+    let provider = payload.and_then(|Json(p)| p.provider);
+    let res = tokio::task::spawn_blocking(move || {
+        crate::usage_quotas::usage_api_payload(provider.as_deref(), true, reg.as_deref())
+    })
+    .await;
+    match res {
+        Ok(Ok(val)) => json_with_headers(StatusCode::OK, val),
+        Ok(Err(e)) => error_response(
+            StatusCode::BAD_REQUEST,
+            "usage_refresh_failed",
+            &e,
+            &format!("Refusé : {e}"),
+        ),
+        Err(e) => error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "usage_join_error",
+            &e.to_string(),
+            "Actualisation des quotas interrompue",
+        ),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Lot 4 — Mises à jour automatiques paramétrables de la flotte (par serveur)
+// ---------------------------------------------------------------------------
+
+#[derive(Deserialize)]
+pub(crate) struct UpdatesPolicyRequest {
+    pub automatic: Option<bool>,
+    pub host: Option<String>,
+    pub mode: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub(crate) struct UpdatesInstallRequest {
+    pub version: String,
+}
+
+pub(crate) async fn route_api_updates_status(
+    State(state): State<ConsoleState>,
+    headers: HeaderMap,
+) -> Response {
+    if let Err((status, code, msg)) = check_private_auth(&state, &headers, false) {
+        return error_response(status, code, msg, &format!("Refusé : {msg}"));
+    }
+    let res = tokio::task::spawn_blocking(|| {
+        crate::updates::admin_request(bridget_transport::protocol::UpdateRequest::Status)
+    })
+    .await;
+    match res {
+        Ok(Ok(val)) => json_with_headers(StatusCode::OK, val),
+        Ok(Err(e)) => error_response(
+            StatusCode::BAD_GATEWAY,
+            "updates_unavailable",
+            &e,
+            &format!("Mises à jour indisponibles : {e}"),
+        ),
+        Err(e) => error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "updates_join_error",
+            &e.to_string(),
+            "Lecture des mises à jour interrompue",
+        ),
+    }
+}
+
+pub(crate) async fn route_api_updates_policy(
+    State(state): State<ConsoleState>,
+    headers: HeaderMap,
+    Json(req): Json<UpdatesPolicyRequest>,
+) -> Response {
+    if let Err((status, code, msg)) = check_private_auth(&state, &headers, true) {
+        return error_response(status, code, msg, &format!("Refusé : {msg}"));
+    }
+    let update_req = if let (Some(host), Some(mode)) = (req.host, req.mode) {
+        bridget_transport::protocol::UpdateRequest::SetHostMode { host, mode }
+    } else if let Some(automatic) = req.automatic {
+        bridget_transport::protocol::UpdateRequest::Configure { automatic }
+    } else {
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            "invalid_updates_policy",
+            "Indiquez soit `automatic`, soit `host` + `mode` (`auto`, `manual`, `default`).",
+            "Refusé : paramètres de mise à jour incomplets",
+        );
+    };
+    let res = tokio::task::spawn_blocking(move || crate::updates::admin_request(update_req)).await;
+    match res {
+        Ok(Ok(val)) => json_with_headers(StatusCode::OK, val),
+        Ok(Err(e)) => error_response(
+            StatusCode::BAD_REQUEST,
+            "updates_policy_refused",
+            &e,
+            &format!("Refusé : {e}"),
+        ),
+        Err(e) => error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "updates_join_error",
+            &e.to_string(),
+            "Mise à jour de la politique interrompue",
+        ),
+    }
+}
+
+pub(crate) async fn route_api_updates_check(
+    State(state): State<ConsoleState>,
+    headers: HeaderMap,
+) -> Response {
+    if let Err((status, code, msg)) = check_private_auth(&state, &headers, true) {
+        return error_response(status, code, msg, &format!("Refusé : {msg}"));
+    }
+    let res = tokio::task::spawn_blocking(|| {
+        crate::updates::admin_request(bridget_transport::protocol::UpdateRequest::Check)
+    })
+    .await;
+    match res {
+        Ok(Ok(val)) => json_with_headers(StatusCode::OK, val),
+        Ok(Err(e)) => error_response(
+            StatusCode::BAD_GATEWAY,
+            "updates_check_failed",
+            &e,
+            &format!("Vérification refusée : {e}"),
+        ),
+        Err(e) => error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "updates_join_error",
+            &e.to_string(),
+            "Vérification interrompue",
+        ),
+    }
+}
+
+pub(crate) async fn route_api_updates_install(
+    State(state): State<ConsoleState>,
+    headers: HeaderMap,
+    Json(req): Json<UpdatesInstallRequest>,
+) -> Response {
+    if let Err((status, code, msg)) = check_private_auth(&state, &headers, true) {
+        return error_response(status, code, msg, &format!("Refusé : {msg}"));
+    }
+    let version = req.version;
+    let res = tokio::task::spawn_blocking(move || {
+        crate::updates::admin_request(bridget_transport::protocol::UpdateRequest::Install {
+            version,
+        })
+    })
+    .await;
+    match res {
+        Ok(Ok(val)) => json_with_headers(StatusCode::OK, val),
+        Ok(Err(e)) => error_response(
+            StatusCode::BAD_REQUEST,
+            "updates_install_refused",
+            &e,
+            &format!("Installation refusée : {e}"),
+        ),
+        Err(e) => error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "updates_join_error",
+            &e.to_string(),
+            "Installation interrompue",
+        ),
+    }
+}
+
 #[cfg(test)]
 #[path = "console_admin_tests.rs"]
 mod tests;

@@ -2323,6 +2323,10 @@ pub enum UpdateRequest {
     Configure {
         automatic: bool,
     },
+    SetHostMode {
+        host: String,
+        mode: String,
+    },
     Prepare {
         token: String,
     },

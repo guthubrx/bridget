@@ -98,6 +98,7 @@ mod console_login;
 mod console_ui;
 mod provider_accounts;
 mod updates;
+pub(crate) mod usage_quotas;
 
 pub(crate) mod user_input;
 

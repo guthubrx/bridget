@@ -9091,6 +9091,35 @@ fn handle_rate_limit(
                     &scope,
                 );
             }
+            let engine_name = match source {
+                bridget_transport::protocol::RateLimitSource::CodexAppServer => "codex",
+                _ => "claude",
+            };
+            crate::usage_quotas::record_passive_observation(
+                engine_name,
+                &state.host,
+                &agent_type,
+                Some(&connection_id),
+                None,
+                &fact,
+                source,
+                unix_timestamp(),
+            );
+        } else {
+            let engine_name = match source {
+                bridget_transport::protocol::RateLimitSource::CodexAppServer => "codex",
+                _ => "claude",
+            };
+            crate::usage_quotas::record_passive_observation(
+                engine_name,
+                &state.host,
+                &agent_type,
+                None,
+                None,
+                &fact,
+                source,
+                unix_timestamp(),
+            );
         }
     }
     DaemonToWrapper::Ack {

@@ -37,6 +37,7 @@ const API_JS: &str = include_str!("../assets/console/api.js");
 const VIEW_ACCOUNTS_JS: &str = include_str!("../assets/console/views/accounts.js");
 const VIEW_MACHINES_JS: &str = include_str!("../assets/console/views/machines.js");
 const VIEW_SETTINGS_JS: &str = include_str!("../assets/console/views/settings.js");
+const VIEW_USAGE_JS: &str = include_str!("../assets/console/views/usage.js");
 
 const SESSION_TTL: Duration = Duration::from_secs(8 * 3600);
 const PREVIEW_TTL: Duration = Duration::from_secs(300);
@@ -582,6 +583,16 @@ async fn route_settings_js(State(state): State<ConsoleState>, headers: HeaderMap
     .await
 }
 
+async fn route_usage_js(State(state): State<ConsoleState>, headers: HeaderMap) -> Response {
+    serve_asset(
+        state,
+        headers,
+        "application/javascript; charset=utf-8",
+        VIEW_USAGE_JS,
+    )
+    .await
+}
+
 async fn route_api_status(State(state): State<ConsoleState>, headers: HeaderMap) -> Response {
     if let Err((status, code, msg)) = check_private_auth(&state, &headers, false) {
         return error_response(status, code, msg, &format!("Refusé : {msg}"));
@@ -928,7 +939,32 @@ pub(crate) fn build_console_router(state: ConsoleState) -> Router {
         .route("/assets/views/accounts.js", get(route_accounts_js))
         .route("/assets/views/machines.js", get(route_machines_js))
         .route("/assets/views/settings.js", get(route_settings_js))
+        .route("/assets/views/usage.js", get(route_usage_js))
         .route("/api/status", get(route_api_status))
+        .route(
+            "/api/usage",
+            get(crate::console_admin::route_api_usage_get),
+        )
+        .route(
+            "/api/usage/refresh",
+            post(crate::console_admin::route_api_usage_refresh),
+        )
+        .route(
+            "/api/updates/status",
+            get(crate::console_admin::route_api_updates_status),
+        )
+        .route(
+            "/api/updates/policy",
+            post(crate::console_admin::route_api_updates_policy),
+        )
+        .route(
+            "/api/updates/check",
+            post(crate::console_admin::route_api_updates_check),
+        )
+        .route(
+            "/api/updates/install",
+            post(crate::console_admin::route_api_updates_install),
+        )
         .route("/api/ui-prefs", post(route_api_ui_prefs))
         .route("/api/accounts/preview", post(route_api_accounts_preview))
         .route("/api/accounts/apply", post(route_api_accounts_apply))

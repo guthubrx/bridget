@@ -2,15 +2,21 @@ import { apiRequest } from "/assets/api.js";
 import { renderAccountsView } from "/assets/views/accounts.js";
 import { renderMachinesView } from "/assets/views/machines.js";
 import { renderSettingsView } from "/assets/views/settings.js";
+import { renderUsageView } from "/assets/views/usage.js";
 
 const mediaDark = window.matchMedia ? window.matchMedia("(prefers-color-scheme: dark)") : null;
 let state = {
   data: null,
   machinesData: null,
   settingsData: null,
+  updatesData: null,
+  usageData: null,
+  usageFilter: "all",
+  usageRefreshing: false,
   activeView: "all",
   themePref: document.documentElement.getAttribute("data-theme-pref") || "system",
 };
+let usageAutoTimer = null;
 let loginCtx = { sessionId: null, pollTimer: null, offset: 0, authUrl: null, popup: null, running: false };
 let deployCtx = { jobId: null, pollTimer: null, offset: 0, running: false };
 
@@ -649,12 +655,23 @@ function updateTopbarAction() {
     btn.textContent = "+ Ajouter une machine";
     btn.classList.remove("hidden");
     btn.onclick = () => handleOpenSshModal(null);
-  } else if (state.activeView === "settings") {
+  } else if (state.activeView === "settings" || state.activeView === "usage") {
     btn.classList.add("hidden");
   } else {
     btn.textContent = "+ Nouveau compte";
     btn.classList.remove("hidden");
     btn.onclick = handleOpenPrepare;
+  }
+}
+
+function syncUsageAutoRefresh() {
+  if (usageAutoTimer) { clearInterval(usageAutoTimer); usageAutoTimer = null; }
+  if (state.activeView === "usage") {
+    usageAutoTimer = setInterval(() => {
+      if (state.activeView === "usage" && !document.hidden && !state.usageRefreshing) {
+        loadUsage(false, true);
+      }
+    }, 60000);
   }
 }
 
@@ -664,15 +681,31 @@ function selectView(view) {
     b.classList.toggle("active", b.getAttribute("data-view") === view);
   }
   updateTopbarAction();
+  syncUsageAutoRefresh();
   render();
   if (view === "machines" && !state.machinesData) loadMachines();
   if (view === "settings" && !state.settingsData) loadSettings();
+  if (view === "usage" && !state.usageData) loadUsage(false);
 }
 
 function render() {
   updateTopbarAction();
   if (state.data) {
     document.getElementById("hostBadge").textContent = `Hôte console : ${state.data.local_machine}`;
+  }
+  const usageBadge = document.getElementById("countUsage");
+  if (usageBadge && state.usageData && state.usageData.summary) {
+    usageBadge.textContent = `${state.usageData.summary.with_live_quota}/${state.usageData.summary.total_subscriptions}`;
+  }
+  if (state.activeView === "usage") {
+    renderUsageView({
+      data: state.usageData,
+      filter: state.usageFilter,
+      refreshing: state.usageRefreshing,
+      onFilter: (f) => { state.usageFilter = f || "all"; render(); },
+      onRefresh: (force) => loadUsage(Boolean(force)),
+    });
+    return;
   }
   if (state.activeView === "machines") {
     renderMachinesView({
@@ -687,9 +720,14 @@ function render() {
   if (state.activeView === "settings") {
     renderSettingsView({
       data: state.settingsData,
+      updatesData: state.updatesData,
       onSaveAutomanaged: handleSaveAutomanaged,
       onSyncFleet: handleSyncFleet,
       onRoutingPreview: handleRoutingPreview,
+      onUpdatesGlobal: handleUpdatesGlobal,
+      onUpdatesHostMode: handleUpdatesHostMode,
+      onUpdatesCheck: handleUpdatesCheck,
+      onUpdatesInstall: handleUpdatesInstall,
     });
     return;
   }
@@ -702,6 +740,84 @@ function render() {
     onTogglePreview: handleTogglePreview,
     onShowCli: handleShowCli,
   });
+}
+
+async function loadUsage(forceRefresh = false, silent = false) {
+  const btn = document.getElementById("refreshBtn");
+  state.usageRefreshing = true;
+  if (!silent && btn) btn.disabled = true;
+  if (state.activeView === "usage") render();
+  try {
+    state.usageData = forceRefresh
+      ? await apiRequest("/api/usage/refresh", { method: "POST", body: JSON.stringify({}) })
+      : await apiRequest("/api/usage");
+    const usageBadge = document.getElementById("countUsage");
+    if (usageBadge && state.usageData && state.usageData.summary) {
+      usageBadge.textContent = `${state.usageData.summary.with_live_quota}/${state.usageData.summary.total_subscriptions}`;
+    }
+    if (!silent && forceRefresh) {
+      showFeedback("ok", "✓", "Quotas actualisés (0 jeton LLM consommé).");
+    }
+  } catch (e) {
+    if (!silent) showFeedback("err", "✕", `Quotas : ${e.message}`);
+  } finally {
+    state.usageRefreshing = false;
+    if (!silent && btn) btn.disabled = false;
+    if (state.activeView === "usage") render();
+  }
+}
+
+async function handleUpdatesGlobal(automatic) {
+  try {
+    state.updatesData = await apiRequest("/api/updates/policy", {
+      method: "POST",
+      body: JSON.stringify({ automatic: Boolean(automatic) }),
+    });
+    showFeedback("ok", "✓", automatic ? "Mode global défini sur Automatique." : "Mode global défini sur Manuel.");
+    if (state.activeView === "settings") render();
+  } catch (e) {
+    showFeedback("err", "✕", `Mises à jour : ${e.message}`);
+    loadSettings();
+  }
+}
+
+async function handleUpdatesHostMode(host, mode) {
+  try {
+    state.updatesData = await apiRequest("/api/updates/policy", {
+      method: "POST",
+      body: JSON.stringify({ host, mode }),
+    });
+    const lbl = mode === "auto" ? "Automatique" : (mode === "manual" ? "Manuel" : "Défaut global");
+    showFeedback("ok", "✓", `Serveur ${host} réglé sur ${lbl}.`);
+    if (state.activeView === "settings") render();
+  } catch (e) {
+    showFeedback("err", "✕", `Mises à jour (${host}) : ${e.message}`);
+    loadSettings();
+  }
+}
+
+async function handleUpdatesCheck() {
+  try {
+    state.updatesData = await apiRequest("/api/updates/check", { method: "POST", body: JSON.stringify({}) });
+    showFeedback("ok", "✓", "Vérification des mises à jour lancée sur la flotte.");
+    if (state.activeView === "settings") render();
+  } catch (e) {
+    showFeedback("err", "✕", `Vérification : ${e.message}`);
+  }
+}
+
+async function handleUpdatesInstall(version) {
+  if (!version) return;
+  try {
+    state.updatesData = await apiRequest("/api/updates/install", {
+      method: "POST",
+      body: JSON.stringify({ version }),
+    });
+    showFeedback("ok", "✓", `Installation de Bridget v${version} demandée pour la flotte.`);
+    if (state.activeView === "settings") render();
+  } catch (e) {
+    showFeedback("err", "✕", `Installation v${version} : ${e.message}`);
+  }
 }
 
 async function loadMachines() {
@@ -721,10 +837,14 @@ async function loadSettings() {
   const btn = document.getElementById("refreshBtn");
   btn.disabled = true;
   try {
-    state.settingsData = await apiRequest("/api/settings");
+    const [settingsRes, updatesRes] = await Promise.allSettled([
+      apiRequest("/api/settings"),
+      apiRequest("/api/updates/status"),
+    ]);
+    if (settingsRes.status === "fulfilled") state.settingsData = settingsRes.value;
+    else showFeedback("err", "✕", `Paramètres : ${settingsRes.reason.message}`);
+    if (updatesRes.status === "fulfilled") state.updatesData = updatesRes.value;
     if (state.activeView === "settings") render();
-  } catch (e) {
-    showFeedback("err", "✕", `Paramètres : ${e.message}`);
   } finally {
     btn.disabled = false;
   }
@@ -744,6 +864,7 @@ async function loadStatus() {
 }
 
 function refreshCurrentView() {
+  if (state.activeView === "usage") return loadUsage(true);
   if (state.activeView === "machines") return loadMachines();
   if (state.activeView === "settings") return loadSettings();
   return loadStatus();
@@ -771,3 +892,4 @@ document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeModal
 applyTheme(state.themePref);
 updateTopbarAction();
 loadStatus();
+loadUsage(false, true);

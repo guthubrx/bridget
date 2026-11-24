@@ -101,7 +101,7 @@ fn now_secs() -> i64 {
         .as_secs() as i64
 }
 
-fn local_machine_name() -> String {
+pub(crate) fn local_machine_name() -> String {
     let host = crate::build_info::local_host();
     if host.is_empty() {
         "local".to_string()

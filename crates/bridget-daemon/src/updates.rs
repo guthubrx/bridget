@@ -121,12 +121,47 @@ pub(crate) fn device_granted(root: &Path, device_id: &str) -> Result<bool, &'sta
         .unwrap_or_default();
     Ok(p.granted_devices.contains(device_id))
 }
+#[derive(Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+struct HostModes {
+    #[serde(default)]
+    host_modes: BTreeMap<String, String>,
+}
+
+fn valid_host_name(host: &str) -> bool {
+    !host.is_empty()
+        && host.len() <= 128
+        && host
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"-_.".contains(&b))
+}
+
+fn read_host_modes(root: &Path) -> Result<HostModes, &'static str> {
+    read::<HostModes>(&root.join("updates-host-modes.json"))
+        .map(|opt| opt.unwrap_or_default())
+        .map_err(|_| "update_state_unavailable")
+}
+
+pub(crate) fn admin_request(request: Q) -> Result<Value, String> {
+    let ns = crate::environment::Namespace::from_environment()
+        .map_err(|_| "namespace_unavailable".to_string())?;
+    match crate::mobile::admin_connection(&ns.socket, A::Updates { request }) {
+        Ok(R::Updates { value }) => Ok(value),
+        Ok(R::Error { code }) => Err(code),
+        Ok(_) => Err("update_response_invalid".to_string()),
+        Err(code) => Err(code.to_string()),
+    }
+}
+
 pub(crate) fn policy(root: &Path, request: &Q) -> Result<Value, &'static str> {
     let _lock = FILE_LOCK.lock().map_err(|_| "update_state_unavailable")?;
     let path = root.join("updates.json");
     let mut p: Policy = read(&path)
         .map_err(|_| "update_state_unavailable")?
         .unwrap_or_default();
+    let mut modes = read_host_modes(root)?;
+    let mut write_policy = false;
+    let mut write_modes = false;
     match request {
         Q::Status => {}
         Q::Configure { automatic } => {
@@ -134,12 +169,32 @@ pub(crate) fn policy(root: &Path, request: &Q) -> Result<Value, &'static str> {
             if !automatic {
                 p.install_target = None;
             }
+            write_policy = true;
+        }
+        Q::SetHostMode { host, mode } => {
+            if !valid_host_name(host) {
+                return Err("invalid_request");
+            }
+            match mode.as_str() {
+                "auto" | "manual" => {
+                    if !modes.host_modes.contains_key(host) && modes.host_modes.len() >= 64 {
+                        return Err("invalid_request");
+                    }
+                    modes.host_modes.insert(host.clone(), mode.clone());
+                }
+                "default" => {
+                    modes.host_modes.remove(host);
+                }
+                _ => return Err("invalid_request"),
+            }
+            write_modes = true;
         }
         Q::Check => {
             p.check_generation = p
                 .check_generation
                 .checked_add(1)
-                .ok_or("update_state_unavailable")?
+                .ok_or("update_state_unavailable")?;
+            write_policy = true;
         }
         Q::Install { version: target } => {
             if version(target).is_none() {
@@ -150,6 +205,7 @@ pub(crate) fn policy(root: &Path, request: &Q) -> Result<Value, &'static str> {
                 .check_generation
                 .checked_add(1)
                 .ok_or("update_state_unavailable")?;
+            write_policy = true;
         }
         Q::Report {
             host,
@@ -158,11 +214,7 @@ pub(crate) fn policy(root: &Path, request: &Q) -> Result<Value, &'static str> {
             stage,
             client_compatibility,
         } => {
-            if host.is_empty()
-                || host.len() > 128
-                || !host
-                    .bytes()
-                    .all(|b| b.is_ascii_alphanumeric() || b"-_.".contains(&b))
+            if !valid_host_name(host)
                 || version(installed).is_none()
                 || available.as_ref().is_some_and(|v| version(v).is_none())
                 || (!p.hosts.contains_key(host) && p.hosts.len() >= 32)
@@ -180,14 +232,19 @@ pub(crate) fn policy(root: &Path, request: &Q) -> Result<Value, &'static str> {
                 report["client_compatibility"] = clients.clone();
             }
             p.hosts.insert(host.clone(), report);
+            write_policy = true;
         }
         _ => return Err("invalid_request"),
     }
-    if !matches!(request, Q::Status) {
+    if write_policy {
         write(&path, &p).map_err(|_| "update_state_unavailable")?;
     }
+    if write_modes {
+        write(&root.join("updates-host-modes.json"), &modes)
+            .map_err(|_| "update_state_unavailable")?;
+    }
     Ok(
-        json!({"status":"ok","automatic":p.automatic,"hosts":p.hosts,"check_generation":p.check_generation,"install_target":p.install_target,"source":"github_stable","core_version":env!("CARGO_PKG_VERSION"),"observed_at":now()}),
+        json!({"status":"ok","automatic":p.automatic,"host_modes":modes.host_modes,"hosts":p.hosts,"check_generation":p.check_generation,"install_target":p.install_target,"source":"github_stable","core_version":env!("CARGO_PKG_VERSION"),"observed_at":now()}),
     )
 }
 /// Ajouter les machines connues sans transformer l'absence de rapport en succès.
@@ -196,6 +253,15 @@ pub(crate) fn project_federation(
     machines: &BTreeSet<String>,
     observed_now: i64,
 ) -> Value {
+    let default_auto = value
+        .get("automatic")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let host_modes = value
+        .get("host_modes")
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
     let Some(hosts) = value.get_mut("hosts").and_then(Value::as_object_mut) else {
         return value;
     };
@@ -209,8 +275,17 @@ pub(crate) fn project_federation(
     for (machine, item) in hosts.iter_mut() {
         let reported = item.get("observed_at").and_then(Value::as_i64);
         let fresh = reported.is_some_and(|t| t <= observed_now + 60 && t >= observed_now - 180);
+        let explicit_mode = host_modes.get(machine).and_then(Value::as_str);
+        let effective_mode = match explicit_mode {
+            Some("auto") => "auto",
+            Some("manual") => "manual",
+            _ if default_auto => "auto",
+            _ => "manual",
+        };
         item["machine_id"] = json!(machine);
         item["registered"] = json!(machines.contains(machine));
+        item["update_mode"] = json!(effective_mode);
+        item["update_mode_explicit"] = json!(explicit_mode.is_some());
         item["report_freshness"] = json!(if reported.is_none() {
             "not_observed"
         } else if fresh {
@@ -346,7 +421,7 @@ impl Gate {
 pub(crate) fn run(args: &[String]) {
     if args.iter().any(|s| matches!(s.as_str(), "--help" | "-h")) || args.is_empty() {
         println!(
-            "bridget updates status | check | auto on/off | install VERSION | once | watch\n  setup --host MACHINE --service UNITE [--service UNITE] : raccorder cette machine\nLa politique est commune à la fédération. Chaque machine doit avoir son service de mise à jour.\nUne machine sans rapport reste visible comme non observée. Les activations préservent les travaux."
+            "bridget updates status | check | auto on/off | mode MACHINE auto|manual|default | install VERSION | once | watch\n  setup --host MACHINE --service UNITE [--service UNITE] : raccorder cette machine\nLa politique globale peut être affinée par serveur (auto / manual). Chaque machine doit avoir son service de mise à jour.\nUne machine sans rapport reste visible comme non observée. Les activations préservent les travaux."
         );
         return;
     }
@@ -380,7 +455,7 @@ pub(crate) fn run(args: &[String]) {
     use std::io::IsTerminal;
     if matches!(
         args.first().map(String::as_str),
-        Some("grant" | "auto" | "install")
+        Some("grant" | "auto" | "mode" | "install")
     ) && !(std::io::stdin().is_terminal() && std::io::stdout().is_terminal())
     {
         eprintln!(
@@ -405,6 +480,12 @@ pub(crate) fn run(args: &[String]) {
             ["auto", v @ ("on" | "off")] => A::Updates {
                 request: Q::Configure {
                     automatic: *v == "on",
+                },
+            },
+            ["mode", host, mode @ ("auto" | "manual" | "default")] => A::Updates {
+                request: Q::SetHostMode {
+                    host: (*host).into(),
+                    mode: (*mode).into(),
                 },
             },
             ["prepare", token] => A::Updates {
@@ -546,6 +627,59 @@ mod tests {
         );
         let value = policy(&r, &Q::Configure { automatic: false }).unwrap();
         assert!(value["install_target"].is_null());
+        fs::remove_dir_all(r).unwrap();
+    }
+
+    #[test]
+    fn spec342_per_host_update_modes_persist_without_breaking_updates_json() {
+        let r = root();
+        let initial = policy(&r, &Q::Status).unwrap();
+        assert_eq!(initial["automatic"], true);
+        assert_eq!(initial["host_modes"], json!({}));
+
+        let after_manual = policy(
+            &r,
+            &Q::SetHostMode {
+                host: "ksstore".into(),
+                mode: "manual".into(),
+            },
+        )
+        .unwrap();
+        assert_eq!(after_manual["host_modes"]["ksstore"], "manual");
+
+        // Vérifier que updates.json n'a pas été modifié par l'ajout d'un champ inconnu (compat rollback).
+        let raw_policy: Option<Policy> = read(&r.join("updates.json")).unwrap();
+        assert!(raw_policy.is_none());
+
+        let machines: BTreeSet<String> = ["cartae", "ksstore"]
+            .into_iter()
+            .map(str::to_string)
+            .collect();
+        let projected = project_federation(after_manual, &machines, 2000);
+        assert_eq!(projected["hosts"]["cartae"]["update_mode"], "auto");
+        assert_eq!(projected["hosts"]["cartae"]["update_mode_explicit"], false);
+        assert_eq!(projected["hosts"]["ksstore"]["update_mode"], "manual");
+        assert_eq!(projected["hosts"]["ksstore"]["update_mode_explicit"], true);
+
+        let cleared = policy(
+            &r,
+            &Q::SetHostMode {
+                host: "ksstore".into(),
+                mode: "default".into(),
+            },
+        )
+        .unwrap();
+        assert!(cleared["host_modes"].get("ksstore").is_none());
+        assert!(
+            policy(
+                &r,
+                &Q::SetHostMode {
+                    host: "ksstore".into(),
+                    mode: "bogus".into(),
+                }
+            )
+            .is_err()
+        );
         fs::remove_dir_all(r).unwrap();
     }
 }

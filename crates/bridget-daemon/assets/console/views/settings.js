@@ -14,7 +14,17 @@ function formatTs(ts) {
 }
 
 export function renderSettingsView(ctx) {
-  const { data, onSaveAutomanaged, onSyncFleet, onRoutingPreview } = ctx;
+  const {
+    data,
+    updatesData,
+    onSaveAutomanaged,
+    onSyncFleet,
+    onRoutingPreview,
+    onUpdatesGlobal,
+    onUpdatesHostMode,
+    onUpdatesCheck,
+    onUpdatesInstall,
+  } = ctx;
   const root = document.getElementById("accountsRoot");
   const banner = document.getElementById("alertBanner");
   if (banner) banner.classList.add("hidden");
@@ -61,7 +71,7 @@ export function renderSettingsView(ctx) {
       <label class="setting-row">
         <div>
           <div class="row-label">Mises à jour automatiques des clients CLI</div>
-          <div class="row-sub">Met à jour Claude, Codex et Antigravity via leurs commandes officielles sans couper les tâches.</div>
+          <div class="row-sub">Met à jour Claude, Codex, Antigravity et Cursor via leurs commandes officielles sans couper les tâches.</div>
         </div>
         <input type="checkbox" id="optCliUpdates" ${cfg.cli_updates ? "checked" : ""} />
       </label>
@@ -157,7 +167,104 @@ export function renderSettingsView(ctx) {
     </p>
   </section>`;
 
-  root.innerHTML = autoHtml + routingHtml + macHelpHtml;
+  let fleetUpdatesHtml = "";
+  if (updatesData && updatesData.hosts && typeof updatesData.hosts === "object") {
+    const globalAuto = updatesData.automatic !== false;
+    const hostEntries = Object.entries(updatesData.hosts).sort(([a], [b]) => a.localeCompare(b));
+    let availVersion = null;
+    for (const [, h] of hostEntries) {
+      if (h && h.available) { availVersion = h.available; break; }
+    }
+    const uRows = hostEntries.map(([mid, h]) => {
+      const stage = (h && h.stage) || "not_reported";
+      const installed = (h && h.installed) || "—";
+      const avail = (h && h.available) || null;
+      const modeVal = h && h.update_mode_explicit
+        ? (h.update_mode || "auto")
+        : "default";
+      const effectiveLabel = (h && h.update_mode === "manual") ? "Manuel" : "Automatique";
+      const pillCls = stage === "up_to_date" || stage === "active"
+        ? "ok"
+        : (stage === "available" || stage === "waiting_idle" || stage === "downloading" || stage === "ready" ? "warn" : (stage === "error" || stage === "rolled_back" ? "err" : "muted"));
+      const stageLabels = {
+        up_to_date: "● À jour",
+        active: "● Activée",
+        available: "▲ Disponible",
+        downloading: "◌ Téléchargement",
+        ready: "◌ Prête",
+        installing: "◌ Activation",
+        waiting_idle: "◌ En attente de repos",
+        disabled: "○ Manuel",
+        rolled_back: "✕ Repli effectué",
+        error: "✕ Erreur",
+        stale: "◌ Rapport ancien",
+        not_reported: "○ Non observée",
+      };
+      const stTxt = stageLabels[stage] || stage;
+      const verDetail = avail ? `v${installed} → v${avail}` : `v${installed}`;
+      return `<div class="row">
+        <div>
+          <div class="row-label">${esc(mid)}</div>
+          <div class="row-sub">Effectif : ${esc(effectiveLabel)} · ${esc(formatTs(h && h.observed_at))}</div>
+        </div>
+        <div class="row-detail mono">${esc(verDetail)}</div>
+        <div class="row-detail">${esc(h && h.report_freshness === "fresh" ? "Rapport récent" : (h && h.report_freshness === "stale" ? "Rapport ancien" : "Non observé"))}</div>
+        <div><span class="status-pill ${pillCls}"><span>${esc(stTxt)}</span></span></div>
+        <div class="row-actions">
+          <select class="compact-select" data-upd-host="${esc(mid)}" aria-label="Mode de mise à jour pour ${esc(mid)}">
+            <option value="auto"${modeVal === "auto" ? " selected" : ""}>Automatique</option>
+            <option value="manual"${modeVal === "manual" ? " selected" : ""}>Manuel</option>
+            <option value="default"${modeVal === "default" ? " selected" : ""}>Défaut (${globalAuto ? "auto" : "manuel"})</option>
+          </select>
+        </div>
+      </div>`;
+    }).join("");
+
+    fleetUpdatesHtml = `<section class="settings-card">
+      <div class="machine-head">
+        <div class="machine-title">
+          <h2>Mises à jour Bridget de la flotte</h2>
+          <span class="machine-meta">Source : GitHub Releases · vérification gén. ${esc(updatesData.check_generation || 0)}</span>
+        </div>
+        <div class="badges">
+          ${availVersion ? `<button class="btn primary" type="button" id="updatesInstallBtn" data-ver="${esc(availVersion)}">Installer v${esc(availVersion)}</button>` : ""}
+          <button class="btn" type="button" id="updatesCheckBtn">Vérifier maintenant</button>
+        </div>
+      </div>
+      <div class="settings-list">
+        <label class="setting-row">
+          <div>
+            <div class="row-label">Mode par défaut de la flotte : automatique</div>
+            <div class="row-sub">Les serveurs sans réglage propre téléchargent, vérifient (SHA-256 + compatibilité) et redémarrent leurs services Bridget (avec repli automatique en cas d'échec).</div>
+          </div>
+          <input type="checkbox" id="optFleetAutoDefault" ${globalAuto ? "checked" : ""} />
+        </label>
+      </div>
+      <div class="table-card">${uRows}</div>
+    </section>`;
+  } else {
+    fleetUpdatesHtml = `<section class="settings-card">
+      <div class="machine-head">
+        <div class="machine-title"><h2>Mises à jour Bridget de la flotte</h2></div>
+        <div class="badges"><button class="btn" type="button" id="updatesCheckBtn">Actualiser</button></div>
+      </div>
+      <div class="row-sub">Statut de mise à jour fédéré non disponible pour l'instant (vérifiez la connexion au daemon Bridget).</div>
+    </section>`;
+  }
+
+  root.innerHTML = fleetUpdatesHtml + autoHtml + routingHtml + macHelpHtml;
+
+  const fleetDefaultCb = document.getElementById("optFleetAutoDefault");
+  if (fleetDefaultCb) {
+    fleetDefaultCb.onchange = () => onUpdatesGlobal(fleetDefaultCb.checked);
+  }
+  const updCheckBtn = document.getElementById("updatesCheckBtn");
+  if (updCheckBtn) updCheckBtn.onclick = () => onUpdatesCheck();
+  const updInstBtn = document.getElementById("updatesInstallBtn");
+  if (updInstBtn) updInstBtn.onclick = () => onUpdatesInstall(updInstBtn.getAttribute("data-ver"));
+  for (const sel of root.querySelectorAll("[data-upd-host]")) {
+    sel.onchange = () => onUpdatesHostMode(sel.getAttribute("data-upd-host"), sel.value);
+  }
 
   document.getElementById("saveAutoBtn").onclick = () => {
     onSaveAutomanaged({

@@ -427,6 +427,7 @@ fn run_with_args(args: Vec<String>) {
         },
         "mobile" => crate::mobile::run(&args[2..]),
         "updates" => crate::updates::run(&args[2..]),
+        "usage" => crate::usage_quotas::run_cli(&args[2..]),
         "automanaged" => crate::automanaged::run(&args[2..]),
         "clients" => crate::client_compatibility::run(&args[2..]),
         "specialists" => cmd_specialists(&args[2..]),

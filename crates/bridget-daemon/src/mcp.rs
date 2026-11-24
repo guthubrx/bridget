@@ -1101,6 +1101,7 @@ fn execute_tool_at_with_identity_once(
         "bridget_domain" => execute_domain(principal, instance_id, arguments, socket),
         "bridget_runtime" => execute_runtime(principal, instance_id, arguments, socket),
         "bridget_status" => execute_status(arguments, socket),
+        "bridget_usage" => execute_usage(arguments),
         "bridget_control_status" => {
             execute_control_status(principal, instance_id, arguments, socket)
         }
@@ -1854,6 +1855,51 @@ fn execute_control_status(
         "inbox_open_count": inbox_open_count,
         "history": history,
     }))
+}
+
+fn execute_usage(arguments: &serde_json::Map<String, Value>) -> Result<Value, ToolError> {
+    reject_unknown_arguments(arguments, &["provider", "refresh", "format"])?;
+    let provider = match arguments.get("provider") {
+        None => None,
+        Some(Value::String(s)) if !s.trim().is_empty() => Some(s.as_str()),
+        _ => {
+            return Err(ToolError::InvalidParams(
+                "provider doit être une chaîne non vide (claude/anthropic, codex/openai, antigravity/agy/google, cursor, all)".into(),
+            ));
+        }
+    };
+    let refresh = match arguments.get("refresh") {
+        None => false,
+        Some(Value::Bool(b)) => *b,
+        _ => {
+            return Err(ToolError::InvalidParams(
+                "refresh doit être un booléen".into(),
+            ));
+        }
+    };
+    let format = match arguments.get("format") {
+        None => "json",
+        Some(Value::String(s)) if matches!(s.as_str(), "json" | "html") => s.as_str(),
+        _ => {
+            return Err(ToolError::InvalidParams(
+                "format doit valoir 'json' ou 'html'".into(),
+            ));
+        }
+    };
+    let report = crate::usage_quotas::collect_usage(provider, refresh, None)
+        .map_err(ToolError::InvalidParams)?;
+    let report_val = serde_json::to_value(&report).map_err(|error| ToolError::Technical {
+        code: "usage_encode_error",
+        message: error.to_string(),
+    })?;
+    if format == "html" {
+        Ok(json!({
+            "report": report_val,
+            "html": crate::usage_quotas::render_html(&report)
+        }))
+    } else {
+        Ok(report_val)
+    }
 }
 
 fn execute_who(
@@ -2789,6 +2835,7 @@ const COMPACT_MCP_TOOLS: &[&str] = &[
     "bridget_specialists",
     "bridget_who",
     "bridget_status",
+    "bridget_usage",
     "bridget_read_commit_file",
     "bridget_read_artifact",
 ];
@@ -3455,6 +3502,19 @@ pub(crate) fn tools() -> Vec<Value> {
             "inputSchema": {
                 "type": "object",
                 "properties": {},
+                "additionalProperties": false
+            }
+        }),
+        json!({
+            "name": "bridget_usage",
+            "description": "Lire les quotas restants par abonnement (0 jeton LLM consommé : sonde gratuite Codex + observations passives Claude ; signale honnêtement les fournisseurs non exposés). Option format='html' pour jauges HTML prêtes à afficher.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "provider": { "type": "string", "minLength": 1, "maxLength": 40 },
+                    "refresh": { "type": "boolean" },
+                    "format": { "enum": ["json", "html"] }
+                },
                 "additionalProperties": false
             }
         }),

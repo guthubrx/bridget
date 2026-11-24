@@ -1,0 +1,1495 @@
+//! Observation et projection unifiée des quotas restants par abonnement (`bridget usage`).
+//!
+//! Principes :
+//! - Aucun jeton LLM consommé : utilise uniquement les observations passives du daemon
+//!   (Claude `rate_limit_event` / StatusLine, Codex `account/rateLimits/read`), le cache
+//!   persistant `usage-quotas.json` (`0600`), et la sonde JSON-RPC gratuite Codex
+//!   (`codex app-server` → `account/rateLimits/read`, ~0,6 s, 0 jeton) dédupliquée par profil
+//!   avec TTL de 5 minutes.
+//! - Honnêteté stricte : jamais de pourcentage fabriqué. Les fournisseurs sans compteur
+//!   exposé en lecture libre (Antigravity, Cursor) sont annoncés explicitement comme
+//!   `not_exposed_by_provider`. Une fenêtre dont `resets_at <= now` est marquée
+//!   `reset_elapsed` plutôt que d'afficher un vieux pourcentage périmé.
+
+use crate::accounts_connect::{ConnectionTarget, load_fleet_connections_with_machines};
+use crate::cli_table::table_println as println;
+use bridget_transport::protocol::{
+    CommunicationDirectoryScope, DaemonToWrapper, RateLimitFact, RateLimitSource,
+};
+use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
+use std::collections::BTreeMap;
+use std::fs::{self, File, OpenOptions};
+use std::io::{BufRead, BufReader, Write};
+use std::os::unix::fs::OpenOptionsExt;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
+use std::sync::Mutex;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+pub(crate) const USAGE_CACHE_TTL_SECS: u64 = 300;
+const CODEX_PROBE_TIMEOUT_SECS: u64 = 6;
+const PASSIVE_FLUSH_MIN_INTERVAL_SECS: i64 = 10;
+
+static CACHE_LOCK: Mutex<i64> = Mutex::new(0);
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub(crate) struct QuotaWindow {
+    pub window: String,
+    pub label: String,
+    pub used_percent: Option<u8>,
+    pub remaining_percent: Option<u8>,
+    pub resets_at: Option<i64>,
+    pub status: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct SubscriptionQuota {
+    pub id: String,
+    pub engine: String,
+    pub provider_label: String,
+    pub account_label: String,
+    pub machine_id: String,
+    pub connection_ids: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub plan_type: Option<String>,
+    pub source_state: String,
+    pub source_label: String,
+    pub windows: Vec<QuotaWindow>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub credits_balance: Option<String>,
+    #[serde(default)]
+    pub credits_unlimited: bool,
+    pub observed_at: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct UsageSummary {
+    pub total_subscriptions: usize,
+    pub with_live_quota: usize,
+    pub not_exposed: usize,
+    pub exhausted: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct UsageReport {
+    pub generated_at: i64,
+    pub cache_ttl_secs: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub provider_filter: Option<String>,
+    pub subscriptions: Vec<SubscriptionQuota>,
+    pub summary: UsageSummary,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+struct CachedQuotaEntry {
+    engine: String,
+    machine_id: String,
+    #[serde(default)]
+    agent_type: String,
+    #[serde(default)]
+    connection_id: Option<String>,
+    #[serde(default)]
+    profile_dir: Option<String>,
+    #[serde(default)]
+    plan_type: Option<String>,
+    #[serde(default)]
+    source: String,
+    #[serde(default)]
+    windows: BTreeMap<String, CachedWindow>,
+    #[serde(default)]
+    credits_balance: Option<String>,
+    #[serde(default)]
+    credits_unlimited: bool,
+    observed_at: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct CachedWindow {
+    window: String,
+    used_percent: Option<u8>,
+    resets_at: Option<i64>,
+    status: String,
+    observed_at: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+struct UsageCacheFile {
+    version: u32,
+    #[serde(default)]
+    entries: BTreeMap<String, CachedQuotaEntry>,
+}
+
+fn now_secs() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64
+}
+
+fn cache_path() -> Result<PathBuf, String> {
+    if let Ok(home) = std::env::var("BRIDGET_HOME")
+        && !home.trim().is_empty()
+    {
+        return Ok(PathBuf::from(home).join("usage-quotas.json"));
+    }
+    let home = std::env::var("HOME").map_err(|_| "variable HOME absente".to_string())?;
+    Ok(PathBuf::from(home)
+        .join(".cache")
+        .join("bridget-core")
+        .join("usage-quotas.json"))
+}
+
+/// Normalise un alias fournisseur vers l'identifiant canonique (`claude`, `codex`,
+/// `antigravity`, `cursor`), ou `Ok(None)` pour « tous ».
+pub(crate) fn normalize_provider_alias(raw: &str) -> Result<Option<&'static str>, String> {
+    let trimmed = raw.trim().to_ascii_lowercase();
+    if trimmed.is_empty() || matches!(trimmed.as_str(), "all" | "tous" | "global" | "fleet") {
+        return Ok(None);
+    }
+    match trimmed.as_str() {
+        "claude" | "anthropic" | "gclaude" | "claude-code" => Ok(Some("claude")),
+        "codex" | "openai" | "chatgpt" | "codex-pro" => Ok(Some("codex")),
+        "antigravity" | "agy" | "google" | "gemini" => Ok(Some("antigravity")),
+        "cursor" | "cursor-agent" => Ok(Some("cursor")),
+        _ => Err(format!(
+            "fournisseur inconnu '{}' (attendus : claude/anthropic, codex/openai, antigravity/agy/google, cursor, ou all)",
+            raw.trim()
+        )),
+    }
+}
+
+pub(crate) fn provider_display_name(engine: &str) -> &'static str {
+    match engine {
+        "claude" => "Claude (Anthropic)",
+        "codex" => "Codex (OpenAI)",
+        "antigravity" => "Antigravity (Google)",
+        "cursor" => "Cursor",
+        _ => "Fournisseur",
+    }
+}
+
+pub(crate) fn format_window_label(window: &str) -> String {
+    let lower = window.to_ascii_lowercase();
+    if lower == "five_hour" || lower.contains("five_hour") || lower == "primary/300m" {
+        return "5h".to_string();
+    }
+    if lower == "seven_day"
+        || lower.contains("seven_day")
+        || lower == "weekly"
+        || lower == "primary/10080m"
+        || lower == "secondary/10080m"
+    {
+        return "7j".to_string();
+    }
+    if let Some(tail) = window.rsplit('/').next()
+        && let Some(mins_str) = tail.strip_suffix('m').or_else(|| tail.strip_suffix('M'))
+        && let Ok(mins) = mins_str.parse::<i64>()
+    {
+        if mins % (24 * 60) == 0 {
+            return format!("{}j", mins / (24 * 60));
+        }
+        if mins % 60 == 0 {
+            return format!("{}h", mins / 60);
+        }
+        return format!("{mins}m");
+    }
+    window.to_string()
+}
+
+fn load_cache_from(path: &Path) -> UsageCacheFile {
+    let Ok(raw) = fs::read_to_string(path) else {
+        return UsageCacheFile {
+            version: 1,
+            entries: BTreeMap::new(),
+        };
+    };
+    serde_json::from_str::<UsageCacheFile>(&raw).unwrap_or(UsageCacheFile {
+        version: 1,
+        entries: BTreeMap::new(),
+    })
+}
+
+fn save_cache_to(path: &Path, cache: &UsageCacheFile) -> Result<(), String> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| "dossier parent usage-quotas manquant".to_string())?;
+    crate::environment::ensure_private_directory(parent)?;
+    let tmp = parent.join(format!(
+        ".usage-quotas-{}.tmp",
+        uuid::Uuid::new_v4().simple()
+    ));
+    let mut bytes = serde_json::to_vec_pretty(cache)
+        .map_err(|e| format!("sérialisation usage-quotas impossible : {e}"))?;
+    bytes.push(b'\n');
+    let mut f = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
+        .open(&tmp)
+        .map_err(|e| format!("écriture temporaire usage-quotas impossible : {e}"))?;
+    f.write_all(&bytes)
+        .and_then(|_| f.sync_all())
+        .map_err(|e| format!("synchronisation usage-quotas impossible : {e}"))?;
+    drop(f);
+    fs::rename(&tmp, path).map_err(|e| {
+        let _ = fs::remove_file(&tmp);
+        format!("remplacement atomique usage-quotas impossible : {e}")
+    })?;
+    if let Ok(dir) = File::open(parent) {
+        let _ = dir.sync_all();
+    }
+    Ok(())
+}
+
+/// Enregistre passivement un fait `RateLimitFact` reçu par le daemon dans le cache privé
+/// `usage-quotas.json` (0 jeton, throttlé pour éviter toute tempête I/O).
+pub(crate) fn record_passive_observation(
+    engine: &str,
+    machine_id: &str,
+    agent_type: &str,
+    connection_id: Option<&str>,
+    profile_dir: Option<&str>,
+    fact: &RateLimitFact,
+    source: RateLimitSource,
+    now: i64,
+) {
+    if fact.window == "account/credits" && fact.credits.is_none() {
+        return;
+    }
+    let Ok(path) = cache_path() else {
+        return;
+    };
+    let Ok(mut last_flush) = CACHE_LOCK.lock() else {
+        return;
+    };
+    let mut cache = load_cache_from(&path);
+    let key = cache_entry_key(engine, machine_id, profile_dir, connection_id, agent_type);
+    let entry = cache.entries.entry(key).or_insert_with(|| CachedQuotaEntry {
+        engine: engine.to_string(),
+        machine_id: machine_id.to_string(),
+        agent_type: agent_type.to_string(),
+        connection_id: connection_id.map(str::to_string),
+        profile_dir: profile_dir.map(str::to_string),
+        plan_type: None,
+        source: format!("{source}"),
+        windows: BTreeMap::new(),
+        credits_balance: None,
+        credits_unlimited: false,
+        observed_at: now,
+    });
+    entry.observed_at = entry.observed_at.max(now);
+    entry.source = format!("{source}");
+    if let Some(conn) = connection_id {
+        entry.connection_id = Some(conn.to_string());
+    }
+    if let Some(credits) = &fact.credits {
+        entry.credits_unlimited = credits.unlimited.unwrap_or(false);
+    }
+    let mut meaningful_change = false;
+    if fact.window != "account/credits" {
+        let prev = entry.windows.get(&fact.window);
+        if prev.is_none_or(|p| {
+            p.used_percent != fact.used_percent
+                || p.status != fact.status
+                || p.resets_at != fact.resets_at
+        }) {
+            meaningful_change = true;
+        }
+        entry.windows.insert(
+            fact.window.clone(),
+            CachedWindow {
+                window: fact.window.clone(),
+                used_percent: fact.used_percent,
+                resets_at: fact.resets_at,
+                status: fact.status.clone(),
+                observed_at: now,
+            },
+        );
+    }
+    if meaningful_change || now.saturating_sub(*last_flush) >= PASSIVE_FLUSH_MIN_INTERVAL_SECS {
+        cache.version = 1;
+        if save_cache_to(&path, &cache).is_ok() {
+            *last_flush = now;
+        }
+    }
+}
+
+fn cache_entry_key(
+    engine: &str,
+    machine_id: &str,
+    profile_dir: Option<&str>,
+    connection_id: Option<&str>,
+    agent_type: &str,
+) -> String {
+    let profile = profile_dir
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or("default");
+    if profile != "default" {
+        return format!("{engine}:{machine_id}:profile:{profile}");
+    }
+    if let Some(conn) = connection_id.filter(|s| !s.is_empty())
+        && engine == "claude"
+    {
+        return format!("{engine}:{machine_id}:default:{conn}");
+    }
+    if engine == "codex" {
+        return format!("{engine}:{machine_id}:default");
+    }
+    format!("{engine}:{machine_id}:{agent_type}")
+}
+
+fn infer_engine_from_agent_type(agent_type: &str) -> &'static str {
+    let lower = agent_type.to_ascii_lowercase();
+    if lower.contains("codex") {
+        "codex"
+    } else if lower.contains("cursor") {
+        "cursor"
+    } else if lower.contains("antigravity") || lower.contains("agy") || lower.contains("gemini") {
+        "antigravity"
+    } else {
+        "claude"
+    }
+}
+
+/// Parse la réponse JSON-RPC `account/rateLimits/read` de `codex app-server`.
+fn parse_codex_rate_limits_response(
+    value: &Value,
+    now: i64,
+) -> Option<(Option<String>, Vec<CachedWindow>, Option<String>, bool)> {
+    let result = value.get("result")?;
+    let rl = result
+        .get("rateLimits")
+        .or_else(|| {
+            result
+                .get("rateLimitsByLimitId")
+                .and_then(|m| m.get("codex"))
+        })?;
+    let plan_type = rl
+        .get("planType")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    let credits = rl.get("credits");
+    let credits_balance = credits
+        .and_then(|c| c.get("balance"))
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    let credits_unlimited = credits
+        .and_then(|c| c.get("unlimited"))
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let spend_control = rl
+        .get("spendControlReached")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let mut windows = Vec::new();
+    for (slot, name) in [("primary", "primary"), ("secondary", "secondary")] {
+        let Some(obj) = rl.get(slot).filter(|v| v.is_object()) else {
+            continue;
+        };
+        let used = obj
+            .get("usedPercent")
+            .and_then(Value::as_u64)
+            .map(|u| u.min(100) as u8);
+        let mins = obj
+            .get("windowDurationMins")
+            .and_then(Value::as_i64)
+            .unwrap_or(0);
+        let resets_at = obj.get("resetsAt").and_then(Value::as_i64);
+        let win_name = if mins > 0 {
+            format!("{name}/{mins}m")
+        } else {
+            name.to_string()
+        };
+        let status = if spend_control || used.is_some_and(|p| p >= 100) {
+            "rejected".to_string()
+        } else {
+            "available".to_string()
+        };
+        windows.push(CachedWindow {
+            window: win_name,
+            used_percent: used,
+            resets_at,
+            status,
+            observed_at: now,
+        });
+    }
+    Some((plan_type, windows, credits_balance, credits_unlimited))
+}
+
+fn probe_codex_app_server(
+    command: &str,
+    profile_dir: Option<&str>,
+    is_local: bool,
+    machine_id: &str,
+    now: i64,
+) -> Result<(Option<String>, Vec<CachedWindow>, Option<String>, bool), String> {
+    let init = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"clientInfo":{"name":"bridget","version":"0.8.53"},"capabilities":{"experimentalApi":true}}}"#;
+    let inited = r#"{"jsonrpc":"2.0","method":"initialized"}"#;
+    let read_req = r#"{"jsonrpc":"2.0","id":2,"method":"account/rateLimits/read","params":{}}"#;
+
+    let mut child = if is_local {
+        let mut cmd = Command::new(command);
+        cmd.arg("app-server")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null());
+        if let Some(dir) = profile_dir.filter(|s| !s.trim().is_empty()) {
+            cmd.env("CODEX_HOME", dir);
+        }
+        cmd.spawn()
+            .map_err(|e| format!("lancement codex app-server local impossible : {e}"))?
+    } else {
+        let env_prefix = match profile_dir.filter(|s| !s.trim().is_empty()) {
+            Some(dir) => format!("CODEX_HOME={} ", shell_single_quote(dir)),
+            None => String::new(),
+        };
+        let remote_cmd = format!(
+            "PATH=\"$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH\" {env_prefix}{} app-server",
+            shell_single_quote(command)
+        );
+        Command::new("ssh")
+            .args([
+                "-o",
+                "BatchMode=yes",
+                "-o",
+                "ConnectTimeout=4",
+                "-o",
+                "StrictHostKeyChecking=accept-new",
+                machine_id,
+                &remote_cmd,
+            ])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .map_err(|e| format!("sonde SSH codex sur {machine_id} impossible : {e}"))?
+    };
+
+    let Some(mut stdin) = child.stdin.take() else {
+        let _ = child.kill();
+        let _ = child.wait();
+        return Err("flux stdin codex indisponible".to_string());
+    };
+    let Some(stdout) = child.stdout.take() else {
+        let _ = child.kill();
+        let _ = child.wait();
+        return Err("flux stdout codex indisponible".to_string());
+    };
+
+    let (tx, rx) = std::sync::mpsc::channel::<Result<Value, String>>();
+    std::thread::spawn(move || {
+        let write_ok = writeln!(stdin, "{init}")
+            .and_then(|_| stdin.flush())
+            .and_then(|_| writeln!(stdin, "{inited}"))
+            .and_then(|_| writeln!(stdin, "{read_req}"))
+            .and_then(|_| stdin.flush());
+        if let Err(e) = write_ok {
+            let _ = tx.send(Err(format!("écriture JSON-RPC codex : {e}")));
+            return;
+        }
+        let mut reader = BufReader::new(stdout);
+        let mut line = String::new();
+        for _ in 0..32 {
+            line.clear();
+            match reader.read_line(&mut line) {
+                Ok(0) => break,
+                Ok(_) => {
+                    let trimmed = line.trim();
+                    if trimmed.is_empty() {
+                        continue;
+                    }
+                    if let Ok(val) = serde_json::from_str::<Value>(trimmed)
+                        && val.get("id").and_then(Value::as_i64) == Some(2)
+                    {
+                        let _ = tx.send(Ok(val));
+                        return;
+                    }
+                }
+                Err(e) => {
+                    let _ = tx.send(Err(format!("lecture JSON-RPC codex : {e}")));
+                    return;
+                }
+            }
+        }
+        let _ = tx.send(Err("réponse account/rateLimits/read absente".to_string()));
+    });
+
+    let outcome = rx
+        .recv_timeout(Duration::from_secs(CODEX_PROBE_TIMEOUT_SECS))
+        .map_err(|_| format!("délai sonde codex dépassé ({CODEX_PROBE_TIMEOUT_SECS}s)"))?;
+    let _ = child.kill();
+    let _ = child.wait();
+    let val = outcome?;
+    if let Some(err) = val.get("error") {
+        let msg = err
+            .get("message")
+            .and_then(Value::as_str)
+            .unwrap_or("erreur fournisseur");
+        return Err(format!("codex account/rateLimits/read refusé : {msg}"));
+    }
+    parse_codex_rate_limits_response(&val, now)
+        .ok_or_else(|| "réponse codex sans bloc rateLimits".to_string())
+}
+
+fn shell_single_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "'\\''"))
+}
+
+fn fetch_remote_cache_if_useful(local_machine: &str, machines: &[String]) -> Option<UsageCacheFile> {
+    if local_machine == "cartae" || !machines.iter().any(|m| m == "cartae") {
+        return None;
+    }
+    let output = Command::new("ssh")
+        .args([
+            "-o",
+            "BatchMode=yes",
+            "-o",
+            "ConnectTimeout=3",
+            "cartae",
+            "cat ~/.cache/bridget-core/usage-quotas.json 2>/dev/null || true",
+        ])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .output()
+        .ok()?;
+    if !output.status.success() || output.stdout.is_empty() {
+        return None;
+    }
+    serde_json::from_slice::<UsageCacheFile>(&output.stdout).ok()
+}
+
+fn collect_live_daemon_rate_limits(now: i64) -> Vec<(String, String, Vec<CachedWindow>)> {
+    let Ok(ns) = crate::environment::Namespace::from_environment() else {
+        return Vec::new();
+    };
+    let Ok(DaemonToWrapper::AgentList { agents }) = crate::communication::client::directory_request(
+        None,
+        &ns.socket,
+        CommunicationDirectoryScope::Global,
+        None,
+    ) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for agent in agents {
+        if agent.rate_limits.is_empty() {
+            continue;
+        }
+        let engine = infer_engine_from_agent_type(&agent.agent_type).to_string();
+        let windows = agent
+            .rate_limits
+            .into_iter()
+            .filter(|f| f.window != "account/credits")
+            .map(|f| CachedWindow {
+                window: f.window,
+                used_percent: f.used_percent,
+                resets_at: f.resets_at,
+                status: f.status,
+                observed_at: now,
+            })
+            .collect::<Vec<_>>();
+        if !windows.is_empty() {
+            out.push((engine, agent.agent_type, windows));
+        }
+    }
+    out
+}
+
+fn materialize_windows(windows: &BTreeMap<String, CachedWindow>, now: i64) -> (Vec<QuotaWindow>, bool) {
+    let mut out = Vec::new();
+    let mut any_live = false;
+    for w in windows.values() {
+        let expired = w.resets_at.is_some_and(|at| at <= now);
+        if expired {
+            out.push(QuotaWindow {
+                window: w.window.clone(),
+                label: format_window_label(&w.window),
+                used_percent: None,
+                remaining_percent: None,
+                resets_at: w.resets_at,
+                status: "reset_elapsed".to_string(),
+            });
+        } else {
+            any_live = true;
+            let remaining = w.used_percent.map(|u| 100u8.saturating_sub(u.min(100)));
+            out.push(QuotaWindow {
+                window: w.window.clone(),
+                label: format_window_label(&w.window),
+                used_percent: w.used_percent,
+                remaining_percent: remaining,
+                resets_at: w.resets_at,
+                status: w.status.clone(),
+            });
+        }
+    }
+    out.sort_by(|a, b| a.label.cmp(&b.label).then_with(|| a.window.cmp(&b.window)));
+    (out, any_live)
+}
+
+/// Collecte les quotas restants sur la flotte sans consommer aucun jeton LLM.
+pub(crate) fn collect_usage(
+    provider_filter_raw: Option<&str>,
+    force_refresh: bool,
+    registry_override: Option<&Path>,
+) -> Result<UsageReport, String> {
+    let filter = match provider_filter_raw {
+        Some(raw) => normalize_provider_alias(raw)?,
+        None => None,
+    };
+    let now = now_secs();
+    let cpath = cache_path().ok();
+    let mut cache = cpath
+        .as_deref()
+        .map(load_cache_from)
+        .unwrap_or(UsageCacheFile {
+            version: 1,
+            entries: BTreeMap::new(),
+        });
+
+    let (local_machine, machines, targets) =
+        load_fleet_connections_with_machines(registry_override).unwrap_or_else(|_| {
+            (
+                crate::accounts_connect::local_machine_name(),
+                Vec::new(),
+                Vec::new(),
+            )
+        });
+
+    // Fusionner les observations passives du maître `cartae` (utile depuis le Mac).
+    if let Some(remote_cache) = fetch_remote_cache_if_useful(&local_machine, &machines) {
+        for (k, entry) in remote_cache.entries {
+            let replace = cache
+                .entries
+                .get(&k)
+                .is_none_or(|cur| cur.observed_at < entry.observed_at);
+            if replace {
+                cache.entries.insert(k, entry);
+            }
+        }
+    }
+
+    // Intégrer les rate_limits des présences actuellement connectées au daemon.
+    let live_daemon = collect_live_daemon_rate_limits(now);
+
+    // Dédupliquer les connexions en abonnements distincts : (engine, machine_id, profile_dir).
+    #[derive(Clone)]
+    struct Group {
+        id: String,
+        engine: String,
+        machine_id: String,
+        profile_dir: Option<String>,
+        command: String,
+        is_local: bool,
+        account_label: String,
+        connection_ids: Vec<String>,
+        agent_types: Vec<String>,
+    }
+
+    let mut groups: BTreeMap<String, Group> = BTreeMap::new();
+    for target in &targets {
+        if let Some(f) = filter
+            && target.engine != f
+        {
+            continue;
+        }
+        let prof = target
+            .profile_dir
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty());
+        let gid = format!(
+            "{}:{}:{}",
+            target.engine,
+            target.machine_id,
+            prof.unwrap_or("default")
+        );
+        let entry = groups.entry(gid.clone()).or_insert_with(|| Group {
+            id: gid,
+            engine: target.engine.clone(),
+            machine_id: target.machine_id.clone(),
+            profile_dir: prof.map(str::to_string),
+            command: target.command.clone(),
+            is_local: target.is_local,
+            account_label: friendly_subscription_label(target),
+            connection_ids: Vec::new(),
+            agent_types: Vec::new(),
+        });
+        if !entry.connection_ids.contains(&target.connection_id) {
+            entry.connection_ids.push(target.connection_id.clone());
+        }
+        if !entry.agent_types.contains(&target.agent_type) {
+            entry.agent_types.push(target.agent_type.clone());
+        }
+    }
+
+    // Sonde Codex gratuite en parallèle pour les groupes périmés ou sur refresh explicite.
+    let mut cache_dirty = false;
+    let mut probe_jobs: Vec<(String, String, Option<String>, bool, String)> = Vec::new();
+    for group in groups.values() {
+        if group.engine != "codex" {
+            continue;
+        }
+        let ckey = cache_entry_key(
+            "codex",
+            &group.machine_id,
+            group.profile_dir.as_deref(),
+            group.connection_ids.first().map(String::as_str),
+            group.agent_types.first().map(String::as_str).unwrap_or("codex"),
+        );
+        let fresh = cache.entries.get(&ckey).is_some_and(|e| {
+            !force_refresh
+                && e.observed_at > 0
+                && now.saturating_sub(e.observed_at) <= USAGE_CACHE_TTL_SECS as i64
+        });
+        if !fresh {
+            probe_jobs.push((
+                group.id.clone(),
+                group.command.clone(),
+                group.profile_dir.clone(),
+                group.is_local,
+                group.machine_id.clone(),
+            ));
+        }
+    }
+
+    let mut probe_results: BTreeMap<
+        String,
+        Result<(Option<String>, Vec<CachedWindow>, Option<String>, bool), String>,
+    > = BTreeMap::new();
+    if !probe_jobs.is_empty() {
+        let handles: Vec<_> = probe_jobs
+            .into_iter()
+            .map(|(gid, cmd, prof, is_local, mid)| {
+                std::thread::spawn(move || {
+                    let res =
+                        probe_codex_app_server(&cmd, prof.as_deref(), is_local, &mid, now);
+                    (gid, res)
+                })
+            })
+            .collect();
+        for h in handles {
+            if let Ok((gid, res)) = h.join() {
+                probe_results.insert(gid, res);
+            }
+        }
+    }
+
+    let mut subscriptions = Vec::new();
+    for group in groups.into_values() {
+        let ckey = cache_entry_key(
+            &group.engine,
+            &group.machine_id,
+            group.profile_dir.as_deref(),
+            group.connection_ids.first().map(String::as_str),
+            group.agent_types.first().map(String::as_str).unwrap_or(&group.engine),
+        );
+
+        match group.engine.as_str() {
+            "codex" => {
+                let mut probe_err: Option<String> = None;
+                if let Some(res) = probe_results.remove(&group.id) {
+                    match res {
+                        Ok((plan_type, wins, credits_balance, credits_unlimited)) => {
+                            let mut map = BTreeMap::new();
+                            for w in wins {
+                                map.insert(w.window.clone(), w);
+                            }
+                            cache.entries.insert(
+                                ckey.clone(),
+                                CachedQuotaEntry {
+                                    engine: "codex".to_string(),
+                                    machine_id: group.machine_id.clone(),
+                                    agent_type: group
+                                        .agent_types
+                                        .first()
+                                        .cloned()
+                                        .unwrap_or_default(),
+                                    connection_id: group.connection_ids.first().cloned(),
+                                    profile_dir: group.profile_dir.clone(),
+                                    plan_type,
+                                    source: "codex_rpc_probe".to_string(),
+                                    windows: map,
+                                    credits_balance,
+                                    credits_unlimited,
+                                    observed_at: now,
+                                },
+                            );
+                            cache_dirty = true;
+                        }
+                        Err(e) => {
+                            probe_err = Some(e);
+                        }
+                    }
+                }
+                let cached = cache.entries.get(&ckey);
+                let (windows, any_live) = cached
+                    .map(|e| materialize_windows(&e.windows, now))
+                    .unwrap_or_else(|| (Vec::new(), false));
+                let (source_state, source_label, detail) = if any_live {
+                    (
+                        "live_probe".to_string(),
+                        "Sonde gratuite Codex (0 jeton)".to_string(),
+                        probe_err.map(|e| format!("Cache conservé ({e})")),
+                    )
+                } else if !windows.is_empty() {
+                    (
+                        "stale_reset".to_string(),
+                        "Fenêtre réinitialisée".to_string(),
+                        probe_err,
+                    )
+                } else {
+                    (
+                        "unavailable".to_string(),
+                        "Indisponible".to_string(),
+                        Some(probe_err.unwrap_or_else(|| {
+                            "Aucune donnée de quota reçue pour ce profil Codex.".to_string()
+                        })),
+                    )
+                };
+                subscriptions.push(SubscriptionQuota {
+                    id: group.id,
+                    engine: group.engine,
+                    provider_label: provider_display_name("codex").to_string(),
+                    account_label: group.account_label,
+                    machine_id: group.machine_id,
+                    connection_ids: group.connection_ids,
+                    plan_type: cached.and_then(|e| e.plan_type.clone()),
+                    source_state,
+                    source_label,
+                    windows,
+                    credits_balance: cached.and_then(|e| e.credits_balance.clone()),
+                    credits_unlimited: cached.is_some_and(|e| e.credits_unlimited),
+                    observed_at: cached.map(|e| e.observed_at),
+                    detail,
+                });
+            }
+            "claude" => {
+                // Fusionner observations live daemon + entrées de cache correspondantes.
+                let mut merged_windows: BTreeMap<String, CachedWindow> = BTreeMap::new();
+                let mut latest_obs: Option<i64> = None;
+
+                for entry in cache.entries.values() {
+                    if entry.engine != "claude" {
+                        continue;
+                    }
+                    let same_machine = entry.machine_id == group.machine_id;
+                    let same_conn = entry
+                        .connection_id
+                        .as_deref()
+                        .is_some_and(|cid| group.connection_ids.iter().any(|c| c == cid));
+                    let same_type = !entry.agent_type.is_empty()
+                        && group.agent_types.iter().any(|t| t == &entry.agent_type);
+                    if same_conn || (same_machine && (same_type || entry.profile_dir == group.profile_dir))
+                    {
+                        latest_obs = latest_obs.max(Some(entry.observed_at));
+                        for (wk, wv) in &entry.windows {
+                            if merged_windows
+                                .get(wk)
+                                .is_none_or(|cur| cur.observed_at < wv.observed_at)
+                            {
+                                merged_windows.insert(wk.clone(), wv.clone());
+                            }
+                        }
+                    }
+                }
+                for (eng, atype, wins) in &live_daemon {
+                    if eng == "claude" && group.agent_types.iter().any(|t| t == atype) {
+                        for w in wins {
+                            latest_obs = latest_obs.max(Some(w.observed_at));
+                            if merged_windows
+                                .get(&w.window)
+                                .is_none_or(|cur| cur.observed_at <= w.observed_at)
+                            {
+                                merged_windows.insert(w.window.clone(), w.clone());
+                            }
+                        }
+                    }
+                }
+
+                let (windows, any_live) = materialize_windows(&merged_windows, now);
+                let (source_state, source_label, detail) = if any_live {
+                    (
+                        "observed".to_string(),
+                        "Observé passivement (sessions Claude, 0 jeton)".to_string(),
+                        None,
+                    )
+                } else if !windows.is_empty() {
+                    (
+                        "stale_reset".to_string(),
+                        "Fenêtre réinitialisée — en attente d'une session Claude".to_string(),
+                        Some(
+                            "Le compteur précédent est arrivé à échéance ; la prochaine session Claude actualisera la jauge sans coût."
+                                .to_string(),
+                        ),
+                    )
+                } else {
+                    (
+                        "unavailable".to_string(),
+                        "En attente d'une observation Claude (0 jeton)".to_string(),
+                        Some(
+                            "Claude publie ses jauges 5h/7j pendant ses sessions actives (rate_limit_event / StatusLine). Aucun jeton n'est dépensé pour sonder."
+                                .to_string(),
+                        ),
+                    )
+                };
+                subscriptions.push(SubscriptionQuota {
+                    id: group.id,
+                    engine: group.engine,
+                    provider_label: provider_display_name("claude").to_string(),
+                    account_label: group.account_label,
+                    machine_id: group.machine_id,
+                    connection_ids: group.connection_ids,
+                    plan_type: None,
+                    source_state,
+                    source_label,
+                    windows,
+                    credits_balance: None,
+                    credits_unlimited: false,
+                    observed_at: latest_obs,
+                    detail,
+                });
+            }
+            "antigravity" | "cursor" => {
+                let engine_name = group.engine.clone();
+                subscriptions.push(SubscriptionQuota {
+                    id: group.id,
+                    engine: engine_name.clone(),
+                    provider_label: provider_display_name(&engine_name).to_string(),
+                    account_label: group.account_label,
+                    machine_id: group.machine_id,
+                    connection_ids: group.connection_ids,
+                    plan_type: None,
+                    source_state: "not_exposed_by_provider".to_string(),
+                    source_label: "Non exposé en lecture libre par le fournisseur".to_string(),
+                    windows: Vec::new(),
+                    credits_balance: None,
+                    credits_unlimited: false,
+                    observed_at: None,
+                    detail: Some(format!(
+                        "{} ne publie pas de compteur de quota restant via sa CLI sans consommer de requête.",
+                        provider_display_name(&engine_name)
+                    )),
+                });
+            }
+            _ => {}
+        }
+    }
+
+    if cache_dirty && let Some(path) = cpath.as_deref() {
+        cache.version = 1;
+        let _ = save_cache_to(path, &cache);
+    }
+
+    // Trier : fournisseurs avec jauge active d'abord, puis par moteur et machine.
+    subscriptions.sort_by(|a, b| {
+        let rank = |s: &str| match s {
+            "live_probe" | "observed" => 0,
+            "stale_reset" => 1,
+            "unavailable" => 2,
+            _ => 3,
+        };
+        rank(&a.source_state)
+            .cmp(&rank(&b.source_state))
+            .then_with(|| a.engine.cmp(&b.engine))
+            .then_with(|| a.machine_id.cmp(&b.machine_id))
+            .then_with(|| a.account_label.cmp(&b.account_label))
+    });
+
+    let total_subscriptions = subscriptions.len();
+    let with_live_quota = subscriptions
+        .iter()
+        .filter(|s| matches!(s.source_state.as_str(), "live_probe" | "observed"))
+        .count();
+    let not_exposed = subscriptions
+        .iter()
+        .filter(|s| s.source_state == "not_exposed_by_provider")
+        .count();
+    let exhausted = subscriptions
+        .iter()
+        .filter(|s| {
+            s.windows
+                .iter()
+                .any(|w| w.status == "rejected" || w.used_percent.is_some_and(|p| p >= 100))
+        })
+        .count();
+
+    Ok(UsageReport {
+        generated_at: now,
+        cache_ttl_secs: USAGE_CACHE_TTL_SECS,
+        provider_filter: filter.map(str::to_string),
+        subscriptions,
+        summary: UsageSummary {
+            total_subscriptions,
+            with_live_quota,
+            not_exposed,
+            exhausted,
+        },
+    })
+}
+
+fn friendly_subscription_label(target: &ConnectionTarget) -> String {
+    if let Some(name) = target
+        .display_name
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        return name.to_string();
+    }
+    let base = match target.engine.as_str() {
+        "claude" => "Claude",
+        "codex" => {
+            if target.connection_id.contains("pro") {
+                "Codex Pro"
+            } else {
+                "Codex"
+            }
+        }
+        "antigravity" => "Antigravity",
+        "cursor" => "Cursor",
+        other => other,
+    };
+    format!("{base} · {}", target.machine_id)
+}
+
+fn format_age_fr(observed_at: Option<i64>, now: i64) -> String {
+    let Some(at) = observed_at else {
+        return "jamais observé".to_string();
+    };
+    let delta = now.saturating_sub(at).max(0);
+    if delta < 10 {
+        "à l'instant".to_string()
+    } else if delta < 60 {
+        format!("il y a {delta}s")
+    } else if delta < 3600 {
+        format!("il y a {} min", delta / 60)
+    } else {
+        format!("il y a {}h", delta / 3600)
+    }
+}
+
+fn format_reset_delta_fr(resets_at: Option<i64>, now: i64) -> String {
+    let Some(at) = resets_at else {
+        return String::new();
+    };
+    let diff = at - now;
+    if diff <= 0 {
+        return "réinitialisé".to_string();
+    }
+    let hours = diff / 3600;
+    let mins = (diff % 3600) / 60;
+    if hours >= 24 {
+        format!("reset dans {}j {}h", hours / 24, hours % 24)
+    } else if hours > 0 {
+        format!("reset dans {hours}h {mins:02}m")
+    } else {
+        format!("reset dans {mins} min")
+    }
+}
+
+fn render_unicode_bar(remaining_pct: u8) -> String {
+    let filled = ((remaining_pct as usize * 12) + 50) / 100;
+    let filled = filled.min(12);
+    format!("{}{}", "█".repeat(filled), "░".repeat(12 - filled))
+}
+
+/// Rendu terminal propre avec jauges Unicode de quota restant.
+pub(crate) fn render_terminal(report: &UsageReport) -> String {
+    let mut out = String::new();
+    let title = match &report.provider_filter {
+        Some(p) => format!("Quotas restants Bridget · {}", provider_display_name(p)),
+        None => "Quotas restants Bridget · Tous les abonnements".to_string(),
+    };
+    out.push_str(&format!("{title}\n"));
+    out.push_str(&format!(
+        "{} abonnement(s) · {} avec jauge active · {} non exposé(s) par le fournisseur\n\n",
+        report.summary.total_subscriptions,
+        report.summary.with_live_quota,
+        report.summary.not_exposed
+    ));
+    if report.subscriptions.is_empty() {
+        out.push_str("Aucun abonnement trouvé pour ce filtre.\n");
+        return out;
+    }
+    for sub in &report.subscriptions {
+        let plan = sub
+            .plan_type
+            .as_deref()
+            .map(|p| format!(" [{p}]"))
+            .unwrap_or_default();
+        out.push_str(&format!(
+            "• {}{} ({}) — {} ({})\n",
+            sub.account_label,
+            plan,
+            sub.machine_id,
+            sub.source_label,
+            format_age_fr(sub.observed_at, report.generated_at)
+        ));
+        if sub.windows.is_empty() {
+            if let Some(detail) = &sub.detail {
+                out.push_str(&format!("    {detail}\n"));
+            }
+        } else {
+            for w in &sub.windows {
+                if w.status == "reset_elapsed" {
+                    out.push_str(&format!(
+                        "    {:>4}  [────────────] fenêtre réinitialisée\n",
+                        w.label
+                    ));
+                } else if let Some(rem) = w.remaining_percent {
+                    let used = w.used_percent.unwrap_or(100u8.saturating_sub(rem));
+                    let rst = format_reset_delta_fr(w.resets_at, report.generated_at);
+                    let rst_part = if rst.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" · {rst}")
+                    };
+                    out.push_str(&format!(
+                        "    {:>4}  [{}] {:>3}% restant ({}% utilisé){}\n",
+                        w.label,
+                        render_unicode_bar(rem),
+                        rem,
+                        used,
+                        rst_part
+                    ));
+                } else if w.status == "rejected" {
+                    let rst = format_reset_delta_fr(w.resets_at, report.generated_at);
+                    out.push_str(&format!("    {:>4}  [░░░░░░░░░░░░] épuisé · {rst}\n", w.label));
+                }
+            }
+        }
+    }
+    out
+}
+
+fn html_esc(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&#39;")
+}
+
+/// Rendu HTML autonome avec jauges propres (compatible `html_render` T3 et navigateur).
+pub(crate) fn render_html(report: &UsageReport) -> String {
+    let mut cards = String::new();
+    for sub in &report.subscriptions {
+        let plan_badge = sub
+            .plan_type
+            .as_deref()
+            .map(|p| format!(r#"<span class="pill plan">{}</span>"#, html_esc(p)))
+            .unwrap_or_default();
+        let age = format_age_fr(sub.observed_at, report.generated_at);
+        let mut body = String::new();
+        if sub.windows.is_empty() {
+            let msg = sub
+                .detail
+                .as_deref()
+                .unwrap_or("Aucune fenêtre de quota observée.");
+            body.push_str(&format!(
+                r#"<div class="empty-note">{}</div>"#,
+                html_esc(msg)
+            ));
+        } else {
+            for w in &sub.windows {
+                if w.status == "reset_elapsed" {
+                    body.push_str(&format!(
+                        r#"<div class="win"><div class="win-head"><span class="win-label">Fenêtre {}</span><span class="win-val muted">Réinitialisée</span></div><div class="track"><div class="fill muted" style="width:0%"></div></div></div>"#,
+                        html_esc(&w.label)
+                    ));
+                    continue;
+                }
+                let used = w
+                    .used_percent
+                    .unwrap_or(if w.status == "rejected" { 100 } else { 0 });
+                let rem = w.remaining_percent.unwrap_or(100u8.saturating_sub(used));
+                let tone = if w.status == "rejected" || used >= 90 {
+                    "danger"
+                } else if used >= 70 {
+                    "warn"
+                } else {
+                    "ok"
+                };
+                let rst = format_reset_delta_fr(w.resets_at, report.generated_at);
+                let rst_html = if rst.is_empty() {
+                    String::new()
+                } else {
+                    format!(r#"<span class="win-rst">{}</span>"#, html_esc(&rst))
+                };
+                body.push_str(&format!(
+                    r#"<div class="win"><div class="win-head"><span class="win-label">Fenêtre {}</span><span class="win-val {}"><strong>{}%</strong> restant <span class="muted">({}% utilisé)</span></span></div><div class="track"><div class="fill {}" style="width:{}%"></div></div><div class="win-foot">{}</div></div>"#,
+                    html_esc(&w.label),
+                    tone,
+                    rem,
+                    used,
+                    tone,
+                    rem,
+                    rst_html
+                ));
+            }
+        }
+        cards.push_str(&format!(
+            r#"<section class="card"><div class="card-head"><div><div class="card-title">{}{}</div><div class="card-sub">{} · {} · {}</div></div><span class="pill">{}</span></div>{}</section>"#,
+            html_esc(&sub.account_label),
+            plan_badge,
+            html_esc(&sub.provider_label),
+            html_esc(&sub.machine_id),
+            html_esc(&age),
+            html_esc(&sub.source_label),
+            body
+        ));
+    }
+
+    if cards.is_empty() {
+        cards.push_str(r#"<div class="empty-note">Aucun abonnement détecté pour ce filtre.</div>"#);
+    }
+
+    let heading = match &report.provider_filter {
+        Some(p) => format!("Quotas restants · {}", provider_display_name(p)),
+        None => "Quotas restants · Abonnements Bridget".to_string(),
+    };
+
+    format!(
+        r#"<!doctype html><html lang="fr"><head><meta charset="utf-8" /><style>
+:root {{ color-scheme: light dark; }}
+* {{ box-sizing: border-box; }}
+body {{ margin: 0; font-family: var(--font-sans, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif); color: var(--foreground, #e5e7eb); font-size: 13px; }}
+.wrap {{ display: flex; flex-direction: column; gap: 12px; }}
+.hdr {{ display: flex; justify-content: space-between; align-items: baseline; gap: 12px; flex-wrap: wrap; }}
+.hdr h1 {{ margin: 0; font-size: 15px; font-weight: 600; }}
+.hdr-meta {{ font-size: 12px; color: var(--muted-foreground, var(--muted, #9ca3af)); }}
+.grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 12px; }}
+.card {{ background: var(--card, rgba(127,127,127,0.08)); border: 1px solid var(--border, rgba(127,127,127,0.25)); border-radius: var(--radius, 10px); padding: 14px 16px; display: flex; flex-direction: column; gap: 10px; }}
+.card-head {{ display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; }}
+.card-title {{ font-weight: 600; font-size: 13.5px; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }}
+.card-sub {{ font-size: 11.5px; color: var(--muted-foreground, var(--muted, #9ca3af)); margin-top: 2px; }}
+.pill {{ font-size: 11px; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--border, rgba(127,127,127,0.28)); color: var(--muted-foreground, var(--muted, #9ca3af)); white-space: nowrap; }}
+.pill.plan {{ text-transform: uppercase; font-weight: 600; color: var(--foreground, #e5e7eb); }}
+.win {{ display: flex; flex-direction: column; gap: 5px; }}
+.win-head {{ display: flex; justify-content: space-between; align-items: baseline; gap: 8px; font-size: 12px; }}
+.win-label {{ font-weight: 500; }}
+.win-val.ok strong {{ color: var(--success, #22c55e); }}
+.win-val.warn strong {{ color: var(--warning, #f59e0b); }}
+.win-val.danger strong {{ color: var(--destructive, #ef4444); }}
+.muted {{ color: var(--muted-foreground, var(--muted, #9ca3af)); }}
+.track {{ height: 8px; border-radius: 999px; background: var(--secondary, rgba(127,127,127,0.18)); overflow: hidden; }}
+.fill {{ height: 100%; border-radius: 999px; transition: width 0.25s ease; }}
+.fill.ok {{ background: var(--success, #22c55e); }}
+.fill.warn {{ background: var(--warning, #f59e0b); }}
+.fill.danger {{ background: var(--destructive, #ef4444); }}
+.fill.muted {{ background: var(--muted, #6b7280); }}
+.win-foot {{ font-size: 11px; color: var(--muted-foreground, var(--muted, #9ca3af)); display: flex; justify-content: flex-end; }}
+.empty-note {{ font-size: 12px; color: var(--muted-foreground, var(--muted, #9ca3af)); line-height: 1.45; }}
+</style></head><body><div class="wrap"><div class="hdr"><h1>{}</h1><span class="hdr-meta">{} abonnement(s) · {} jauge(s) active(s) · 0 jeton LLM consommé</span></div><div class="grid">{}</div></div></body></html>"#,
+        html_esc(&heading),
+        report.summary.total_subscriptions,
+        report.summary.with_live_quota,
+        cards
+    )
+}
+
+/// Point d'entrée CLI `bridget usage [provider|alias] [--refresh] [--json] [--html]`.
+pub(crate) fn run_cli(args: &[String]) {
+    let mut provider: Option<String> = None;
+    let mut refresh = false;
+    let mut as_json = false;
+    let mut as_html = false;
+
+    for arg in args {
+        match arg.as_str() {
+            "-h" | "--help" => {
+                println!(
+                    "bridget usage [fournisseur] [--refresh] [--json] [--html]\n  fournisseur : claude/anthropic | codex/openai | antigravity/agy/google | cursor | all\n  --refresh   : relance les sondes gratuites (0 jeton LLM) sans attendre le TTL de 5 min\n  --json      : sortie JSON structurée\n  --html      : sortie HTML autonome avec jauges de quotas restants"
+                );
+                return;
+            }
+            "--refresh" => refresh = true,
+            "--json" => as_json = true,
+            "--html" => as_html = true,
+            other if other.starts_with('-') => {
+                eprintln!("option inconnue pour bridget usage : {other}");
+                crate::cli_table::exit(2);
+            }
+            other => {
+                if provider.is_some() {
+                    eprintln!("un seul filtre fournisseur attendu (reçu '{other}')");
+                    crate::cli_table::exit(2);
+                }
+                provider = Some(other.to_string());
+            }
+        }
+    }
+
+    match collect_usage(provider.as_deref(), refresh, None) {
+        Ok(report) => {
+            if as_json {
+                println!("{}", serde_json::to_string_pretty(&report).unwrap_or_default());
+            } else if as_html {
+                println!("{}", render_html(&report));
+            } else {
+                println!("{}", render_terminal(&report));
+            }
+        }
+        Err(e) => {
+            eprintln!("erreur bridget usage : {e}");
+            crate::cli_table::exit(1);
+        }
+    }
+}
+
+/// Point d'entrée JSON pour la console web (`/api/usage` et `/api/usage/refresh`).
+pub(crate) fn usage_api_payload(
+    provider: Option<&str>,
+    refresh: bool,
+    registry_override: Option<&Path>,
+) -> Result<Value, String> {
+    let report = collect_usage(provider, refresh, registry_override)?;
+    serde_json::to_value(report).map_err(|e| format!("sérialisation usage : {e}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn spec342_provider_aliases_normalize_cleanly() {
+        assert_eq!(normalize_provider_alias("anthropic").unwrap(), Some("claude"));
+        assert_eq!(normalize_provider_alias("Claude").unwrap(), Some("claude"));
+        assert_eq!(normalize_provider_alias("openai").unwrap(), Some("codex"));
+        assert_eq!(normalize_provider_alias("CODEX").unwrap(), Some("codex"));
+        assert_eq!(normalize_provider_alias("agy").unwrap(), Some("antigravity"));
+        assert_eq!(normalize_provider_alias("google").unwrap(), Some("antigravity"));
+        assert_eq!(normalize_provider_alias("cursor-agent").unwrap(), Some("cursor"));
+        assert_eq!(normalize_provider_alias("all").unwrap(), None);
+        assert!(normalize_provider_alias("inexistant").is_err());
+    }
+
+    #[test]
+    fn spec342_parse_codex_rate_limits_and_render_html_and_terminal() {
+        let now = 1_795_500_000;
+        let payload = json!({
+            "id": 2,
+            "result": {
+                "rateLimits": {
+                    "planType": "pro",
+                    "primary": {
+                        "usedPercent": 44,
+                        "windowDurationMins": 10080,
+                        "resetsAt": now + 3600 * 48
+                    },
+                    "secondary": {
+                        "usedPercent": 15,
+                        "windowDurationMins": 300,
+                        "resetsAt": now + 7200
+                    },
+                    "credits": {
+                        "hasCredits": false,
+                        "unlimited": false,
+                        "balance": "0"
+                    },
+                    "spendControlReached": false
+                }
+            }
+        });
+        let (plan, wins, bal, unlim) = parse_codex_rate_limits_response(&payload, now).unwrap();
+        assert_eq!(plan.as_deref(), Some("pro"));
+        assert_eq!(bal.as_deref(), Some("0"));
+        assert!(!unlim);
+        assert_eq!(wins.len(), 2);
+
+        let mut map = BTreeMap::new();
+        for w in wins {
+            map.insert(w.window.clone(), w);
+        }
+        let (mat, any_live) = materialize_windows(&map, now);
+        assert!(any_live);
+        assert_eq!(mat[0].label, "5h");
+        assert_eq!(mat[0].remaining_percent, Some(85));
+        assert_eq!(mat[1].label, "7j");
+        assert_eq!(mat[1].remaining_percent, Some(56));
+
+        let report = UsageReport {
+            generated_at: now,
+            cache_ttl_secs: USAGE_CACHE_TTL_SECS,
+            provider_filter: None,
+            subscriptions: vec![
+                SubscriptionQuota {
+                    id: "codex:monordinateur:default".into(),
+                    engine: "codex".into(),
+                    provider_label: provider_display_name("codex").into(),
+                    account_label: "Codex Pro · monordinateur".into(),
+                    machine_id: "monordinateur".into(),
+                    connection_ids: vec!["codex-mac-pro".into()],
+                    plan_type: plan,
+                    source_state: "live_probe".into(),
+                    source_label: "Sonde gratuite Codex (0 jeton)".into(),
+                    windows: mat,
+                    credits_balance: bal,
+                    credits_unlimited: unlim,
+                    observed_at: Some(now - 20),
+                    detail: None,
+                },
+                SubscriptionQuota {
+                    id: "cursor:monordinateur:default".into(),
+                    engine: "cursor".into(),
+                    provider_label: provider_display_name("cursor").into(),
+                    account_label: "Cursor · monordinateur".into(),
+                    machine_id: "monordinateur".into(),
+                    connection_ids: vec!["cursor-mac".into()],
+                    plan_type: None,
+                    source_state: "not_exposed_by_provider".into(),
+                    source_label: "Non exposé en lecture libre par le fournisseur".into(),
+                    windows: vec![],
+                    credits_balance: None,
+                    credits_unlimited: false,
+                    observed_at: None,
+                    detail: Some("Non exposé".into()),
+                },
+            ],
+            summary: UsageSummary {
+                total_subscriptions: 2,
+                with_live_quota: 1,
+                not_exposed: 1,
+                exhausted: 0,
+            },
+        };
+
+        let term = render_terminal(&report);
+        assert!(term.contains("85% restant"));
+        assert!(term.contains("56% restant"));
+        assert!(term.contains("Non exposé"));
+
+        let html = render_html(&report);
+        assert!(html.contains("85%"));
+        assert!(html.contains("56%"));
+        assert!(html.contains("0 jeton LLM consommé"));
+        assert!(html.contains("Non exposé"));
+    }
+
+    #[test]
+    fn spec342_expired_window_is_marked_reset_elapsed_never_stale_percent() {
+        let now = 1_795_500_000;
+        let mut map = BTreeMap::new();
+        map.insert(
+            "five_hour".to_string(),
+            CachedWindow {
+                window: "five_hour".to_string(),
+                used_percent: Some(92),
+                resets_at: Some(now - 60),
+                status: "allowed".to_string(),
+                observed_at: now - 3600,
+            },
+        );
+        let (mat, any_live) = materialize_windows(&map, now);
+        assert!(!any_live);
+        assert_eq!(mat.len(), 1);
+        assert_eq!(mat[0].status, "reset_elapsed");
+        assert_eq!(mat[0].remaining_percent, None);
+    }
+}
