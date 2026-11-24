@@ -223,6 +223,7 @@ async function handleLogin(conn, logoutFirst, enableOnSuccess) {
             if (det) det.open = true;
           }
           loadStatus();
+          if (state.activeView === "usage") loadUsage(true, true);
         }
       } catch {}
     };
@@ -448,6 +449,7 @@ function handleRepairMachine(machine, repair) {
           showFeedback("ok", "✓", res.ui_state);
           loadMachines();
           loadStatus();
+          if (state.activeView === "usage") loadUsage(true, true);
         } catch (e) { msg.textContent = e.message; }
       },
     },
@@ -689,6 +691,48 @@ function selectView(view) {
   if (view === "usage" && !state.usageData) loadUsage(false);
 }
 
+async function handleManageUsageAccount(sub) {
+  if (!state.data) await loadStatus();
+  const conns = (state.data && state.data.connections) || [];
+  const cids = new Set(sub.connection_ids || []);
+  const hosts = new Set((sub.machines && sub.machines.length) ? sub.machines : [sub.machine_id]);
+  const matches = conns.filter((c) => {
+    const cidHit = cids.has(c.connection_id) || (c.covered_connections || []).some((cc) => cids.has(cc));
+    return hosts.has(c.machine_id) && (cidHit || c.engine === sub.engine);
+  });
+  const logoutFirst = sub.logged_in !== false;
+  if (matches.length === 1) {
+    handleLogin(matches[0], logoutFirst, false);
+    return;
+  }
+  if (matches.length === 0) {
+    selectView("all");
+    return;
+  }
+  const listHtml = matches.map((c, idx) =>
+    `<button class="btn" type="button" data-pick-conn="${idx}" style="justify-content:space-between;width:100%"><span><strong>${esc(c.machine_id)}</strong> · ${esc(c.account_label || c.engine)}</span><span class="row-sub">${esc(c.connection_id)}</span></button>`
+  ).join("");
+  openModal(`${logoutFirst ? "Changer de compte" : "Connecter"} · ${sub.account_label}`, `<div style="display:flex;flex-direction:column;gap:8px">${listHtml}</div>`, [
+    { label: "Annuler", onClick: closeModal },
+  ]);
+  for (const b of document.querySelectorAll("[data-pick-conn]")) {
+    b.onclick = () => {
+      const conn = matches[Number(b.getAttribute("data-pick-conn"))];
+      closeModal();
+      if (conn) handleLogin(conn, logoutFirst, false);
+    };
+  }
+}
+
+async function handleManageMachineCell(machineId, engine, cell) {
+  if (!state.data) await loadStatus();
+  const conns = (state.data && state.data.connections) || [];
+  const conn = conns.find((c) => c.machine_id === machineId && (c.connection_id === cell.connection_id || (c.covered_connections || []).includes(cell.connection_id)))
+    || conns.find((c) => c.machine_id === machineId && c.engine === engine);
+  if (!conn) { selectView("all"); return; }
+  handleLogin(conn, cell.status === "connected", false);
+}
+
 function render() {
   updateTopbarAction();
   if (state.data) {
@@ -706,6 +750,8 @@ function render() {
       refreshingId: state.usageRefreshingId,
       onFilter: (f) => { state.usageFilter = f || "all"; render(); },
       onRefresh: (force, subId) => loadUsage(Boolean(force), false, subId || null),
+      onManageAccount: handleManageUsageAccount,
+      onManageCell: handleManageMachineCell,
     });
     return;
   }
