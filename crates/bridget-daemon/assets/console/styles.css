@@ -284,7 +284,11 @@ details.tech-log summary { cursor: pointer; padding: 7px 11px; font-size: 12px; 
 .quota-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(310px, 1fr)); gap: 14px; }
 .quota-card { display: flex; flex-direction: column; gap: 12px; padding: 15px 16px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); }
 .quota-card-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; }
+.quota-card-meta { min-width: 0; flex: 1; }
 .quota-card-title { font-weight: 600; font-size: 14px; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.quota-other-row { padding: 10px 4px; border-bottom: 1px solid var(--border); display: flex; flex-direction: column; gap: 3px; }
+.quota-other-row:last-child { border-bottom: 0; }
+.quota-other-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 13px; }
 .quota-windows { display: flex; flex-direction: column; gap: 10px; }
 .quota-win { display: flex; flex-direction: column; gap: 5px; }
 .quota-win-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; font-size: 12.5px; }

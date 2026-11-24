@@ -9095,12 +9095,36 @@ fn handle_rate_limit(
                 bridget_transport::protocol::RateLimitSource::CodexAppServer => "codex",
                 _ => "claude",
             };
+            let obs_machine = state
+                .registry
+                .routing_policy()
+                .and_then(|policy| {
+                    policy
+                        .connections
+                        .iter()
+                        .find(|c| c.connection_id == connection_id)
+                        .map(|c| {
+                            if c.machine_id == "local" {
+                                state.host.as_str()
+                            } else {
+                                c.machine_id.as_str()
+                            }
+                        })
+                })
+                .unwrap_or(state.host.as_str());
+            let obs_profile = state.registry.get(&agent_type).ok().and_then(|def| {
+                match engine_name {
+                    "claude" => def.claude_config_dir.as_deref(),
+                    "codex" => def.codex_home.as_deref(),
+                    _ => None,
+                }
+            });
             crate::usage_quotas::record_passive_observation(
                 engine_name,
-                &state.host,
+                obs_machine,
                 &agent_type,
                 Some(&connection_id),
-                None,
+                obs_profile,
                 &fact,
                 source,
                 unix_timestamp(),
@@ -9110,9 +9134,16 @@ fn handle_rate_limit(
                 bridget_transport::protocol::RateLimitSource::CodexAppServer => "codex",
                 _ => "claude",
             };
+            let obs_machine = state
+                .delegation_store
+                .for_child(agent)
+                .ok()
+                .flatten()
+                .and_then(|task| task.remote_placement.map(|p| p.machine_id))
+                .unwrap_or_else(|| state.host.clone());
             crate::usage_quotas::record_passive_observation(
                 engine_name,
-                &state.host,
+                &obs_machine,
                 &agent_type,
                 None,
                 None,
