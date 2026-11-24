@@ -245,7 +245,10 @@ fn extract_connections_from_registry(
     };
     let mut out = Vec::new();
     for conn in &policy.connections {
-        if !matches!(conn.engine.as_str(), "claude" | "codex" | "antigravity") {
+        if !matches!(
+            conn.engine.as_str(),
+            "claude" | "codex" | "antigravity" | "cursor"
+        ) {
             continue;
         }
         let machine_id = if conn.machine_id == "local" {
@@ -549,6 +552,18 @@ fn build_probe_script(targets: &[ConnectionTarget]) -> String {
                     "if {missing}; then printf '%s\\tbinary_missing\\tagy absent\\n' {id}; else\n{dir_check}\nfi\n"
                 ));
             }
+            "cursor" => {
+                script.push_str(&format!(
+                    "if {missing}; then printf '%s\\tbinary_missing\\tcursor-agent absent\\n' {id}; else\n\
+                     out=$({env_prefix} {cmd} status 2>&1 || true)\n\
+                     if printf '%s' \"$out\" | grep -qi 'logged in'; then\n\
+                       line=$(printf '%s' \"$out\" | grep -i 'logged in' | head -n 1 | tr '\\t\\r\\n' '   ')\n\
+                       printf '%s\\tauthenticated\\t%s\\n' {id} \"$line\"\n\
+                     else\n\
+                       printf '%s\\tunauthenticated\\tnon connecte\\n' {id}\n\
+                     fi; fi\n"
+                ));
+            }
             _ => {
                 script.push_str(&format!(
                     "printf '%s\\tunsupported\\tmoteur non gere\\n' {id}\n"
@@ -606,6 +621,7 @@ fn friendly_account_label(t: &ConnectionTarget) -> String {
             "claude" => "Claude",
             "codex" => "Codex",
             "antigravity" => "Antigravity",
+            "cursor" => "Cursor",
             other => other,
         };
         return format!("{eng} ({name})");
@@ -620,6 +636,7 @@ fn friendly_account_label(t: &ConnectionTarget) -> String {
         ("codex", "codex-pro") => "Codex Pro".to_string(),
         ("codex", _) => "Codex".to_string(),
         ("antigravity", _) => "Antigravity".to_string(),
+        ("cursor", _) => "Cursor".to_string(),
         (other, _) => other.to_string(),
     }
 }
@@ -881,6 +898,15 @@ pub(crate) fn build_login_shell_command(target: &ConnectionTarget, logout_first:
             }
             flags.push_str(" --login");
             format!("{env_prefix} {cmd} {flags}")
+        }
+        "cursor" => {
+            if logout_first {
+                format!(
+                    "{env_prefix} {cmd} logout >/dev/null 2>&1 || true; {env_prefix} {cmd} login"
+                )
+            } else {
+                format!("{env_prefix} {cmd} login")
+            }
         }
         _ => format!(
             "printf 'Moteur non pris en charge : %s\\n' {} && exit 1",

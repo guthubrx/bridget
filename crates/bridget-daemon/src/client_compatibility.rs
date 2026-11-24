@@ -16,10 +16,11 @@ const MAX_PROGRAMS: usize = 16;
 
 fn minimum(engine: &str) -> &'static str {
     // Politique de support209 : preuve208 pour Claude ; schéma de référence ADR155 pour Codex ;
-    // CLI ACP qualifié 1.5.0+ pour Google Antigravity.
+    // CLI ACP qualifié 1.5.0+ pour Google Antigravity ; CLI ACP 2026.9.1+ pour Cursor.
     match engine {
         "claude" => "2.1.280",
         "antigravity" => "1.5.0",
+        "cursor" => "2026.9.1",
         _ => "0.162.1",
     }
 }
@@ -43,6 +44,26 @@ fn triplet(s: &str) -> Option<[u32; 3]> {
 }
 fn parse_version(engine: &str, raw: &[u8]) -> Option<String> {
     let text = std::str::from_utf8(raw).ok()?.trim();
+    if engine == "cursor" {
+        // Ex. `2026.10.01-14929f9` → normalisé en triplet `2026.10.1`.
+        let head = text.lines().next()?.trim().split('-').next()?.trim();
+        let parts: Vec<&str> = head.split('.').collect();
+        if parts.len() != 3
+            || parts
+                .iter()
+                .any(|p| p.is_empty() || p.len() > 6 || !p.bytes().all(|b| b.is_ascii_digit()))
+        {
+            return None;
+        }
+        let normalized = format!(
+            "{}.{}.{}",
+            parts[0].parse::<u32>().ok()?,
+            parts[1].parse::<u32>().ok()?,
+            parts[2].parse::<u32>().ok()?
+        );
+        triplet(&normalized)?;
+        return Some(normalized);
+    }
     let value = match engine {
         "claude" => text.strip_suffix(" (Claude Code)")?,
         "codex" => text.strip_prefix("codex-cli ")?,
@@ -77,7 +98,10 @@ fn probe(program: &str, engine: &str, deadline: Instant) -> (String, Option<Stri
         .file_name()
         .and_then(|p| p.to_str())
         .unwrap_or("");
-    if !matches!(base, "claude" | "codex" | "gclaude" | "codex-pro" | "agy") {
+    if !matches!(
+        base,
+        "claude" | "codex" | "gclaude" | "codex-pro" | "agy" | "cursor-agent"
+    ) {
         return ("launcher_unverified".into(), None);
     }
     let mut child = match Command::new(program)
@@ -253,14 +277,17 @@ fn entries(
             .iter()
             .filter(|c| c.enabled && (c.machine_id == host || c.machine_id == "local"))
         {
-            if !matches!(c.engine.as_str(), "claude" | "codex" | "antigravity") {
+            if !matches!(
+                c.engine.as_str(),
+                "claude" | "codex" | "antigravity" | "cursor"
+            ) {
                 continue;
             }
             let d = registry.get(&c.agent_type)?;
             let protocol = match c.engine.as_str() {
                 "claude" => "claude_stream_json",
                 "codex" => "codex_app_server",
-                "antigravity" => "acp",
+                "antigravity" | "cursor" => "acp",
                 _ => continue,
             };
             if d.protocol != protocol {
@@ -281,6 +308,14 @@ fn entries(
                         == Some("agy") =>
                 {
                     "antigravity"
+                }
+                "acp"
+                    if matches!(
+                        Path::new(&d.command).file_name().and_then(|s| s.to_str()),
+                        Some("cursor-agent" | "agent")
+                    ) =>
+                {
+                    "cursor"
                 }
                 _ => continue,
             };
@@ -366,6 +401,15 @@ fn report_with(
             Requirement {
                 minimum: minimum("antigravity").into(),
                 provenance: "antigravity_acp_308".into(),
+            },
+        );
+    }
+    if clients.iter().any(|c| c.engine == "cursor") {
+        report_policy.requirements.insert(
+            "cursor".into(),
+            Requirement {
+                minimum: minimum("cursor").into(),
+                provenance: "cursor_acp_341".into(),
             },
         );
     }
@@ -477,7 +521,7 @@ pub(crate) fn valid_report(value: &Value, host: &str) -> bool {
             .as_deref()
             .is_none_or(|p| atom(p, 4096) && Path::new(p).is_absolute())
         && report.policy.version == 1
-        && (2..=3).contains(&report.policy.requirements.len())
+        && (2..=4).contains(&report.policy.requirements.len())
         && ["claude", "codex"].iter().all(|engine| {
             report.policy.requirements.get(*engine).is_some_and(|r| {
                 triplet(&r.minimum).is_some_and(|v| v >= triplet(minimum(engine)).unwrap())
@@ -485,7 +529,7 @@ pub(crate) fn valid_report(value: &Value, host: &str) -> bool {
             })
         })
         && report.policy.requirements.keys().all(|k| {
-            matches!(k.as_str(), "claude" | "codex" | "antigravity")
+            matches!(k.as_str(), "claude" | "codex" | "antigravity" | "cursor")
                 && report.policy.requirements.get(k).is_some_and(|r| {
                     triplet(&r.minimum).is_some_and(|v| v >= triplet(minimum(k)).unwrap())
                         && atom(&r.provenance, 128)
@@ -504,7 +548,10 @@ pub(crate) fn valid_report(value: &Value, host: &str) -> bool {
         && value.to_string().len() <= 32768
         && report.verdict == expected_verdict
         && report.clients.iter().all(|c| {
-            matches!(c.engine.as_str(), "claude" | "codex" | "antigravity")
+            matches!(
+                c.engine.as_str(),
+                "claude" | "codex" | "antigravity" | "cursor"
+            )
                 && atom(&c.program, 4096)
                 && c.connections.len() <= 64
                 && c.connections.iter().all(|s| atom(s, 256))

@@ -1771,3 +1771,108 @@ fn oracle_capability_refuse_une_valeur_bidi_reelle() {
         "oracle — isolat U+2066 (Trojan Source) DOIT être refusé"
     );
 }
+
+#[test]
+fn routing341_cursor_native_auto_and_third_party_explicit_only() {
+    let mut value = routing168_registry_value();
+    value["agents"]["cursor"] = serde_json::json!({
+        "command": "cursor-agent",
+        "args": ["--model", "auto", "acp"],
+        "protocol": "acp"
+    });
+    value["routing_policy"]["connections"]
+        .as_array_mut()
+        .unwrap()
+        .push(serde_json::json!({
+            "connection_id": "cursor-cartae",
+            "machine_id": "cartae",
+            "engine": "cursor",
+            "agent_type": "cursor",
+            "enabled": true
+        }));
+    value["routing_policy"]["model_catalog"]["cursor-cartae"] = serde_json::json!([
+        {"model": "auto", "supported_efforts": [], "default_effort": null, "provenance": "declared"},
+        {"model": "composer-1", "supported_efforts": [], "default_effort": null, "provenance": "declared"},
+        {"model": "claude-4-sonnet", "supported_efforts": ["high"], "default_effort": "high", "provenance": "declared"},
+        {"model": "gpt-5-high", "supported_efforts": ["high"], "default_effort": "high", "provenance": "declared"}
+    ]);
+    let reg = AgentRegistry::from_json(&value.to_string(), "/tmp/cursor341.json").unwrap();
+
+    // 1. Sans filtre sur cartae : modèles natifs Cursor (`auto`, `composer-1`), jamais les modèles tiers Cursor.
+    let auto = reg
+        .select_routing_candidates(
+            "local",
+            &RoutingCandidateFilters {
+                machine_id: Some("cartae".into()),
+                ..RoutingCandidateFilters::default()
+            },
+        )
+        .unwrap();
+    assert!(auto.iter().any(|s| s.candidate.connection_id == "cursor-cartae" && s.candidate.model == "auto"));
+    assert!(auto.iter().any(|s| s.candidate.connection_id == "cursor-cartae" && s.candidate.model == "composer-1"));
+    assert!(
+        !auto.iter().any(|s| {
+            s.candidate.engine == "cursor"
+                && (s.candidate.model == "claude-4-sonnet" || s.candidate.model == "gpt-5-high")
+        }),
+        "un modèle tiers Cursor ne doit jamais être candidat automatique"
+    );
+
+    // 2. engine="cursor" sans modèle : uniquement natifs Cursor, `auto` en premier.
+    let cursor_only = reg
+        .select_routing_candidates(
+            "local",
+            &RoutingCandidateFilters {
+                engine: Some("cursor".into()),
+                ..RoutingCandidateFilters::default()
+            },
+        )
+        .unwrap();
+    let models: Vec<&str> = cursor_only
+        .iter()
+        .map(|s| s.candidate.model.as_str())
+        .collect();
+    assert_eq!(models, vec!["auto", "composer-1"]);
+
+    // 3. Modèle tiers demandé SANS cibler Cursor : refusé (pas de bascule silencieuse sur Cursor).
+    let third_party_no_engine = reg
+        .select_routing_candidates(
+            "local",
+            &RoutingCandidateFilters {
+                model: Some("claude-4-sonnet".into()),
+                ..RoutingCandidateFilters::default()
+            },
+        )
+        .unwrap();
+    assert!(third_party_no_engine.is_empty());
+
+    // 4. engine="cursor" + model="claude-4-sonnet" + effort="high" : autorisé !
+    let explicit = reg
+        .select_routing_candidates(
+            "local",
+            &RoutingCandidateFilters {
+                engine: Some("cursor".into()),
+                model: Some("claude-4-sonnet".into()),
+                effort: Some("high".into()),
+                ..RoutingCandidateFilters::default()
+            },
+        )
+        .unwrap();
+    assert_eq!(explicit.len(), 1);
+    assert_eq!(explicit[0].candidate.connection_id, "cursor-cartae");
+    assert_eq!(explicit[0].candidate.model, "claude-4-sonnet");
+
+    // 5. connection_id="cursor-cartae" + model="gpt-5-high" : autorisé !
+    let explicit_conn = reg
+        .select_routing_candidates(
+            "local",
+            &RoutingCandidateFilters {
+                connection_id: Some("cursor-cartae".into()),
+                model: Some("gpt-5-high".into()),
+                ..RoutingCandidateFilters::default()
+            },
+        )
+        .unwrap();
+    assert_eq!(explicit_conn.len(), 1);
+    assert_eq!(explicit_conn[0].candidate.model, "gpt-5-high");
+}

@@ -182,13 +182,13 @@ async function handleLogin(conn, logoutFirst, enableOnSuccess) {
           }
           const urlRow = document.getElementById("loginUrlRow");
           if (urlRow) urlRow.classList.remove("hidden");
-          const needsCode = res.engine !== "codex";
+          const needsCode = res.engine !== "codex" && res.engine !== "cursor";
           const codeBox = document.getElementById("loginCodeBox");
           if (codeBox) codeBox.classList.toggle("hidden", !needsCode);
           setBanner(
             "",
             needsCode ? "Validez dans la fenêtre ouverte puis cliquez « Copier »" : "Validez dans la fenêtre ouverte",
-            needsCode ? "Dès que vous copiez le code, Bridget l'envoie automatiquement (ou collez-le ci-dessous)." : "La redirection locale est automatique pour Codex."
+            needsCode ? "Dès que vous copiez le code, Bridget l'envoie automatiquement (ou collez-le ci-dessous)." : "La redirection navigateur est automatique pour cette connexion."
           );
         }
         if (res.running && res.code_auto_sent) {

@@ -4400,10 +4400,11 @@ fn spawn_managed_session_transport(
     }
     match definition.protocol.as_str() {
         "acp" => {
-            let is_antigravity = std::path::Path::new(&definition.command)
+            let basename = std::path::Path::new(&definition.command)
                 .file_name()
-                .and_then(|s| s.to_str())
-                == Some("agy");
+                .and_then(|s| s.to_str());
+            let is_antigravity = basename == Some("agy");
+            let is_cursor = matches!(basename, Some("cursor-agent" | "agent"));
             let mut acp_args = Vec::with_capacity(native_args.len() + 4);
             let mut session_config = bridget_transport::acp::AcpSessionConfig::default();
             let mut acp_mcp_servers = mcp_servers.to_vec();
@@ -4460,6 +4461,50 @@ fn spawn_managed_session_transport(
                         acp_args.push("antigravity-bridget".to_string());
                     }
                 }
+            } else if is_cursor {
+                // `cursor-agent acp` exige `--model` en option globale AVANT `acp`
+                // et annonce `cursor_login` + modes ACP `agent` / `plan`.
+                session_config.auth_method_id = Some("cursor_login".to_string());
+                session_config.session_mode = Some(
+                    if acp_permissions == "allow" {
+                        "agent"
+                    } else {
+                        "plan"
+                    }
+                    .to_string(),
+                );
+                let mut model_arg: Option<String> = None;
+                let mut effort_arg: Option<String> = None;
+                let mut passthrough = Vec::new();
+                let mut idx = 0;
+                while idx < native_args.len() {
+                    if native_args[idx] == "--model" && idx + 1 < native_args.len() {
+                        model_arg = Some(native_args[idx + 1].clone());
+                        idx += 2;
+                    } else if native_args[idx] == "--effort" && idx + 1 < native_args.len() {
+                        effort_arg = Some(native_args[idx + 1].clone());
+                        idx += 2;
+                    } else if native_args[idx] == "acp" {
+                        idx += 1;
+                    } else {
+                        passthrough.push(native_args[idx].clone());
+                        idx += 1;
+                    }
+                }
+                if let Some(model) = model_arg {
+                    let cli_model = match effort_arg.as_deref() {
+                        Some(effort) if !model.contains('[') && !model.eq_ignore_ascii_case("auto") => {
+                            format!("{model}[effort={effort}]")
+                        }
+                        _ => model.clone(),
+                    };
+                    acp_args.push("--model".to_string());
+                    acp_args.push(cli_model);
+                    session_config.model = Some(model);
+                }
+                session_config.effort = effort_arg;
+                acp_args.extend(passthrough);
+                acp_args.push("acp".to_string());
             } else {
                 acp_args.extend(native_args.iter().cloned());
             }

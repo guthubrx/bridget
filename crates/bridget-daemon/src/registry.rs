@@ -612,6 +612,18 @@ fn is_antigravity_claude_model(candidate: &RoutingCandidate) -> bool {
         && candidate.model.to_ascii_lowercase().starts_with("claude-")
 }
 
+/// Un modèle natif Cursor (`auto`, `composer*`, `cursor-*`) reste admissible en
+/// sélection automatique. Les modèles tiers hébergés dans Cursor (Claude, GPT,
+/// Gemini, Grok…) exigent une demande explicite ciblant Cursor et ce modèle.
+fn is_cursor_native_model(model: &str) -> bool {
+    let lower = model.to_ascii_lowercase();
+    lower == "auto" || lower.starts_with("composer") || lower.starts_with("cursor-")
+}
+
+fn is_cursor_third_party_model(candidate: &RoutingCandidate) -> bool {
+    candidate.engine == "cursor" && !is_cursor_native_model(&candidate.model)
+}
+
 fn effective_routing_filters(
     requested: &RoutingCandidateFilters,
     policy: &RoutingMachinePolicy,
@@ -1068,6 +1080,14 @@ impl AgentRegistry {
                     .any(|conn| conn.connection_id == cid && conn.engine == "antigravity")
             });
         let explicit_antigravity_claude = explicit_antigravity_target && effective.model.is_some();
+        let explicit_cursor_target = effective.engine.as_deref() == Some("cursor")
+            || effective.connection_id.as_deref().is_some_and(|cid| {
+                policy
+                    .connections
+                    .iter()
+                    .any(|conn| conn.connection_id == cid && conn.engine == "cursor")
+            });
+        let explicit_cursor_third_party = explicit_cursor_target && effective.model.is_some();
         let candidates = self
             .routing_candidates()
             .expect("routing_policy was checked above")
@@ -1075,6 +1095,7 @@ impl AgentRegistry {
             .filter(|candidate| candidate.enabled)
             .filter(|candidate| {
                 (!is_antigravity_claude_model(candidate) || explicit_antigravity_claude)
+                    && (!is_cursor_third_party_model(candidate) || explicit_cursor_third_party)
                     && effective
                         .engine
                         .as_deref()
@@ -1680,6 +1701,7 @@ impl AgentRegistry {
             "claude" | "gclaude" | "claude-son" => Some("claude"),
             "gemini" => Some("gemini"),
             "agy" | "antigravity" => Some("antigravity"),
+            "cursor" | "cursor-agent" => Some("cursor"),
             _ => None,
         }
     }
@@ -2379,7 +2401,10 @@ fn validate_admission_config(
 fn valid_routing_engine(engine: &str, protocol: &str) -> bool {
     matches!(
         (engine, protocol),
-        ("codex", "codex_app_server") | ("claude", "claude_stream_json") | ("antigravity", "acp")
+        ("codex", "codex_app_server")
+            | ("claude", "claude_stream_json")
+            | ("antigravity", "acp")
+            | ("cursor", "acp")
     )
 }
 
@@ -3021,10 +3046,19 @@ fn native_codex_definition() -> AgentDefinition {
 }
 
 fn native_cursor_definition() -> AgentDefinition {
-    // Le CLI Cursor choisit le modèle en interne : on affiche l'étiquette
-    // honnête `auto`, jamais un nom inventé. Sans `--model`, who reste vide.
+    let command = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .filter(|home| home.is_absolute())
+        .map(|home| {
+            home.join(".local/bin/cursor-agent")
+                .to_string_lossy()
+                .into_owned()
+        })
+        .unwrap_or_else(|| "cursor-agent".to_string());
+    // Le CLI Cursor choisit le modèle natif `auto` par défaut ; les modèles
+    // tiers sont sélectionnables explicitement via `--model` + ACP.
     AgentDefinition {
-        command: "cursor-agent".to_string(),
+        command,
         args: vec!["--model".to_string(), "auto".to_string(), "acp".to_string()],
         protocol: "acp".to_string(),
         forbidden_env: vec![
@@ -3032,7 +3066,19 @@ fn native_cursor_definition() -> AgentDefinition {
             "OPENAI_API_KEY".to_string(),
             "ANTHROPIC_API_KEY".to_string(),
         ],
-        pass_env: Vec::new(),
+        pass_env: [
+            "XDG_CONFIG_HOME",
+            "XDG_CACHE_HOME",
+            "SSH_AUTH_SOCK",
+            "HTTPS_PROXY",
+            "HTTP_PROXY",
+            "NO_PROXY",
+            "SSL_CERT_FILE",
+            "SSL_CERT_DIR",
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .collect(),
         claude_config_dir: None,
         codex_home: None,
         antigravity_home: None,

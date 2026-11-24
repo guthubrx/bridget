@@ -390,8 +390,10 @@ fn collect_discovered_models(
         }
     }
 
-    // 2. Complément direct local pour Antigravity (`agy models`) si non encore présent dans le cache.
+    // 2. Complément direct local pour Antigravity (`agy models`) et Cursor (`cursor-agent --list-models`)
+    // si non encore présents dans le cache.
     let mut probed_agy_cmds: BTreeMap<String, Vec<DiscoveredModel>> = BTreeMap::new();
+    let mut probed_cursor_cmds: BTreeMap<String, Vec<DiscoveredModel>> = BTreeMap::new();
     for reg_path in local_registries {
         let Ok(raw) = crate::registry::read_private_registry(reg_path) else {
             continue;
@@ -403,28 +405,63 @@ fn collect_discovered_models(
             continue;
         };
         for conn in &policy.connections {
-            if !conn.enabled
-                || conn.engine != "antigravity"
-                || by_conn.contains_key(&conn.connection_id)
-            {
+            if !conn.enabled || by_conn.contains_key(&conn.connection_id) {
                 continue;
             }
             let Ok(def) = registry.get(&conn.agent_type) else {
                 continue;
             };
-            if def.antigravity_home.is_some() {
-                continue;
-            }
-            let models = probed_agy_cmds
-                .entry(def.command.clone())
-                .or_insert_with(|| probe_local_agy_models(&def.command));
-            if !models.is_empty() {
-                by_conn.insert(conn.connection_id.clone(), models.clone());
+            if conn.engine == "antigravity" {
+                if def.antigravity_home.is_some() {
+                    continue;
+                }
+                let models = probed_agy_cmds
+                    .entry(def.command.clone())
+                    .or_insert_with(|| probe_local_agy_models(&def.command));
+                if !models.is_empty() {
+                    by_conn.insert(conn.connection_id.clone(), models.clone());
+                }
+            } else if conn.engine == "cursor" {
+                let models = probed_cursor_cmds
+                    .entry(def.command.clone())
+                    .or_insert_with(|| probe_local_cursor_models(&def.command));
+                if !models.is_empty() {
+                    by_conn.insert(conn.connection_id.clone(), models.clone());
+                }
             }
         }
     }
 
     by_conn
+}
+
+fn probe_local_cursor_models(command: &str) -> Vec<DiscoveredModel> {
+    let mut cmd = Command::new(command);
+    cmd.arg("--list-models")
+        .env_remove("CURSOR_API_KEY")
+        .env_remove("OPENAI_API_KEY")
+        .env_remove("ANTHROPIC_API_KEY")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+    let Ok(child) = cmd.spawn() else {
+        return Vec::new();
+    };
+    let Ok(out) = wait_bounded(child, MODEL_PROBE_TIMEOUT_SECS) else {
+        return Vec::new();
+    };
+    if !out.status.success() {
+        return Vec::new();
+    }
+    let text = String::from_utf8_lossy(&out.stdout);
+    crate::provider_catalogue::parse_cursor_models(&text)
+        .into_iter()
+        .map(|m| DiscoveredModel {
+            model: m.model,
+            supported_efforts: m.supported_efforts,
+            default_effort: m.default_effort,
+        })
+        .collect()
 }
 
 fn probe_local_agy_models(command: &str) -> Vec<DiscoveredModel> {
@@ -662,7 +699,11 @@ fn run_local_cli_updates(registries: &[PathBuf], dry_run: bool) -> Vec<CliUpdate
             continue;
         };
         for conn in &policy.connections {
-            if !conn.enabled || !matches!(conn.engine.as_str(), "claude" | "codex" | "antigravity")
+            if !conn.enabled
+                || !matches!(
+                    conn.engine.as_str(),
+                    "claude" | "codex" | "antigravity" | "cursor"
+                )
             {
                 continue;
             }
@@ -702,6 +743,11 @@ fn run_local_cli_updates(registries: &[PathBuf], dry_run: bool) -> Vec<CliUpdate
                 }
             }
             "antigravity" => ("agy update", command.clone(), vec!["update".into()]),
+            "cursor" => (
+                "cursor-agent update",
+                command.clone(),
+                vec!["update".into()],
+            ),
             _ => continue,
         };
         if dry_run {

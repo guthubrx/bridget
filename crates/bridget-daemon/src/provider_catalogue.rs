@@ -370,7 +370,10 @@ impl CatalogueService {
                 let is_claude =
                     connection.engine == "claude" && def.protocol == "claude_stream_json";
                 let is_antigravity = connection.engine == "antigravity" && def.protocol == "acp";
-                if !connection.enabled || (!is_codex && !is_claude && !is_antigravity) {
+                let is_cursor = connection.engine == "cursor" && def.protocol == "acp";
+                if !connection.enabled
+                    || (!is_codex && !is_claude && !is_antigravity && !is_cursor)
+                {
                     let inactive_stamp = format!(
                         "{}:{}:{}",
                         resolved.digest, connection.enabled, connection.engine
@@ -431,6 +434,8 @@ impl CatalogueService {
                     probe_claude(def, &source, &salt, self.stopping.as_ref())
                 } else if is_antigravity {
                     probe_antigravity(def, &source, &salt, self.stopping.as_ref())
+                } else if is_cursor {
+                    probe_cursor(def, &source, &salt, self.stopping.as_ref())
                 } else if recovered {
                     probe(
                         &directory,
@@ -1240,6 +1245,162 @@ fn probe_antigravity(
     Ok((models, Some(format!("{:x}", hasher.finalize()))))
 }
 
+fn strip_ansi_sequences(raw: &str) -> String {
+    let mut out = String::with_capacity(raw.len());
+    let mut chars = raw.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '\u{1b}' && chars.peek() == Some(&'[') {
+            chars.next();
+            for next in chars.by_ref() {
+                if next.is_ascii_alphabetic() {
+                    break;
+                }
+            }
+            continue;
+        }
+        out.push(c);
+    }
+    out
+}
+
+/// Analyse la sortie de `cursor-agent --list-models`.
+/// Accepte le modèle natif `auto`, `composer*` ainsi que les modèles tiers
+/// (Claude, OpenAI, Google…) annoncés par Cursor CLI.
+pub(crate) fn parse_cursor_models(raw: &str) -> Vec<CatalogueModel> {
+    let cleaned = strip_ansi_sequences(raw);
+    let mut seen = BTreeSet::new();
+    let mut models = Vec::new();
+    for raw_line in cleaned.lines() {
+        let line = raw_line.rsplit('\r').next().unwrap_or(raw_line).trim();
+        if line.is_empty()
+            || line.starts_with("Available")
+            || line.starts_with("Loading")
+            || line.starts_with("Error")
+            || line.starts_with("Tip:")
+        {
+            continue;
+        }
+        let line = line.trim_start_matches(['*', '•', '-', ' ']).trim();
+        let Some(token) = line.split_whitespace().next() else {
+            continue;
+        };
+        let token = token.trim_end_matches([',', ':']);
+        let looks_like_model = (token == "auto"
+            || (token.contains('-')
+                && token.len() >= 4
+                && token
+                    .bytes()
+                    .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b".-_".contains(&b))))
+            && catalogue_token(token);
+        if looks_like_model && seen.insert(token.to_string()) {
+            models.push(CatalogueModel {
+                service_tiers_unavailable: false,
+                model: token.to_string(),
+                supported_efforts: Vec::new(),
+                default_effort: None,
+                service_tiers: Vec::new(),
+                default_service_tier: None,
+            });
+            if models.len() >= MAX_CATALOGUE_MODELS {
+                break;
+            }
+        }
+    }
+    // Modèles natifs Cursor en tête (`auto`, `composer*`, `cursor-*`), puis ordre alphabétique.
+    models.sort_by(|a, b| {
+        let rank = |m: &str| {
+            if m == "auto" {
+                0u8
+            } else if m.starts_with("composer") || m.starts_with("cursor-") {
+                1u8
+            } else {
+                2u8
+            }
+        };
+        rank(&a.model)
+            .cmp(&rank(&b.model))
+            .then_with(|| a.model.cmp(&b.model))
+    });
+    models
+}
+
+/// Vérifie la session et les modèles annoncés par Cursor CLI (`cursor-agent --list-models`,
+/// métadonnées uniquement, aucun tour de modèle, variables interdites nettoyées).
+fn probe_cursor(
+    def: &crate::registry::AgentDefinition,
+    source: &crate::lifecycle::SourceEnvironment,
+    salt: &[u8],
+    stopping: &AtomicBool,
+) -> Result<(Vec<CatalogueModel>, Option<String>), (CatalogueCause, Option<RunningManagedChild>)> {
+    use sha2::{Digest, Sha256};
+    let plain = |cause| (cause, None);
+    let env = crate::lifecycle::build_environment(def, source)
+        .map_err(|_| plain(CatalogueCause::SourceUnavailable))?;
+    let mut cmd = std::process::Command::new(&def.command);
+    cmd.arg("--list-models")
+        .env_clear()
+        .envs(&env)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    let mut child = cmd
+        .spawn()
+        .map_err(|_| plain(CatalogueCause::ProgramUnavailable))?;
+    let mut stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| plain(CatalogueCause::SourceUnavailable))?;
+    let reader = std::thread::spawn(move || {
+        let mut buf = Vec::new();
+        let mut chunk = [0u8; 4096];
+        while buf.len() < 64 * 1024 {
+            match stdout.read(&mut chunk) {
+                Ok(0) => break,
+                Ok(n) => {
+                    let keep = n.min(64 * 1024 - buf.len());
+                    buf.extend_from_slice(&chunk[..keep]);
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+                Err(_) => break,
+            }
+        }
+        buf
+    });
+    let deadline = Instant::now() + PROBE_BUDGET;
+    let status = loop {
+        if stopping.load(Ordering::Acquire) || Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            let _ = reader.join();
+            return Err(plain(CatalogueCause::TimedOut));
+        }
+        match child.try_wait() {
+            Ok(Some(st)) => break st,
+            Ok(None) => std::thread::sleep(Duration::from_millis(25)),
+            Err(_) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                let _ = reader.join();
+                return Err(plain(CatalogueCause::SourceUnavailable));
+            }
+        }
+    };
+    let bytes = reader.join().unwrap_or_default();
+    let text = String::from_utf8_lossy(&bytes);
+    let models = parse_cursor_models(&text);
+    if !status.success() || models.is_empty() {
+        return Ok((Vec::new(), None));
+    }
+    let mut hasher = Sha256::new();
+    hasher.update(salt);
+    hasher.update(b":cursor:");
+    hasher.update(def.command.as_bytes());
+    let home = PathBuf::from(source.get("HOME").cloned().unwrap_or_default()).join(".cursor");
+    hasher.update(file_stamp(&home.join("cli-config.json")).as_bytes());
+    hasher.update(file_stamp(&home.join("auth.json")).as_bytes());
+    Ok((models, Some(format!("{:x}", hasher.finalize()))))
+}
+
 fn probe(
     directory: &Path,
     markers: &ManagedMarkerStore,
@@ -1687,5 +1848,21 @@ mod program_schema221_tests {
         ));
         assert!(markers.load("probe").is_err());
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn spec341_parse_cursor_models_orders_native_first_and_strips_ansi() {
+        let raw = "\x1b[1mAvailable models\x1b[0m\n\
+                   claude-4-sonnet - Claude 4 Sonnet\n\
+                   gpt-5-high - GPT-5 High\n\
+                   * auto - Auto (default)\n\
+                   composer-1 - Composer 1\n\
+                   Tip: use --model\n";
+        let models = parse_cursor_models(raw);
+        let names: Vec<&str> = models.iter().map(|m| m.model.as_str()).collect();
+        assert_eq!(
+            names,
+            vec!["auto", "composer-1", "claude-4-sonnet", "gpt-5-high"]
+        );
     }
 }

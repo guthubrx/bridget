@@ -261,3 +261,18 @@ fn spec308_client_compatibility_accepts_agy_version() {
     assert!(triplet("1.5.13") >= triplet(minimum("antigravity")));
     assert!(triplet("1.4.9") < triplet(minimum("antigravity")));
 }
+
+#[test]
+fn spec341_client_compatibility_accepts_cursor_version() {
+    assert_eq!(
+        parse_version("cursor", b"2026.10.01-14929f9\n").as_deref(),
+        Some("2026.10.1")
+    );
+    assert_eq!(
+        parse_version("cursor", b"2026.11.22-e9042b2\n").as_deref(),
+        Some("2026.11.22")
+    );
+    assert_eq!(parse_version("cursor", b"bad"), None);
+    assert!(triplet("2026.10.1") >= triplet(minimum("cursor")));
+    assert!(triplet("2026.8.31") < triplet(minimum("cursor")));
+}
