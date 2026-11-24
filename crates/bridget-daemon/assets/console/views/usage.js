@@ -113,7 +113,8 @@ export function renderUsageView(ctx) {
   const activeHtml = active.length === 0
     ? ""
     : `<div class="quota-grid">${active.map((s) => {
-        const plan = s.plan_type ? `<span class="badge guarded" style="text-transform:uppercase">${esc(s.plan_type)}</span>` : "";
+        const showPlan = s.plan_type && !String(s.account_label || "").toLowerCase().includes(String(s.plan_type).toLowerCase());
+        const plan = showPlan ? `<span class="badge guarded" style="text-transform:uppercase">${esc(s.plan_type)}</span>` : "";
         const age = formatAge(s.observed_at, data.generated_at);
         const machinesTxt = (s.machines && s.machines.length) ? s.machines.join(" · ") : s.machine_id;
         const stateCls = s.source_state === "live_probe" || s.source_state === "observed" ? "ok" : "warn";
@@ -128,10 +129,19 @@ export function renderUsageView(ctx) {
               <div class="quota-track"><div class="quota-fill muted" style="width:0%"></div></div>
             </div>`;
           }
+          const rst = formatReset(w.resets_at, data.generated_at);
+          if (typeof w.used_percent !== "number" && w.status !== "rejected") {
+            return `<div class="quota-win">
+              <div class="quota-win-head">
+                <span class="quota-win-label">Fenêtre ${esc(w.label)}</span>
+                <span class="quota-win-val ok"><strong>Disponible</strong> <span class="row-sub">(% non publié)</span></span>
+              </div>
+              ${rst ? `<div class="quota-win-foot">${esc(rst)}</div>` : ""}
+            </div>`;
+          }
           const used = typeof w.used_percent === "number" ? w.used_percent : (w.status === "rejected" ? 100 : 0);
           const rem = typeof w.remaining_percent === "number" ? w.remaining_percent : Math.max(0, 100 - used);
           const tone = w.status === "rejected" || used >= 90 ? "err" : (used >= 70 ? "warn" : "ok");
-          const rst = formatReset(w.resets_at, data.generated_at);
           return `<div class="quota-win">
             <div class="quota-win-head">
               <span class="quota-win-label">Fenêtre ${esc(w.label)}</span>

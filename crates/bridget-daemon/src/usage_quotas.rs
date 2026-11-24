@@ -631,6 +631,9 @@ fn materialize_windows(
     let mut out = Vec::new();
     let mut any_live = false;
     for w in windows.values() {
+        if w.window == "unknown" && w.status != "rejected" && w.used_percent.is_none() {
+            continue;
+        }
         let expired = w.resets_at.is_some_and(|at| at <= now);
         if expired {
             out.push(QuotaWindow {
@@ -1349,6 +1352,17 @@ pub(crate) fn render_terminal(report: &UsageReport) -> String {
                     "    {:>4}  [░░░░░░░░░░░░] épuisé · {rst}\n",
                     w.label
                 ));
+            } else {
+                let rst = format_reset_delta_fr(w.resets_at, report.generated_at);
+                let rst_part = if rst.is_empty() {
+                    String::new()
+                } else {
+                    format!(" · {rst}")
+                };
+                out.push_str(&format!(
+                    "    {:>4}  disponible (% non publié par ce flux){rst_part}\n",
+                    w.label
+                ));
             }
         }
     }
@@ -1388,6 +1402,11 @@ pub(crate) fn render_html(report: &UsageReport) -> String {
         let plan_badge = sub
             .plan_type
             .as_deref()
+            .filter(|p| {
+                !sub.account_label
+                    .to_ascii_lowercase()
+                    .contains(&p.to_ascii_lowercase())
+            })
             .map(|p| format!(r#"<span class="pill plan">{}</span>"#, html_esc(p)))
             .unwrap_or_default();
         let short_status = match sub.source_state.as_str() {
@@ -1411,6 +1430,20 @@ pub(crate) fn render_html(report: &UsageReport) -> String {
                 ));
                 continue;
             }
+            let rst = format_reset_delta_fr(w.resets_at, report.generated_at);
+            let rst_html = if rst.is_empty() {
+                String::new()
+            } else {
+                format!(r#"<span class="win-rst">{}</span>"#, html_esc(&rst))
+            };
+            if w.used_percent.is_none() && w.status != "rejected" {
+                body.push_str(&format!(
+                    r#"<div class="win"><div class="win-head"><span class="win-label">Fenêtre {}</span><span class="win-val ok"><strong>Disponible</strong> <span class="muted">(% non publié)</span></span></div><div class="win-foot">{}</div></div>"#,
+                    html_esc(&w.label),
+                    rst_html
+                ));
+                continue;
+            }
             let used = w
                 .used_percent
                 .unwrap_or(if w.status == "rejected" { 100 } else { 0 });
@@ -1421,12 +1454,6 @@ pub(crate) fn render_html(report: &UsageReport) -> String {
                 "warn"
             } else {
                 "ok"
-            };
-            let rst = format_reset_delta_fr(w.resets_at, report.generated_at);
-            let rst_html = if rst.is_empty() {
-                String::new()
-            } else {
-                format!(r#"<span class="win-rst">{}</span>"#, html_esc(&rst))
             };
             body.push_str(&format!(
                 r#"<div class="win"><div class="win-head"><span class="win-label">Fenêtre {}</span><span class="win-val {}"><strong>{}%</strong> restant <span class="muted">({}% utilisé)</span></span></div><div class="track"><div class="fill {}" style="width:{}%"></div></div><div class="win-foot">{}</div></div>"#,
@@ -1798,5 +1825,74 @@ mod tests {
         assert_eq!(mat.len(), 1);
         assert_eq!(mat[0].status, "reset_elapsed");
         assert_eq!(mat[0].remaining_percent, None);
+    }
+
+    #[test]
+    fn spec344_allowed_without_percent_never_fakes_100_percent_and_drops_unknown() {
+        let now = 1_795_500_000;
+        let mut map = BTreeMap::new();
+        map.insert(
+            "seven_day".to_string(),
+            CachedWindow {
+                window: "seven_day".to_string(),
+                used_percent: None,
+                resets_at: Some(now + 3600 * 24),
+                status: "allowed".to_string(),
+                observed_at: now - 120,
+            },
+        );
+        map.insert(
+            "unknown".to_string(),
+            CachedWindow {
+                window: "unknown".to_string(),
+                used_percent: None,
+                resets_at: None,
+                status: "allowed".to_string(),
+                observed_at: now - 120,
+            },
+        );
+        let (mat, any_live) = materialize_windows(&map, now);
+        assert!(any_live);
+        assert_eq!(mat.len(), 1);
+        assert_eq!(mat[0].label, "7j");
+        assert_eq!(mat[0].remaining_percent, None);
+
+        let report = UsageReport {
+            generated_at: now,
+            cache_ttl_secs: USAGE_CACHE_TTL_SECS,
+            provider_filter: None,
+            subscriptions: vec![SubscriptionQuota {
+                id: "claude:cartae:default".into(),
+                engine: "claude".into(),
+                provider_label: provider_display_name("claude").into(),
+                account_label: "Cartae Claude natif".into(),
+                machine_id: "cartae".into(),
+                machines: vec!["cartae".into()],
+                account_id: None,
+                connection_ids: vec!["claude-cartae".into()],
+                plan_type: None,
+                source_state: "observed".into(),
+                source_label: "Observé passivement".into(),
+                windows: mat,
+                credits_balance: None,
+                credits_unlimited: false,
+                observed_at: Some(now - 120),
+                detail: None,
+            }],
+            summary: UsageSummary {
+                total_subscriptions: 1,
+                with_live_quota: 1,
+                not_exposed: 0,
+                exhausted: 0,
+            },
+        };
+        let html = render_html(&report);
+        assert!(html.contains("Disponible"));
+        assert!(html.contains("% non publié"));
+        assert!(!html.contains("100%</strong>"));
+        assert!(!html.contains("0% utilisé"));
+        assert!(!html.contains("unknown"));
+        let term = render_terminal(&report);
+        assert!(term.contains("disponible (% non publié par ce flux)"));
     }
 }
