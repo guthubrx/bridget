@@ -607,6 +607,11 @@ fn requested_or_fixed(
         .ok_or("routing_fixed_axis_missing".into())
 }
 
+fn is_antigravity_claude_model(candidate: &RoutingCandidate) -> bool {
+    candidate.engine == "antigravity"
+        && candidate.model.to_ascii_lowercase().starts_with("claude-")
+}
+
 fn effective_routing_filters(
     requested: &RoutingCandidateFilters,
     policy: &RoutingMachinePolicy,
@@ -1055,16 +1060,25 @@ impl AgentRegistry {
             return Err("routing_machine_policy_disabled".into());
         }
         let effective = effective_routing_filters(requested, machine_policy)?;
-        let mut candidates = self
+        let explicit_antigravity_target = effective.engine.as_deref() == Some("antigravity")
+            || effective.connection_id.as_deref().is_some_and(|cid| {
+                policy
+                    .connections
+                    .iter()
+                    .any(|conn| conn.connection_id == cid && conn.engine == "antigravity")
+            });
+        let explicit_antigravity_claude = explicit_antigravity_target && effective.model.is_some();
+        let candidates = self
             .routing_candidates()
             .expect("routing_policy was checked above")
             .into_iter()
             .filter(|candidate| candidate.enabled)
             .filter(|candidate| {
-                effective
-                    .engine
-                    .as_deref()
-                    .is_none_or(|value| candidate.engine == value)
+                (!is_antigravity_claude_model(candidate) || explicit_antigravity_claude)
+                    && effective
+                        .engine
+                        .as_deref()
+                        .is_none_or(|value| candidate.engine == value)
                     && effective
                         .model
                         .as_deref()
@@ -1092,20 +1106,6 @@ impl AgentRegistry {
                 imposed_effort: effective.effort.clone(),
             })
             .collect::<Vec<_>>();
-        candidates.sort_by(|left, right| {
-            (
-                &left.candidate.machine_id,
-                &left.candidate.engine,
-                &left.candidate.connection_id,
-                &left.candidate.model,
-            )
-                .cmp(&(
-                    &right.candidate.machine_id,
-                    &right.candidate.engine,
-                    &right.candidate.connection_id,
-                    &right.candidate.model,
-                ))
-        });
         Ok(candidates)
     }
 

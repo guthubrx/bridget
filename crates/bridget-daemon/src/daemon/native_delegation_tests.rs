@@ -3372,6 +3372,99 @@ fn spec168_modele_unique_et_deux_niveaux_off_ne_consultent_pas_et_rejouent_avant
 }
 
 #[test]
+fn spec338_score_tiebreak_follows_declared_catalog_order_for_fallback() {
+    let (state, config, _rx, _reader, request, _root) = routing168_fixture(1);
+    let mut plan = routing168_plan(&state, &request);
+    plan.policy.connections = vec![
+        crate::registry::RoutingConnection {
+            connection_id: "codex-cartae".into(),
+            machine_id: "cartae".into(),
+            engine: "codex".into(),
+            agent_type: "codex".into(),
+            enabled: true,
+            display_name: None,
+        },
+        crate::registry::RoutingConnection {
+            connection_id: "antigravity-cartae".into(),
+            machine_id: "cartae".into(),
+            engine: "antigravity".into(),
+            agent_type: "antigravity".into(),
+            enabled: true,
+            display_name: None,
+        },
+    ];
+    plan.policy.model_catalog.insert(
+        "codex-cartae".into(),
+        vec![crate::registry::RoutingModel {
+            model: "gpt-6.1-sol".into(),
+            supported_efforts: vec![],
+            service_tiers: vec![],
+            default_effort: None,
+            provenance: crate::registry::RoutingModelProvenance::Declared,
+            observed_at: None,
+        }],
+    );
+    plan.policy.model_catalog.insert(
+        "antigravity-cartae".into(),
+        vec![
+            crate::registry::RoutingModel {
+                model: "gemini-4-neon-high".into(),
+                supported_efforts: vec![],
+                service_tiers: vec![],
+                default_effort: None,
+                provenance: crate::registry::RoutingModelProvenance::Declared,
+                observed_at: None,
+            },
+            crate::registry::RoutingModel {
+                model: "gemini-3.8-flash-high".into(),
+                supported_efforts: vec![],
+                service_tiers: vec![],
+                default_effort: None,
+                provenance: crate::registry::RoutingModelProvenance::Declared,
+                observed_at: None,
+            },
+        ],
+    );
+    let make_candidate = |conn: &str, engine: &str, model: &str| crate::registry::RoutingCandidate {
+        machine_id: "cartae".into(),
+        engine: engine.into(),
+        connection_id: conn.into(),
+        agent_type: engine.into(),
+        enabled: true,
+        model: model.into(),
+        supported_efforts: vec![],
+        service_tiers: vec![],
+        default_effort: None,
+        provenance: crate::registry::RoutingModelProvenance::Declared,
+        observed_at: None,
+    };
+    // Mettre volontairement les candidats dans l'ordre alphabétique inverse de l'ordre déclaré.
+    plan.candidates = vec![
+        make_candidate("antigravity-cartae", "antigravity", "gemini-3.8-flash-high"),
+        make_candidate("antigravity-cartae", "antigravity", "gemini-4-neon-high"),
+        make_candidate("codex-cartae", "codex", "gpt-6.1-sol"),
+    ];
+    plan.observations = vec![routing168_observation(); 3];
+    score_routing_candidates(&request, &mut plan, "host", 100).unwrap();
+    let ordered: Vec<(&str, &str)> = plan
+        .candidates
+        .iter()
+        .map(|c| (c.connection_id.as_str(), c.model.as_str()))
+        .collect();
+    assert_eq!(
+        ordered,
+        vec![
+            ("codex-cartae", "gpt-6.1-sol"),
+            ("antigravity-cartae", "gemini-4-neon-high"),
+            ("antigravity-cartae", "gemini-3.8-flash-high"),
+        ]
+    );
+    assert_eq!(plan.fallback_id, "c001");
+    drop(state);
+    cleanup(&config);
+}
+
+#[test]
 fn spec168_score_saturation_fraiche_inconnus_stabilite_et_compilation() {
     let (state, config, _rx, _reader, mut request, _root) = routing168_fixture(2);
     let mut plan = routing168_plan(&state, &request);

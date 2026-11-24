@@ -2631,15 +2631,32 @@ fn score_routing_candidates(
             + connection.map_or(0, |fact| i32::from(fact.remaining + fact.reset));
         ordered.push((candidate, observation, score));
     }
+    let declared_rank = |candidate: &crate::registry::RoutingCandidate| -> (usize, usize) {
+        let conn_rank = plan
+            .policy
+            .connections
+            .iter()
+            .position(|conn| conn.connection_id == candidate.connection_id)
+            .unwrap_or(usize::MAX);
+        let model_rank = plan
+            .policy
+            .model_catalog
+            .get(&candidate.connection_id)
+            .and_then(|models| models.iter().position(|entry| entry.model == candidate.model))
+            .unwrap_or(usize::MAX);
+        (conn_rank, model_rank)
+    };
     ordered.sort_by(|(a, _, sa), (b, _, sb)| {
-        sb.cmp(sa).then_with(|| {
-            (&a.machine_id, &a.engine, &a.connection_id, &a.model).cmp(&(
-                &b.machine_id,
-                &b.engine,
-                &b.connection_id,
-                &b.model,
-            ))
-        })
+        sb.cmp(sa)
+            .then_with(|| declared_rank(a).cmp(&declared_rank(b)))
+            .then_with(|| {
+                (&a.machine_id, &a.engine, &a.connection_id, &a.model).cmp(&(
+                    &b.machine_id,
+                    &b.engine,
+                    &b.connection_id,
+                    &b.model,
+                ))
+            })
     });
     plan.scores.clear();
     for (candidate, observation, score) in ordered {

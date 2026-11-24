@@ -526,8 +526,8 @@ fn routing168_axes_independants_fixes_et_contradiction_restent_des_filtres() {
         )
         .unwrap();
     assert_eq!(selected.len(), 2, "un modèle conserve les deux machines");
-    assert_eq!(selected[0].candidate.machine_id, "cartae");
-    assert_eq!(selected[1].candidate.machine_id, "local");
+    assert_eq!(selected[0].candidate.machine_id, "local");
+    assert_eq!(selected[1].candidate.machine_id, "cartae");
     assert!(
         registry
             .select_routing_candidates(
@@ -540,6 +540,138 @@ fn routing168_axes_independants_fixes_et_contradiction_restent_des_filtres() {
             .unwrap()
             .is_empty()
     );
+}
+
+#[test]
+fn routing338_declared_order_and_antigravity_claude_explicit_only() {
+    let mut value = routing168_registry_value();
+    value["agents"]["antigravity"] = serde_json::json!({
+        "command": "agy",
+        "protocol": "acp"
+    });
+    value["routing_policy"]["connections"]
+        .as_array_mut()
+        .unwrap()
+        .push(serde_json::json!({
+            "connection_id": "antigravity-cartae",
+            "machine_id": "cartae",
+            "engine": "antigravity",
+            "agent_type": "antigravity",
+            "enabled": true
+        }));
+    value["routing_policy"]["model_catalog"]["antigravity-cartae"] = serde_json::json!([
+        {"model": "gemini-4-neon-high", "supported_efforts": [], "default_effort": null, "provenance": "declared"},
+        {"model": "claude-opus-5-5-high", "supported_efforts": [], "default_effort": null, "provenance": "declared"},
+        {"model": "gemini-3.8-flash-high", "supported_efforts": [], "default_effort": null, "provenance": "declared"}
+    ]);
+    let registry =
+        AgentRegistry::from_json(&value.to_string(), "/tmp/agents-routing338.json").unwrap();
+
+    // 1. Sans moteur ni modèle sur cartae : ordre déclaré (codex-work puis claude-cartae puis antigravity-cartae)
+    //    et aucun claude-* issu d'Antigravity.
+    let auto_cartae = registry
+        .select_routing_candidates(
+            "local",
+            &RoutingCandidateFilters {
+                machine_id: Some("cartae".into()),
+                ..RoutingCandidateFilters::default()
+            },
+        )
+        .unwrap();
+    assert_eq!(auto_cartae[0].candidate.connection_id, "codex-work");
+    assert_eq!(auto_cartae[0].candidate.model, "gpt-6.1-sol");
+    assert!(
+        !auto_cartae.iter().any(|s| {
+            s.candidate.engine == "antigravity" && s.candidate.model.starts_with("claude-")
+        }),
+        "claude-* sur antigravity ne doit jamais être candidat automatique"
+    );
+
+    // 2. Avec engine="antigravity" seul : seuls les modèles Gemini, dans l'ordre déclaré (neon en 1er).
+    let agy_only = registry
+        .select_routing_candidates(
+            "local",
+            &RoutingCandidateFilters {
+                machine_id: Some("cartae".into()),
+                engine: Some("antigravity".into()),
+                ..RoutingCandidateFilters::default()
+            },
+        )
+        .unwrap();
+    let agy_models: Vec<&str> = agy_only.iter().map(|s| s.candidate.model.as_str()).collect();
+    assert_eq!(agy_models, vec!["gemini-4-neon-high", "gemini-3.8-flash-high"]);
+
+    // 3. Avec connection_id="antigravity-cartae" seul : idem, claude-* exclu.
+    let agy_conn_only = registry
+        .select_routing_candidates(
+            "local",
+            &RoutingCandidateFilters {
+                connection_id: Some("antigravity-cartae".into()),
+                ..RoutingCandidateFilters::default()
+            },
+        )
+        .unwrap();
+    let agy_conn_models: Vec<&str> = agy_conn_only
+        .iter()
+        .map(|s| s.candidate.model.as_str())
+        .collect();
+    assert_eq!(
+        agy_conn_models,
+        vec!["gemini-4-neon-high", "gemini-3.8-flash-high"]
+    );
+
+    // 4. Avec model="claude-opus-5-5-high" seul (sans demander antigravity) : refusé (vide).
+    let model_only = registry
+        .select_routing_candidates(
+            "local",
+            &RoutingCandidateFilters {
+                machine_id: Some("cartae".into()),
+                model: Some("claude-opus-5-5-high".into()),
+                ..RoutingCandidateFilters::default()
+            },
+        )
+        .unwrap();
+    assert!(
+        model_only.is_empty(),
+        "un modèle claude-* sur antigravity exige une demande explicite d'antigravity"
+    );
+
+    // 5. Avec engine="antigravity" ET model="claude-opus-5-5-high" : autorisé.
+    let explicit_engine = registry
+        .select_routing_candidates(
+            "local",
+            &RoutingCandidateFilters {
+                machine_id: Some("cartae".into()),
+                engine: Some("antigravity".into()),
+                model: Some("claude-opus-5-5-high".into()),
+                ..RoutingCandidateFilters::default()
+            },
+        )
+        .unwrap();
+    assert_eq!(explicit_engine.len(), 1);
+    assert_eq!(explicit_engine[0].candidate.connection_id, "antigravity-cartae");
+    assert_eq!(explicit_engine[0].candidate.model, "claude-opus-5-5-high");
+
+    // 6. Avec connection_id="antigravity-cartae" ET model="claude-opus-5-5-high" : autorisé.
+    let explicit_conn = registry
+        .select_routing_candidates(
+            "local",
+            &RoutingCandidateFilters {
+                connection_id: Some("antigravity-cartae".into()),
+                model: Some("claude-opus-5-5-high".into()),
+                ..RoutingCandidateFilters::default()
+            },
+        )
+        .unwrap();
+    assert_eq!(explicit_conn.len(), 1);
+    assert_eq!(explicit_conn[0].candidate.connection_id, "antigravity-cartae");
+    assert_eq!(explicit_conn[0].candidate.model, "claude-opus-5-5-high");
+
+    // 7. Le catalogue public continue d'annoncer claude-opus-5-5-high sur antigravity-cartae.
+    let catalogue = registry.routing_catalogue(1_700_000_000).unwrap();
+    assert!(catalogue.options.iter().any(|opt| {
+        opt.connection_id == "antigravity-cartae" && opt.model == "claude-opus-5-5-high"
+    }));
 }
 
 #[test]
