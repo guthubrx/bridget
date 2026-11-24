@@ -7,7 +7,7 @@ description: "Communiquer, déléguer, consulter les quotas restants (`usage`) e
 
 ## Commandes directes `/bridget ...` (exécution immédiate)
 
-Quand l’utilisateur invoque `/bridget <sous-commande>` dans une conversation, **exécuter directement la sous-commande demandée** au lieu d’afficher une aide générique :
+Quand l’utilisateur invoque `/bridget <sous-commande>` (`usage`, `status`, `who`, `updates`), **arrêter immédiatement la lecture de ce fichier ici** (ne pas lire les sections suivantes) et exécuter directement la sous-commande demandée :
 
 - **`/bridget usage [fournisseur] [--refresh]`** (quotas restants par abonnement, 0 jeton LLM) :
   1. Si l’outil MCP `bridget_usage` est chargé : appeler `bridget_usage` (`provider` si fourni : `claude`/`anthropic`, `codex`/`openai`, `antigravity`/`agy`/`google`, `cursor` ou omis pour tous ; `refresh: true` si `--refresh` est demandé ; `format: "html"` si `html_render` est disponible dans la session).
