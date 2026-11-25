@@ -12618,3 +12618,39 @@ fn incident300_terminal_slots_close_without_scanning_unrelated_archive() {
     );
     assert!(runtime.store.inventory().is_err());
 }
+
+#[test]
+fn spec353_worker_idle_reconcile_and_mutation_seq_avoid_repeated_store_scans() {
+    let fixture = Fixture::new();
+    let mut runtime = runtime_fixture(&fixture);
+    let seq0 = runtime.store.mutation_seq();
+    // Aucune commande active : reconcile_all passe en état calme au seq courant.
+    runtime.reconcile_all().unwrap();
+    assert_eq!(runtime.idle_reconciled_seq, Some(seq0));
+
+    // Une nouvelle réservation incrémente mutation_seq et sort de l'état calme.
+    reserve(&runtime.store);
+    let reserved = slot(353);
+    runtime.store.reserve_result_slot(&reserved, 101).unwrap();
+    let seq1 = runtime.store.mutation_seq();
+    assert!(seq1 > seq0);
+    runtime.reconcile_all().unwrap();
+    assert_eq!(runtime.idle_reconciled_seq, None);
+
+    // Une fois la commande et son slot clos, reconcile_all revient en état calme.
+    runtime.finish_command(&command()).unwrap();
+    let seq2 = runtime.store.mutation_seq();
+    assert!(seq2 > seq1);
+    runtime.reconcile_all().unwrap();
+    assert_eq!(runtime.idle_reconciled_seq, Some(seq2));
+
+    // pending_results_with_next_retry reste vide et cohérent sans relecture redondante.
+    let (pending, retry_at) = runtime.store.pending_results_with_next_retry(200).unwrap();
+    assert!(pending.is_empty());
+    assert_eq!(retry_at, None);
+
+    // collect sans expiration laisse mutation_seq stable et arme idle_collected_seq.
+    let removed = runtime.store.collect(200).unwrap();
+    assert_eq!(removed, 0);
+    assert_eq!(runtime.store.mutation_seq(), seq2);
+}

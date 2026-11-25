@@ -1016,6 +1016,7 @@ struct DaemonState {
             bool,
         ),
     >,
+    communication_project_last_diag: HashMap<String, String>,
     native_project_retries: HashMap<String, NativeProjectRetry>,
     project_retry_workers: HashSet<String>,
     project_announcement_sequence: u64,
@@ -4840,6 +4841,7 @@ impl DaemonState {
             observation_sequences: HashMap::new(),
             thread_notice_versions: HashMap::new(),
             communication_projects: HashMap::new(),
+            communication_project_last_diag: HashMap::new(),
             native_project_retries: HashMap::new(),
             project_retry_workers: HashSet::new(),
             project_announcement_sequence: 0,
@@ -5080,6 +5082,7 @@ impl DaemonState {
         self.conn_names.remove(&old_conn);
         self.conn_hosts.remove(&old_conn);
         self.communication_projects.remove(&old_conn);
+        self.communication_project_last_diag.remove(&old_conn);
         self.native_project_retries.remove(&old_conn);
         self.conn_operating_systems.remove(&old_conn);
         self.auxiliary_connections.remove(&old_conn);
@@ -5178,6 +5181,7 @@ impl DaemonState {
             self.conn_names.remove(&conn_id);
             self.conn_hosts.remove(&conn_id);
             self.communication_projects.remove(&conn_id);
+            self.communication_project_last_diag.remove(&conn_id);
             self.native_project_retries.remove(&conn_id);
             self.conn_operating_systems.remove(&conn_id);
             self.auxiliary_connections.remove(&conn_id);
@@ -7544,6 +7548,7 @@ fn handle_connection(
         st.observations.remove_source(&conn_id, Instant::now());
         st.conn_hosts.remove(&conn_id);
         st.communication_projects.remove(&conn_id);
+        st.communication_project_last_diag.remove(&conn_id);
         st.native_project_retries.remove(&conn_id);
         st.conn_operating_systems.remove(&conn_id);
         st.connection_roles.remove(&conn_id);
@@ -11155,13 +11160,28 @@ fn announce_communication_project_inner(
         st.t3_thread_bindings.remove(conn_id);
     }
     let retry_pending = st.native_project_retries.contains_key(conn_id);
+    let diag_to_log = if project.is_none() {
+        let diag =
+            project_resolution_diagnostic277(&owner, unchanged, conflicting, &resolution_cause)
+                .to_string();
+        if st.communication_project_last_diag.get(conn_id).map(String::as_str) == Some(diag.as_str())
+        {
+            None
+        } else {
+            st.communication_project_last_diag
+                .insert(conn_id.into(), diag.clone());
+            Some(diag)
+        }
+    } else {
+        st.communication_project_last_diag.remove(conn_id);
+        None
+    };
     invalidate_human_authority(&mut st);
     drop(st);
     let warnings = if project.is_none() {
-        eprintln!(
-            "bridget_communication_project {}",
-            project_resolution_diagnostic277(&owner, unchanged, conflicting, &resolution_cause)
-        );
+        if let Some(diag) = diag_to_log {
+            eprintln!("bridget_communication_project {diag}");
+        }
         let mut warnings =
             crate::communication::project_scope(None, None, "", None).unwrap_or_default();
         if retry_pending {

@@ -910,6 +910,7 @@ pub struct WorkerStore {
     worker: WorkerIdentity,
     _lock: WorkerFileLock,
     transition: Mutex<()>,
+    mutation_seq: std::sync::atomic::AtomicU64,
 }
 
 impl WorkerStore {
@@ -966,6 +967,7 @@ impl WorkerStore {
             worker,
             _lock: lock,
             transition: Mutex::new(()),
+            mutation_seq: std::sync::atomic::AtomicU64::new(1),
         };
         store.health()?;
         // Lit et valide les reçus au redémarrage. Aucun état ne vaut autorisation
@@ -1537,26 +1539,57 @@ impl WorkerStore {
         )
     }
 
+    pub fn mutation_seq(&self) -> u64 {
+        self.mutation_seq.load(Ordering::Acquire)
+    }
+
+    fn bump_mutation(&self) {
+        self.mutation_seq.fetch_add(1, Ordering::AcqRel);
+    }
+
     /// Relais borné après reconnexion ou mort du wrapper. Aucun lancement ni
     /// décision métier ; les reports demandés par le maître restent respectés.
     pub fn pending_results(&self, now: i64) -> Result<Vec<RemoteResultEnvelope>, WorkerStoreError> {
+        Ok(self.pending_results_with_next_retry(now)?.0)
+    }
+
+    fn pending_results_with_next_retry(
+        &self,
+        now: i64,
+    ) -> Result<(Vec<RemoteResultEnvelope>, Option<i64>), WorkerStoreError> {
         let _guard = self
             .transition
             .lock()
             .map_err(|_| WorkerStoreError::Quarantined)?;
         self.health()?;
-        let slots = self.slot_receipts()?;
+        let commands = self.command_receipts()?;
+        let known_commands: HashSet<_> = commands
+            .iter()
+            .map(|c| command_key(&c.identity))
+            .collect();
+        let slots = self.slot_receipts_with_commands(Some(&known_commands))?;
         let mut results = Vec::new();
+        let mut next_retry: Option<i64> = None;
         for slot in slots {
-            if slot.disposition.as_ref().is_some_and(|record| {
-                record.disposition.is_final()
-                    || matches!(record.disposition, bridget_transport::protocol::RemoteResultDisposition::Deferred { retry_after, .. } if now < retry_after)
-            }) { continue; }
+            if let Some(record) = slot.disposition.as_ref() {
+                if record.disposition.is_final() {
+                    continue;
+                }
+                if let bridget_transport::protocol::RemoteResultDisposition::Deferred {
+                    retry_after,
+                    ..
+                } = record.disposition
+                    && now < retry_after
+                {
+                    next_retry = Some(next_retry.map_or(retry_after, |prev| prev.min(retry_after)));
+                    continue;
+                }
+            }
             if let Some(result) = self.read_blob(&slot)? {
                 results.push(result);
             }
         }
-        Ok(results)
+        Ok((results, next_retry))
     }
 
     /// Attestation fournie par le runtime après observation terminale du
@@ -1624,15 +1657,7 @@ impl WorkerStore {
             .lock()
             .map_err(|_| WorkerStoreError::Quarantined)?;
         self.health()?;
-        let (commands, slots, _, _) = self.inventory()?;
-        // Les commandes et slots d'une vue conservée restent nécessaires au
-        // retrait. Ne pas perdre sa preuve de clôture après sept jours.
-        let retained_views = self
-            .view_receipts(None)?
-            .into_iter()
-            .filter(|receipt| receipt.commit_view.as_ref().is_none_or(|view| !view.closed))
-            .map(|receipt| receipt.command.task_id)
-            .collect::<HashSet<_>>();
+        let (commands, slots, _, _, retained_views) = self.inventory_with_retained_views()?;
         let terminal_commands: HashSet<_> = commands
             .iter()
             .filter(|c| {
@@ -1644,7 +1669,9 @@ impl WorkerStore {
             .map(|c| command_key(&c.identity))
             .collect();
         let mut removed = 0;
-        for slot in slots {
+        let mut removed_slot_keys: HashSet<String> = HashSet::new();
+        let mut mutated = false;
+        for slot in &slots {
             let command_terminal =
                 terminal_commands.contains(&command_key(&slot.slot.identity.command));
             let final_disposition = slot
@@ -1654,7 +1681,7 @@ impl WorkerStore {
             let never_dispatched = slot.closed == Some(WorkerSlotClosureProof::NeverDispatched);
             let closed_without_result = slot.closed.is_some()
                 && slot.disposition.is_none()
-                && self.read_blob(&slot)?.is_none();
+                && self.read_blob(slot)?.is_none();
             if !slot.producer_terminal
                 || !(command_terminal || slot.closed.is_some())
                 || !(final_disposition || never_dispatched || closed_without_result)
@@ -1666,10 +1693,11 @@ impl WorkerStore {
             let _publication = lock_file(&payload.join("publish.lock"), false)?;
             let blob = payload.join("blob.json");
             if fs::symlink_metadata(&blob).is_ok() {
-                self.read_blob(&slot)?;
+                self.read_blob(slot)?;
                 fs::remove_file(&blob)?;
                 File::open(&payload)?.sync_all()?;
                 removed += 1;
+                mutated = true;
             }
             // Garder le compact au-delà de sept jours en présence d'orphelins,
             // au lieu d'effacer une preuve ambiguë ou de déborder une réservation.
@@ -1684,10 +1712,18 @@ impl WorkerStore {
                 fs::remove_file(directory.join("receipt.json"))?;
                 fs::remove_dir(&directory)?;
                 File::open(self.root.join("slots"))?.sync_all()?;
+                removed_slot_keys.insert(json_digest(&slot.slot.identity)?);
+                mutated = true;
             }
         }
         // Aucun ancien canon non expiré ne perd sa preuve d'admission.
-        let (_, remaining_slots, _, _) = self.inventory()?;
+        let remaining_slots_storage;
+        let remaining_slots: &[SlotReceipt] = if removed_slot_keys.is_empty() {
+            &slots
+        } else {
+            remaining_slots_storage = self.inventory()?.1;
+            &remaining_slots_storage
+        };
         let referenced: HashSet<_> = remaining_slots
             .iter()
             .map(|slot| command_key(&slot.slot.identity.command))
@@ -1715,7 +1751,11 @@ impl WorkerStore {
                 }
                 fs::remove_file(self.command_path(&command.identity))?;
                 File::open(self.root.join("commands"))?.sync_all()?;
+                mutated = true;
             }
+        }
+        if mutated {
+            self.bump_mutation();
         }
         Ok(removed)
     }
@@ -1809,6 +1849,32 @@ impl WorkerStore {
         read::read_worker_command(&self.root, &self.worker, identity)
     }
 
+    fn validate_slot_receipt(
+        &self,
+        receipt: &SlotReceipt,
+        expected_identity: Option<&WorkerResultIdentity>,
+    ) -> Result<(), WorkerStoreError> {
+        receipt.slot.identity.validate()?;
+        if let Some(identity) = expected_identity
+            && receipt.slot.identity != *identity
+        {
+            return Err(WorkerStoreError::Conflict);
+        }
+        if receipt.worker != self.worker || receipt.version != STORE_VERSION {
+            return Err(WorkerStoreError::Conflict);
+        }
+        receipt.slot.validate()?;
+        if let Some(disposition) = &receipt.disposition {
+            disposition.validate()?;
+            if disposition.identity != receipt.slot.identity
+                || disposition.disposition.is_final() != receipt.finalized_at.is_some()
+            {
+                return Err(WorkerStoreError::Quarantined);
+            }
+        }
+        Ok(())
+    }
+
     fn read_slot(
         &self,
         identity: &WorkerResultIdentity,
@@ -1818,21 +1884,7 @@ impl WorkerStore {
         let result: Option<SlotReceipt> =
             read_optional(&directory.join("receipt.json"), MAX_METADATA_BYTES)?;
         if let Some(receipt) = &result {
-            if receipt.worker != self.worker
-                || receipt.version != STORE_VERSION
-                || receipt.slot.identity != *identity
-            {
-                return Err(WorkerStoreError::Conflict);
-            }
-            receipt.slot.validate()?;
-            if let Some(disposition) = &receipt.disposition {
-                disposition.validate()?;
-                if disposition.identity != receipt.slot.identity
-                    || disposition.disposition.is_final() != receipt.finalized_at.is_some()
-                {
-                    return Err(WorkerStoreError::Quarantined);
-                }
-            }
+            self.validate_slot_receipt(receipt, Some(identity))?;
         } else if fs::symlink_metadata(directory).is_ok() {
             return Err(WorkerStoreError::Quarantined);
         }
@@ -1866,7 +1918,10 @@ impl WorkerStore {
 
     fn persist<T: Serialize>(&self, path: &Path, value: &T) -> Result<(), WorkerStoreError> {
         match write_json(path, value) {
-            Ok(()) => Ok(()),
+            Ok(()) => {
+                self.bump_mutation();
+                Ok(())
+            }
             Err(error) => {
                 let _ = self.quarantine();
                 Err(error)
@@ -1896,20 +1951,25 @@ impl WorkerStore {
             if path.extension().is_none_or(|ext| ext != "json") {
                 continue;
             }
-            let command: WorkerCommandReceipt =
+            let mut command: WorkerCommandReceipt =
                 read_optional(&path, MAX_METADATA_BYTES)?.ok_or(WorkerStoreError::Quarantined)?;
             if self.command_path(&command.identity) != path {
                 return Err(WorkerStoreError::Quarantined);
             }
-            let command = self
-                .read_command(&command.identity)?
-                .ok_or(WorkerStoreError::Quarantined)?;
+            read::validate_worker_command(&self.root, &self.worker, &mut command, None)?;
             commands.push(command);
         }
         Ok(commands)
     }
 
     fn slot_receipts(&self) -> Result<Vec<SlotReceipt>, WorkerStoreError> {
+        self.slot_receipts_with_commands(None)
+    }
+
+    fn slot_receipts_with_commands(
+        &self,
+        known_commands: Option<&HashSet<(&str, &str, &str, u64)>>,
+    ) -> Result<Vec<SlotReceipt>, WorkerStoreError> {
         let mut slots = Vec::new();
         for (index, entry) in fs::read_dir(self.root.join("slots"))?.enumerate() {
             if index >= MAX_WORKER_STORE_ENTRIES {
@@ -1920,12 +1980,14 @@ impl WorkerStore {
             check_private(&path.join("payload"), true)?;
             let slot: SlotReceipt = read_optional(&path.join("receipt.json"), MAX_METADATA_BYTES)?
                 .ok_or(WorkerStoreError::Quarantined)?;
-            if self.slot_dir(&slot.slot.identity)? != path
-                || self.read_command(&slot.slot.identity.command)?.is_none()
-            {
+            let command_present = match known_commands {
+                Some(set) => set.contains(&command_key(&slot.slot.identity.command)),
+                None => self.read_command(&slot.slot.identity.command)?.is_some(),
+            };
+            if self.slot_dir(&slot.slot.identity)? != path || !command_present {
                 return Err(WorkerStoreError::Quarantined);
             }
-            self.read_slot(&slot.slot.identity)?;
+            self.validate_slot_receipt(&slot, None)?;
             slots.push(slot);
         }
         Ok(slots)
@@ -1939,10 +2001,30 @@ impl WorkerStore {
     fn inventory(
         &self,
     ) -> Result<(Vec<WorkerCommandReceipt>, Vec<SlotReceipt>, u64, usize), WorkerStoreError> {
+        let (commands, slots, used, count, _) = self.inventory_with_retained_views()?;
+        Ok((commands, slots, used, count))
+    }
+
+    fn inventory_with_retained_views(
+        &self,
+    ) -> Result<
+        (
+            Vec<WorkerCommandReceipt>,
+            Vec<SlotReceipt>,
+            u64,
+            usize,
+            HashSet<String>,
+        ),
+        WorkerStoreError,
+    > {
         let mut used =
             private_tree_bytes(&self.root)?.saturating_add(2 * MAX_METADATA_BYTES as u64);
         let commands = self.command_receipts()?;
-        let slots = self.slot_receipts()?;
+        let known_commands: HashSet<_> = commands
+            .iter()
+            .map(|c| command_key(&c.identity))
+            .collect();
+        let slots = self.slot_receipts_with_commands(Some(&known_commands))?;
         for command in &commands {
             // Les 4 Kio gardent la preuve de drainage et les détails de sortie tardifs.
             used = used.saturating_add(DRAIN_PROOF_RESERVATION);
@@ -1974,6 +2056,7 @@ impl WorkerStore {
         }
         let mut workspaces = 0;
         let mut view_keys = BTreeSet::new();
+        let mut retained_views = HashSet::new();
         if self.root.join("workspaces").exists() {
             for entry in fs::read_dir(self.root.join("workspaces"))? {
                 let path = entry?.path();
@@ -1997,6 +2080,9 @@ impl WorkerStore {
                     view.validate(&receipt)?;
                     if !view_keys.insert(view.key.clone()) {
                         return Err(WorkerStoreError::Quarantined);
+                    }
+                    if !view.closed {
+                        retained_views.insert(receipt.command.task_id.clone());
                     }
                     let owned = self.view_companion_bytes(&view.key)?;
                     used = used.saturating_add(view.reserved_bytes.saturating_sub(owned));
@@ -2022,7 +2108,7 @@ impl WorkerStore {
         if used > MAX_WORKER_STORE_BYTES as u64 || count > MAX_WORKER_STORE_ENTRIES {
             return Err(WorkerStoreError::Quota);
         }
-        Ok((commands, slots, used, count))
+        Ok((commands, slots, used, count, retained_views))
     }
 
     fn view_root(&self) -> PathBuf {
@@ -4160,7 +4246,9 @@ fn read_optional<T: DeserializeOwned>(
     {
         return Err(WorkerStoreError::Quarantined);
     }
-    let mut bytes = Vec::new();
+    // Pré-allocation exacte : Take<File>::read_to_end sur Vec::new() multiplie
+    // autrement les petits appels read() (32, 64, 128...).
+    let mut bytes = Vec::with_capacity((metadata.len() as usize).min(max).saturating_add(1));
     file.take(max as u64 + 1).read_to_end(&mut bytes)?;
     if bytes.len() > max {
         return Err(WorkerStoreError::Quarantined);
@@ -4995,6 +5083,8 @@ struct WorkerRuntime {
     view_file_audits: BTreeMap<String, ViewFileAudit>,
     last_maintenance: Instant,
     last_collection: Instant,
+    idle_reconciled_seq: Option<u64>,
+    idle_collected_seq: Option<u64>,
     cancelled: Arc<Mutex<BTreeSet<String>>>,
     cancel_signal_issued: BTreeSet<String>,
     host_resources: crate::host_resources::HostResourceCollector,
@@ -7349,6 +7439,8 @@ impl WorkerRuntime {
             view_file_audits: BTreeMap::new(),
             last_maintenance: Instant::now() - Duration::from_secs(1),
             last_collection: Instant::now() - Duration::from_secs(10),
+            idle_reconciled_seq: None,
+            idle_collected_seq: None,
             cancelled: Arc::new(Mutex::new(BTreeSet::new())),
             cancel_signal_issued: BTreeSet::new(),
             host_resources: crate::host_resources::HostResourceCollector::default(),
@@ -8998,10 +9090,16 @@ impl WorkerRuntime {
         let (commands, slots) = {
             let _guard = self.store.transition.lock().map_err(unavailable)?;
             self.store.health().map_err(refuse)?;
-            (
-                self.store.command_receipts().map_err(refuse)?,
-                self.store.slot_receipts().map_err(refuse)?,
-            )
+            let commands = self.store.command_receipts().map_err(refuse)?;
+            let known_commands: HashSet<_> = commands
+                .iter()
+                .map(|c| command_key(&c.identity))
+                .collect();
+            let slots = self
+                .store
+                .slot_receipts_with_commands(Some(&known_commands))
+                .map_err(refuse)?;
+            (commands, slots)
         };
         let terminal: BTreeMap<_, _> = commands
             .iter()
@@ -9013,12 +9111,17 @@ impl WorkerRuntime {
             })
             .map(|command| (command.identity.command_id.as_str(), &command.identity))
             .collect();
+        let mut has_active_work = false;
         for slot in &slots {
-            if terminal
-                .get(slot.slot.identity.command.command_id.as_str())
-                .is_some_and(|identity| **identity == slot.slot.identity.command)
-            {
-                self.finish_result_slot(slot)?;
+            if !slot.producer_terminal || slot.closed.is_none() {
+                if terminal
+                    .get(slot.slot.identity.command.command_id.as_str())
+                    .is_some_and(|identity| **identity == slot.slot.identity.command)
+                {
+                    self.finish_result_slot(slot)?;
+                } else {
+                    has_active_work = true;
+                }
             }
         }
         drop(terminal);
@@ -9029,6 +9132,7 @@ impl WorkerRuntime {
             ) {
                 continue;
             }
+            has_active_work = true;
             let cancel_key = json_digest(&command.identity).map_err(unavailable)?;
             let cancel_requested = self
                 .cancelled
@@ -9052,6 +9156,20 @@ impl WorkerRuntime {
             if let Err(reason) = self.reconcile(&command.identity) {
                 log::warn!("worker_reconcile_pending reason={reason:?}");
             }
+        }
+        let cancelled_empty = self
+            .cancelled
+            .lock()
+            .map_or(false, |set| set.is_empty());
+        if !has_active_work
+            && self.running.is_empty()
+            && self.held.is_empty()
+            && self.abandoned.is_empty()
+            && cancelled_empty
+        {
+            self.idle_reconciled_seq = Some(self.store.mutation_seq());
+        } else {
+            self.idle_reconciled_seq = None;
         }
         Ok(())
     }
@@ -9129,14 +9247,30 @@ impl WorkerRuntime {
                 self.abandoned.insert(id, held.child.abandon().0);
             }
         }
-        if self.last_maintenance.elapsed() >= Duration::from_secs(1) {
+        let current_seq = self.store.mutation_seq();
+        let reconcile_is_idle = self.idle_reconciled_seq == Some(current_seq)
+            && self.running.is_empty()
+            && self.held.is_empty()
+            && self.abandoned.is_empty()
+            && self.cancelled.lock().map_or(false, |set| set.is_empty());
+        let reconcile_interval = if reconcile_is_idle {
+            Duration::from_secs(30)
+        } else {
+            Duration::from_secs(1)
+        };
+        if self.last_maintenance.elapsed() >= reconcile_interval {
             self.reconcile_all()?;
             self.last_maintenance = Instant::now();
         }
         // Les preuves restent conservées ; seul le nettoyage peut attendre dix
-        // secondes. Le suivi des processus conserve sa cadence d'une seconde.
-        if self.last_collection.elapsed() >= Duration::from_secs(10) {
-            self.store.collect(worker_now()).map_err(refuse)?;
+        // secondes en activité et soixante secondes au repos sans mutation du store.
+        let collect_interval = if self.idle_collected_seq == Some(self.store.mutation_seq()) {
+            Duration::from_secs(60)
+        } else {
+            Duration::from_secs(10)
+        };
+        if self.last_collection.elapsed() >= collect_interval {
+            let removed = self.store.collect(worker_now()).map_err(refuse)?;
             if !self.cancel_signal_issued.is_empty() {
                 let commands = self.store.commands().map_err(refuse)?;
                 let mut retained_commands = commands
@@ -9166,6 +9300,11 @@ impl WorkerRuntime {
                 self.cancel_signal_issued
                     .retain(|key| retained_commands.contains(key));
             }
+            self.idle_collected_seq = if removed == 0 {
+                Some(self.store.mutation_seq())
+            } else {
+                None
+            };
             self.last_collection = Instant::now();
         }
         if self.last_resource_refresh.elapsed() >= Duration::from_secs(10) {
@@ -10308,6 +10447,7 @@ pub fn run_worker(config: WorkerRuntimeConfig) -> Result<(), String> {
             }
         });
         let mut last_relay = Instant::now() - Duration::from_secs(2);
+        let mut relay_idle_state: Option<(u64, Option<i64>)> = None;
         let mut observed: BTreeMap<String, (WorkerCommandPhase, bool)> = BTreeMap::new();
         let mut fatal = None;
         while !disconnected.load(Ordering::Acquire) {
@@ -10315,10 +10455,24 @@ pub fn run_worker(config: WorkerRuntimeConfig) -> Result<(), String> {
                 fatal = Some(format!("worker_state_unavailable:{reason:?}"));
                 break;
             }
-            if last_relay.elapsed() >= Duration::from_secs(2) {
-                match runtime.store.pending_results(worker_now()) {
-                    Ok(results) => {
+            let relay_now = worker_now();
+            let relay_seq = runtime.store.mutation_seq();
+            let relay_interval = match relay_idle_state {
+                Some((seq, retry_at))
+                    if seq == relay_seq && retry_at.is_none_or(|at| relay_now < at) =>
+                {
+                    Duration::from_secs(30)
+                }
+                _ => Duration::from_secs(2),
+            };
+            if last_relay.elapsed() >= relay_interval {
+                let mut sent_any = false;
+                let next_retry_after;
+                match runtime.store.pending_results_with_next_retry(relay_now) {
+                    Ok((results, retry_at)) => {
+                        next_retry_after = retry_at;
                         for result in results {
+                            sent_any = true;
                             let response = WorkerResponse {
                                 version: REMOTE_WORKER_VERSION,
                                 correlation_id: result.message_id.clone(),
@@ -10357,6 +10511,7 @@ pub fn run_worker(config: WorkerRuntimeConfig) -> Result<(), String> {
                             {
                                 continue;
                             }
+                            sent_any = true;
                             let response = WorkerResponse {
                                 version: REMOTE_WORKER_VERSION,
                                 correlation_id: uuid::Uuid::new_v4().to_string(),
@@ -10389,6 +10544,11 @@ pub fn run_worker(config: WorkerRuntimeConfig) -> Result<(), String> {
                         break;
                     }
                 }
+                relay_idle_state = if !sent_any && !disconnected.load(Ordering::Acquire) {
+                    Some((runtime.store.mutation_seq(), next_retry_after))
+                } else {
+                    None
+                };
                 last_relay = Instant::now();
             }
             if negotiated.contains(&WorkerCapability::ProviderCatalogueV1) {

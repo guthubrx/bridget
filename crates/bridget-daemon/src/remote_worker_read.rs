@@ -2171,6 +2171,63 @@ impl ProbeReadContext {
     }
 }
 
+pub(super) fn validate_worker_command(
+    root: &Path,
+    worker: &WorkerIdentity,
+    receipt: &mut WorkerCommandReceipt,
+    expected_identity: Option<&WorkerCommandIdentity>,
+) -> Result<(), WorkerStoreError> {
+    receipt.identity.validate()?;
+    if let Some(identity) = expected_identity
+        && receipt.identity != *identity
+    {
+        return Err(WorkerStoreError::Conflict);
+    }
+    if receipt.worker == *worker {
+        proof::overlay_fence(root, worker, receipt)?;
+    }
+    if receipt.worker != *worker || receipt.version != STORE_VERSION {
+        return Err(WorkerStoreError::Conflict);
+    }
+    receipt.placement.validate()?;
+    let expected_fence = receipt
+        .pre_start_fence
+        .as_ref()
+        .map(|_| {
+            proof::fence_digest(
+                worker,
+                &receipt.identity,
+                &receipt.placement,
+                receipt.deadline_at,
+            )
+        })
+        .transpose()?;
+    if !receipt.placement.matches_worker(worker)
+        || !valid_digest(&receipt.command_digest)
+        || receipt.created_at < 0
+        || (receipt.pre_start_fence.is_none() && receipt.deadline_at <= receipt.created_at)
+        || receipt.pre_start_fence.as_ref().is_some_and(|digest| {
+            !valid_digest(digest)
+                || Some(digest) != expected_fence.as_ref()
+                || *digest != receipt.command_digest
+                || receipt.phase != WorkerCommandPhase::Refused
+                || receipt.marker.is_some()
+                || receipt.permit.is_some()
+                || receipt.child_id.is_some()
+                || receipt.preparation.is_some()
+                || receipt.routing.is_some()
+                || receipt.release_epoch.is_some()
+                || receipt.native_ready
+                || receipt.startup_failed
+                || receipt.startup_failure.is_some()
+                || receipt.terminal_exit_code.is_some()
+        })
+    {
+        return Err(WorkerStoreError::Quarantined);
+    }
+    Ok(())
+}
+
 pub(super) fn read_worker_command(
     root: &Path,
     worker: &WorkerIdentity,
@@ -2183,48 +2240,8 @@ pub(super) fn read_worker_command(
             .join(format!("{}.json", marker_key(identity))),
         MAX_METADATA_BYTES,
     )?;
-    if let Some(receipt) = result.as_mut()
-        && receipt.worker == *worker
-        && receipt.identity == *identity
-    {
-        proof::overlay_fence(root, worker, receipt)?;
-    }
-    if let Some(receipt) = &result {
-        if receipt.worker != *worker
-            || receipt.version != STORE_VERSION
-            || receipt.identity != *identity
-        {
-            return Err(WorkerStoreError::Conflict);
-        }
-        receipt.placement.validate()?;
-        let expected_fence = receipt
-            .pre_start_fence
-            .as_ref()
-            .map(|_| proof::fence_digest(worker, identity, &receipt.placement, receipt.deadline_at))
-            .transpose()?;
-        if !receipt.placement.matches_worker(worker)
-            || !valid_digest(&receipt.command_digest)
-            || receipt.created_at < 0
-            || (receipt.pre_start_fence.is_none() && receipt.deadline_at <= receipt.created_at)
-            || receipt.pre_start_fence.as_ref().is_some_and(|digest| {
-                !valid_digest(digest)
-                    || Some(digest) != expected_fence.as_ref()
-                    || *digest != receipt.command_digest
-                    || receipt.phase != WorkerCommandPhase::Refused
-                    || receipt.marker.is_some()
-                    || receipt.permit.is_some()
-                    || receipt.child_id.is_some()
-                    || receipt.preparation.is_some()
-                    || receipt.routing.is_some()
-                    || receipt.release_epoch.is_some()
-                    || receipt.native_ready
-                    || receipt.startup_failed
-                    || receipt.startup_failure.is_some()
-                    || receipt.terminal_exit_code.is_some()
-            })
-        {
-            return Err(WorkerStoreError::Quarantined);
-        }
+    if let Some(receipt) = result.as_mut() {
+        validate_worker_command(root, worker, receipt, Some(identity))?;
     }
     Ok(result)
 }

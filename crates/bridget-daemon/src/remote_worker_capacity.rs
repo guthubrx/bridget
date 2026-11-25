@@ -37,6 +37,7 @@ impl WorkerStore {
             worker,
             _lock: lock,
             transition: Mutex::new(()),
+            mutation_seq: std::sync::atomic::AtomicU64::new(1),
         };
         // Validation intégrale par le lecteur corrigé. Aucun health contourné
         // pour lancer une commande : le magasin reste en quarantaine ici.
