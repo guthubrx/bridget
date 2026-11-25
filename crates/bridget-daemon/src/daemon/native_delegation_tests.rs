@@ -29006,3 +29006,170 @@ fn spec340_factual_summary_projects_authoritative_execution_git_and_warnings() {
     );
     cleanup(&config);
 }
+
+#[test]
+fn spec355_provider_quota_exhausted_diagnostic_and_mission_pending_failure() {
+    use super::super::dispatch_diagnostics::{Stage, observe};
+    let now = unix_timestamp();
+    let far_reset = now + 21 * 3600;
+    let near_reset = now + 1800;
+
+    // 1. Le diagnostic provider_quota_exhausted ne doit jamais accuser la preuve du parent.
+    {
+        let (st, config, task) = diagnostics190_fixture();
+        let state = Arc::new(Mutex::new(st));
+        let _: Result<(), String> = observe(
+            &state,
+            &task,
+            Stage::ParentProof,
+            Err("provider_quota_exhausted".into()),
+        );
+        let st = state.lock().unwrap();
+        let view = current_task_view(&st, &task, true).unwrap();
+        let refusal = &view["detail"]["dispatch_refusal"];
+        assert_eq!(refusal["code"], "provider_quota_exhausted");
+        let msg = refusal["message"].as_str().unwrap();
+        assert!(msg.contains("quota du fournisseur"), "message={msg}");
+        assert!(!msg.contains("preuve du parent"), "message={msg}");
+        let human = refusal["human_action"].as_str().unwrap();
+        assert!(!human.contains("Si la preuve"), "human_action={human}");
+        drop(st);
+        drop(state);
+        cleanup(&config);
+    }
+
+    // 2. remote_dispatch_proof classe provider_quota_exhausted en final_permissions (jamais parent_proof).
+    {
+        let (mut st, config, mut task) = diagnostics190_fixture();
+        let mut parent = continuation172_parent();
+        parent.source = "provider_turn".into();
+        parent.cwd.clone_from(&task.cwd);
+        let mut snap = crate::native_permissions::snapshot(
+            &task.owner,
+            &task.owner_instance,
+            parent,
+            json!({"kind":"codex"}),
+            Path::new(&task.cwd),
+        );
+        snap.source = "provider_turn".into();
+        task.admission_authority_version = Some(1);
+        task.permission_snapshot = Some(snap);
+        st.delegation_store.save(&task).unwrap();
+        let NativeDelegationRequest::Delegate { agent_type, .. } = &task.request else {
+            panic!("delegate attendu");
+        };
+        st.provider_limits.record_scoped(
+            agent_type,
+            task.child_instance.as_deref().unwrap(),
+            bridget_transport::protocol::RateLimitFact {
+                credits: None,
+                window: "five_hour".into(),
+                status: "rejected".into(),
+                resets_at: Some(far_reset),
+                used_percent: Some(100),
+            },
+            bridget_transport::protocol::RateLimitSource::CodexAppServer,
+            now,
+        );
+        let state = Arc::new(Mutex::new(st));
+        let err = remote_dispatch_proof(&state, &task).unwrap_err();
+        assert_eq!(err, "provider_quota_exhausted");
+        let st = state.lock().unwrap();
+        let view = current_task_view(&st, &task, true).unwrap();
+        assert_eq!(view["detail"]["dispatch_refusal"]["stage"], "final_permissions");
+        assert_eq!(view["detail"]["dispatch_refusal"]["code"], "provider_quota_exhausted");
+        assert!(
+            view["detail"]["dispatch_refusal"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("quota du fournisseur")
+        );
+        drop(st);
+        drop(state);
+        cleanup(&config);
+    }
+
+    // 3. tick() sort immédiatement une tâche mission_pending bloquée par quota (sans resume_on_limit)
+    //    vers failed + usage_limit + limit_reset_at, au lieu de pendre indéfiniment.
+    {
+        let (mut st, config, task) = diagnostics190_fixture();
+        let (_sender, receiver) = mpsc::channel();
+        st.remote_result_reservation = Some(receiver);
+        let NativeDelegationRequest::Delegate { agent_type, .. } = &task.request else {
+            panic!("delegate attendu");
+        };
+        st.provider_limits.record_scoped(
+            agent_type,
+            task.child_instance.as_deref().unwrap(),
+            bridget_transport::protocol::RateLimitFact {
+                credits: None,
+                window: "five_hour".into(),
+                status: "rejected".into(),
+                resets_at: Some(far_reset),
+                used_percent: Some(100),
+            },
+            bridget_transport::protocol::RateLimitSource::CodexAppServer,
+            now,
+        );
+        let state = Arc::new(Mutex::new(st));
+        tick(&state);
+        let st = state.lock().unwrap();
+        let updated = st.delegation_store.get(&task.task_id).unwrap().unwrap();
+        assert_eq!(updated.state, "failed");
+        let view = current_task_view(&st, &updated, true).unwrap();
+        assert_eq!(view["status"], "failed");
+        assert_eq!(view["error"], "usage_limit");
+        assert_eq!(view["detail"]["limit_reset_at"], far_reset);
+        drop(st);
+        drop(state);
+        cleanup(&config);
+    }
+
+    // 4. Avec resume_on_limit=true et reset <= 6h, la tâche attend en mission_pending ;
+    //    avec reset > 6h, elle échoue proprement en usage_limit.
+    for (reset_at, expected_state) in [(near_reset, "mission_pending"), (far_reset, "failed")] {
+        let (mut st, config, mut task) = diagnostics190_fixture();
+        let (_sender, receiver) = mpsc::channel();
+        st.remote_result_reservation = Some(receiver);
+        if let NativeDelegationRequest::Delegate {
+            ref mut resume_on_limit,
+            ..
+        } = task.request
+        {
+            *resume_on_limit = Some(true);
+        }
+        st.delegation_store.save(&task).unwrap();
+        let NativeDelegationRequest::Delegate { agent_type, .. } = &task.request else {
+            panic!("delegate attendu");
+        };
+        st.provider_limits.record_scoped(
+            agent_type,
+            task.child_instance.as_deref().unwrap(),
+            bridget_transport::protocol::RateLimitFact {
+                credits: None,
+                window: "five_hour".into(),
+                status: "rejected".into(),
+                resets_at: Some(reset_at),
+                used_percent: Some(100),
+            },
+            bridget_transport::protocol::RateLimitSource::CodexAppServer,
+            now,
+        );
+        let state = Arc::new(Mutex::new(st));
+        tick(&state);
+        let st = state.lock().unwrap();
+        let updated = st.delegation_store.get(&task.task_id).unwrap().unwrap();
+        assert_eq!(updated.state, expected_state, "reset_at={reset_at}");
+        let view = current_task_view(&st, &updated, true).unwrap();
+        if expected_state == "mission_pending" {
+            assert_eq!(view["detail"]["dispatch_refusal"]["stage"], "final_permissions");
+            assert_eq!(view["detail"]["dispatch_refusal"]["code"], "provider_quota_exhausted");
+        } else {
+            assert_eq!(view["error"], "usage_limit");
+            assert_eq!(view["detail"]["limit_reset_at"], reset_at);
+        }
+        drop(st);
+        drop(state);
+        cleanup(&config);
+    }
+}

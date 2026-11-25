@@ -139,44 +139,56 @@ fn closed_code(code: &str) -> String {
 }
 impl Record {
     fn projection(&self) -> Value {
-        let (message, recovery) = match self.stage {
-            Stage::ParentProof => (
-                "La preuve du parent n’a pas été confirmée pour cette remise.",
-                "Vérifiez le worker de l’hôte d’origine et les sources de droits du parent admis. Une attestation générique antérieure ne remplace pas la réponse de ce contrôle. Ne répétez pas les attestations sans fait nouveau.",
-            ),
-            Stage::CommandIdentity => (
-                "Le maître n’a pas relié la commande persistée à cette exécution.",
-                "Vérifiez commande, instance, génération et lien parent dans les reçus natifs. Ne recréez ni identité ni commande pour remplacer une preuve manquante.",
-            ),
-            Stage::WorkerObservation => (
-                "Le maître n’a pas obtenu l’observation distante attendue pour cette remise.",
-                "Vérifiez le code de refus, l’identité et l’autorisation de la machine dans le registre, puis le contact du worker et la durée du contrôle corrélé. Un délai ne prouve ni panne réseau ni arrêt de l’exécution. Conservez la même tâche et ses fichiers.",
-            ),
-            Stage::WorkerPermissions => (
-                "L’observation reçue du worker ne confirme pas les conditions de remise.",
-                "Consultez les faits joints : phase, préparation native, présence de preuve de droits et de rapport Git. Faites vérifier les sources ou le dossier par leur responsable ; ne forcez pas la garde.",
-            ),
-            Stage::FinalPermissions => (
-                "La dernière garde du maître a refusé la remise.",
-                "Vérifiez le code constaté : autorité admise, révocations ou quota de cette exécution. Conservez la tâche ; ne changez pas ses droits ou son moteur pour contourner ce refus.",
-            ),
-            Stage::Control => (
-                "Le contrôle natif du maître retient la remise.",
-                "Consultez l’état natif de contrôle et sa décision humaine. Ne le modifiez pas pour contourner ce refus.",
-            ),
-            Stage::ResultReservation => (
-                "Le maître n’a pas confirmé la réservation du résultat.",
-                "Vérifiez le reçu et la capacité de retour de cette même exécution. Aucun travail de remplacement n’est autorisé pendant une issue inconnue.",
-            ),
-            Stage::Preparation => (
-                "Une condition du maître empêche la vérification de remise.",
-                "Vérifiez le code fermé et la préparation native de cette tâche. La cause précise reste inconnue si le code est unclassified ; faites inspecter ce point sans reconstruire le dossier ni la mission.",
-            ),
+        let (message, recovery, human_action) = if self.code == "provider_quota_exhausted" {
+            (
+                "Le quota du fournisseur est épuisé pour cette exécution.",
+                "Le compte sélectionné pour cette exécution a atteint sa limite de quota sans crédits utilisables ; la preuve du parent n’est pas en cause. Attendez la réinitialisation du quota ou, une fois cette tâche terminée et nettoyée, lancez une nouvelle demande sur un autre compte ou moteur autorisé.",
+                "Demandez à l’utilisateur s’il faut attendre la réinitialisation du compte sélectionné ou autoriser une bascule vers un autre compte ou moteur existant pour cette mission. Gardez la tâche, sa clé et ses fichiers ; aucune annulation d’autrui ni remplacement automatique.",
+            )
+        } else {
+            let (message, recovery) = match self.stage {
+                Stage::ParentProof => (
+                    "La preuve du parent n’a pas été confirmée pour cette remise.",
+                    "Vérifiez le worker de l’hôte d’origine et les sources de droits du parent admis. Une attestation générique antérieure ne remplace pas la réponse de ce contrôle. Ne répétez pas les attestations sans fait nouveau.",
+                ),
+                Stage::CommandIdentity => (
+                    "Le maître n’a pas relié la commande persistée à cette exécution.",
+                    "Vérifiez commande, instance, génération et lien parent dans les reçus natifs. Ne recréez ni identité ni commande pour remplacer une preuve manquante.",
+                ),
+                Stage::WorkerObservation => (
+                    "Le maître n’a pas obtenu l’observation distante attendue pour cette remise.",
+                    "Vérifiez le code de refus, l’identité et l’autorisation de la machine dans le registre, puis le contact du worker et la durée du contrôle corrélé. Un délai ne prouve ni panne réseau ni arrêt de l’exécution. Conservez la même tâche et ses fichiers.",
+                ),
+                Stage::WorkerPermissions => (
+                    "L’observation reçue du worker ne confirme pas les conditions de remise.",
+                    "Consultez les faits joints : phase, préparation native, présence de preuve de droits et de rapport Git. Faites vérifier les sources ou le dossier par leur responsable ; ne forcez pas la garde.",
+                ),
+                Stage::FinalPermissions => (
+                    "La dernière garde du maître a refusé la remise.",
+                    "Vérifiez le code constaté : autorité admise, révocations ou quota de cette exécution. Conservez la tâche ; ne changez pas ses droits ou son moteur pour contourner ce refus.",
+                ),
+                Stage::Control => (
+                    "Le contrôle natif du maître retient la remise.",
+                    "Consultez l’état natif de contrôle et sa décision humaine. Ne le modifiez pas pour contourner ce refus.",
+                ),
+                Stage::ResultReservation => (
+                    "Le maître n’a pas confirmé la réservation du résultat.",
+                    "Vérifiez le reçu et la capacité de retour de cette même exécution. Aucun travail de remplacement n’est autorisé pendant une issue inconnue.",
+                ),
+                Stage::Preparation => (
+                    "Une condition du maître empêche la vérification de remise.",
+                    "Vérifiez le code fermé et la préparation native de cette tâche. La cause précise reste inconnue si le code est unclassified ; faites inspecter ce point sans reconstruire le dossier ni la mission.",
+                ),
+            };
+            (
+                message,
+                recovery,
+                "Si la preuve ne peut pas être rétablie dans votre périmètre, demandez au responsable ou à l’utilisateur la décision précise sur la source, la capacité ou la maintenance concernée. Gardez la tâche, sa clé et ses fichiers ; aucune annulation d’autrui ni remplacement automatique.",
+            )
         };
         json!({"version":1,"scope":"last_observed_master_refusal","authorizes_dispatch":false,
             "observed_at":self.observed_at,"stage":self.stage,"code":self.code,"worker":self.worker,
-            "message":message,"recovery":recovery,
-            "human_action":"Si la preuve ne peut pas être rétablie dans votre périmètre, demandez au responsable ou à l’utilisateur la décision précise sur la source, la capacité ou la maintenance concernée. Gardez la tâche, sa clé et ses fichiers ; aucune annulation d’autrui ni remplacement automatique."})
+            "message":message,"recovery":recovery,"human_action":human_action})
     }
 }
 impl Cache {

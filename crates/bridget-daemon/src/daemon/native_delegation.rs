@@ -10032,17 +10032,17 @@ pub(super) fn remote_dispatch_proof(
             .as_ref()
             .ok_or_else(|| "remote_placement_missing".to_owned()),
     )?;
-    observe(
+    let parent_result = remote_parent_proof(
         state,
-        task,
-        Stage::ParentProof,
-        remote_parent_proof(
-            state,
-            &task.owner,
-            &snapshot.parent,
-            task.admitted_parent()?.map(|_| task),
-        ),
-    )?;
+        &task.owner,
+        &snapshot.parent,
+        task.admitted_parent()?.map(|_| task),
+    );
+    let parent_stage = match &parent_result {
+        Err(code) if code == "provider_quota_exhausted" => Stage::FinalPermissions,
+        _ => Stage::ParentProof,
+    };
+    observe(state, task, parent_stage, parent_result)?;
     let command_result = {
         let st = state.lock().recover_poison();
         remote_command_identity(&st, task).map_err(|e| format!("{e:?}"))
@@ -16845,6 +16845,45 @@ pub(super) fn tick(state: &Arc<Mutex<DaemonState>>) {
             }
             if task.state == "mission_pending" {
                 use super::dispatch_diagnostics::{Stage, record_locked};
+                if task.mission_issued_at.is_none()
+                    && let NativeDelegationRequest::Delegate { agent_type, .. } = &task.request
+                    && let Some(child_instance) = task.child_instance.as_deref()
+                {
+                    let now = unix_timestamp();
+                    if let Some(quota) = st
+                        .provider_limits
+                        .scoped_quota(agent_type, child_instance, now)
+                        .filter(|quota| quota.launch_blocked)
+                    {
+                        let waitable = quota_enabled(&task)
+                            && quota
+                                .resets_at
+                                .is_some_and(|reset| reset > now && reset <= now.saturating_add(21600));
+                        if waitable {
+                            if let Some(event) = record_locked(
+                                &mut st,
+                                &task,
+                                Stage::FinalPermissions,
+                                "provider_quota_exhausted",
+                                None,
+                            ) {
+                                dispatch_events.push(event);
+                            }
+                        } else {
+                            let error = quota.resets_at.map_or_else(
+                                || "usage_limit".to_string(),
+                                |reset_at| {
+                                    json!({"code": "usage_limit", "limit_reset_at": reset_at})
+                                        .to_string()
+                                },
+                            );
+                            if let Err(err) = fail_quota_task(&mut st, &mut task, &error, now) {
+                                warn!("échec quota avant remise mission_pending: {err}");
+                            }
+                        }
+                        continue;
+                    }
+                }
                 if task.remote_placement.is_some() {
                     // L'absence de réponse d'un travail asynchrone n'est pas
                     // un refus : seule la garde réellement exécutée est observée.
