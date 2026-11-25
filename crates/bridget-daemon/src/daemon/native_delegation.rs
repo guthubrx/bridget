@@ -2779,6 +2779,15 @@ fn recovered_routing_request(receipt: &AutoAdmissionReceipt) -> Result<AutoDeleg
     Ok(request)
 }
 
+pub(super) fn auto_quota_fallback_enabled() -> bool {
+    std::env::var("BRIDGET_AUTO_QUOTA_FALLBACK").is_ok_and(|value| {
+        matches!(
+            value.trim().to_ascii_lowercase().as_str(),
+            "1" | "true" | "yes" | "on"
+        )
+    })
+}
+
 fn routing_delegate(
     request: &AutoDelegateV2,
     candidate: &RoutingCandidate,
@@ -2818,8 +2827,10 @@ fn routing_delegate(
         brief: request.brief.clone(),
         child_requests: request.child_requests.clone(),
         fallback: Vec::new(),
-        quota_fallback_authorized: request.quota_fallback_authorized,
-        resume_on_limit: None,
+        quota_fallback_authorized: request
+            .quota_fallback_authorized
+            .or_else(|| auto_quota_fallback_enabled().then_some(true)),
+        resume_on_limit: Some(request.resume_on_limit.unwrap_or(true)),
     }
 }
 

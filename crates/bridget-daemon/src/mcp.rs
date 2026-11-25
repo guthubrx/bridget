@@ -2866,6 +2866,12 @@ const COMPACT_AUTO_DELEGATE_FIELDS: &[&str] = &[
     "expected_base_commit",
     "workspace",
     "brief",
+    "resume_on_limit",
+    "quota_fallback_authorized",
+    "service_tier",
+    "workload",
+    "urgent",
+    "child_requests",
 ];
 
 const COMPACT_DELEGATE_FIELDS: &[&str] = &[
@@ -2882,6 +2888,9 @@ const COMPACT_DELEGATE_FIELDS: &[&str] = &[
     "keep_alive_secs",
     "workspace",
     "brief",
+    "resume_on_limit",
+    "quota_fallback_authorized",
+    "fallback",
 ];
 
 fn truncate_compact_description(raw: &str, max_chars: usize) -> String {

@@ -1620,8 +1620,31 @@ fn merge_quota_windows(target: &mut Vec<QuotaWindow>, incoming: Vec<QuotaWindow>
     sort_windows_for_engine(engine, target);
 }
 
+fn propagate_known_emails_by_account_id(subs: &mut [SubscriptionQuota]) {
+    let mut known: BTreeMap<(String, String), String> = BTreeMap::new();
+    for s in subs.iter() {
+        if let (Some(acc_id), Some(email)) = (
+            s.account_id.as_deref().filter(|v| !v.is_empty()),
+            s.account_email.as_deref().filter(|v| !v.is_empty()),
+        ) {
+            known
+                .entry((s.engine.clone(), acc_id.to_string()))
+                .or_insert_with(|| email.to_string());
+        }
+    }
+    for s in subs.iter_mut() {
+        if s.account_email.as_deref().is_none_or(str::is_empty)
+            && let Some(acc_id) = s.account_id.as_deref().filter(|v| !v.is_empty())
+            && let Some(email) = known.get(&(s.engine.clone(), acc_id.to_string()))
+        {
+            s.account_email = Some(email.clone());
+            s.account_label = email.clone();
+        }
+    }
+}
+
 /// Fusionne les abonnements partageant le même compte réel (Codex par `account_id`/`email`,
-/// Antigravity par `email`/`empreinte`, Claude connecté par `email`, GLM et Cursor regroupés).
+/// Antigravity par `empreinte`/`email`, Claude connecté par `email`, GLM et Cursor regroupés).
 fn deduplicate_shared_accounts(
     subs: Vec<SubscriptionQuota>,
     local_machine: &str,
@@ -1638,10 +1661,10 @@ fn deduplicate_shared_accounts(
                 .filter(|s| !s.is_empty())
                 .or_else(|| sub.account_email.clone().filter(|s| !s.is_empty())),
             "antigravity" => sub
-                .account_email
+                .account_id
                 .clone()
                 .filter(|s| !s.is_empty())
-                .or_else(|| sub.account_id.clone().filter(|s| !s.is_empty())),
+                .or_else(|| sub.account_email.clone().filter(|s| !s.is_empty())),
             "claude" => {
                 if sub.logged_in == Some(true) {
                     sub.account_email.clone().filter(|s| !s.is_empty())
@@ -2982,6 +3005,8 @@ pub(crate) fn collect_usage_targeted(
         let _ = save_cache_to(path, &cache);
     }
 
+    propagate_known_emails_by_account_id(&mut raw_subscriptions);
+
     let machine_rows = if filter.is_none() {
         build_machine_matrix(&local_machine, &machines, &raw_subscriptions, &machine_online)
     } else {
@@ -4247,6 +4272,69 @@ mod tests {
         assert_eq!(active_claude[0].account_label, "fullflare@runbox.com");
         assert_eq!(active_claude[0].machines, vec!["cartae", "ksstore"]);
         assert_eq!(active_claude[0].windows.len(), 1);
+
+        // Antigravity : propagation de l'email connu via l'empreinte hebdomadaire commune
+        // même si certains serveurs n'ont pas ~/.gemini/google_accounts.json.
+        let mut agy_raw = vec![
+            SubscriptionQuota {
+                id: "antigravity:monordinateur:default".into(),
+                engine: "antigravity".into(),
+                provider_label: "Antigravity".into(),
+                account_label: "fullflare@gmail.com".into(),
+                account_email: Some("fullflare@gmail.com".into()),
+                logged_in: Some(true),
+                machine_id: "monordinateur".into(),
+                machines: vec!["monordinateur".into()],
+                account_id: Some("agy:3p-weekly:100|gemini-weekly:200".into()),
+                connection_ids: vec!["agy-mac".into()],
+                plan_type: None,
+                source_state: "live_probe".into(),
+                source_label: "Sonde agy /usage".into(),
+                windows: vec![],
+                credits_balance: None,
+                credits_unlimited: false,
+                manual_resets_available: None,
+                manual_reset_expirations: Vec::new(),
+                observed_at: Some(now),
+                detail: None,
+            },
+            SubscriptionQuota {
+                id: "antigravity:ksstore:default".into(),
+                engine: "antigravity".into(),
+                provider_label: "Antigravity".into(),
+                account_label: "Antigravity · ksstore".into(),
+                account_email: None,
+                logged_in: Some(true),
+                machine_id: "ksstore".into(),
+                machines: vec!["ksstore".into()],
+                account_id: Some("agy:3p-weekly:100|gemini-weekly:200".into()),
+                connection_ids: vec!["agy-ksstore".into()],
+                plan_type: None,
+                source_state: "live_probe".into(),
+                source_label: "Sonde agy /usage".into(),
+                windows: vec![],
+                credits_balance: None,
+                credits_unlimited: false,
+                manual_resets_available: None,
+                manual_reset_expirations: Vec::new(),
+                observed_at: Some(now),
+                detail: None,
+            },
+        ];
+        propagate_known_emails_by_account_id(&mut agy_raw);
+        let agy_matrix = build_machine_matrix("monordinateur", &[], &agy_raw, &online);
+        let ks_agy = agy_matrix
+            .iter()
+            .find(|r| r.machine_id == "ksstore")
+            .unwrap()
+            .antigravity
+            .as_ref()
+            .unwrap();
+        assert_eq!(ks_agy.account.as_deref(), Some("fullflare@gmail.com"));
+        let agy_dedup = deduplicate_shared_accounts(agy_raw, "monordinateur");
+        assert_eq!(agy_dedup.len(), 1);
+        assert_eq!(agy_dedup[0].account_label, "fullflare@gmail.com");
+        assert_eq!(agy_dedup[0].machines, vec!["monordinateur", "ksstore"]);
     }
 
     #[test]

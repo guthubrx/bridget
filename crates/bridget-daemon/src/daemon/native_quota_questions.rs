@@ -146,7 +146,8 @@ pub(super) fn pre_admission(
             r.request_id.as_str(),
             r.engine.as_deref().unwrap_or("moteur admissible"),
             r.machine_id.as_deref().unwrap_or("destination demandée"),
-            r.quota_fallback_authorized == Some(true),
+            r.quota_fallback_authorized
+                .unwrap_or_else(auto_quota_fallback_enabled),
         ),
         NativeDelegationRequest::Delegate {
             request_id,
@@ -158,7 +159,7 @@ pub(super) fn pre_admission(
             request_id.as_str(),
             agent_type.as_str(),
             machine_id.as_deref().unwrap_or("local"),
-            *quota_fallback_authorized == Some(true),
+            quota_fallback_authorized.unwrap_or_else(auto_quota_fallback_enabled),
         ),
         _ => return Ok(()),
     };

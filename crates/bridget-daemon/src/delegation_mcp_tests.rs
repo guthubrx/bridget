@@ -46,7 +46,7 @@ fn spec297_published_auto_fields_reach_transport() {
     let properties = schema["properties"].as_object().unwrap();
     let mut args = json!({
         "request_id":"same297", "task":"lecture", "cwd":"/source",
-        "quota_fallback_authorized":false, "machine_id":"fixture", "project_id":"fixture",
+        "quota_fallback_authorized":false, "resume_on_limit":true, "machine_id":"fixture", "project_id":"fixture",
         "engine":"codex", "connection_id":"fixture", "model":"fixture", "effort":"medium",
         "workload":"general", "expected_base_commit":"a".repeat(40), "posture":"discovery",
         "reply_timeout":600, "workspace":{"strategy":"shared"}, "child_requests":"deny",

@@ -1035,6 +1035,7 @@ mod tests {
             urgent: None,
             deliverable: None,
             quota_fallback_authorized: None,
+            resume_on_limit: None,
             agent_type: None,
         }
     }

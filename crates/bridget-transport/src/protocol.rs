@@ -2147,6 +2147,8 @@ pub struct AutoDelegateV2 {
     )]
     pub quota_fallback_authorized: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resume_on_limit: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub machine_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub project_id: Option<String>,
