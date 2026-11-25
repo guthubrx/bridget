@@ -2145,3 +2145,38 @@ Sans `kind`, ou avec `kind="message"`, le comportement historique reste celui
 d’une demande de message suivie. Aucun aiguillage automatique entre ces portées.
 L’opération d’admission exige `admission_cancel_v1` ; un ancien maître est refusé
 avant transmission. Ni le rejeu d’une admission ni une clé neuve ne l’annulent.
+
+## Graphes de tâches natifs (DAG)
+
+`bridget_delegate_graph` permet à un agent parent de soumettre un graphe acyclique
+d'étapes dépendantes (par exemple `A -> B + C -> D`) en un seul appel, sans boucle
+de veille ni réveil périodique :
+
+- **Ordonnancement automatique :** les étapes racines démarrent immédiatement ;
+  les étapes aval se lancent dès que tous leurs prédécesseurs `depends_on`
+  réussissent, avec les résultats amont injectés dans leur contexte de mission.
+- **Politique d'échec (`on_failure`) :** définit si l'échec d'une étape annule
+  les branches en attente ou laisse se terminer les branches indépendantes.
+- **Notification consolidée (`notify_policy`) :** réveille le parent une seule
+  fois à l'issue du graphe (ou par jalon), tout en conservant le `task_id` natif
+  et les reçus de chaque étape.
+- **Suivi et annulation :** `bridget_graph_status` lit l'avancement détaillé de
+  chaque nœud et `bridget_graph_cancel` arrête un graphe actif et ses descendants.
+
+## Résilience quota par défaut, bascule automatique et Cursor ACP
+
+- **`resume_on_limit` actif par défaut en délégation automatique et graphes :**
+  `bridget_auto_delegate` et les étapes de `bridget_delegate_graph` activent
+  `resume_on_limit: true` par défaut (passer explicitement `false` pour
+  désactiver). Lorsqu'une fenêtre de quota observée se réinitialise sous six
+  heures, Bridget met l'enfant en attente puis relance automatiquement la même
+  mission (jusqu'à deux rondes quota), sans consommer les reprises après panne.
+- **Bascule automatique sur quota :** déclarer `quota_fallback_authorized: true`
+  (ou activer `BRIDGET_AUTO_QUOTA_FALLBACK=1` sur le daemon) autorise Bridget à
+  basculer vers un autre compte ou moteur admissible lorsque la fenêtre choisie
+  est épuisée, à droits constants.
+- **Nettoyage des orphelins (`BRIDGET_REAPER_MODE=cleanup`) :** active le
+  nettoyage contrôlé des processus orphelins confirmés selon les gardes du daemon.
+- **Cursor ACP :** Cursor CLI (`agent`) est pris en charge comme moteur de
+  délégation natif aux côtés de Codex, Claude Code, Antigravity et GLM lorsqu'il
+  est installé et déclaré dans le catalogue de flotte.

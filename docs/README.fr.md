@@ -6,9 +6,11 @@ L’anglais est la langue par défaut des guides publics. Les versions français
 restent accessibles avec le suffixe `.fr.md`.
 
 - [Installation](communication-installation.fr.md)
+- [Console Web et quotas zéro-jeton](console-and-quotas.fr.md)
 - [Communication et files](reference-communication.fr.md)
-- [Délégation native](delegation-native.fr.md)
+- [Délégation native et graphes de tâches](delegation-native.fr.md)
 - [Fédération SSH](federation-services.fr.md)
+- [Mises à jour automatiques](automatic-updates.fr.md)
 - [Application Android](mobile.fr.md)
 - [Caches de compilation](build-cache.fr.md)
 - [Dépréciations](DEPRECATIONS.fr.md)

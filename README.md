@@ -1,31 +1,75 @@
 # Bridget
 
-<p align="center"><img src="assets/branding/bridget-logo.png" alt="Bridget" width="180"></p>
+<p align="center"><img src="assets/branding/bridget-logo.png" alt="Bridget" width="160"></p>
 
-**A local communication layer for your coding agents.**
+<p align="center">
+  <strong>Local communication, native delegation, task graphs and zero-token quota console for your coding agents.</strong>
+</p>
 
-[English](README.md) · [Français](README.fr.md) · [Documentation](docs/README.md) · [Releases](https://github.com/guthubrx/bridget/releases)
+<p align="center">
+  <a href="README.md">English</a> ·
+  <a href="README.fr.md">Français</a> ·
+  <a href="docs/README.md">Documentation</a> ·
+  <a href="docs/console-and-quotas.md">Web Console &amp; Quotas</a> ·
+  <a href="https://github.com/guthubrx/bridget/releases">Releases</a>
+</p>
 
 Bridget connects agent sessions across providers and machines. Agents can find
-each other, exchange messages, ask for a reply, share a thread and delegate work
-without copying conversations by hand.
+each other, exchange messages, ask for a reply, share a thread, delegate
+missions and chain multi-step task graphs (`A -> B + C -> D`) without copying
+conversations by hand or polling in a loop.
 
-A Rust daemon owns identities, delivery receipts and task state. CLI and MCP
-clients use that same authority. Bridget owns its communication, delegation and
-human-question contracts across terminal and Android clients.
+A Rust daemon owns identities, delivery receipts, quota probes and task state.
+CLI, MCP, local web console and Android clients use that same authority. Bridget
+owns its communication, delegation and human-question contracts across terminal,
+web console and Android clients.
+
+<p align="center">
+  <img src="docs/assets/console-usage-dark.png" alt="Bridget Web Console — Quotas &amp; Subscriptions (sanitized demo data)" width="900">
+</p>
 
 ## What you can do
 
 - **Communicate:** address an agent, request a reply and inspect the recorded outcome.
 - **Share context:** use shared threads, a handoff brief or a bounded journal excerpt.
-- **Delegate:** give a child a mission, inspect its result and continue it when its guard permits.
-- **Work remotely:** connect machines over SSH and run supported tasks in separate Git worktrees.
+- **Delegate & chain task graphs (DAG):** give a child a mission (`bridget_auto_delegate` / `bridget_delegate`), or submit an entire dependency graph (`bridget_delegate_graph`) where downstream steps launch automatically with upstream results injected and wake the parent once.
+- **Built-in quota resilience:** `resume_on_limit` is enabled by default on automatic delegations and graph steps (auto-pauses on exhausted quota windows and resumes after reset), with optional cross-account/engine fallback (`quota_fallback_authorized` / `fallback`).
+- **Local Web Console & zero-token quotas (`bridget ui` / `bridget usage`):** inspect real remaining quotas, banked resets and expiration dates for Codex, Claude and Antigravity without spending LLM tokens; manage OAuth accounts, isolated profiles, SSH machines, CLI deployments and per-host updates in Light or Dark mode.
+- **Work remotely:** connect machines over SSH and run supported tasks in separate Git worktrees with automatic bundle preparation.
 - **Answer human questions:** keep the model’s choices and descriptions, add your own text, and confirm a response from Android or a terminal. Drafts stay on their device.
-- **Keep control:** inspect queues, cancel owned tasks and use human controls to halt new delegations.
+- **Keep control:** inspect queues, cancel owned tasks or graphs and use human controls to halt new delegations.
 
-Codex and Claude Code use native drivers. Cursor and Gemini use supported
-integration paths. A provider listed in the catalog still needs an installed
-program, a configured account and permissions on the selected machine.
+Codex, Claude Code and Cursor ACP use native drivers. Antigravity, Gemini and
+GLM use supported integration paths. A provider listed in the catalog still
+needs an installed program, a configured account and permissions on the selected
+machine.
+
+## Web Console & Zero-Token Quotas
+
+Open the local web console on `127.0.0.1` or check subscriptions directly from your terminal:
+
+```sh
+bridget ui                 # Launch the local Web Console (Quotas, Accounts, Machines, Settings)
+bridget ui usage           # Jump directly to Quotas & Subscriptions
+bridget usage              # Zero-LLM-token terminal summary (5-minute cache)
+bridget usage --refresh    # Force a fresh probe across all connected hosts
+bridget usage --html       # Export a standalone HTML report
+```
+
+<details>
+<summary><strong>More console screenshots</strong> (Light theme Accounts &amp; Dark theme Machines/CLI — 100% synthetic demo data)</summary>
+<br>
+<p align="center">
+  <img src="docs/assets/console-accounts-light.png" alt="Bridget Web Console — Accounts &amp; Isolated Profiles in light theme" width="880">
+</p>
+<p align="center">
+  <img src="docs/assets/console-machines-dark.png" alt="Bridget Web Console — SSH Machines &amp; CLI Deployment in dark theme" width="880">
+</p>
+</details>
+
+See the [Web Console & Quotas guide](docs/console-and-quotas.md) for probe details
+(Codex `app-server`, Claude OAuth usage & banked resets, Antigravity `/usage`,
+Cursor & GLM) and local-only credential boundaries.
 
 ## Start here
 
@@ -101,7 +145,25 @@ ID, request key and exact arguments. If an admission response is lost, inspect
 or replay that same request; a new key can create a second mission.
 
 Read the [delegation guide](docs/delegation-native.md) for permissions, remote
-preparation, worktrees, continuation and cancellation.
+preparation, worktrees, continuation, quota resilience and cancellation.
+
+### Native task graphs (DAG)
+
+Instead of polling or keeping a parent agent awake between stages, submit a
+dependency graph with `bridget_delegate_graph`. The daemon executes independent
+branches in parallel, injects upstream results into dependent steps, handles
+`on_failure` policies and wakes the parent once when the graph settles:
+
+```mermaid
+flowchart LR
+    A["Step A: Audit & Spec"] --> B["Step B: Implement Backend"]
+    A --> C["Step C: Implement Tests"]
+    B --> D["Step D: Final Verification"]
+    C --> D
+```
+
+Inspect or stop a running graph at any time with `bridget_graph_status` and
+`bridget_graph_cancel`.
 
 ## What a receipt proves
 
@@ -137,9 +199,11 @@ No secret scanner can prove that a repository contains no sensitive information.
 | Topic | English | Français |
 | --- | --- | --- |
 | Installation and terminal identity | [Guide](docs/communication-installation.md) | [Guide](docs/communication-installation.fr.md) |
+| Web console, accounts and zero-token quotas | [Guide](docs/console-and-quotas.md) | [Guide](docs/console-and-quotas.fr.md) |
 | Communication, receipts and queues | [Reference](docs/reference-communication.md) | [Référence](docs/reference-communication.fr.md) |
-| Native delegation and remote work | [Guide](docs/delegation-native.md) | [Guide](docs/delegation-native.fr.md) |
+| Native delegation, task graphs and remote work | [Guide](docs/delegation-native.md) | [Guide](docs/delegation-native.fr.md) |
 | SSH federation | [Guide](docs/federation-services.md) | [Guide](docs/federation-services.fr.md) |
+| Automatic and per-host updates | [Guide](docs/automatic-updates.md) | [Guide](docs/automatic-updates.fr.md) |
 | Android app | [Guide](docs/mobile.md) | [Guide](docs/mobile.fr.md) |
 | Build cache maintenance | [Guide](docs/build-cache.md) | [Guide](docs/build-cache.fr.md) |
 | Deprecations | [Register](docs/DEPRECATIONS.md) | [Registre](docs/DEPRECATIONS.fr.md) |

@@ -159,3 +159,20 @@ Android publication validation also supports an exact draft found through the
 bounded official release list when its tag does not exist yet. assets_verified
 only confirms the files; public_verified stays false until the release is public.
 An uncertain upload is inspected with --verify-published before any new upload.
+
+## Per-host update modes and fleet automation (`bridget ui settings`)
+
+Each host in the federation can override the global automatic-update default
+with an explicit per-host mode (`auto`, `manual`, or `default` to inherit the
+fleet policy), stored in `updates-host-modes.json` and editable directly from
+the **Settings** tab of `bridget ui` (see [Web Console & Quotas](console-and-quotas.md)).
+
+The same **Settings** tab also manages `automanaged.json` (mode `0600`,
+propagated to reachable hosts):
+
+- **Official CLI updates (`cli_updates`):** periodically updates installed
+  provider CLIs through their official installers without interrupting active
+  missions.
+- **Additive model sync (`model_sync`):** adds newly published provider models
+  to fleet registries strictly additively, preserving existing entries and
+  routing constraints.

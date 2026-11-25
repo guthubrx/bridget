@@ -51,6 +51,10 @@
     {
       "en": "docs/automatic-updates.md",
       "fr": "docs/automatic-updates.fr.md"
+    },
+    {
+      "en": "docs/console-and-quotas.md",
+      "fr": "docs/console-and-quotas.fr.md"
     }
   ],
   "additional": [

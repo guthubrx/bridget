@@ -1455,3 +1455,39 @@ texte libre ne sont pas affichés. Conserver localement l’enveloppe et le refu
 Vérifier toute demande antérieure avec la même clé avant de corriger les paramètres.
 Si le champ est annoncé par le schéma chargé, faire vérifier ce schéma et la
 version du client par le mainteneur ; ne pas changer de route ni de droits.
+
+## Native task graphs (DAG)
+
+`bridget_delegate_graph` lets a parent agent submit a directed acyclic graph of
+dependent steps (such as `A -> B + C -> D`) in one call, without periodic wakes
+or polling loops:
+
+- **Automatic scheduling:** root steps launch immediately; downstream steps
+  start as soon as all their `depends_on` predecessors succeed, with upstream
+  summaries injected into their mission context.
+- **Failure policies (`on_failure`):** configure whether a failed step cancels
+  pending branches or lets independent branches finish.
+- **Consolidated notification (`notify_policy`):** wake the parent once when the
+  graph settles (or per milestone) while keeping every step's native `task_id`
+  and receipts inspectable.
+- **Inspection & cancellation:** read live step states with
+  `bridget_graph_status` and stop an active graph and its running descendants
+  with `bridget_graph_cancel`.
+
+## Default quota resilience, automatic fallback and Cursor ACP
+
+- **Default `resume_on_limit` on automatic delegation and graph steps:**
+  `bridget_auto_delegate` and `bridget_delegate_graph` steps enable
+  `resume_on_limit: true` by default (explicit `false` opts out). When an
+  observed quota window resets within six hours, Bridget pauses the child and
+  relaunches the exact mission automatically (up to two quota rounds) without
+  consuming crash-recovery attempts.
+- **Automatic quota fallback:** setting `quota_fallback_authorized: true` on an
+  admission (or enabling `BRIDGET_AUTO_QUOTA_FALLBACK=1` on the daemon) allows
+  Bridget to re-route to another eligible account or engine when the selected
+  window is exhausted, within existing permissions.
+- **Orphan cleanup (`BRIDGET_REAPER_MODE=cleanup`):** enables controlled cleanup
+  of confirmed orphaned processes according to daemon safety checks.
+- **Cursor ACP:** Cursor CLI (`agent`) is supported as a native delegation
+  engine alongside Codex, Claude Code, Antigravity and GLM when installed and
+  declared in the fleet catalog.

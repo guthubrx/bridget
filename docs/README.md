@@ -11,9 +11,11 @@ implementation records remain historical evidence, not installation instructions
 | Topic | English | Français |
 | --- | --- | --- |
 | Install and register an agent | [Installation](communication-installation.md) | [Installation](communication-installation.fr.md) |
+| Web console, accounts and zero-token quotas | [Console & quotas](console-and-quotas.md) | [Console & quotas](console-and-quotas.fr.md) |
 | Send, reply, inspect and manage queues | [Communication](reference-communication.md) | [Communication](reference-communication.fr.md) |
-| Delegate, continue and cancel work | [Native delegation](delegation-native.md) | [Délégation native](delegation-native.fr.md) |
+| Delegate, task graphs (DAG), resilience and cancel | [Native delegation](delegation-native.md) | [Délégation native](delegation-native.fr.md) |
 | Connect machines | [SSH federation](federation-services.md) | [Fédération SSH](federation-services.fr.md) |
+| Automatic and per-host updates | [Automatic updates](automatic-updates.md) | [Mises à jour automatiques](automatic-updates.fr.md) |
 | Use Bridget on Android | [Mobile](mobile.md) | [Mobile](mobile.fr.md) |
 | Build and maintain caches | [Build caches](build-cache.md) | [Caches](build-cache.fr.md) |
 | Understand compatibility changes | [Deprecations](DEPRECATIONS.md) | [Dépréciations](DEPRECATIONS.fr.md) |

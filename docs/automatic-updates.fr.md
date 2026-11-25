@@ -107,3 +107,21 @@ Si la réponse complète dépasse 64 Kio, `update_status_too_large` refuse la
 projection avant son transport. Faire inspecter les rapports d'hôtes par le
 mainteneur et corriger leur volume ; ce code n'autorise ni suppression de tâches,
 ni activation forcée. Les données conservées restent inchangées.
+
+## Modes par machine et automatismes de flotte (`bridget ui settings`)
+
+Chaque hôte de la fédération peut déroger au réglage global de mise à jour
+automatique avec un mode dédié (`auto`, `manual`, ou `default` pour hériter de
+la politique commune), conservé dans `updates-host-modes.json` et pilotable
+directement depuis l'onglet **Paramètres** de `bridget ui` (voir
+[Console Web et quotas zéro-jeton](console-and-quotas.fr.md)).
+
+Le même onglet **Paramètres** gère également `automanaged.json` (droits `0600`,
+propagé aux machines joignables) :
+
+- **Mises à jour des clients CLI (`cli_updates`) :** met à jour périodiquement
+  les CLI fournisseurs installés via leurs commandes officielles sans couper les
+  missions en cours.
+- **Synchronisation des modèles (`model_sync`) :** ajoute de manière strictement
+  additive les nouveaux modèles publiés dans les registres de flotte, sans
+  altérer les entrées ni les contraintes de routage existantes.
