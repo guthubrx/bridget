@@ -44,8 +44,7 @@ function renderChips(sub) {
 }
 
 function renderResets(sub, now) {
-  if (sub.engine === "claude") return `<div class="u-resets"><div class="u-muted">non exposé</div></div>`;
-  if (sub.engine !== "codex" || typeof sub.manual_resets_available !== "number") {
+  if ((sub.engine !== "codex" && sub.engine !== "claude") || typeof sub.manual_resets_available !== "number") {
     return `<div class="u-resets"><div class="u-muted">—</div></div>`;
   }
   const n = sub.manual_resets_available;
@@ -183,11 +182,15 @@ export function renderUsageView(ctx) {
   if (activeFilter === "all" || activeFilter === "claude") {
     const list = vendorSubs(subs, "claude");
     if (list.length) {
+      const tot = (data.provider_totals || []).find((t) => t.engine === "claude");
+      const meta = tot
+        ? `<span class="u-${tot.remaining_sum === 0 ? "err" : "ok"}">${tot.remaining_sum} %</span> / ${tot.capacity_max} % · ${tot.credentials_count} compte${tot.credentials_count > 1 ? "s" : ""}`
+        : `${list.length} compte${list.length > 1 ? "s" : ""}`;
       const renderClaudeWin = (lbl, w) => {
         if (!w || w.status === "reset_elapsed") {
           return `<div class="u-gauge"><div class="u-gtop"><span class="u-muted">${lbl}</span><span class="u-muted u-nw">—</span></div><div class="u-track"></div><div class="u-gsub"><span>via StatusLine</span></div></div>`;
         }
-        const sub = formatResetShort(w.resets_at, now, true) || "via StatusLine";
+        const sub = w.status === "idle" ? "inactif" : (formatResetShort(w.resets_at, now, true) || "via StatusLine");
         if (typeof w.remaining_percent === "number") {
           const tone = toneForRem(w.remaining_percent, w.status);
           return `<div class="u-gauge"><div class="u-gtop"><span class="u-muted">${lbl}</span><span class="u-${tone} u-nw">${w.remaining_percent} %</span></div><div class="u-track"><div class="u-fill ${tone}" style="width:${w.remaining_percent}%"></div></div><div class="u-gsub"><span>${esc(sub)}</span></div></div>`;
@@ -204,7 +207,7 @@ export function renderUsageView(ctx) {
           ${renderResets(s, now)}${renderActs(s, refreshing, refreshingId, true)}
         </div>`;
       }).join("");
-      sections.push(`<section class="u-vendor"><div class="u-vhead"><span class="u-vname">Claude</span><span class="u-vmeta">${list.length} compte${list.length > 1 ? "s" : ""}</span></div>${rows}</section>`);
+      sections.push(`<section class="u-vendor"><div class="u-vhead"><span class="u-vname">Claude</span><span class="u-vmeta">${meta}</span></div>${rows}</section>`);
     }
   }
 

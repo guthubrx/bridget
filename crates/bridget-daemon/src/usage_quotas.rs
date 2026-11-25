@@ -262,6 +262,12 @@ struct ClaudeAuthProbeResult {
     plan_type: Option<String>,
 }
 
+struct ClaudeOAuthUsageResult {
+    windows: Vec<CachedWindow>,
+    manual_resets_available: Option<u32>,
+    manual_reset_expirations: Vec<i64>,
+}
+
 fn now_secs() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -440,11 +446,15 @@ pub(crate) fn format_window_label(window: &str) -> String {
     window.to_string()
 }
 
-/// Convertit un horodatage RFC3339/ISO-8601 UTC (`2026-11-30T20:03:03Z` ou avec fractions)
+/// Convertit un horodatage RFC3339/ISO-8601 UTC (`2026-11-30T20:03:03Z`, `+00:00` ou avec fractions)
 /// en epoch Unix (secondes). Pur Rust, sans dépendance externe.
 pub(crate) fn parse_iso8601_utc(raw: &str) -> Option<i64> {
     let s = raw.trim();
-    let core = s.strip_suffix('Z').or_else(|| s.strip_suffix('z'))?;
+    let core = s
+        .strip_suffix('Z')
+        .or_else(|| s.strip_suffix('z'))
+        .or_else(|| s.strip_suffix("+00:00"))
+        .or_else(|| s.strip_suffix("-00:00"))?;
     let (date_part, time_part_full) = core.split_once('T')?;
     let time_part = time_part_full.split('.').next()?;
     let mut d_it = date_part.split('-');
@@ -1360,6 +1370,218 @@ fn probe_claude_auth(
         .ok_or_else(|| "réponse claude auth status sans champ loggedIn".to_string())
 }
 
+/// Parse la réponse officielle OAuth Anthropic `/api/oauth/usage?cedar_ember=1&skip_spend=1`
+/// (0 jeton LLM : fenêtres `five_hour` / `seven_day` et crédits de reset `cedar_ember.grants`).
+fn parse_claude_oauth_usage_response(val: &Value, now: i64) -> Option<ClaudeOAuthUsageResult> {
+    let mut windows = Vec::new();
+
+    let parse_win = |obj: &Value, name: &str| -> Option<CachedWindow> {
+        let util = obj
+            .get("utilization")
+            .and_then(Value::as_f64)
+            .or_else(|| obj.get("percent").and_then(Value::as_f64))?;
+        let used = util.round().clamp(0.0, 100.0) as u8;
+        let resets_at = obj
+            .get("resets_at")
+            .and_then(Value::as_str)
+            .and_then(parse_iso8601_utc);
+        let status = if used >= 100 {
+            "rejected".to_string()
+        } else {
+            "available".to_string()
+        };
+        Some(CachedWindow {
+            window: name.to_string(),
+            pool: None,
+            used_percent: Some(used),
+            resets_at,
+            status,
+            observed_at: now,
+        })
+    };
+
+    let seven_day = val
+        .get("seven_day")
+        .filter(|v| v.is_object())
+        .and_then(|v| parse_win(v, "seven_day"))
+        .or_else(|| {
+            val.get("limits")
+                .and_then(Value::as_array)
+                .and_then(|arr| arr.iter().find(|l| l.get("kind").and_then(Value::as_str) == Some("weekly_all")))
+                .and_then(|v| parse_win(v, "seven_day"))
+        });
+
+    let five_hour = val
+        .get("five_hour")
+        .filter(|v| v.is_object())
+        .and_then(|v| parse_win(v, "five_hour"));
+
+    if let Some(w5) = five_hour {
+        windows.push(w5);
+    } else if seven_day.is_some() {
+        // Fenêtre 5h non démarrée (0 % utilisé / 100 % disponible).
+        windows.push(CachedWindow {
+            window: "five_hour".to_string(),
+            pool: None,
+            used_percent: Some(0),
+            resets_at: None,
+            status: "idle".to_string(),
+            observed_at: now,
+        });
+    }
+    if let Some(w7) = seven_day {
+        windows.push(w7);
+    }
+
+    let mut manual_resets_available: Option<u32> = None;
+    let mut manual_reset_expirations: Vec<i64> = Vec::new();
+    if let Some(grants) = val
+        .get("cedar_ember")
+        .and_then(|ce| ce.get("grants"))
+        .and_then(Value::as_array)
+    {
+        let mut total_left = 0u32;
+        for g in grants {
+            let paused = g.get("paused").and_then(Value::as_bool).unwrap_or(false);
+            if paused {
+                continue;
+            }
+            let left = g.get("resets_left").and_then(Value::as_u64).unwrap_or(0) as u32;
+            if left > 0 {
+                total_left = total_left.saturating_add(left);
+                if let Some(exp) = g
+                    .get("ends_at")
+                    .and_then(Value::as_str)
+                    .and_then(parse_iso8601_utc)
+                {
+                    manual_reset_expirations.push(exp);
+                }
+            }
+        }
+        manual_reset_expirations.sort_unstable();
+        manual_resets_available = Some(total_left);
+    }
+
+    if windows.is_empty() && manual_resets_available.is_none() {
+        return None;
+    }
+    Some(ClaudeOAuthUsageResult {
+        windows,
+        manual_resets_available,
+        manual_reset_expirations,
+    })
+}
+
+fn read_local_claude_oauth_token(profile_dir: Option<&str>) -> Option<String> {
+    let extract = |raw: &str| -> Option<String> {
+        let val: Value = serde_json::from_str(raw.trim()).ok()?;
+        val.get("claudeAiOauth")
+            .and_then(|o| o.get("accessToken"))
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+    };
+    if let Some(dir) = profile_dir.filter(|s| !s.trim().is_empty()) {
+        let p = Path::new(dir).join(".credentials.json");
+        if let Ok(raw) = fs::read_to_string(p)
+            && let Some(tok) = extract(&raw)
+        {
+            return Some(tok);
+        }
+    }
+    if let Ok(home) = std::env::var("HOME") {
+        let p = PathBuf::from(home).join(".claude").join(".credentials.json");
+        if let Ok(raw) = fs::read_to_string(p)
+            && let Some(tok) = extract(&raw)
+        {
+            return Some(tok);
+        }
+    }
+    #[cfg(target_os = "macos")]
+    {
+        if let Ok(out) = Command::new("security")
+            .args(["find-generic-password", "-s", "Claude Code-credentials", "-w"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .output()
+            && out.status.success()
+            && let Ok(text) = String::from_utf8(out.stdout)
+            && let Some(tok) = extract(&text)
+        {
+            return Some(tok);
+        }
+    }
+    None
+}
+
+fn probe_claude_oauth_usage(
+    profile_dir: Option<&str>,
+    is_local: bool,
+    machine_id: &str,
+    now: i64,
+) -> Result<ClaudeOAuthUsageResult, String> {
+    let body = if is_local {
+        let token = read_local_claude_oauth_token(profile_dir)
+            .ok_or_else(|| "jeton OAuth Claude introuvable localement".to_string())?;
+        let resp = minreq::get("https://api.anthropic.com/api/oauth/usage?cedar_ember=1&skip_spend=1")
+            .with_header("Authorization", format!("Bearer {token}"))
+            .with_header("anthropic-beta", "oauth-2025-04-20")
+            .with_header("User-Agent", "claude-cli/2.1.332 (external, cli)")
+            .with_header("Content-Type", "application/json")
+            .with_timeout(8)
+            .send()
+            .map_err(|e| format!("requête OAuth usage Claude impossible : {e}"))?;
+        if resp.status_code != 200 {
+            return Err(format!("OAuth usage Claude HTTP {}", resp.status_code));
+        }
+        resp.as_str()
+            .map(str::to_string)
+            .map_err(|e| format!("lecture réponse OAuth usage Claude : {e}"))?
+    } else {
+        let dir_expr = match profile_dir.filter(|s| !s.trim().is_empty()) {
+            Some(dir) => format!("Path({})", serde_json::to_string(dir).unwrap_or_default()),
+            None => "Path.home() / '.claude'".to_string(),
+        };
+        let py = format!(
+            "import json,urllib.request,urllib.error\n\
+from pathlib import Path\n\
+p={dir_expr}/'.credentials.json'\n\
+tok=json.loads(p.read_text()).get('claudeAiOauth',{{}}).get('accessToken')\n\
+assert tok\n\
+req=urllib.request.Request('https://api.anthropic.com/api/oauth/usage?cedar_ember=1&skip_spend=1',headers={{'Authorization':'Bearer '+tok,'anthropic-beta':'oauth-2025-04-20','User-Agent':'claude-cli/2.1.332 (external, cli)','Content-Type':'application/json'}})\n\
+with urllib.request.urlopen(req,timeout=8) as r: print(r.read().decode())\n"
+        );
+        let remote_cmd = format!("python3 -c {}", shell_single_quote(&py));
+        let child = Command::new("ssh")
+            .args([
+                "-o",
+                "BatchMode=yes",
+                "-o",
+                "ConnectTimeout=4",
+                "-o",
+                "StrictHostKeyChecking=accept-new",
+                machine_id,
+                &remote_cmd,
+            ])
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .map_err(|e| format!("sonde SSH OAuth usage Claude sur {machine_id} impossible : {e}"))?;
+        run_command_with_timeout(child, 10)?
+    };
+    let trimmed = body.trim();
+    if trimmed.is_empty() {
+        return Err("réponse OAuth usage Claude vide".to_string());
+    }
+    let val: Value = serde_json::from_str(trimmed)
+        .map_err(|_| "réponse OAuth usage Claude non JSON".to_string())?;
+    parse_claude_oauth_usage_response(&val, now)
+        .ok_or_else(|| "réponse OAuth usage Claude sans fenêtre ni reset".to_string())
+}
+
 fn parse_cursor_list_models_logged_in(output: &str) -> bool {
     let lower = output.to_ascii_lowercase();
     if lower.contains("authentication required")
@@ -1717,7 +1939,16 @@ fn deduplicate_shared_accounts(
             if sub.engine == "claude" {
                 merge_quota_windows(&mut existing.windows, sub.windows, "claude");
                 existing.observed_at = existing.observed_at.max(sub.observed_at);
-                if sub.source_state == "observed" || existing.source_state == "observed" {
+                if sub.manual_resets_available.is_some() {
+                    existing.manual_resets_available = sub.manual_resets_available;
+                }
+                if !sub.manual_reset_expirations.is_empty() {
+                    existing.manual_reset_expirations = sub.manual_reset_expirations;
+                }
+                if sub.source_state == "live_probe" || existing.source_state == "live_probe" {
+                    existing.source_state = "live_probe".to_string();
+                    existing.source_label = "Sonde OAuth Claude (0 jeton)".to_string();
+                } else if sub.source_state == "observed" || existing.source_state == "observed" {
                     existing.source_state = "observed".to_string();
                     existing.source_label = "Observé passivement".to_string();
                 } else {
@@ -1850,12 +2081,24 @@ fn build_machine_matrix(
                 let cid = s.connection_ids.first().cloned();
                 let extra = if glm_present { Some("+ GLM".to_string()) } else { None };
                 let cell = if s.logged_in == Some(true) {
+                    let rem7 = s
+                        .windows
+                        .iter()
+                        .find(|w| w.label == "7j")
+                        .or_else(|| s.windows.first())
+                        .and_then(|w| w.remaining_percent);
+                    let plan_lbl = s.plan_type.clone().unwrap_or_else(|| "Connecté".to_string());
+                    let summary = match rem7 {
+                        Some(r) => Some(format!("{plan_lbl} · {r} %")),
+                        None => Some(plan_lbl),
+                    };
+                    let tone = rem7.map(tone_for_remaining).unwrap_or_else(|| "ok".to_string());
                     MachineCell {
                         status: "connected".to_string(),
                         account: s.account_email.clone().or_else(|| Some("Claude".to_string())),
-                        summary: s.plan_type.clone().or_else(|| Some("Connecté".to_string())),
+                        summary,
                         extra,
-                        tone: "ok".to_string(),
+                        tone,
                         connection_id: cid,
                     }
                 } else if s.logged_in == Some(false) {
@@ -2111,12 +2354,12 @@ fn build_provider_totals(subs: &[SubscriptionQuota]) -> Vec<ProviderTotal> {
         }
     }
 
-    // 3. Claude : si au moins un abonnement a un pourcentage réel (via StatusLine / utilization).
+    // 3. Claude : si au moins un abonnement a un pourcentage réel (sonde OAuth ou StatusLine).
     let claude_pct: Vec<_> = subs
         .iter()
         .filter(|s| {
             s.engine == "claude"
-                && s.source_state == "observed"
+                && matches!(s.source_state.as_str(), "live_probe" | "observed")
                 && s.windows.iter().any(|w| w.remaining_percent.is_some())
         })
         .collect();
@@ -2502,6 +2745,117 @@ pub(crate) fn collect_usage_targeted(
             claude_results.insert(gid, res);
         }
     }
+
+    // Mettre à jour les métadonnées d'authentification Claude avant la sonde OAuth usage
+    // (1 seule requête HTTPS /api/oauth/usage par email Claude unique pour éviter tout HTTP 429).
+    let mut claude_oauth_jobs: BTreeMap<String, (Option<String>, bool, String)> = BTreeMap::new();
+    for group in groups.values().filter(|g| g.engine == "claude") {
+        let ckey = cache_entry_key(
+            &group.engine,
+            &group.machine_id,
+            group.profile_dir.as_deref(),
+            group.connection_ids.first().map(String::as_str),
+            group.agent_types.first().map(String::as_str).unwrap_or(&group.engine),
+        );
+        if let Some(Ok(auth)) = claude_results.get(&group.id) {
+            let entry = cache.entries.entry(ckey.clone()).or_insert_with(|| {
+                CachedQuotaEntry {
+                    engine: "claude".to_string(),
+                    machine_id: group.machine_id.clone(),
+                    agent_type: group.agent_types.first().cloned().unwrap_or_default(),
+                    connection_id: group.connection_ids.first().cloned(),
+                    profile_dir: group.profile_dir.clone(),
+                    source: "claude_auth_probe".to_string(),
+                    observed_at: 0,
+                    ..CachedQuotaEntry::default()
+                }
+            });
+            entry.logged_in = Some(auth.logged_in);
+            entry.account_email = if auth.logged_in { auth.account_email.clone() } else { None };
+            entry.plan_type = if auth.logged_in { auth.plan_type.clone() } else { None };
+            entry.auth_checked_at = Some(now);
+            cache_dirty = true;
+        }
+        let cached_entry = cache.entries.get(&ckey);
+        let is_logged = cached_entry.and_then(|e| e.logged_in) == Some(true);
+        let email = cached_entry
+            .and_then(|e| e.account_email.clone())
+            .filter(|s| !s.is_empty());
+        if !is_logged {
+            continue;
+        }
+        let acc_key = email.clone().unwrap_or_else(|| group.id.clone());
+        let targeted = match target_subscription_id {
+            None => force_refresh,
+            Some(tid) => {
+                force_refresh
+                    && (tid == group.id
+                        || email
+                            .as_deref()
+                            .is_some_and(|em| tid == format!("claude:account:{em}")))
+            }
+        };
+        let fresh = cached_entry.is_some_and(|e| {
+            !targeted
+                && e.source == "claude_oauth_usage"
+                && !e.windows.is_empty()
+                && e.observed_at > 0
+                && now.saturating_sub(e.observed_at) <= USAGE_CACHE_TTL_SECS as i64
+        });
+        if !fresh && !claude_oauth_jobs.contains_key(&acc_key) {
+            claude_oauth_jobs.insert(
+                acc_key,
+                (group.profile_dir.clone(), group.is_local, group.machine_id.clone()),
+            );
+        }
+    }
+
+    let claude_oauth_handles: Vec<_> = claude_oauth_jobs
+        .into_iter()
+        .map(|(acc_key, (prof, is_local, mid))| {
+            std::thread::spawn(move || {
+                let res = probe_claude_oauth_usage(prof.as_deref(), is_local, &mid, now);
+                (acc_key, res)
+            })
+        })
+        .collect();
+    let mut claude_oauth_results: BTreeMap<String, Result<ClaudeOAuthUsageResult, String>> =
+        BTreeMap::new();
+    for h in claude_oauth_handles {
+        if let Ok((acc_key, res)) = h.join() {
+            claude_oauth_results.insert(acc_key, res);
+        }
+    }
+    for group in groups.values().filter(|g| g.engine == "claude") {
+        let ckey = cache_entry_key(
+            &group.engine,
+            &group.machine_id,
+            group.profile_dir.as_deref(),
+            group.connection_ids.first().map(String::as_str),
+            group.agent_types.first().map(String::as_str).unwrap_or(&group.engine),
+        );
+        let Some(entry) = cache.entries.get_mut(&ckey) else {
+            continue;
+        };
+        if entry.logged_in != Some(true) {
+            continue;
+        }
+        let acc_key = entry
+            .account_email
+            .clone()
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| group.id.clone());
+        if let Some(Ok(usage)) = claude_oauth_results.get(&acc_key) {
+            for w in &usage.windows {
+                entry.windows.insert(w.window.clone(), w.clone());
+            }
+            entry.manual_resets_available = usage.manual_resets_available;
+            entry.manual_reset_expirations = usage.manual_reset_expirations.clone();
+            entry.source = "claude_oauth_usage".to_string();
+            entry.observed_at = now;
+            cache_dirty = true;
+        }
+    }
     let mut cursor_results: BTreeMap<String, Result<bool, String>> = BTreeMap::new();
     for h in cursor_handles {
         if let Ok((gid, mid, res)) = h.join() {
@@ -2734,35 +3088,9 @@ pub(crate) fn collect_usage_targeted(
                 });
             }
             "claude" => {
-                let mut probe_err: Option<String> = None;
-                if let Some(res) = claude_results.remove(&group.id) {
-                    match res {
-                        Ok(auth) => {
-                            let entry = cache.entries.entry(ckey.clone()).or_insert_with(|| {
-                                CachedQuotaEntry {
-                                    engine: "claude".to_string(),
-                                    machine_id: group.machine_id.clone(),
-                                    agent_type: group
-                                        .agent_types
-                                        .first()
-                                        .cloned()
-                                        .unwrap_or_default(),
-                                    connection_id: group.connection_ids.first().cloned(),
-                                    profile_dir: group.profile_dir.clone(),
-                                    source: "claude_auth_probe".to_string(),
-                                    observed_at: 0,
-                                    ..CachedQuotaEntry::default()
-                                }
-                            });
-                            entry.logged_in = Some(auth.logged_in);
-                            entry.account_email = if auth.logged_in { auth.account_email } else { None };
-                            entry.plan_type = if auth.logged_in { auth.plan_type } else { None };
-                            entry.auth_checked_at = Some(now);
-                            cache_dirty = true;
-                        }
-                        Err(e) => probe_err = Some(e),
-                    }
-                }
+                let probe_err: Option<String> = claude_results
+                    .remove(&group.id)
+                    .and_then(|r| r.err());
                 let cached_meta = cache.entries.get(&ckey).cloned();
                 let logged_in = cached_meta.as_ref().and_then(|e| e.logged_in);
                 let account_email = cached_meta.as_ref().and_then(|e| e.account_email.clone());
@@ -2771,6 +3099,15 @@ pub(crate) fn collect_usage_targeted(
                     .and_then(|e| e.plan_type.as_deref())
                     .map(format_plan_type)
                     .filter(|s| !s.is_empty());
+                let is_oauth_live = cached_meta
+                    .as_ref()
+                    .is_some_and(|e| e.source == "claude_oauth_usage");
+                let manual_resets_available =
+                    cached_meta.as_ref().and_then(|e| e.manual_resets_available);
+                let manual_reset_expirations = cached_meta
+                    .as_ref()
+                    .map(|e| e.manual_reset_expirations.clone())
+                    .unwrap_or_default();
 
                 let mut merged_windows: BTreeMap<String, CachedWindow> = BTreeMap::new();
                 let mut latest_obs: Option<i64> = None;
@@ -2832,6 +3169,12 @@ pub(crate) fn collect_usage_targeted(
                         "Non connecté".to_string(),
                         None,
                     )
+                } else if any_live && is_oauth_live {
+                    (
+                        "live_probe".to_string(),
+                        "Sonde OAuth Claude (0 jeton)".to_string(),
+                        None,
+                    )
                 } else if any_live {
                     (
                         "observed".to_string(),
@@ -2874,8 +3217,8 @@ pub(crate) fn collect_usage_targeted(
                     windows,
                     credits_balance: None,
                     credits_unlimited: false,
-                    manual_resets_available: None,
-                    manual_reset_expirations: Vec::new(),
+                    manual_resets_available,
+                    manual_reset_expirations,
                     observed_at: latest_obs,
                     detail,
                 });
@@ -3173,7 +3516,7 @@ fn render_unicode_bar(remaining_pct: u8) -> String {
 
 fn format_resets_terminal(sub: &SubscriptionQuota, now: i64) -> String {
     match sub.engine.as_str() {
-        "codex" => match sub.manual_resets_available {
+        "codex" | "claude" => match sub.manual_resets_available {
             Some(0) => " · 0 reset".to_string(),
             Some(n) => {
                 let plural = if n > 1 { "s" } else { "" };
@@ -3189,7 +3532,6 @@ fn format_resets_terminal(sub: &SubscriptionQuota, now: i64) -> String {
             }
             None => String::new(),
         },
-        "claude" => " · resets : non exposé".to_string(),
         _ => String::new(),
     }
 }
@@ -3390,7 +3732,7 @@ fn render_html_chips(sub: &SubscriptionQuota) -> String {
 
 fn render_html_resets(sub: &SubscriptionQuota, now: i64) -> String {
     match sub.engine.as_str() {
-        "codex" => match sub.manual_resets_available {
+        "codex" | "claude" => match sub.manual_resets_available {
             Some(0) => r#"<div class="resets"><div><strong>0</strong> reset</div><div class="r-sub">—</div></div>"#.to_string(),
             Some(n) => {
                 let plural = if n > 1 { "s" } else { "" };
@@ -3414,7 +3756,6 @@ fn render_html_resets(sub: &SubscriptionQuota, now: i64) -> String {
             }
             None => r#"<div class="resets"><div class="muted">—</div></div>"#.to_string(),
         },
-        "claude" => r#"<div class="resets"><div class="muted">non exposé</div></div>"#.to_string(),
         _ => r#"<div class="resets"><div class="muted">—</div></div>"#.to_string(),
     }
 }
@@ -3600,11 +3941,33 @@ pub(crate) fn render_html(report: &UsageReport) -> String {
     // 3. CLAUDE
     let claude_subs = vendor_visible_subs(&report.subscriptions, "claude");
     if !claude_subs.is_empty() {
-        let meta = format!(
-            "{} compte{}",
-            claude_subs.len(),
-            if claude_subs.len() > 1 { "s" } else { "" }
-        );
+        let meta = report
+            .provider_totals
+            .iter()
+            .find(|t| t.engine == "claude")
+            .map(|t| {
+                let pct_cls = if t.remaining_sum == 0 {
+                    "danger"
+                } else if t.capacity_max > 0 && (t.remaining_sum * 100 / t.capacity_max) <= 20 {
+                    "warn"
+                } else {
+                    "ok"
+                };
+                format!(
+                    r#"<span class="{pct_cls}">{} %</span> / {} % · {} compte{}"#,
+                    t.remaining_sum,
+                    t.capacity_max,
+                    t.credentials_count,
+                    if t.credentials_count > 1 { "s" } else { "" }
+                )
+            })
+            .unwrap_or_else(|| {
+                format!(
+                    "{} compte{}",
+                    claude_subs.len(),
+                    if claude_subs.len() > 1 { "s" } else { "" }
+                )
+            });
         let mut rows = String::new();
         for sub in &claude_subs {
             let plan = sub
@@ -3619,7 +3982,13 @@ pub(crate) fn render_html(report: &UsageReport) -> String {
                 match opt {
                     Some(w) if w.status != "reset_elapsed" => {
                         let rst = format_reset_short_fr(w.resets_at, now, true);
-                        let sub_txt = if rst.is_empty() { "via StatusLine".to_string() } else { rst };
+                        let sub_txt = if w.status == "idle" {
+                            "inactif".to_string()
+                        } else if rst.is_empty() {
+                            "via StatusLine".to_string()
+                        } else {
+                            rst
+                        };
                         if let Some(rem) = w.remaining_percent {
                             let tone = if w.status == "rejected" || rem <= 10 {
                                 "danger"
@@ -4430,8 +4799,105 @@ mod tests {
         };
         let html = render_html(&report);
         assert!(html.contains("Disponible"));
-        assert!(html.contains("non exposé"));
         assert!(!html.contains("100 %</span>"));
         assert!(!html.contains("unknown"));
+    }
+
+    #[test]
+    fn spec351_parse_claude_oauth_usage_and_cedar_ember_resets() {
+        let now = parse_iso8601_utc("2026-11-25T07:14:00+00:00").unwrap();
+        let payload = json!({
+            "five_hour": null,
+            "seven_day": {
+                "utilization": 4.0,
+                "resets_at": "2026-11-30T05:59:59.787228+00:00"
+            },
+            "cedar_ember": {
+                "eligible": true,
+                "grants": [
+                    {
+                        "id": "full-reset-2611",
+                        "resets_total": 1,
+                        "resets_left": 0,
+                        "ends_at": "2026-12-10T22:00:00+00:00",
+                        "paused": false
+                    },
+                    {
+                        "id": "launch-2610-fable-6mo",
+                        "resets_total": 1,
+                        "resets_left": 1,
+                        "ends_at": "2027-03-09T07:59:00+00:00",
+                        "paused": false
+                    }
+                ]
+            }
+        });
+        let parsed = parse_claude_oauth_usage_response(&payload, now).unwrap();
+        assert_eq!(parsed.manual_resets_available, Some(1));
+        assert_eq!(parsed.manual_reset_expirations.len(), 1);
+        assert_eq!(format_short_date_fr(parsed.manual_reset_expirations[0]), "9 mars");
+
+        let mut map = BTreeMap::new();
+        for w in parsed.windows {
+            map.insert(w.window.clone(), w);
+        }
+        let (mat, any_live) = materialize_windows(&map, now);
+        assert!(any_live);
+        let w5 = mat.iter().find(|w| w.label == "5h").unwrap();
+        assert_eq!(w5.remaining_percent, Some(100));
+        assert_eq!(w5.status, "idle");
+        let w7 = mat.iter().find(|w| w.label == "7j").unwrap();
+        assert_eq!(w7.remaining_percent, Some(96));
+
+        let subs = vec![SubscriptionQuota {
+            id: "claude:account:fullflare@runbox.com".into(),
+            engine: "claude".into(),
+            provider_label: "Claude".into(),
+            account_label: "fullflare@runbox.com".into(),
+            account_email: Some("fullflare@runbox.com".into()),
+            logged_in: Some(true),
+            machine_id: "cartae, ksstore, sysle2".into(),
+            machines: vec!["cartae".into(), "ksstore".into(), "sysle2".into()],
+            account_id: None,
+            connection_ids: vec!["claude-cartae".into()],
+            plan_type: Some("Max 20x".into()),
+            source_state: "live_probe".into(),
+            source_label: "Sonde OAuth Claude (0 jeton)".into(),
+            windows: mat,
+            credits_balance: None,
+            credits_unlimited: false,
+            manual_resets_available: parsed.manual_resets_available,
+            manual_reset_expirations: parsed.manual_reset_expirations,
+            observed_at: Some(now),
+            detail: None,
+        }];
+        let totals = build_provider_totals(&subs);
+        assert_eq!(totals.len(), 1);
+        assert_eq!(totals[0].remaining_sum, 96);
+        assert_eq!(totals[0].capacity_max, 100);
+
+        let report = UsageReport {
+            generated_at: now,
+            cache_ttl_secs: USAGE_CACHE_TTL_SECS,
+            provider_filter: None,
+            provider_totals: totals,
+            alerts: vec![],
+            subscriptions: subs,
+            machines: vec![],
+            summary: UsageSummary {
+                total_subscriptions: 1,
+                with_live_quota: 1,
+                not_exposed: 0,
+                exhausted: 0,
+                low_quota_alerts: 0,
+            },
+        };
+        let html = render_html(&report);
+        assert!(html.contains("96 %"));
+        assert!(html.contains("100 %"));
+        assert!(html.contains("inactif"));
+        assert!(html.contains("<strong>1</strong> reset"));
+        assert!(html.contains("exp. 9 mars"));
+        assert!(!html.contains("non exposé"));
     }
 }
