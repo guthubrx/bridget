@@ -1398,3 +1398,77 @@ fn spec287_specialists_search_requires_role_and_list_does_not() {
         assert!(!matches!(result, Err(ClientError::InvalidParams(_))));
     }
 }
+
+#[test]
+fn spec352_specialists_rejects_query_on_list_with_action_specific_guidance() {
+    let catalogue = tools(&json!({}));
+    let tool = catalogue
+        .iter()
+        .find(|t| t["name"] == "bridget_specialists")
+        .unwrap();
+    let description = tool["description"].as_str().unwrap();
+    assert!(description.contains("list (sans filtre de rôle)"));
+    assert!(description.contains("cursor/limit"));
+    assert!(description.contains("memory_recall"));
+
+    let branches = tool["inputSchema"]["oneOf"].as_array().unwrap();
+    let recall = branches
+        .iter()
+        .find(|b| b["properties"]["action"]["const"] == "memory_recall")
+        .unwrap();
+    assert!(recall["properties"]["query"]["description"]
+        .as_str()
+        .unwrap()
+        .contains("memory_recall"));
+
+    let identity = ResolvedIdentity {
+        name: "owner".into(),
+        instance_id: "instance".into(),
+        delegated_origin: None,
+    };
+
+    // Exact repro of RIDA report: list + query + limit
+    let error = execute_with_proof(
+        &identity,
+        "bridget_specialists",
+        &json!({"version": 1, "action": "list", "query": "mainteneur", "limit": 10}),
+        Path::new("/missing/never-connected352.sock"),
+        None,
+    );
+    assert!(
+        matches!(error, Err(ClientError::InvalidParams(ref msg))
+            if msg.contains("`query`")
+                && msg.contains("`list`")
+                && msg.contains("memory_recall")
+                && msg.contains("cursor, limit")
+                && msg.contains("Aucun appel envoyé")),
+        "unexpected error: {error:?}"
+    );
+
+    // Valid list with limit passes parameter parsing
+    let valid_list = execute_with_proof(
+        &identity,
+        "bridget_specialists",
+        &json!({"version": 1, "action": "list", "limit": 10}),
+        Path::new("/missing/never-connected352.sock"),
+        None,
+    );
+    assert!(valid_list.is_err());
+    assert!(!matches!(valid_list, Err(ClientError::InvalidParams(_))));
+
+    // Missing required field on get names specialist_agent_id
+    let missing_get = execute_with_proof(
+        &identity,
+        "bridget_specialists",
+        &json!({"version": 1, "action": "get"}),
+        Path::new("/missing/never-connected352.sock"),
+        None,
+    );
+    assert!(
+        matches!(missing_get, Err(ClientError::InvalidParams(ref msg))
+            if msg.contains("specialist_agent_id")
+                && msg.contains("`get`")
+                && msg.contains("Aucun appel envoyé")),
+        "unexpected missing_get error: {missing_get:?}"
+    );
+}

@@ -412,7 +412,7 @@ pub(crate) fn tools(brief_schema: &Value) -> Vec<Value> {
         {"type":"object","properties":{"strategy":{"const":"worktree","description":"Dossier de travail isolé : seuls strategy et les chaînes facultatives base_ref et branch sont acceptés."},"base_ref":{"type":"string","description":"Référence Git disponible dans cwd sur la machine du parent. Pour une base figée, fournir le même SHA complet que expected_base_commit ; un nom de branche peut avancer. Un commit présent uniquement sur la destination doit d’abord être récupéré dans le dépôt source."},"branch":{"type":"string"}},"required":["strategy"],"additionalProperties":false}
     ]});
     let mut definitions = vec![
-        json!({"name":"bridget_specialists","description":"Catalogue des spécialistes. Fournir version:1 comme nombre JSON (sans guillemets) à chaque appel. Lecture : action search (role_id obligatoire), list (sans filtre de rôle) ou get (specialist_agent_id requis). Exemple : {version:1,action:search,role_id:mainteneur-bridget}. L’action catalogue n’existe pas. Le schéma expose les autres actions de profils, rôles et mémoire sourcée. Déclarer ses rôles ne donne aucun droit. request_role choisit un responsable unique et conserve sa clé ; request_status relit la demande sans réveil. Une activation durable ou un mandat permanent exige l'administration humaine. Budget Bridget sans plafond par défaut ; restrictions techniques et fournisseur restent distinctes.","inputSchema":specialists_schema(),"annotations":{"readOnlyHint":false,"destructiveHint":false,"idempotentHint":true}}),
+        json!({"name":"bridget_specialists","description":"Catalogue des spécialistes. Fournir version:1 comme nombre JSON (sans guillemets) à chaque appel. Lecture : action search (role_id obligatoire ; optionnels : project_id, cursor, limit), list (sans filtre de rôle) avec cursor/limit optionnels, ou get (specialist_agent_id requis). Le champ query sert uniquement à memory_recall. Exemple : {version:1,action:search,role_id:mainteneur-bridget}. L’action catalogue n’existe pas. Le schéma expose les autres actions de profils, rôles et mémoire sourcée. Déclarer ses rôles ne donne aucun droit. request_role choisit un responsable unique et conserve sa clé ; request_status relit la demande sans réveil. Une activation durable ou un mandat permanent exige l'administration humaine. Budget Bridget sans plafond par défaut ; restrictions techniques et fournisseur restent distinctes.","inputSchema":specialists_schema(),"annotations":{"readOnlyHint":false,"destructiveHint":false,"idempotentHint":true}}),
         json!({"name":"bridget_read_commit_file","description":"Rend disponible un fichier omis dans la vue privée du commit exact de sa tâche active. path est le chemin relatif indiqué dans la carte de la vue, sans ../ ni chemin absolu. Sans task_id, l'enfant lit sa propre tâche ; avec task_id, le parent doit en être propriétaire. Copie privée contrôlée, aucun changement du dépôt source, de la base, des comptes ou des droits. Un fichier existant divergent n'est jamais écrasé. Après succès, lire le chemin de données renvoyé. Une ancienne tâche clôturée ne redémarre pas par cette lecture.",
             "inputSchema":{"type":"object","properties":{"task_id":{"type":"string","minLength":1,"maxLength":128},
                 "path":{"type":"string","minLength":1,"maxLength":4096}},"required":["path"],"additionalProperties":false},
@@ -650,20 +650,7 @@ fn execute_with_proof(
     let request = match name {
         "bridget_specialists" => NativeDelegationRequest::Specialists {
             request: serde_json::from_value(args.clone()).map_err(|_| {
-                let correction = if args.get("version").and_then(Value::as_u64).is_none() {
-                    r#"Fournissez version:1 comme nombre JSON, sans guillemets. Le champ version est absent ou n'est pas un entier positif ; une chaîne comme "1" n'est pas acceptée."#
-                } else if args.get("action").and_then(Value::as_str) == Some("search")
-                    && args.get("role_id").and_then(Value::as_str).is_none()
-                {
-                    r#"Fournissez role_id comme chaîne pour l’action search : ce champ est obligatoire. Pour consulter le catalogue sans filtre de rôle, utilisez {"version":1,"action":"list"}."#
-                } else if args.get("action").and_then(Value::as_str) == Some("catalogue") {
-                    "Utilisez une action du schéma, par exemple search. L’action catalogue n’existe pas."
-                } else {
-                    "Vérifiez les champs et leurs types dans le schéma de bridget_specialists ; la forme de cet appel est invalide."
-                };
-                ClientError::InvalidParams(format!(
-                    r#"{correction} Exemple de recherche : {{"version":1,"action":"search","role_id":"mainteneur-bridget"}}. Aucun appel envoyé : seul cet appel est refusé. Conservez les opérations déjà connues ; les autres travaux autorisés suivent leur propre état."#
-                ))
+                ClientError::InvalidParams(specialists_invalid_params_guidance(args))
             })?,
         },
         "bridget_read_commit_file"=>{
@@ -1447,6 +1434,260 @@ mod continuation_receipt221_tests {
     }
 }
 
+const SPECIALISTS_ACTION_FIELDS: &[(&str, &[&str], &[&str])] = &[
+    (
+        "capture_history",
+        &["request_id", "specialist_agent_id"],
+        &["project_id", "after_seq", "limit"],
+    ),
+    ("profiles", &[], &["cursor", "limit"]),
+    ("profile_versions", &["profile_id"], &["cursor", "limit"]),
+    (
+        "attach_profile",
+        &[
+            "request_id",
+            "profile_id",
+            "profile_revision",
+            "expected_revision",
+        ],
+        &[],
+    ),
+    ("list", &[], &["cursor", "limit"]),
+    ("search", &["role_id"], &["project_id", "cursor", "limit"]),
+    ("get", &["specialist_agent_id"], &[]),
+    (
+        "declare_roles",
+        &["request_id", "expected_revision", "roles"],
+        &[],
+    ),
+    ("propose_profile", &["request_id", "definition"], &[]),
+    (
+        "propose_revision",
+        &["request_id", "expected_revision", "definition"],
+        &[],
+    ),
+    (
+        "approve_revision",
+        &["request_id", "profile_id", "revision"],
+        &[],
+    ),
+    (
+        "activate",
+        &[
+            "request_id",
+            "specialist_agent_id",
+            "profile_id",
+            "profile_revision",
+            "expected_revision",
+            "scope",
+            "durable",
+            "auto_start",
+        ],
+        &["mandate", "budget", "launch_policy"],
+    ),
+    (
+        "disable",
+        &["request_id", "specialist_agent_id", "expected_revision"],
+        &[],
+    ),
+    (
+        "configure_mandate",
+        &[
+            "request_id",
+            "specialist_agent_id",
+            "expected_revision",
+            "mandate",
+            "scope",
+            "auto_start",
+        ],
+        &["budget", "launch_policy"],
+    ),
+    (
+        "revoke",
+        &["request_id", "specialist_agent_id", "expected_revision"],
+        &[],
+    ),
+    (
+        "designate_role",
+        &["request_id", "specialist_agent_id", "role_id", "official"],
+        &[],
+    ),
+    (
+        "memory_recall",
+        &["specialist_agent_id", "project_id", "query"],
+        &["cursor", "limit"],
+    ),
+    ("memory_versions", &["memory_id"], &["cursor", "limit"]),
+    (
+        "memory_write",
+        &[
+            "request_id",
+            "specialist_agent_id",
+            "project_id",
+            "shared",
+            "kind",
+            "text",
+            "source",
+        ],
+        &[],
+    ),
+    (
+        "memory_correct",
+        &[
+            "request_id",
+            "memory_id",
+            "expected_revision",
+            "text",
+            "kind",
+        ],
+        &[],
+    ),
+    (
+        "memory_forget",
+        &["request_id", "memory_id", "expected_revision"],
+        &[],
+    ),
+    ("export", &["profile_id", "revision"], &[]),
+    ("import", &["request_id", "definition"], &[]),
+    (
+        "convert",
+        &[
+            "request_id",
+            "specialist_agent_id",
+            "profile_id",
+            "profile_revision",
+            "expected_revision",
+        ],
+        &[],
+    ),
+    (
+        "request_role",
+        &["request_id", "role_id", "project_id", "task"],
+        &["specialist_agent_id"],
+    ),
+    ("request_status", &["request_id"], &[]),
+    (
+        "request_team",
+        &["request_id", "profile_id", "revision", "project_id", "task"],
+        &[],
+    ),
+];
+
+fn specialists_action_spec(action: &str) -> Option<(&'static [&'static str], &'static [&'static str])> {
+    if action == "request_approval" {
+        return Some((&["request_id", "operation"], &[]));
+    }
+    if action == "request_temporary" {
+        return Some((
+            &["request_id", "profile_id", "profile_revision", "delegation"],
+            &[],
+        ));
+    }
+    SPECIALISTS_ACTION_FIELDS
+        .iter()
+        .find(|(name, _, _)| *name == action)
+        .map(|(_, req, opt)| (*req, *opt))
+}
+
+fn specialists_format_accepted(required: &[&str], optional: &[&str]) -> String {
+    let mut req = vec!["version", "action"];
+    req.extend_from_slice(required);
+    if optional.is_empty() {
+        format!("obligatoires : {}", req.join(", "))
+    } else {
+        format!(
+            "obligatoires : {} ; optionnels : {}",
+            req.join(", "),
+            optional.join(", ")
+        )
+    }
+}
+
+fn specialists_safe_field(key: &str) -> String {
+    if !key.is_empty()
+        && key.len() <= 64
+        && key
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+    {
+        format!("`{key}`")
+    } else {
+        "(nom non affiché)".into()
+    }
+}
+
+fn specialists_invalid_params_guidance(args: &Value) -> String {
+    let correction: String = if args.get("version").and_then(Value::as_u64).is_none() {
+        r#"Fournissez version:1 comme nombre JSON, sans guillemets. Le champ version est absent ou n'est pas un entier positif ; une chaîne comme "1" n'est pas acceptée."#.into()
+    } else if args.get("action").and_then(Value::as_str) == Some("search")
+        && args.get("role_id").and_then(Value::as_str).is_none()
+    {
+        r#"Fournissez role_id comme chaîne pour l’action search : ce champ est obligatoire. Pour consulter le catalogue sans filtre de rôle, utilisez {"version":1,"action":"list"}."#.into()
+    } else if args.get("action").and_then(Value::as_str) == Some("catalogue") {
+        "Utilisez une action du schéma, par exemple search. L’action catalogue n’existe pas.".into()
+    } else if let Some(action) = args.get("action").and_then(Value::as_str) {
+        if let Some((required, optional)) = specialists_action_spec(action) {
+            let accepted_summary = specialists_format_accepted(required, optional);
+            let obj = args.as_object();
+            let unexpected = obj.and_then(|map| {
+                map.keys().find(|k| {
+                    let k = k.as_str();
+                    k != "version" && k != "action" && !required.contains(&k) && !optional.contains(&k)
+                })
+            });
+            if let Some(key) = unexpected {
+                let field = specialists_safe_field(key);
+                let hint = if key == "query" && action == "list" {
+                    r#" Le champ `query` sert uniquement à `memory_recall` ; utilisez {"version":1,"action":"list"} (avec `cursor`/`limit` optionnels) pour lister le catalogue, ou `action:"search"` avec `role_id` pour filtrer par rôle."#.to_string()
+                } else if key == "query" {
+                    " Le champ `query` sert uniquement à `memory_recall`.".to_string()
+                } else {
+                    let matching_actions: Vec<&str> = SPECIALISTS_ACTION_FIELDS
+                        .iter()
+                        .filter(|(_, r, o)| r.contains(&key.as_str()) || o.contains(&key.as_str()))
+                        .map(|(name, _, _)| *name)
+                        .take(4)
+                        .collect();
+                    if matching_actions.is_empty() {
+                        String::new()
+                    } else {
+                        format!(
+                            " Ce champ appartient aux actions : {}.",
+                            matching_actions.join(", ")
+                        )
+                    }
+                };
+                format!(
+                    "Le champ {field} n'est pas accepté pour l'action `{action}`.{hint} Champs acceptés pour `{action}` ({accepted_summary})."
+                )
+            } else {
+                let missing: Vec<&str> = required
+                    .iter()
+                    .copied()
+                    .filter(|k| obj.and_then(|m| m.get(*k)).is_none())
+                    .collect();
+                if !missing.is_empty() {
+                    format!(
+                        "Champ(s) obligatoire(s) manquant(s) pour l'action `{action}` : {}. Champs acceptés pour `{action}` ({accepted_summary}).",
+                        missing.join(", ")
+                    )
+                } else {
+                    format!(
+                        "Type ou valeur invalide pour l'action `{action}`. Champs acceptés pour `{action}` ({accepted_summary})."
+                    )
+                }
+            }
+        } else {
+            "Action inconnue pour bridget_specialists. Actions de lecture : `list` (cursor, limit), `search` (role_id obligatoire ; project_id, cursor, limit), `get` (specialist_agent_id), `profiles`, `memory_recall` (specialist_agent_id, project_id, query).".into()
+        }
+    } else {
+        "Action absente ou non textuelle pour bridget_specialists. Actions de lecture : `list` (cursor, limit), `search` (role_id obligatoire), `get` (specialist_agent_id).".into()
+    };
+    format!(
+        r#"{correction} Exemple de recherche : {{"version":1,"action":"search","role_id":"mainteneur-bridget"}}. Aucun appel envoyé : seul cet appel est refusé. Conservez les opérations déjà connues ; les autres travaux autorisés suivent leur propre état."#
+    )
+}
+
 fn specialists_schema() -> Value {
     let text = json!({"type":"string","minLength":1,"maxLength":256});
     let scope = json!({"type":"object","properties":{"projects":{"type":"array","maxItems":64,"items":text},"transversal":{"type":"boolean"}},"additionalProperties":false});
@@ -1495,7 +1736,14 @@ fn specialists_schema() -> Value {
         "text".into(),
         json!({"type":"string","minLength":1,"maxLength":16000}),
     );
-    fields.insert("query".into(), json!({"type":"string","maxLength":4096}));
+    fields.insert(
+        "role_id".into(),
+        json!({"type":"string","minLength":1,"maxLength":256,"description":"Identifiant de rôle (obligatoire pour search, designate_role et request_role ; non accepté par list)."}),
+    );
+    fields.insert(
+        "query".into(),
+        json!({"type":"string","maxLength":4096,"description":"Texte recherché en mémoire (action memory_recall uniquement ; non accepté par list ni search)."}),
+    );
     fields.insert(
         "kind".into(),
         json!({"enum":["fact","decision","hypothesis","reported_result"]}),
@@ -1516,158 +1764,8 @@ fn specialists_schema() -> Value {
         {"type":"object","properties":{"kind":{"const":"journal"},"agent_id":text,"file":{"type":"string","maxLength":4096},"from_seq":{"type":"integer","minimum":0},"to_seq":{"type":"integer","minimum":0},"part":{"type":"integer","minimum":0},"digest":{"type":"string","pattern":"^[0-9a-f]{64}$"}},"required":["kind","agent_id","file","from_seq","to_seq","digest"],"additionalProperties":false}
     ]}));
     fields.insert("after_seq".into(), json!({"type":"integer","minimum":0}));
-    let rows = [
-        (
-            "capture_history",
-            vec!["request_id", "specialist_agent_id"],
-            vec!["project_id", "after_seq", "limit"],
-        ),
-        ("profiles", vec![], vec!["cursor", "limit"]),
-        (
-            "profile_versions",
-            vec!["profile_id"],
-            vec!["cursor", "limit"],
-        ),
-        (
-            "attach_profile",
-            vec![
-                "request_id",
-                "profile_id",
-                "profile_revision",
-                "expected_revision",
-            ],
-            vec![],
-        ),
-        ("list", vec![], vec!["cursor", "limit"]),
-        (
-            "search",
-            vec!["role_id"],
-            vec!["project_id", "cursor", "limit"],
-        ),
-        ("get", vec!["specialist_agent_id"], vec![]),
-        (
-            "declare_roles",
-            vec!["request_id", "expected_revision", "roles"],
-            vec![],
-        ),
-        ("propose_profile", vec!["request_id", "definition"], vec![]),
-        (
-            "propose_revision",
-            vec!["request_id", "expected_revision", "definition"],
-            vec![],
-        ),
-        (
-            "approve_revision",
-            vec!["request_id", "profile_id", "revision"],
-            vec![],
-        ),
-        (
-            "activate",
-            vec![
-                "request_id",
-                "specialist_agent_id",
-                "profile_id",
-                "profile_revision",
-                "expected_revision",
-                "scope",
-                "durable",
-                "auto_start",
-            ],
-            vec!["mandate", "budget", "launch_policy"],
-        ),
-        (
-            "disable",
-            vec!["request_id", "specialist_agent_id", "expected_revision"],
-            vec![],
-        ),
-        (
-            "configure_mandate",
-            vec![
-                "request_id",
-                "specialist_agent_id",
-                "expected_revision",
-                "mandate",
-                "scope",
-                "auto_start",
-            ],
-            vec!["budget", "launch_policy"],
-        ),
-        (
-            "revoke",
-            vec!["request_id", "specialist_agent_id", "expected_revision"],
-            vec![],
-        ),
-        (
-            "designate_role",
-            vec!["request_id", "specialist_agent_id", "role_id", "official"],
-            vec![],
-        ),
-        (
-            "memory_recall",
-            vec!["specialist_agent_id", "project_id", "query"],
-            vec!["cursor", "limit"],
-        ),
-        (
-            "memory_versions",
-            vec!["memory_id"],
-            vec!["cursor", "limit"],
-        ),
-        (
-            "memory_write",
-            vec![
-                "request_id",
-                "specialist_agent_id",
-                "project_id",
-                "shared",
-                "kind",
-                "text",
-                "source",
-            ],
-            vec![],
-        ),
-        (
-            "memory_correct",
-            vec![
-                "request_id",
-                "memory_id",
-                "expected_revision",
-                "text",
-                "kind",
-            ],
-            vec![],
-        ),
-        (
-            "memory_forget",
-            vec!["request_id", "memory_id", "expected_revision"],
-            vec![],
-        ),
-        ("export", vec!["profile_id", "revision"], vec![]),
-        ("import", vec!["request_id", "definition"], vec![]),
-        (
-            "convert",
-            vec![
-                "request_id",
-                "specialist_agent_id",
-                "profile_id",
-                "profile_revision",
-                "expected_revision",
-            ],
-            vec![],
-        ),
-        (
-            "request_role",
-            vec!["request_id", "role_id", "project_id", "task"],
-            vec!["specialist_agent_id"],
-        ),
-        ("request_status", vec!["request_id"], vec![]),
-        (
-            "request_team",
-            vec!["request_id", "profile_id", "revision", "project_id", "task"],
-            vec![],
-        ),
-    ];
     let mut branches = Vec::new();
-    for (action, required, optional) in rows {
+    for (action, required, optional) in SPECIALISTS_ACTION_FIELDS {
         let mut properties = serde_json::Map::new();
         properties.insert("version".into(), json!({"const":1}));
         properties.insert("action".into(), json!({"const":action}));
@@ -1675,8 +1773,8 @@ fn specialists_schema() -> Value {
             properties.insert((*name).into(), fields[*name].clone());
         }
         let mut req = vec!["version", "action"];
-        req.extend(required);
-        if action == "memory_versions" {
+        req.extend(required.iter().copied());
+        if *action == "memory_versions" {
             properties.insert("cursor".into(), json!({"type":"integer","minimum":1}));
         }
         branches.push(json!({"type":"object","properties":properties,"required":req,"additionalProperties":false}));
