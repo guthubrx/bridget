@@ -11,13 +11,36 @@ fn failure(task: &Task) -> bool {
         })
 }
 
-fn authorized(task: &Task) -> bool {
-    matches!(
-        &task.request,
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum QuotaFallbackAuth {
+    CallerDeclared,
+    OperatorDefault,
+    None,
+}
+
+fn resolve_auth(explicit: Option<bool>, operator_default: bool) -> QuotaFallbackAuth {
+    match explicit {
+        Some(true) => QuotaFallbackAuth::CallerDeclared,
+        Some(false) => QuotaFallbackAuth::None,
+        None if operator_default => QuotaFallbackAuth::OperatorDefault,
+        None => QuotaFallbackAuth::None,
+    }
+}
+
+fn task_auth(task: &Task, operator_default: bool) -> QuotaFallbackAuth {
+    match &task.request {
         NativeDelegationRequest::Delegate {
-            quota_fallback_authorized: Some(true),
+            quota_fallback_authorized,
             ..
-        }
+        } => resolve_auth(*quota_fallback_authorized, operator_default),
+        _ => QuotaFallbackAuth::None,
+    }
+}
+
+fn authorized(task: &Task) -> bool {
+    !matches!(
+        task_auth(task, auto_quota_fallback_enabled()),
+        QuotaFallbackAuth::None
     )
 }
 
@@ -107,25 +130,36 @@ pub(super) fn ensure(st: &DaemonState, task: &Task) -> Result<(), String> {
 }
 
 pub(super) fn attach(st: &DaemonState, task: &Task, view: &mut Value) {
+    attach_with_default(st, task, view, auto_quota_fallback_enabled());
+}
+
+fn attach_with_default(st: &DaemonState, task: &Task, view: &mut Value, operator_default: bool) {
     if !failure(task) {
         return;
     }
-    if authorized(task) {
-        view["quota_recovery"] = json!({"state":"prior_authorization_declared","scope":"this_mission","automatic_restart":false,
-            "next_action":"L’appelant a déclaré l’accord humain explicite de bascule pour cette mission. Ne pas redemander cet accord. Vérifier d’abord la clôture physique et le dossier ; conserver cette tâche et ne reprendre que le travail restant dans le périmètre déjà autorisé."});
-    } else {
-        let question = id(task);
-        let row = crate::user_input::get(st.store.connection(), &question)
-            .ok()
-            .flatten()
-            .filter(|row| valid_row(task, row));
-        if row.is_none() && task.failure_sent {
-            return;
+    match task_auth(task, operator_default) {
+        QuotaFallbackAuth::CallerDeclared => {
+            view["quota_recovery"] = json!({"state":"prior_authorization_declared","authorization_source":"caller_declared","scope":"this_mission","automatic_restart":false,
+                "next_action":"L’appelant a déclaré l’accord humain explicite de bascule pour cette mission. Ne pas redemander cet accord. Vérifier d’abord la clôture physique et le dossier ; conserver cette tâche et ne reprendre que le travail restant dans le périmètre déjà autorisé."});
         }
+        QuotaFallbackAuth::OperatorDefault => {
+            view["quota_recovery"] = json!({"state":"operator_policy_enabled","authorization_source":"daemon_env_default","scope":"this_mission","automatic_restart":false,
+                "next_action":"L’appelant n’a pas déclaré d’accord de bascule sur cette mission, mais la politique d’exploitation du démon (BRIDGET_AUTO_QUOTA_FALLBACK=1) dispense de nouvelle question humaine. Aucune bascule automatique de moteur ni de compte n’a été exécutée par Bridget. Vérifier d’abord la clôture physique et le dossier ; conserver cette tâche et ne reprendre que le travail restant dans le périmètre déjà autorisé."});
+        }
+        QuotaFallbackAuth::None => {
+            let question = id(task);
+            let row = crate::user_input::get(st.store.connection(), &question)
+                .ok()
+                .flatten()
+                .filter(|row| valid_row(task, row));
+            if row.is_none() && task.failure_sent {
+                return;
+            }
 
-        view["quota_recovery"] = json!({"state":if row.is_some(){"human_question"}else{"question_pending"},"request_id":question,"scope":"this_mission","automatic_restart":false,
-            "question":row.map(crate::user_input::projection),
-            "next_action":"Attendre la réponse humaine avec bridget_ask_user action wait et le request_id indiqué, sans recréer la question. Le choix initial automatique ne vaut pas accord de bascule. Un accord explicite antérieur dans le fil reste applicable dans son périmètre : le parent peut fermer cette question devenue sans objet, sans fabriquer de réponse humaine. Avant toute reprise, vérifier la clôture physique et le dossier, conserver l’ancienne tâche et sa clé, puis ne reprendre que le travail restant. Aucun nouvel accès ni budget déduit."});
+            view["quota_recovery"] = json!({"state":if row.is_some(){"human_question"}else{"question_pending"},"request_id":question,"scope":"this_mission","automatic_restart":false,
+                "question":row.map(crate::user_input::projection),
+                "next_action":"Attendre la réponse humaine avec bridget_ask_user action wait et le request_id indiqué, sans recréer la question. Le choix initial automatique ne vaut pas accord de bascule. Un accord explicite antérieur dans le fil reste applicable dans son périmètre : le parent peut fermer cette question devenue sans objet, sans fabriquer de réponse humaine. Avant toute reprise, vérifier la clôture physique et le dossier, conserver l’ancienne tâche et sa clé, puis ne reprendre que le travail restant. Aucun nouvel accès ni budget déduit."});
+        }
     }
 }
 
@@ -138,16 +172,33 @@ pub(super) fn pre_admission(
     known_quota: bool,
     view: &mut Value,
 ) -> Result<(), String> {
+    pre_admission_with_default(
+        st,
+        conn,
+        request,
+        known_quota,
+        view,
+        auto_quota_fallback_enabled(),
+    )
+}
+
+fn pre_admission_with_default(
+    st: &DaemonState,
+    conn: &str,
+    request: &NativeDelegationRequest,
+    known_quota: bool,
+    view: &mut Value,
+    operator_default: bool,
+) -> Result<(), String> {
     if !known_quota {
         return Ok(());
     }
-    let (key, engine, machine, allowed) = match request {
+    let (key, engine, machine, auth) = match request {
         NativeDelegationRequest::AutoDelegateV2(r) => (
             r.request_id.as_str(),
             r.engine.as_deref().unwrap_or("moteur admissible"),
             r.machine_id.as_deref().unwrap_or("destination demandée"),
-            r.quota_fallback_authorized
-                .unwrap_or_else(auto_quota_fallback_enabled),
+            resolve_auth(r.quota_fallback_authorized, operator_default),
         ),
         NativeDelegationRequest::Delegate {
             request_id,
@@ -159,13 +210,20 @@ pub(super) fn pre_admission(
             request_id.as_str(),
             agent_type.as_str(),
             machine_id.as_deref().unwrap_or("local"),
-            quota_fallback_authorized.unwrap_or_else(auto_quota_fallback_enabled),
+            resolve_auth(*quota_fallback_authorized, operator_default),
         ),
         _ => return Ok(()),
     };
-    if allowed {
-        view["quota_recovery"] = json!({"state":"prior_authorization_declared","scope":"this_mission","automatic_restart":false,"next_action":"L’accord de bascule pour cette mission est déjà déclaré : ne pas le redemander. Conserver le refus original et vérifier l’absence attestée d’admission avant de préparer la suite autorisée ; aucun autre compte ni moteur n’est prouvé disponible par ce seul refus."});
-        return Ok(());
+    match auth {
+        QuotaFallbackAuth::CallerDeclared => {
+            view["quota_recovery"] = json!({"state":"prior_authorization_declared","authorization_source":"caller_declared","scope":"this_mission","automatic_restart":false,"next_action":"L’accord de bascule pour cette mission est déjà déclaré : ne pas le redemander. Conserver le refus original et vérifier l’absence attestée d’admission avant de préparer la suite autorisée ; aucun autre compte ni moteur n’est prouvé disponible par ce seul refus."});
+            return Ok(());
+        }
+        QuotaFallbackAuth::OperatorDefault => {
+            view["quota_recovery"] = json!({"state":"operator_policy_enabled","authorization_source":"daemon_env_default","scope":"this_mission","automatic_restart":false,"next_action":"L’appelant n’a pas déclaré d’accord de bascule sur cette demande, mais la politique d’exploitation du démon (BRIDGET_AUTO_QUOTA_FALLBACK=1) dispense de nouvelle question humaine. Aucune bascule automatique n’a été exécutée. Conserver le refus original et vérifier l’absence attestée d’admission avant de préparer la suite autorisée ; aucun autre compte ni moteur n’est prouvé disponible par ce seul refus."});
+            return Ok(());
+        }
+        QuotaFallbackAuth::None => {}
     }
     let (owner, instance) = live_connection_identity(st, conn).ok_or("identity_unavailable")?;
     let owner = st
@@ -231,11 +289,20 @@ pub(super) fn pre_admission(
 }
 
 pub(super) fn notice(st: &DaemonState, task: &Task) -> String {
+    notice_with_default(st, task, auto_quota_fallback_enabled())
+}
+
+fn notice_with_default(st: &DaemonState, task: &Task, operator_default: bool) -> String {
     if !failure(task) {
         return String::new();
     }
     let mut view = Value::Null;
-    attach(st, task, &mut view);
+    attach_with_default(st, task, &mut view, operator_default);
+    let fallback_label = if view["quota_recovery"]["state"] == "operator_policy_enabled" {
+        "sans question (politique démon BRIDGET_AUTO_QUOTA_FALLBACK=1 active ; aucun accord attribué à l’appelant)"
+    } else {
+        "sans question, accord préalable déclaré"
+    };
     format!(
         "\nReprise quota : {}\nrequest_id de question : {}. Les autres travaux autorisés suivent leur propre état.",
         view["quota_recovery"]["next_action"]
@@ -243,7 +310,7 @@ pub(super) fn notice(st: &DaemonState, task: &Task) -> String {
             .unwrap_or("Conserver la tâche et vérifier sa question native."),
         view["quota_recovery"]["request_id"]
             .as_str()
-            .unwrap_or("sans question, accord préalable déclaré")
+            .unwrap_or(fallback_label)
     )
 }
 
@@ -407,6 +474,57 @@ mod tests {
             crate::user_input::get(st.store.connection(), &id(&task))
                 .unwrap()
                 .is_some()
+        );
+    }
+
+    #[test]
+    fn spec356_operator_default_does_not_attribute_caller_declaration() {
+        let (st, mut task, _peer) = fixture();
+
+        // 1. Champ omis (None) + politique démon active => ne jamais attribuer l'accord à l'appelant.
+        let mut view = json!({});
+        attach_with_default(&st, &task, &mut view, true);
+        assert_eq!(view["quota_recovery"]["state"], "operator_policy_enabled");
+        assert_eq!(
+            view["quota_recovery"]["authorization_source"],
+            "daemon_env_default"
+        );
+        let msg = notice_with_default(&st, &task, true);
+        assert!(msg.contains("BRIDGET_AUTO_QUOTA_FALLBACK=1"), "msg={msg}");
+        assert!(
+            !msg.contains("L’appelant a déclaré l’accord humain explicite"),
+            "msg={msg}"
+        );
+
+        // 2. Refus explicite de l'appelant (Some(false)) prime sur la politique démon.
+        if let NativeDelegationRequest::Delegate {
+            quota_fallback_authorized,
+            ..
+        } = &mut task.request
+        {
+            *quota_fallback_authorized = Some(false);
+        }
+        let mut denied_view = json!({});
+        attach_with_default(&st, &task, &mut denied_view, true);
+        assert_eq!(denied_view["quota_recovery"]["state"], "question_pending");
+
+        // 3. Accord explicite de l'appelant (Some(true)) reste caller_declared.
+        if let NativeDelegationRequest::Delegate {
+            quota_fallback_authorized,
+            ..
+        } = &mut task.request
+        {
+            *quota_fallback_authorized = Some(true);
+        }
+        let mut declared_view = json!({});
+        attach_with_default(&st, &task, &mut declared_view, true);
+        assert_eq!(
+            declared_view["quota_recovery"]["state"],
+            "prior_authorization_declared"
+        );
+        assert_eq!(
+            declared_view["quota_recovery"]["authorization_source"],
+            "caller_declared"
         );
     }
 }

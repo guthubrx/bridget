@@ -318,6 +318,17 @@ fn routing_decision_request(
     Ok(decision)
 }
 
+fn record_plan_connection(
+    connections: &mut Vec<RoutingDecisionFact>,
+    fact: RoutingDecisionFact,
+) {
+    if let Some(existing) = connections.iter_mut().find(|entry| entry.id == fact.id) {
+        *existing = fact;
+    } else {
+        connections.push(fact);
+    }
+}
+
 fn routing_auto_receipt(
     owner: String,
     request: &AutoDelegateV2,
@@ -330,6 +341,15 @@ fn routing_auto_receipt(
         i64::try_from(plan.policy.revision).map_err(|_| "auto_admission_invalid")?;
     let metadata =
         serde_json::to_vec(&routing_snapshot(plan, None)).map_err(|_| "auto_admission_invalid")?;
+    if metadata.len() > crate::delegation::MAX_AUTO_ADMISSION_METADATA_V2_BYTES {
+        warn!(
+            "auto_admission metadata trop volumineux: {} octets (limite {}, {} candidats)",
+            metadata.len(),
+            crate::delegation::MAX_AUTO_ADMISSION_METADATA_V2_BYTES,
+            plan.candidates.len()
+        );
+        return Err("auto_admission_invalid:metadata_too_large".into());
+    }
     Ok(AutoAdmissionReceipt {
         owner,
         request_id: request.request_id.clone(),
@@ -1846,14 +1866,17 @@ fn observe_routing_candidates_for_project(
                         let quota =
                             st.provider_limits
                                 .account_quota244(quota, account.as_deref(), now);
-                        plan.connections.push(RoutingDecisionFact {
-                            id: candidate.connection_id.clone(),
-                            observed_at: quota.as_ref().map(|q| q.observed_at),
-                            summary: quota
-                                .as_ref()
-                                .and_then(|q| serde_json::to_string(q).ok())
-                                .unwrap_or_else(|| "unknown".into()),
-                        });
+                        record_plan_connection(
+                            &mut plan.connections,
+                            RoutingDecisionFact {
+                                id: candidate.connection_id.clone(),
+                                observed_at: quota.as_ref().map(|q| q.observed_at),
+                                summary: quota
+                                    .as_ref()
+                                    .and_then(|q| serde_json::to_string(q).ok())
+                                    .unwrap_or_else(|| "unknown".into()),
+                            },
+                        );
                         quota.as_ref().is_some_and(|q| q.launch_blocked)
                     });
                 if blocked {
@@ -2287,14 +2310,17 @@ fn observe_routing_candidates_for_project(
                             account.as_deref(),
                             received_at,
                         );
-                        plan.connections.push(RoutingDecisionFact {
-                            id: connection.clone(),
-                            observed_at: quota.as_ref().map(|q| q.observed_at),
-                            summary: quota
-                                .as_ref()
-                                .and_then(|q| serde_json::to_string(q).ok())
-                                .unwrap_or_else(|| "unknown".into()),
-                        });
+                        record_plan_connection(
+                            &mut plan.connections,
+                            RoutingDecisionFact {
+                                id: connection.clone(),
+                                observed_at: quota.as_ref().map(|q| q.observed_at),
+                                summary: quota
+                                    .as_ref()
+                                    .and_then(|q| serde_json::to_string(q).ok())
+                                    .unwrap_or_else(|| "unknown".into()),
+                            },
+                        );
                         quota.as_ref().is_some_and(|q| q.launch_blocked)
                     });
                 if blocked {
@@ -2827,9 +2853,7 @@ fn routing_delegate(
         brief: request.brief.clone(),
         child_requests: request.child_requests.clone(),
         fallback: Vec::new(),
-        quota_fallback_authorized: request
-            .quota_fallback_authorized
-            .or_else(|| auto_quota_fallback_enabled().then_some(true)),
+        quota_fallback_authorized: request.quota_fallback_authorized,
         resume_on_limit: Some(request.resume_on_limit.unwrap_or(true)),
     }
 }
@@ -3488,13 +3512,14 @@ fn admit_auto_routing(
     if request.agent_type.is_some() {
         return Err("auto_admission_invalid:agent_type_not_supported".into());
     }
-    if request.task.trim().is_empty()
-        || request.task.len() > 65536
-        || request.request_id.is_empty()
-        || request.request_id.len() > 128
-        || canonical.len() > crate::delegation::MAX_AUTO_ADMISSION_CANONICAL_BYTES
-    {
-        return Err("auto_admission_invalid".into());
+    if request.task.trim().is_empty() || request.task.len() > 65536 {
+        return Err("auto_admission_invalid:task_invalid".into());
+    }
+    if request.request_id.is_empty() || request.request_id.len() > 128 {
+        return Err("auto_admission_invalid:request_id_invalid".into());
+    }
+    if canonical.len() > crate::delegation::MAX_AUTO_ADMISSION_CANONICAL_BYTES {
+        return Err("auto_admission_invalid:canonical_too_large".into());
     }
     let (registry, coordinator) = {
         let mut st = state.lock().recover_poison();
@@ -5772,6 +5797,38 @@ fn failure(code: &str) -> Value {
             "detail":{"field":"agent_type","cause":"not_supported_in_automatic_admission",
                 "recovery":"Omettez agent_type. Conservez machine_id et utilisez engine pour le moteur ; connection_id est facultatif et désigne une connexion précise du catalogue. Gardez les contraintes de base et de workspace. Consultez detail.admission : suivez toute tâche connue et conservez une demande en attente ou d’issue inconnue. Une correction de paramètres avec la même request_id n’est admise qu’avant tout reçu, après confirmation de l’absence de tâche et d’autre appel en vol ; un reçu existant impose son canon et ne doit jamais être réécrit.",
                 "human_action":"Si une connexion précise est requise mais n’est pas identifiable dans le catalogue autorisé, demandez au responsable laquelle utiliser ; ne choisissez pas une autre machine ou un autre moteur pour contourner le refus."}});
+    }
+    if let Some((field, cause, message, recovery)) = match code {
+        "auto_admission_invalid:metadata_too_large" => Some((
+            "metadata",
+            "metadata_limit_exceeded",
+            "Le cliché interne de routage de cette admission dépasse la limite de stockage du reçu.",
+            "Les champs de votre demande ne sont pas en cause : l’ensemble des candidats du catalogue dépasse la taille maximale du cliché d’admission. Restreignez un axe autorisé (ex. engine ou machine_id) ou signalez cet incident au mainteneur Bridget, sans multiplier les essais.",
+        )),
+        "auto_admission_invalid:task_invalid" => Some((
+            "task",
+            "task_empty_or_too_large",
+            "Le champ task doit être non vide et ne pas dépasser 65536 octets.",
+            "Vérifiez la longueur et le contenu de task puis vérifiez l’absence d’admission avant de réessayer.",
+        )),
+        "auto_admission_invalid:request_id_invalid" => Some((
+            "request_id",
+            "request_id_empty_or_too_large",
+            "Le champ request_id doit contenir entre 1 et 128 octets.",
+            "Fournissez un request_id conforme (1 à 128 octets).",
+        )),
+        "auto_admission_invalid:canonical_too_large" => Some((
+            "request",
+            "canonical_limit_exceeded",
+            "L’enveloppe complète de la demande dépasse la taille maximale de 512 Kio.",
+            "Réduisez la taille de la demande (task/brief) sous 512 Kio avant une nouvelle admission.",
+        )),
+        _ => None,
+    } {
+        return json!({"status":"refused","code":"auto_admission_invalid",
+            "message":message,
+            "detail":{"field":field,"cause":cause,"recovery":recovery,
+                "human_action":"Si le champ indiqué ne peut pas être corrigé dans votre mandat ou s’il s’agit d’une limite interne Bridget (metadata), transmettez ce reçu au mainteneur Bridget sans multiplier les essais."}});
     }
     if code == "routing_candidate_unavailable" {
         let message = "Consultez le sort de cette admission et ses motifs avant tout nouvel essai. Aucun candidat requis n’a pu être confirmé comme éligible lors du contrôle ; les autres travaux autorisés suivent leur propre état.";

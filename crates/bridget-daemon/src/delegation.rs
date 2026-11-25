@@ -12,8 +12,8 @@ use std::time::Duration;
 pub(crate) const MAX_AUTO_ADMISSION_CANONICAL_BYTES: usize = 512 * 1024;
 /// Borne historique des snapshots 163 (version absente ou `1`).
 pub(crate) const MAX_AUTO_ADMISSION_METADATA_V1_BYTES: usize = 16 * 1024;
-/// Borne des snapshots de routage 168. Le canon reste volontairement séparé.
-pub(crate) const MAX_AUTO_ADMISSION_METADATA_V2_BYTES: usize = 128 * 1024;
+/// Borne des snapshots de routage 168/356 (alignée sur MAX_ROUTING_CANDIDATES=512). Le canon reste volontairement séparé.
+pub(crate) const MAX_AUTO_ADMISSION_METADATA_V2_BYTES: usize = 512 * 1024;
 /// Alias conservé pour les appelants 163 : il ne doit jamais valider un reçu v2.
 #[cfg(test)]
 pub(crate) const MAX_AUTO_ADMISSION_METADATA_BYTES: usize = MAX_AUTO_ADMISSION_METADATA_V1_BYTES;
@@ -257,13 +257,7 @@ impl AutoAdmissionReceipt {
         if self.metadata_version == 1 {
             return bridget_transport::protocol::is_auto_candidate_id(value);
         }
-        value.len() == 4
-            && value.starts_with('c')
-            && value[1..].bytes().all(|byte| byte.is_ascii_digit())
-            && value[1..]
-                .parse::<u16>()
-                .ok()
-                .is_some_and(|id| (1..=128).contains(&id))
+        bridget_transport::protocol::is_routing_candidate_id(value)
     }
 
     fn validate(&self) -> Result<(), String> {
@@ -461,7 +455,7 @@ const AUTO_RECEIPT_CREATE_168: &str = "CREATE TABLE auto_admission_receipts_168_
   refusal_code TEXT,
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL,
-  CHECK (length(metadata) BETWEEN 1 AND CASE metadata_version WHEN 2 THEN 131072 ELSE 16384 END),
+  CHECK (length(metadata) BETWEEN 1 AND CASE metadata_version WHEN 2 THEN 524288 ELSE 16384 END),
   PRIMARY KEY(owner, request_id)
 )";
 const AUTO_RECEIPT_INDEXES_168: &str = "
@@ -482,17 +476,32 @@ fn migrate_auto_admission_receipts_168(tx: &Transaction<'_>) -> rusqlite::Result
         .query_map([], |row| row.get::<_, String>(1))?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     let names = columns.iter().map(String::as_str).collect::<Vec<_>>();
-    if names == AUTO_RECEIPT_COLUMNS_168 {
-        verify_auto_receipt_schema_168(tx)?;
-        return Ok(());
-    }
-    if names != AUTO_RECEIPT_COLUMNS_163 {
+    let preserve_metadata_version = if names == AUTO_RECEIPT_COLUMNS_168 {
+        if verify_auto_receipt_schema_168(tx).is_ok() {
+            return Ok(());
+        }
+        verify_auto_receipt_schema_168_legacy_128k(tx)?;
+        true
+    } else if names == AUTO_RECEIPT_COLUMNS_163 {
+        verify_auto_receipt_schema_163(tx)?;
+        false
+    } else {
         return Err(rusqlite::Error::InvalidQuery);
-    }
-    verify_auto_receipt_schema_163(tx)?;
+    };
     reject_unexpected_auto_receipt_dependencies(tx)?;
     tx.execute_batch(AUTO_RECEIPT_CREATE_168)?;
-    tx.execute_batch(
+    let copy_sql = if preserve_metadata_version {
+        "INSERT INTO auto_admission_receipts_168_new(
+           owner,request_id,canonical,metadata,metadata_version,state,coordinator_epoch,revision,
+           policy_revision,policy_digest,candidate_id,delegate_canonical,mode,reason,task_id,
+           refusal_code,created_at,updated_at)
+         SELECT owner,request_id,canonical,metadata,metadata_version,state,coordinator_epoch,revision,
+           policy_revision,policy_digest,candidate_id,delegate_canonical,mode,reason,task_id,
+           refusal_code,created_at,updated_at
+         FROM auto_admission_receipts;
+         DROP TABLE auto_admission_receipts;
+         ALTER TABLE auto_admission_receipts_168_new RENAME TO auto_admission_receipts;"
+    } else {
         "INSERT INTO auto_admission_receipts_168_new(
            owner,request_id,canonical,metadata,metadata_version,state,coordinator_epoch,revision,
            policy_revision,policy_digest,candidate_id,delegate_canonical,mode,reason,task_id,
@@ -502,8 +511,9 @@ fn migrate_auto_admission_receipts_168(tx: &Transaction<'_>) -> rusqlite::Result
            refusal_code,created_at,updated_at
          FROM auto_admission_receipts;
          DROP TABLE auto_admission_receipts;
-         ALTER TABLE auto_admission_receipts_168_new RENAME TO auto_admission_receipts;",
-    )?;
+         ALTER TABLE auto_admission_receipts_168_new RENAME TO auto_admission_receipts;"
+    };
+    tx.execute_batch(copy_sql)?;
     tx.execute_batch(AUTO_RECEIPT_INDEXES_168)?;
     verify_auto_receipt_schema_168(tx)?;
     let quick_check: String = tx.query_row("PRAGMA quick_check", [], |row| row.get(0))?;
@@ -588,11 +598,23 @@ fn reject_unexpected_auto_receipt_dependencies(tx: &Transaction<'_>) -> rusqlite
     }
 }
 
-fn verify_auto_receipt_schema_168(tx: &Transaction<'_>) -> rusqlite::Result<()> {
+fn verify_auto_receipt_schema_168_legacy_128k(tx: &Transaction<'_>) -> rusqlite::Result<()> {
     reject_unexpected_auto_receipt_dependencies(tx)?;
     verify_auto_receipt_columns(tx, AUTO_RECEIPT_COLUMNS_168)?;
     let sql = normalized_auto_receipt_sql(tx)?;
     const EXPECTED: &str = "createtableauto_admission_receipts(ownertextnotnull,request_idtextnotnull,canonicalblobnotnullcheck(length(canonical)between1and524288),metadatablobnotnull,metadata_versionintegernotnulldefault1check(metadata_versionin(1,2)),statetextnotnullcheck(statein('pending','decision_started','chosen','admitted','refused')),coordinator_epochintegernotnullcheck(coordinator_epoch>=0),revisionintegernotnullcheck(revision>=0),policy_revisionintegernotnullcheck(policy_revision>0),policy_digesttextnotnull,candidate_idtext,delegate_canonicalblob,modetextcheck(modeisnullormodein('explicit','automatic','fallback')),reasontext,task_idtext,refusal_codetext,created_atintegernotnull,updated_atintegernotnull,check(length(metadata)between1andcasemetadata_versionwhen2then131072else16384end),primarykey(owner,request_id))";
+    if sql != EXPECTED {
+        return Err(rusqlite::Error::InvalidQuery);
+    }
+    verify_auto_receipt_indexes(tx)?;
+    Ok(())
+}
+
+fn verify_auto_receipt_schema_168(tx: &Transaction<'_>) -> rusqlite::Result<()> {
+    reject_unexpected_auto_receipt_dependencies(tx)?;
+    verify_auto_receipt_columns(tx, AUTO_RECEIPT_COLUMNS_168)?;
+    let sql = normalized_auto_receipt_sql(tx)?;
+    const EXPECTED: &str = "createtableauto_admission_receipts(ownertextnotnull,request_idtextnotnull,canonicalblobnotnullcheck(length(canonical)between1and524288),metadatablobnotnull,metadata_versionintegernotnulldefault1check(metadata_versionin(1,2)),statetextnotnullcheck(statein('pending','decision_started','chosen','admitted','refused')),coordinator_epochintegernotnullcheck(coordinator_epoch>=0),revisionintegernotnullcheck(revision>=0),policy_revisionintegernotnullcheck(policy_revision>0),policy_digesttextnotnull,candidate_idtext,delegate_canonicalblob,modetextcheck(modeisnullormodein('explicit','automatic','fallback')),reasontext,task_idtext,refusal_codetext,created_atintegernotnull,updated_atintegernotnull,check(length(metadata)between1andcasemetadata_versionwhen2then524288else16384end),primarykey(owner,request_id))";
     if sql != EXPECTED {
         return Err(rusqlite::Error::InvalidQuery);
     }
@@ -1404,7 +1426,7 @@ CREATE TABLE IF NOT EXISTS auto_admission_receipts(
   refusal_code TEXT,
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL,
-  CHECK (length(metadata) BETWEEN 1 AND CASE metadata_version WHEN 2 THEN 131072 ELSE 16384 END),
+  CHECK (length(metadata) BETWEEN 1 AND CASE metadata_version WHEN 2 THEN 524288 ELSE 16384 END),
   PRIMARY KEY(owner, request_id)
 );
 CREATE INDEX IF NOT EXISTS auto_admission_receipts_maintenance

@@ -29173,3 +29173,59 @@ fn spec355_provider_quota_exhausted_diagnostic_and_mission_pending_failure() {
         cleanup(&config);
     }
 }
+
+#[test]
+fn spec356_connection_dedup_and_auto_admission_invalid_field_diagnostics() {
+    // 1. record_plan_connection déduplique par connection_id (1 entrée par connexion, pas par modèle).
+    let mut conns = Vec::new();
+    for i in 0..5 {
+        record_plan_connection(
+            &mut conns,
+            crate::decision_service::RoutingDecisionFact {
+                id: "codex-sysle2".into(),
+                observed_at: Some(100 + i),
+                summary: format!("s{i}"),
+            },
+        );
+    }
+    record_plan_connection(
+        &mut conns,
+        crate::decision_service::RoutingDecisionFact {
+            id: "claude-cartae".into(),
+            observed_at: Some(200),
+            summary: "ok".into(),
+        },
+    );
+    assert_eq!(conns.len(), 2);
+    assert_eq!(conns[0].id, "codex-sysle2");
+    assert_eq!(conns[0].summary, "s4");
+
+    // 2. Les codes détaillés auto_admission_invalid renseignent detail.field et detail.cause.
+    for (code, expected_field, expected_cause) in [
+        (
+            "auto_admission_invalid:metadata_too_large",
+            "metadata",
+            "metadata_limit_exceeded",
+        ),
+        (
+            "auto_admission_invalid:task_invalid",
+            "task",
+            "task_empty_or_too_large",
+        ),
+        (
+            "auto_admission_invalid:request_id_invalid",
+            "request_id",
+            "request_id_empty_or_too_large",
+        ),
+        (
+            "auto_admission_invalid:canonical_too_large",
+            "request",
+            "canonical_limit_exceeded",
+        ),
+    ] {
+        let view = failure(code);
+        assert_eq!(view["code"], "auto_admission_invalid");
+        assert_eq!(view["detail"]["field"], expected_field, "code={code}");
+        assert_eq!(view["detail"]["cause"], expected_cause, "code={code}");
+    }
+}

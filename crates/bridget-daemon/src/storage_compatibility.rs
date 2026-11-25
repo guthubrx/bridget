@@ -37,6 +37,7 @@ const FORMATS: &[&str] = &[
     "workspace.commit_view.large.v2",
     "worker.store.capacity.v3",
     "agents.dormancy.v1",
+    "auto_admission.metadata_v2_512k.v1",
     SPECIALIST_REQUESTS,
     WORKER_CAPACITY,
     WORKTREE,

@@ -1700,6 +1700,90 @@ fn spec168_migre_163_sans_alterer_les_blobs_et_borne_v2() {
 }
 
 #[test]
+fn spec356_migre_168_128k_vers_512k_et_accepte_c512() {
+    let dir = std::env::temp_dir().join(format!("bridget-auto356-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("admission.sqlite");
+    let conn = Connection::open(&path).unwrap();
+    conn.execute_batch(
+        "CREATE TABLE auto_admission_receipts(
+          owner TEXT NOT NULL,
+          request_id TEXT NOT NULL,
+          canonical BLOB NOT NULL CHECK (length(canonical) BETWEEN 1 AND 524288),
+          metadata BLOB NOT NULL,
+          metadata_version INTEGER NOT NULL DEFAULT 1 CHECK (metadata_version IN (1,2)),
+          state TEXT NOT NULL CHECK (state IN ('pending','decision_started','chosen','admitted','refused')),
+          coordinator_epoch INTEGER NOT NULL CHECK (coordinator_epoch >= 0),
+          revision INTEGER NOT NULL CHECK (revision >= 0),
+          policy_revision INTEGER NOT NULL CHECK (policy_revision > 0),
+          policy_digest TEXT NOT NULL,
+          candidate_id TEXT,
+          delegate_canonical BLOB,
+          mode TEXT CHECK (mode IS NULL OR mode IN ('explicit','automatic','fallback')),
+          reason TEXT,
+          task_id TEXT,
+          refusal_code TEXT,
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL,
+          CHECK (length(metadata) BETWEEN 1 AND CASE metadata_version WHEN 2 THEN 131072 ELSE 16384 END),
+          PRIMARY KEY(owner, request_id)
+        );
+        CREATE INDEX auto_admission_receipts_maintenance
+        ON auto_admission_receipts(coordinator_epoch, state, updated_at);
+        CREATE INDEX auto_admission_receipts_task
+        ON auto_admission_receipts(task_id) WHERE task_id IS NOT NULL;
+        CREATE INDEX auto_admission_receipts_refused_purge
+        ON auto_admission_receipts(state, task_id, updated_at, owner, request_id)
+        WHERE state='refused' AND task_id IS NULL;",
+    )
+    .unwrap();
+    let v2_existing = serde_json::to_vec(&serde_json::json!({"decision_level":"decision_service","kept":true})).unwrap();
+    conn.execute(
+        "INSERT INTO auto_admission_receipts VALUES(?1,?2,?3,?4,2,'chosen',1,2,7,?5,'c092',?6,'automatic',NULL,NULL,NULL,10,11)",
+        params!["owner", "existing-v2", b"canon-v2".as_slice(), v2_existing.as_slice(), "a".repeat(64), b"del-v2".as_slice()],
+    )
+    .unwrap();
+    drop(conn);
+
+    // Ouverture : migration froide 128 Kio -> 512 Kio préservant metadata_version=2 et ses blobs.
+    let store = DelegationStore::open(&path).unwrap();
+    let kept = store
+        .auto_admission_receipt("owner", "existing-v2")
+        .unwrap()
+        .unwrap();
+    assert_eq!(kept.metadata_version, 2);
+    assert_eq!(kept.metadata, v2_existing);
+    assert_eq!(kept.candidate_id.as_deref(), Some("c092"));
+
+    // Un snapshot v2 > 128 Kio (ex. 160 Kio) et un candidate_id c200 (<= 512) sont admis.
+    let mut big_v2 = auto_receipt163("owner", "big-v2-356", 2, 12);
+    big_v2.metadata_version = 2;
+    big_v2.state = AutoAdmissionState::Chosen;
+    big_v2.candidate_id = Some("c200".into());
+    big_v2.delegate_canonical = Some(b"delegate-c200".to_vec());
+    big_v2.mode = Some(AutoAdmissionMode::Automatic);
+    big_v2.metadata = serde_json::to_vec(&serde_json::json!({
+        "decision_level": "decision_service",
+        "snapshot": "x".repeat(160 * 1024),
+    }))
+    .unwrap();
+    assert!(big_v2.metadata.len() > 128 * 1024);
+    assert!(big_v2.metadata.len() <= MAX_AUTO_ADMISSION_METADATA_V2_BYTES);
+    assert!(store.insert_auto_admission_receipt(&big_v2).unwrap());
+
+    // c513 (> MAX_ROUTING_CANDIDATES=512) reste refusé.
+    let mut bad_candidate = big_v2.clone();
+    bad_candidate.request_id = "bad-c513".into();
+    bad_candidate.candidate_id = Some("c513".into());
+    assert_eq!(
+        store.insert_auto_admission_receipt(&bad_candidate).unwrap_err(),
+        "auto_admission_invalid"
+    );
+    drop(store);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn spec168_migration_faute_copie_rollback_conserve_legacy() {
     let dir = std::env::temp_dir().join(format!("bridget-auto168-copy-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir_all(&dir).unwrap();
