@@ -3210,11 +3210,7 @@ impl WorkerStore {
             return Err(WorkerStoreError::Conflict);
         }
         validate_prepare_command(&binding.command)?;
-        if proof::read_workspace_receipt(&self.root, &self.worker, &binding.command)?.is_some()
-            || !self
-                .view_receipts(Some(&binding.command.task_id))?
-                .is_empty()
-        {
+        if proof::read_workspace_receipt(&self.root, &self.worker, &binding.command)?.is_some() {
             return Err(WorkerStoreError::Unknown);
         }
         let key = binding.key().map_err(workspace_failure)?;
@@ -3228,7 +3224,13 @@ impl WorkerStore {
                 Err(error) => return Err(error.into()),
             }
         }
-        let (commands, slots, _, _) = self.inventory()?;
+        // Vérifier le fence de commande et les slots avant toute lecture de l'archive workspaces.
+        let commands = self.command_receipts()?;
+        let known_commands: HashSet<_> = commands
+            .iter()
+            .map(|c| command_key(&c.identity))
+            .collect();
+        let slots = self.slot_receipts_with_commands(Some(&known_commands))?;
         let mut exact_fence = false;
         for command in commands
             .iter()
@@ -3250,6 +3252,12 @@ impl WorkerStore {
             || slots
                 .iter()
                 .any(|slot| slot.slot.identity.command.task_id == binding.command.task_id)
+        {
+            return Err(WorkerStoreError::Unknown);
+        }
+        if !self
+            .view_receipts(Some(&binding.command.task_id))?
+            .is_empty()
         {
             return Err(WorkerStoreError::Unknown);
         }
@@ -3311,7 +3319,12 @@ impl WorkerStore {
         {
             return Err(WorkerStoreError::Unknown);
         }
-        let (commands, slots, _, _) = self.inventory()?;
+        let commands = self.command_receipts()?;
+        let known_commands: HashSet<_> = commands
+            .iter()
+            .map(|c| command_key(&c.identity))
+            .collect();
+        let slots = self.slot_receipts_with_commands(Some(&known_commands))?;
         let related = commands
             .iter()
             .filter(|command| command.identity.task_id == binding.command.task_id);

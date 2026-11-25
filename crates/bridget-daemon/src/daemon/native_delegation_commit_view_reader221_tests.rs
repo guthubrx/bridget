@@ -1355,3 +1355,14 @@ fn spec329_parent_momentanement_absent_la_mission_attend_puis_echoue() {
         1_001
     ));
 }
+
+#[test]
+fn spec354_commit_view_conservation_backoff_progression() {
+    assert_eq!(conservation_backoff_delay(0), Duration::ZERO);
+    assert_eq!(conservation_backoff_delay(1), Duration::from_secs(5));
+    assert_eq!(conservation_backoff_delay(2), Duration::from_secs(15));
+    assert_eq!(conservation_backoff_delay(3), Duration::from_secs(45));
+    assert_eq!(conservation_backoff_delay(4), Duration::from_secs(120));
+    assert_eq!(conservation_backoff_delay(5), Duration::from_secs(300));
+    assert_eq!(conservation_backoff_delay(99), Duration::from_secs(300));
+}

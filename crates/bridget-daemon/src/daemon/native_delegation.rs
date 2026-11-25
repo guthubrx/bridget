@@ -4959,6 +4959,21 @@ fn admit_auto_configured(
 pub(super) struct WorkspaceWork {
     creations: HashMap<(String, String), WorkspaceReservation>,
     reports: HashSet<(String, String, u32)>,
+    /// Backoff exponentiel des conservations de vue refusées pour une même
+    /// époque et un même jeu de capacités worker : évite une boucle 1 Hz sur
+    /// une vieille tâche dont la preuve worker a expiré ou reste indisponible.
+    conservation_backoff: HashMap<(String, String, bool), (u32, Instant)>,
+}
+
+fn conservation_backoff_delay(failures: u32) -> Duration {
+    match failures {
+        0 => Duration::ZERO,
+        1 => Duration::from_secs(5),
+        2 => Duration::from_secs(15),
+        3 => Duration::from_secs(45),
+        4 => Duration::from_secs(120),
+        _ => Duration::from_secs(300),
+    }
 }
 
 struct WorkspaceReservation {
@@ -17547,7 +17562,7 @@ fn complete_commit_view_conservation(state: &Arc<Mutex<DaemonState>>, snapshot: 
         snapshot.mission.clone(),
         snapshot.round_no(),
     );
-    let _claim = {
+    let (backoff_key, _claim) = {
         let st = state.lock().recover_poison();
         let Ok(Some(current)) = st.delegation_store.get(&snapshot.task_id) else {
             return false;
@@ -17571,14 +17586,37 @@ fn complete_commit_view_conservation(state: &Arc<Mutex<DaemonState>>, snapshot: 
         if current.cleanup_done {
             return true;
         }
+        let (worker_epoch, has_view_cap) = st
+            .remote_workers
+            .get(&worker.machine_id)
+            .map(|entry| {
+                (
+                    entry.epoch.clone(),
+                    entry
+                        .capabilities
+                        .contains(&bridget_transport::protocol::WorkerCapability::WorkspaceViewV1),
+                )
+            })
+            .unwrap_or_else(|| (String::new(), false));
+        let backoff_key = (snapshot.task_id.clone(), worker_epoch, has_view_cap);
         let mut work = st.workspace_work.lock().recover_poison();
+        if work
+            .conservation_backoff
+            .get(&backoff_key)
+            .is_some_and(|(_, next_at)| Instant::now() < *next_at)
+        {
+            return false;
+        }
         if !work.reports.insert(key.clone()) {
             return false;
         }
-        WorkspaceClaim {
-            work: Arc::clone(&st.workspace_work),
-            key: WorkspaceClaimKey::Report(key),
-        }
+        (
+            backoff_key,
+            WorkspaceClaim {
+                work: Arc::clone(&st.workspace_work),
+                key: WorkspaceClaimKey::Report(key),
+            },
+        )
     };
     let response = remote_worker_roundtrip(
         state,
@@ -17592,16 +17630,37 @@ fn complete_commit_view_conservation(state: &Arc<Mutex<DaemonState>>, snapshot: 
     if !matches!(&response,Ok(WorkerResponseOperation::CommitViewConserved {prepare_digest}) if prepare_digest==digest)
     {
         // Code fermé seulement. L'erreur métier d'origine n'est pas remplacée.
+        let (failures, delay) = {
+            let st = state.lock().recover_poison();
+            let mut work = st.workspace_work.lock().recover_poison();
+            work.conservation_backoff
+                .retain(|(tid, _, _), _| tid != &snapshot.task_id || *tid == backoff_key.0);
+            let entry = work
+                .conservation_backoff
+                .entry(backoff_key)
+                .or_insert((0, Instant::now()));
+            entry.0 = entry.0.saturating_add(1);
+            let delay = conservation_backoff_delay(entry.0);
+            entry.1 = Instant::now() + delay;
+            (entry.0, delay)
+        };
         warn!(
-            "conservation de vue non confirmée : tâche={}, cause={:?}",
+            "conservation de vue non confirmée : tâche={}, cause={:?}, essai={}, prochain_essai_s={}",
             snapshot.task_id,
             response
                 .err()
-                .unwrap_or(bridget_transport::protocol::WorkerRefusal::CommandMismatch)
+                .unwrap_or(bridget_transport::protocol::WorkerRefusal::CommandMismatch),
+            failures,
+            delay.as_secs()
         );
         return false;
     }
     let st = state.lock().recover_poison();
+    st.workspace_work
+        .lock()
+        .recover_poison()
+        .conservation_backoff
+        .retain(|(tid, _, _), _| tid != &snapshot.task_id);
     let Ok(Some(mut current)) = st.delegation_store.get(&snapshot.task_id) else {
         return false;
     };
