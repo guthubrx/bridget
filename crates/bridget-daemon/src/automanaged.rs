@@ -261,7 +261,8 @@ pub(crate) fn merge_discovered_models_into_registry_value(
                 .default_effort
                 .as_deref()
                 .filter(|d| item.supported_efforts.iter().any(|e| e == d))
-                .map(str::to_string);
+                .map(str::to_string)
+                .or_else(|| item.supported_efforts.first().cloned());
 
             // 1. Ajouter dans `agents.<agent_type>.capabilities.models` si absent.
             let mut touched = false;
@@ -509,10 +510,15 @@ pub(crate) fn parse_claude_initialize_models(raw: &str) -> Vec<DiscoveredModel> 
                         .collect()
                 })
                 .unwrap_or_default();
+            let default_effort = if supported_efforts.iter().any(|e| e == "medium") {
+                Some("medium".to_string())
+            } else {
+                supported_efforts.first().cloned()
+            };
             models.push(DiscoveredModel {
                 model: model.to_string(),
                 supported_efforts,
-                default_effort: None,
+                default_effort,
             });
         }
     }
@@ -1336,6 +1342,6 @@ mod tests {
             fable.supported_efforts,
             vec!["low", "medium", "high", "xhigh", "max"]
         );
-        assert_eq!(fable.default_effort, None);
+        assert_eq!(fable.default_effort.as_deref(), Some("medium"));
     }
 }
