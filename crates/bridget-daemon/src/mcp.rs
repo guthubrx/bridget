@@ -2674,8 +2674,15 @@ fn tool_result(payload: Value) -> Value {
 }
 
 fn technical_result(code: &str, message: &str) -> Value {
+    let text = if code == "auxiliary_identity_unproven"
+        && message.starts_with("auxiliary_identity_unproven")
+    {
+        crate::delegation_mcp::format_auxiliary_identity_unproven(message, None, None)
+    } else {
+        message.to_string()
+    };
     json!({
-        "content": [{ "type": "text", "text": message }],
+        "content": [{ "type": "text", "text": text }],
         "isError": true,
         "code": code
     })

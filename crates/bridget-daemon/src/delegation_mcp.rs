@@ -39,39 +39,98 @@ fn parse_workspace(value: &Value) -> Result<WorkspaceRequest, ClientError> {
 pub(crate) const WAIT_TIMEOUT_DEFAULT_SECS: u64 = 600;
 pub(crate) const WAIT_TIMEOUT_MAX_SECS: u64 = 3600;
 
+fn pre_dispatch_reference(args: &Value) -> String {
+    args.get("task_id")
+        .and_then(Value::as_str)
+        .map(|id| format!("task_id={id}"))
+        .or_else(|| {
+            args.get("request_id")
+                .and_then(Value::as_str)
+                .map(|id| format!("request_id={id}"))
+        })
+        .or_else(|| {
+            parse_task_ids(args)
+                .ok()
+                .filter(|ids| {
+                    ids.iter().all(|id| {
+                        id.len() <= 128
+                            && id
+                                .bytes()
+                                .all(|byte| byte.is_ascii_alphanumeric() || b"-_:.".contains(&byte))
+                    })
+                })
+                .map(|ids| format!("task_ids={}", json!(ids)))
+        })
+        .unwrap_or_else(|| "les identifiants des tâches de cet appel".into())
+}
+
+pub(crate) fn format_auxiliary_identity_unproven(
+    raw_message: &str,
+    stage: Option<&str>,
+    reference: Option<&str>,
+) -> String {
+    let cause = raw_message
+        .strip_prefix("auxiliary_identity_unproven : ")
+        .map(str::trim);
+    let stage_suffix = stage
+        .map(|value| format!(" ; étape : {value}"))
+        .unwrap_or_default();
+    let reference = reference.unwrap_or("les identifiants de cet appel");
+    match cause {
+        Some("primary_absent" | "primary_not_live") => format!(
+            "Attendez quelques secondes la reconnexion du lien Bridget principal de cette session (par exemple juste après un redémarrage du daemon), puis réessayez cet appel s'il est en lecture seule ; pour une opération mutante, vérifiez d'abord son état durable avec {reference} avant tout nouvel essai, sans créer de mission de remplacement. Cause constatée : {raw_message} (le lien principal de cette session n'est pas enregistré ou n'est plus actif auprès du daemon{stage_suffix}). La commande de cet appel n'a pas été transmise. Ce refus concerne uniquement cette connexion et cette session, et ne prouve pas un arrêt global. Les autres travaux autorisés peuvent continuer selon leur propre état. Si le refus persiste après reconnexion, conservez le code auxiliary_identity_unproven, cette cause et {reference}, puis signalez l'incident au responsable Bridget ; demandez à l'utilisateur de relancer ou rattacher la session uniquement si le responsable ne peut pas rétablir le lien dans son périmètre."
+        ),
+        Some(
+            detail
+            @ ("credential_mismatch" | "instance_mismatch" | "connection_already_registered"),
+        ) => {
+            let explanation = match detail {
+                "credential_mismatch" => {
+                    "la preuve locale ne correspond plus au lien principal actif de cette session"
+                }
+                "instance_mismatch" => {
+                    "le lien principal actif appartient à une autre incarnation ou instance"
+                }
+                "connection_already_registered" => {
+                    "cette connexion auxiliaire est déjà enregistrée"
+                }
+                _ => unreachable!("cause d'identité auxiliaire vérifiée"),
+            };
+            format!(
+                "Ne réessayez pas aveuglément sur ce lien auxiliaire : conservez {reference} et vérifiez l'état durable de la tâche avant toute nouvelle action, sans créer de mission de remplacement. Cause constatée : {raw_message} ({explanation}{stage_suffix}). La commande de cet appel n'a pas été transmise. Ce refus concerne uniquement cette connexion et cette session, pas un arrêt global. Les autres travaux autorisés peuvent continuer selon leur propre état. Pour rétablir les appels Bridget depuis cette session, demandez à l'utilisateur de la relancer ou de rétablir son rattachement natif ; si le défaut persiste sur une session neuve, transmettez le code auxiliary_identity_unproven, cette cause et {reference} au responsable Bridget."
+            )
+        }
+        _ => format!(
+            "Ne réessayez pas aveuglément avant de vérifier le rattachement Bridget de cette session : conservez {reference} et vérifiez l'état durable avant toute opération mutante, sans créer de mission de remplacement. Cause précise inconnue au-delà du refus renvoyé ({raw_message}{stage_suffix}) : vérification manquante sur l'état du lien principal et du fichier de preuve local de cette session. La commande de cet appel n'a pas été transmise. Ce refus concerne uniquement cette connexion et cette session, pas un arrêt global. Les autres travaux autorisés peuvent continuer selon leur propre état. Transmettez le code auxiliary_identity_unproven, ce message et {reference} au responsable Bridget ; demandez à l'utilisateur de relancer ou rattacher la session si le responsable ne peut pas rétablir la preuve."
+        ),
+    }
+}
+
 /// Validation commune des deux outils d'attente : forme JSON puis bornes métier.
 pub(crate) fn pre_dispatch_failure(error: ClientError, stage: &str, args: &Value) -> ClientError {
     match error {
         ClientError::Technical { code, message }
             if matches!(code, "daemon_unreachable" | "outcome_unknown") =>
         {
-            let reference = args
-                .get("task_id")
-                .and_then(Value::as_str)
-                .map(|id| format!("task_id={id}"))
-                .or_else(|| {
-                    args.get("request_id")
-                        .and_then(Value::as_str)
-                        .map(|id| format!("request_id={id}"))
-                })
-                .or_else(|| {
-                    parse_task_ids(args)
-                        .ok()
-                        .filter(|ids| {
-                            ids.iter().all(|id| {
-                                id.len() <= 128
-                                    && id.bytes().all(|byte| {
-                                        byte.is_ascii_alphanumeric() || b"-_:.".contains(&byte)
-                                    })
-                            })
-                        })
-                        .map(|ids| format!("task_ids={}", json!(ids)))
-                })
-                .unwrap_or_else(|| "les identifiants des tâches de cet appel".into());
+            let reference = pre_dispatch_reference(args);
             ClientError::Technical {
                 code,
                 message: format!(
                     "{message} Étape : {stage}. La commande de cet appel n'a pas été transmise. Conservez {reference} et tout reçu antérieur. Vérifiez le lien natif depuis cette machine avant de reprendre exactement cet appel ; si la lecture reste indisponible, le responsable Bridget doit mesurer cette liaison. La cause précise du retard reste inconnue. Ce refus concerne cet appel ; les autres travaux autorisés suivent leur propre état."
+                ),
+            }
+        }
+        ClientError::Technical {
+            code: "auxiliary_identity_unproven",
+            message,
+        } => {
+            let reference = pre_dispatch_reference(args);
+            ClientError::Technical {
+                code: "auxiliary_identity_unproven",
+                message: format_auxiliary_identity_unproven(
+                    &message,
+                    Some(stage),
+                    Some(&reference),
                 ),
             }
         }
@@ -141,7 +200,11 @@ fn parse_delegate_graph(args: &Value) -> Result<DelegateGraphRequest, ClientErro
     let title = match args.get("title") {
         None | Some(Value::Null) => None,
         Some(Value::String(s)) if !s.trim().is_empty() && s.len() <= 256 => Some(s.clone()),
-        _ => return Err(ClientError::InvalidParams("title invalide (1..=256 caractères)".into())),
+        _ => {
+            return Err(ClientError::InvalidParams(
+                "title invalide (1..=256 caractères)".into(),
+            ));
+        }
     };
     let on_failure = match args.get("on_failure") {
         None => GraphFailurePolicy::StopDependents,
@@ -226,9 +289,9 @@ fn parse_delegate_graph(args: &Value) -> Result<DelegateGraphRequest, ClientErro
                 )));
             }
         };
-        let raw_del = step_obj.get("delegation").ok_or_else(|| {
-            ClientError::InvalidParams(format!("steps[{idx}].delegation requis"))
-        })?;
+        let raw_del = step_obj
+            .get("delegation")
+            .ok_or_else(|| ClientError::InvalidParams(format!("steps[{idx}].delegation requis")))?;
         let decoded_del = raw_del
             .as_str()
             .and_then(|txt| serde_json::from_str::<Value>(txt).ok())
@@ -313,10 +376,7 @@ fn parse_delegate_graph(args: &Value) -> Result<DelegateGraphRequest, ClientErro
                 .map(|_| del_str("connection_id"))
                 .transpose()?,
             agent_type: None,
-            model: del_obj
-                .get("model")
-                .map(|_| del_str("model"))
-                .transpose()?,
+            model: del_obj.get("model").map(|_| del_str("model")).transpose()?,
             effort: del_obj
                 .get("effort")
                 .map(|_| del_str("effort"))
@@ -605,7 +665,13 @@ fn execute_with_proof(
         "bridget_task_continue" => &["task_id", "request_id", "task", "brief"],
         "bridget_task_respond" => &["task_id", "request_id", "decision", "answer"],
         "bridget_task_status" | "bridget_task_cancel" => &["task_id"],
-        "bridget_delegate_graph" => &["request_id", "title", "on_failure", "notify_policy", "steps"],
+        "bridget_delegate_graph" => &[
+            "request_id",
+            "title",
+            "on_failure",
+            "notify_policy",
+            "steps",
+        ],
         "bridget_graph_status" | "bridget_graph_cancel" => &["graph_id"],
         "bridget_admission_cancel" => &["request_id"],
         "bridget_task_wait" => &["task_ids", "wait_timeout"],
@@ -1573,7 +1639,9 @@ const SPECIALISTS_ACTION_FIELDS: &[(&str, &[&str], &[&str])] = &[
     ),
 ];
 
-fn specialists_action_spec(action: &str) -> Option<(&'static [&'static str], &'static [&'static str])> {
+fn specialists_action_spec(
+    action: &str,
+) -> Option<(&'static [&'static str], &'static [&'static str])> {
     if action == "request_approval" {
         return Some((&["request_id", "operation"], &[]));
     }
@@ -1632,7 +1700,10 @@ fn specialists_invalid_params_guidance(args: &Value) -> String {
             let unexpected = obj.and_then(|map| {
                 map.keys().find(|k| {
                     let k = k.as_str();
-                    k != "version" && k != "action" && !required.contains(&k) && !optional.contains(&k)
+                    k != "version"
+                        && k != "action"
+                        && !required.contains(&k)
+                        && !optional.contains(&k)
                 })
             });
             if let Some(key) = unexpected {
@@ -1927,6 +1998,93 @@ mod tracking230_preflight_tests {
             ),
             ClientError::InvalidParams(_)
         ));
+    }
+
+    #[test]
+    fn auxiliary_identity_unproven_preflight_guides_transient_mismatch_and_unknown() {
+        for cause in ["primary_absent", "primary_not_live"] {
+            let ClientError::Technical { code, message } = pre_dispatch_failure(
+                ClientError::Technical {
+                    code: "auxiliary_identity_unproven",
+                    message: format!("auxiliary_identity_unproven : {cause}"),
+                },
+                "raccordement préalable au plafond MCP",
+                &json!({"task_id":"task-aux-1"}),
+            ) else {
+                panic!()
+            };
+            assert_eq!(code, "auxiliary_identity_unproven");
+            for expected in [
+                "Attendez quelques secondes la reconnexion",
+                &format!("auxiliary_identity_unproven : {cause}"),
+                "raccordement préalable au plafond MCP",
+                "task_id=task-aux-1",
+                "n'a pas été transmise",
+                "cette connexion et cette session",
+                "ne prouve pas un arrêt global",
+                "autres travaux autorisés",
+                "responsable Bridget",
+            ] {
+                assert!(
+                    message.contains(expected),
+                    "manquant ({expected}) : {message}"
+                );
+            }
+        }
+
+        for (cause, detail) in [
+            ("credential_mismatch", "preuve locale ne correspond plus"),
+            ("instance_mismatch", "autre incarnation ou instance"),
+            ("connection_already_registered", "déjà enregistrée"),
+        ] {
+            let ClientError::Technical { code, message } = pre_dispatch_failure(
+                ClientError::Technical {
+                    code: "auxiliary_identity_unproven",
+                    message: format!("auxiliary_identity_unproven : {cause}"),
+                },
+                "raccordement de cette session",
+                &json!({"request_id":"req-aux-2"}),
+            ) else {
+                panic!()
+            };
+            assert_eq!(code, "auxiliary_identity_unproven");
+            for expected in [
+                "Ne réessayez pas aveuglément",
+                &format!("auxiliary_identity_unproven : {cause}"),
+                detail,
+                "request_id=req-aux-2",
+                "pas un arrêt global",
+                "autres travaux autorisés",
+            ] {
+                assert!(
+                    message.contains(expected),
+                    "manquant ({expected}) : {message}"
+                );
+            }
+        }
+
+        let ClientError::Technical { code, message } = pre_dispatch_failure(
+            ClientError::Technical {
+                code: "auxiliary_identity_unproven",
+                message: "auxiliary_identity_unproven : future_cause".into(),
+            },
+            "raccordement",
+            &json!({}),
+        ) else {
+            panic!()
+        };
+        assert_eq!(code, "auxiliary_identity_unproven");
+        for expected in [
+            "Cause précise inconnue",
+            "vérification manquante",
+            "auxiliary_identity_unproven : future_cause",
+            "pas un arrêt global",
+        ] {
+            assert!(
+                message.contains(expected),
+                "manquant ({expected}) : {message}"
+            );
+        }
     }
 }
 

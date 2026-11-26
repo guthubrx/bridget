@@ -212,13 +212,22 @@ fn spec228_catalogue_input_schemas_are_objects_before_identity() {
         .iter()
         .find(|t| t["name"] == "bridget_domain")
         .unwrap();
-    assert_eq!(domain["inputSchema"]["properties"]["domain"]["type"], "string");
-    assert_eq!(domain["inputSchema"]["properties"]["reset"]["type"], "boolean");
+    assert_eq!(
+        domain["inputSchema"]["properties"]["domain"]["type"],
+        "string"
+    );
+    assert_eq!(
+        domain["inputSchema"]["properties"]["reset"]["type"],
+        "boolean"
+    );
     let specialists = catalogue
         .iter()
         .find(|t| t["name"] == "bridget_specialists")
         .unwrap();
-    assert_eq!(specialists["inputSchema"]["required"], json!(["version", "action"]));
+    assert_eq!(
+        specialists["inputSchema"]["required"],
+        json!(["version", "action"])
+    );
     assert_eq!(
         specialists["inputSchema"]["properties"]["version"],
         json!({"type": "integer", "enum": [1]})
@@ -7441,5 +7450,31 @@ fn spec309_compact_discovery_tools_fits_acp_budget_and_keeps_core_delegation_fie
     assert_eq!(
         specialists["inputSchema"]["properties"]["action"]["type"],
         "string"
+    );
+}
+
+#[test]
+fn technical_result_guides_auxiliary_identity_unproven_without_double_wrapping() {
+    let raw = technical_result(
+        "auxiliary_identity_unproven",
+        "auxiliary_identity_unproven : primary_absent",
+    );
+    assert_eq!(raw["isError"], true);
+    assert_eq!(raw["code"], "auxiliary_identity_unproven");
+    let text = raw["content"][0]["text"].as_str().unwrap();
+    assert!(text.contains("Attendez quelques secondes la reconnexion"));
+    assert!(text.contains("auxiliary_identity_unproven : primary_absent"));
+    assert!(text.contains("cette connexion et cette session"));
+    assert!(text.contains("ne prouve pas un arrêt global"));
+
+    let already_formatted = crate::delegation_mcp::format_auxiliary_identity_unproven(
+        "auxiliary_identity_unproven : primary_absent",
+        Some("raccordement préalable au plafond MCP"),
+        Some("task_id=t-1"),
+    );
+    let wrapped = technical_result("auxiliary_identity_unproven", &already_formatted);
+    assert_eq!(
+        wrapped["content"][0]["text"].as_str().unwrap(),
+        already_formatted
     );
 }
