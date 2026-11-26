@@ -1,6 +1,6 @@
 //! Gestion `automanaged` (active par défaut) :
 //! - Auto-référencement additif des nouveaux modèles annoncés par les fournisseurs
-//!   (Codex et Antigravity) dans les registres `agents.json` (verrouillés et validés).
+//!   (Codex, Antigravity, Cursor et Claude) dans les registres `agents.json` (verrouillés et validés).
 //! - Mise à jour périodique des CLI fournisseurs (`claude`, `codex`, `agy`) via leurs
 //!   commandes officielles, sans interrompre les missions en cours.
 //!
@@ -390,10 +390,12 @@ fn collect_discovered_models(
         }
     }
 
-    // 2. Complément direct local pour Antigravity (`agy models`) et Cursor (`cursor-agent --list-models`)
-    // si non encore présents dans le cache.
+    // 2. Complément direct local pour Antigravity (`agy models`), Cursor (`cursor-agent --list-models`)
+    // et Claude (`stream-json` `initialize`, métadonnées seules, 0 jeton) si non encore présents.
     let mut probed_agy_cmds: BTreeMap<String, Vec<DiscoveredModel>> = BTreeMap::new();
     let mut probed_cursor_cmds: BTreeMap<String, Vec<DiscoveredModel>> = BTreeMap::new();
+    let mut probed_claude_cmds: BTreeMap<(String, Option<String>), Vec<DiscoveredModel>> =
+        BTreeMap::new();
     for reg_path in local_registries {
         let Ok(raw) = crate::registry::read_private_registry(reg_path) else {
             continue;
@@ -406,6 +408,9 @@ fn collect_discovered_models(
         };
         for conn in &policy.connections {
             if !conn.enabled || by_conn.contains_key(&conn.connection_id) {
+                continue;
+            }
+            if is_legacy_alias_connection(&conn.connection_id) {
                 continue;
             }
             let Ok(def) = registry.get(&conn.agent_type) else {
@@ -428,11 +433,131 @@ fn collect_discovered_models(
                 if !models.is_empty() {
                     by_conn.insert(conn.connection_id.clone(), models.clone());
                 }
+            } else if conn.engine == "claude" {
+                let base = Path::new(&def.command)
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("");
+                if base == "gclaude"
+                    || conn.connection_id.starts_with("glm")
+                    || conn.agent_type == "glm"
+                {
+                    continue;
+                }
+                let key = (def.command.clone(), def.claude_config_dir.clone());
+                let models = probed_claude_cmds.entry(key).or_insert_with(|| {
+                    probe_local_claude_models(&def.command, def.claude_config_dir.as_deref())
+                });
+                if !models.is_empty() {
+                    by_conn.insert(conn.connection_id.clone(), models.clone());
+                }
             }
         }
     }
 
     by_conn
+}
+
+/// Analyse la sortie NDJSON de `claude --input-format stream-json --output-format stream-json --verbose --print`
+/// après envoi d'une requête `control_request` `initialize` (métadonnées seules, 0 jeton).
+pub(crate) fn parse_claude_initialize_models(raw: &str) -> Vec<DiscoveredModel> {
+    let mut seen = BTreeSet::new();
+    let mut models = Vec::new();
+    for line in raw.lines() {
+        let trimmed = line.trim();
+        if !trimmed.starts_with('{') {
+            continue;
+        }
+        let Ok(val) = serde_json::from_str::<Value>(trimmed) else {
+            continue;
+        };
+        if val.get("type").and_then(Value::as_str) != Some("control_response") {
+            continue;
+        }
+        if val.pointer("/response/subtype").and_then(Value::as_str) != Some("success") {
+            continue;
+        }
+        let Some(entries) = val
+            .pointer("/response/response/models")
+            .and_then(Value::as_array)
+        else {
+            continue;
+        };
+        for item in entries {
+            let candidate = item
+                .get("resolvedModel")
+                .and_then(Value::as_str)
+                .or_else(|| {
+                    item.get("value")
+                        .and_then(Value::as_str)
+                        .filter(|v| v.contains('-'))
+                });
+            let Some(model) = candidate else {
+                continue;
+            };
+            if !catalogue_token(model) || !seen.insert(model.to_string()) {
+                continue;
+            }
+            let supported_efforts: Vec<String> = item
+                .get("supportedEffortLevels")
+                .and_then(Value::as_array)
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(Value::as_str)
+                        .filter(|e| catalogue_token(e))
+                        .map(str::to_string)
+                        .collect()
+                })
+                .unwrap_or_default();
+            models.push(DiscoveredModel {
+                model: model.to_string(),
+                supported_efforts,
+                default_effort: None,
+            });
+        }
+    }
+    models.sort_by(|a, b| a.model.cmp(&b.model));
+    models
+}
+
+fn probe_local_claude_models(
+    command: &str,
+    claude_config_dir: Option<&str>,
+) -> Vec<DiscoveredModel> {
+    let mut cmd = Command::new(command);
+    cmd.args([
+        "--input-format",
+        "stream-json",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--print",
+    ])
+    .env_remove("ANTHROPIC_API_KEY")
+    .env_remove("ANTHROPIC_AUTH_TOKEN")
+    .env_remove("CLAUDE_CODE_OAUTH_TOKEN")
+    .stdin(Stdio::piped())
+    .stdout(Stdio::piped())
+    .stderr(Stdio::null());
+    if let Some(dir) = claude_config_dir {
+        cmd.env("CLAUDE_CONFIG_DIR", dir);
+    }
+    let Ok(mut child) = cmd.spawn() else {
+        return Vec::new();
+    };
+    if let Some(mut stdin) = child.stdin.take() {
+        let req = r#"{"type":"control_request","request_id":"bridget-init","request":{"subtype":"initialize"}}"#;
+        let _ = writeln!(stdin, "{req}");
+        let _ = stdin.flush();
+    }
+    let Ok(out) = wait_bounded(child, MODEL_PROBE_TIMEOUT_SECS) else {
+        return Vec::new();
+    };
+    if !out.status.success() {
+        return Vec::new();
+    }
+    let text = String::from_utf8_lossy(&out.stdout);
+    parse_claude_initialize_models(&text)
 }
 
 fn probe_local_cursor_models(command: &str) -> Vec<DiscoveredModel> {
@@ -1178,5 +1303,39 @@ mod tests {
         let added_again = merge_discovered_models_into_registry_value(&mut reg, &discovered);
         assert!(added_again.is_empty());
         assert_eq!(reg["routing_policy"]["revision"], 5);
+    }
+
+    #[test]
+    fn spec360_parse_claude_initialize_models_discovers_fable_and_deduplicates() {
+        let raw = concat!(
+            "{\"type\":\"system\",\"subtype\":\"hook_started\"}\n",
+            "{\"type\":\"control_response\",\"response\":{\"subtype\":\"success\",\"request_id\":\"bridget-init\",\"response\":{\"models\":[",
+            "{\"value\":\"default\",\"resolvedModel\":\"claude-opus-5-5\",\"supportedEffortLevels\":[\"low\",\"medium\",\"high\",\"xhigh\",\"max\"]},",
+            "{\"value\":\"opus\",\"resolvedModel\":\"claude-opus-5-5\",\"supportedEffortLevels\":[\"low\",\"medium\",\"high\",\"xhigh\",\"max\"]},",
+            "{\"value\":\"fable\",\"resolvedModel\":\"claude-fable-5-2\",\"supportedEffortLevels\":[\"low\",\"medium\",\"high\",\"xhigh\",\"max\"]},",
+            "{\"value\":\"sonnet\",\"resolvedModel\":\"claude-sonnet-5-5\",\"supportedEffortLevels\":[\"low\",\"medium\",\"high\",\"xhigh\",\"max\"]},",
+            "{\"value\":\"haiku\",\"resolvedModel\":\"claude-haiku-5-5\",\"supportedEffortLevels\":[\"low\",\"medium\",\"high\",\"xhigh\",\"max\"]}",
+            "]}}}\n"
+        );
+        let parsed = parse_claude_initialize_models(raw);
+        let names: Vec<&str> = parsed.iter().map(|m| m.model.as_str()).collect();
+        assert_eq!(
+            names,
+            vec![
+                "claude-fable-5-2",
+                "claude-haiku-5-5",
+                "claude-opus-5-5",
+                "claude-sonnet-5-5"
+            ]
+        );
+        let fable = parsed
+            .iter()
+            .find(|m| m.model == "claude-fable-5-2")
+            .unwrap();
+        assert_eq!(
+            fable.supported_efforts,
+            vec!["low", "medium", "high", "xhigh", "max"]
+        );
+        assert_eq!(fable.default_effort, None);
     }
 }
