@@ -490,14 +490,26 @@ perms=$(stat -f '%Lp' "$HOME/.cache/bridget-core/update-host-state.json")
             raise RuntimeError(f"bridget status échoué sur le maître: {st_res.stderr.strip()}")
         plan["master_status_ok"] = True
 
-    # 6. Nettoyage conservateur des anciens binaires inutilisés (garde actif + précédent + ouverts).
+    # 6. Nettoyage conservateur des anciens binaires inutilisés (garde actif + précédent + rollback + ouverts).
     keep_names = {build_name}
-    if previous_bin:
-        prev_parts = Path(previous_bin).parts
-        if "bridget-communication" in prev_parts:
-            idx = prev_parts.index("bridget-communication")
-            if idx + 1 < len(prev_parts):
-                keep_names.add(prev_parts[idx + 1])
+    for kept_path in (previous_bin, rollback_target):
+        if kept_path:
+            parts = Path(kept_path).parts
+            if "bridget-communication" in parts:
+                idx = parts.index("bridget-communication")
+                if idx + 1 < len(parts):
+                    keep_names.add(parts[idx + 1])
+    rb_read = runner.run(
+        "python3 -c 'import json,os; print(json.load(open(os.path.expanduser(\"~/.cache/bridget-core/update-host-state.json\"))).get(\"rollback\") or \"\")' 2>/dev/null || true",
+        timeout=10,
+    )
+    persisted_rb = (rb_read.stdout or "").strip()
+    if persisted_rb:
+        parts = Path(persisted_rb).parts
+        if "bridget-communication" in parts:
+            idx = parts.index("bridget-communication")
+            if idx + 1 < len(parts):
+                keep_names.add(parts[idx + 1])
     keep_literal = " ".join(shlex.quote(k) for k in sorted(keep_names))
     if os_name == "Linux":
         clean_script = f"""
