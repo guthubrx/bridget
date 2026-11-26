@@ -3,8 +3,8 @@
 
 use crate::accounts_connect::{
     ConnectionTarget, build_login_shell_command, build_ssh_login_args, enable_isolated_account,
-    extract_auth_url, extract_logged_in_account, find_target, load_fleet_connections, open_browser,
-    prepare_isolated_account, strip_ansi, valid_machine_id,
+    extract_auth_url, extract_device_code, extract_logged_in_account, find_target,
+    load_fleet_connections, open_browser, prepare_isolated_account, strip_ansi, valid_machine_id,
 };
 use crate::console_ui::{ConsoleState, check_private_auth, error_response, json_with_headers};
 use axum::extract::{Query, State};
@@ -24,6 +24,7 @@ pub(crate) struct LoginSession {
     engine: String,
     log: String,
     auth_url: Option<String>,
+    device_code: Option<String>,
     browser_opened: bool,
     open_in_browser: bool,
     code_sent: bool,
@@ -197,6 +198,7 @@ fn pump_stream<R: std::io::Read>(reader: R, session: Arc<Mutex<LoginSession>>) {
             Ok(_) => {
                 let text = strip_ansi(&String::from_utf8_lossy(&line));
                 let detected_url = extract_auth_url(&text);
+                let detected_device_code = extract_device_code(&text);
                 let detected_account = extract_logged_in_account(&text);
                 let mut url_to_open = None;
                 let mut open_via_os = false;
@@ -208,6 +210,11 @@ fn pump_stream<R: std::io::Read>(reader: R, session: Arc<Mutex<LoginSession>>) {
                     }
                     if let Some(acc) = detected_account {
                         guard.logged_in_as = Some(acc);
+                    }
+                    if guard.engine == "codex"
+                        && let Some(code) = detected_device_code
+                    {
+                        guard.device_code = Some(code);
                     }
                     if let Some(url) = detected_url {
                         guard.auth_url = Some(url.clone());
@@ -334,6 +341,7 @@ pub(crate) async fn route_api_login_start(
             target.connection_id, target.engine, target.machine_id
         ),
         auth_url: None,
+        device_code: None,
         browser_opened: false,
         open_in_browser: req.open_in_browser,
         code_sent: false,
@@ -479,6 +487,7 @@ pub(crate) async fn route_api_login_poll(
             "running": guard.running,
             "exit_code": guard.exit_code,
             "auth_url": guard.auth_url,
+            "device_code": guard.device_code,
             "engine": guard.engine,
             "code_sent": guard.code_sent,
             "code_auto_sent": guard.code_auto_sent,

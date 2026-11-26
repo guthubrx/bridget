@@ -18,7 +18,7 @@ let state = {
   themePref: document.documentElement.getAttribute("data-theme-pref") || "system",
 };
 let usageAutoTimer = null;
-let loginCtx = { sessionId: null, pollTimer: null, offset: 0, authUrl: null, popup: null, running: false };
+let loginCtx = { sessionId: null, pollTimer: null, offset: 0, authUrl: null, deviceCode: null, popup: null, running: false };
 let deployCtx = { jobId: null, pollTimer: null, offset: 0, running: false };
 
 function stopDeployPolling() {
@@ -113,10 +113,14 @@ function openAuthPopup(url) {
 async function handleLogin(conn, logoutFirst, enableOnSuccess) {
   stopLoginPolling();
   closeLoginPopup();
-  loginCtx = { sessionId: null, pollTimer: null, offset: 0, authUrl: null, popup: null, running: true };
+  loginCtx = { sessionId: null, pollTimer: null, offset: 0, authUrl: null, deviceCode: null, popup: null, running: true };
   const popup = openAuthPopup("about:blank");
   const title = `${logoutFirst ? "Changer de compte" : "Connexion"} · ${conn.account_label || conn.engine} (${conn.machine_id})`;
   const body = `<div id="loginBanner" class="login-banner"><strong>Préparation de la session…</strong>Démarrage de la connexion sur ${esc(conn.machine_id)}.</div>
+    <div id="loginDeviceBox" class="device-code-box hidden">
+      <div class="device-code-meta"><span>Code à usage unique à saisir dans la fenêtre OpenAI</span><strong id="loginDeviceCode" class="device-code-value"></strong></div>
+      <button class="btn primary" type="button" id="copyDeviceCodeBtn">Copier le code</button>
+    </div>
     <div id="loginUrlRow" class="login-actions hidden"><button class="btn primary" type="button" id="openAuthUrlBtn">Ouvrir la page de connexion</button></div>
     <div id="loginCodeBox" class="code-row hidden">
       <input id="loginCodeInput" type="text" placeholder="Collez le code OAuth si la détection automatique ne l'a pas envoyé" autocomplete="off" />
@@ -159,6 +163,26 @@ async function handleLogin(conn, logoutFirst, enableOnSuccess) {
     loginCtx.sessionId = started.session_id;
     const openBtn = document.getElementById("openAuthUrlBtn");
     if (openBtn) openBtn.onclick = () => { if (loginCtx.authUrl) openAuthPopup(loginCtx.authUrl); };
+    const copyDeviceBtn = document.getElementById("copyDeviceCodeBtn");
+    if (copyDeviceBtn) {
+      copyDeviceBtn.onclick = async () => {
+        if (!loginCtx.deviceCode) return;
+        try {
+          await navigator.clipboard.writeText(loginCtx.deviceCode);
+          copyDeviceBtn.textContent = "Code copié ✓";
+          setTimeout(() => { if (copyDeviceBtn) copyDeviceBtn.textContent = "Copier le code"; }, 2000);
+        } catch {
+          const codeEl = document.getElementById("loginDeviceCode");
+          if (codeEl && window.getSelection) {
+            const r = document.createRange();
+            r.selectNodeContents(codeEl);
+            const sel = window.getSelection();
+            sel.removeAllRanges();
+            sel.addRange(r);
+          }
+        }
+      };
+    }
     const sendBtn = document.getElementById("sendCodeBtn");
     const inputEl = document.getElementById("loginCodeInput");
     const sendCode = async () => {
@@ -189,13 +213,34 @@ async function handleLogin(conn, logoutFirst, enableOnSuccess) {
           }
           const urlRow = document.getElementById("loginUrlRow");
           if (urlRow) urlRow.classList.remove("hidden");
+          const isDeviceFlow = Boolean(res.device_code) || res.auth_url.includes("/device");
           const needsCode = res.engine !== "codex" && res.engine !== "cursor";
           const codeBox = document.getElementById("loginCodeBox");
           if (codeBox) codeBox.classList.toggle("hidden", !needsCode);
+          if (isDeviceFlow) {
+            setBanner(
+              "",
+              "Validez dans la fenêtre ouverte avec le code ci-dessous",
+              "Copiez le code à usage unique et collez-le sur la page OpenAI pour finaliser la connexion."
+            );
+          } else {
+            setBanner(
+              "",
+              needsCode ? "Validez dans la fenêtre ouverte puis cliquez « Copier »" : "Validez dans la fenêtre ouverte",
+              needsCode ? "Dès que vous copiez le code, Bridget l'envoie automatiquement (ou collez-le ci-dessous)." : "La redirection navigateur est automatique pour cette connexion."
+            );
+          }
+        }
+        if (res.device_code && res.device_code !== loginCtx.deviceCode) {
+          loginCtx.deviceCode = res.device_code;
+          const deviceBox = document.getElementById("loginDeviceBox");
+          const deviceCodeEl = document.getElementById("loginDeviceCode");
+          if (deviceCodeEl) deviceCodeEl.textContent = res.device_code;
+          if (deviceBox) deviceBox.classList.remove("hidden");
           setBanner(
             "",
-            needsCode ? "Validez dans la fenêtre ouverte puis cliquez « Copier »" : "Validez dans la fenêtre ouverte",
-            needsCode ? "Dès que vous copiez le code, Bridget l'envoie automatiquement (ou collez-le ci-dessous)." : "La redirection navigateur est automatique pour cette connexion."
+            "Validez dans la fenêtre ouverte avec le code ci-dessous",
+            "Copiez le code à usage unique et collez-le sur la page OpenAI pour finaliser la connexion."
           );
         }
         if (res.running && res.code_auto_sent) {
@@ -210,8 +255,10 @@ async function handleLogin(conn, logoutFirst, enableOnSuccess) {
           closeLoginPopup();
           const urlRow = document.getElementById("loginUrlRow");
           const codeBox = document.getElementById("loginCodeBox");
+          const deviceBox = document.getElementById("loginDeviceBox");
           if (urlRow) urlRow.classList.add("hidden");
           if (codeBox) codeBox.classList.add("hidden");
+          if (deviceBox) deviceBox.classList.add("hidden");
           setFootDone();
           if (res.exit_code === 0) {
             const who = res.logged_in_as ? `Compte connecté : ${res.logged_in_as}.` : "Session enregistrée et prête à l'emploi.";

@@ -162,6 +162,29 @@ pub(crate) fn extract_auth_url(text: &str) -> Option<String> {
     None
 }
 
+/// Extrait un code d'appareil OAuth autonome (ex. `3T34-UASYE` pour `codex login --device-auth`).
+pub(crate) fn extract_device_code(text: &str) -> Option<String> {
+    let cleaned = strip_ansi(text);
+    for raw_line in cleaned.lines() {
+        let trimmed = raw_line.trim();
+        let Some((left, right)) = trimmed.split_once('-') else {
+            continue;
+        };
+        if (4..=5).contains(&left.len())
+            && (4..=5).contains(&right.len())
+            && left
+                .bytes()
+                .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit())
+            && right
+                .bytes()
+                .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit())
+        {
+            return Some(trimmed.to_string());
+        }
+    }
+    None
+}
+
 /// Retire les séquences ANSI d'échappement pour un affichage lisible.
 pub(crate) fn strip_ansi(input: &str) -> String {
     let mut out = String::with_capacity(input.len());
@@ -884,12 +907,17 @@ pub(crate) fn build_login_shell_command(target: &ConnectionTarget, logout_first:
             }
         }
         "codex" => {
-            if logout_first {
-                format!(
-                    "{env_prefix} {cmd} logout >/dev/null 2>&1 || true; {env_prefix} {cmd} login"
-                )
-            } else {
+            // Sur une machine distante, utiliser --device-auth évite toute redirection TCP
+            // sur le port 1455 (bloquée par PermitOpen / AllowTcpForwarding sur les serveurs durcis).
+            let login = if target.is_local {
                 format!("{env_prefix} {cmd} login")
+            } else {
+                format!("{env_prefix} {cmd} login --device-auth")
+            };
+            if logout_first {
+                format!("{env_prefix} {cmd} logout >/dev/null 2>&1 || true; {login}")
+            } else {
+                login
             }
         }
         "antigravity" => {
@@ -948,21 +976,21 @@ fn parse_json_payload(raw: &str) -> Result<Value, String> {
 }
 
 pub(crate) fn build_ssh_login_args(target: &ConnectionTarget, login_cmd: String) -> Vec<String> {
-    let mut ssh_args = vec![
+    vec![
         "-tt".to_string(),
+        "-o".to_string(),
+        "ControlMaster=no".to_string(),
+        "-o".to_string(),
+        "ControlPath=none".to_string(),
+        "-o".to_string(),
+        "ControlPersist=no".to_string(),
         "-o".to_string(),
         "ServerAliveInterval=15".to_string(),
         "-o".to_string(),
         format!("ConnectTimeout={DEFAULT_SSH_CONNECT_TIMEOUT}"),
-    ];
-    if target.engine == "codex" {
-        // Redirige le callback OAuth local de Codex (port 1455) vers le serveur distant.
-        ssh_args.push("-L".to_string());
-        ssh_args.push("1455:127.0.0.1:1455".to_string());
-    }
-    ssh_args.push(target.machine_id.clone());
-    ssh_args.push(login_cmd);
-    ssh_args
+        target.machine_id.clone(),
+        login_cmd,
+    ]
 }
 
 /// Prépare (preview + apply) un nouveau compte isolé sur la machine locale ou distante.
@@ -1413,7 +1441,33 @@ mod tests {
         );
         assert!(codex_cmd.contains("CODEX_HOME='/tmp/acc/codex'"));
         assert!(codex_cmd.contains("-u OPENAI_API_KEY"));
-        assert!(codex_cmd.contains("login"));
+        assert!(codex_cmd.contains("login --device-auth"));
+
+        let mut local_codex = target("codex", "/usr/local/bin/codex", None);
+        local_codex.is_local = true;
+        let local_codex_cmd = build_login_shell_command(&local_codex, true);
+        assert!(local_codex_cmd.contains("logout"));
+        assert!(local_codex_cmd.ends_with("login"));
+        assert!(!local_codex_cmd.contains("--device-auth"));
+
+        let remote_codex = target("codex", "/home/moi/.local/bin/codex", None);
+        let ssh_args = build_ssh_login_args(&remote_codex, codex_cmd);
+        assert!(ssh_args.iter().any(|a| a == "ControlMaster=no"));
+        assert!(ssh_args.iter().any(|a| a == "ControlPath=none"));
+        assert!(ssh_args.iter().any(|a| a == "ControlPersist=no"));
+        assert!(!ssh_args.iter().any(|a| a == "-L" || a.contains("1455")));
+
+        assert_eq!(
+            extract_device_code("   3T34-UASYE\r\n").as_deref(),
+            Some("3T34-UASYE")
+        );
+        assert_eq!(
+            extract_device_code("ABCD-EFGH").as_deref(),
+            Some("ABCD-EFGH")
+        );
+        assert_eq!(extract_device_code("2026-11-26"), None);
+        assert_eq!(extract_device_code("Enter this one-time code"), None);
+        assert_eq!(extract_device_code("abcd-efgh"), None);
     }
 
     #[test]
