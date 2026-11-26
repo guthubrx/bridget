@@ -346,7 +346,11 @@ def deploy_one_host(
         )
 
     # 3. Qualification du rollback (jamais de faux rollback incompatible).
+    preserve_existing_rollback = bool(previous_bin and previous_bin == remote_bin)
     if rollback_policy == "null":
+        rollback_target = None
+        preserve_existing_rollback = False
+    elif preserve_existing_rollback:
         rollback_target = None
     else:
         rollback_target = (
@@ -354,10 +358,11 @@ def deploy_one_host(
             if check_remote_rollback_compatible(runner, previous_bin, remote_bin)
             else None
         )
-    plan["rollback"] = rollback_target
+    plan["rollback"] = "preserved" if preserve_existing_rollback else rollback_target
 
     # 4. Activation atomique + mise à jour 0600 de update-host-state.json + redémarrage services.
     rb_py = repr(rollback_target)
+    preserve_py = repr(preserve_existing_rollback)
     if os_name == "Linux":
         svc_args = " ".join(shlex.quote(s) for s in services)
         activate_script = f"""
@@ -380,7 +385,8 @@ with open(lock_path, "a+") as lf:
             data = json.load(f)
         shutil.copy2(state_path, state_path + ".bak")
         os.chmod(state_path + ".bak", 0o600)
-    data["rollback"] = {rb_py}
+    if not {preserve_py}:
+        data["rollback"] = {rb_py}
     tmp = state_path + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, separators=(",", ":"))
@@ -391,11 +397,19 @@ with open(lock_path, "a+") as lf:
     os.chmod(state_path, 0o600)
 PY
 systemctl --user restart {svc_args} bridget-updates.service
-sleep 2
 for svc in {svc_args}; do
-  state=$(systemctl --user is-active "$svc" || true)
-  pid=$(systemctl --user show -p MainPID --value "$svc" || true)
-  exe=$(readlink -f "/proc/$pid/exe" 2>/dev/null || echo "?")
+  state=""
+  pid=""
+  exe="?"
+  for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
+    state=$(systemctl --user is-active "$svc" || true)
+    pid=$(systemctl --user show -p MainPID --value "$svc" || true)
+    exe=$(readlink -f "/proc/$pid/exe" 2>/dev/null || echo "?")
+    if [ "$state" = "active" ] && [ "$exe" = {shlex.quote(remote_bin)} ]; then
+      break
+    fi
+    sleep 1
+  done
   echo "VERIFY:$svc:$state:$pid:$exe"
   [ "$state" = "active" ] || {{ echo "SERVICE_NOT_ACTIVE:$svc:$state" >&2; exit 21; }}
   [ "$exe" = {shlex.quote(remote_bin)} ] || {{ echo "EXE_MISMATCH:$svc:$exe" >&2; exit 22; }}
@@ -438,7 +452,8 @@ with open(lock_path, "a+") as lf:
             data = json.load(f)
         shutil.copy2(state_path, state_path + ".bak")
         os.chmod(state_path + ".bak", 0o600)
-    data["rollback"] = {rb_py}
+    if not {preserve_py}:
+        data["rollback"] = {rb_py}
     tmp = state_path + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, separators=(",", ":"))
