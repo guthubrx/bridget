@@ -13,6 +13,10 @@ pub(crate) fn qualify_workload_tools(
     use bridget_transport::protocol::{
         WorkloadTool as T, WorkloadToolObservation, WorkloadToolState as S,
     };
+    let effective_path = crate::lifecycle::path_with_standard_user_tool_dirs(
+        source.get("PATH").map(std::ffi::OsString::as_os_str),
+        source.get("HOME").map(std::ffi::OsString::as_os_str),
+    );
     tools
         .iter()
         .map(|tool| {
@@ -31,28 +35,34 @@ pub(crate) fn qualify_workload_tools(
                 if Instant::now() >= deadline {
                     return S::Unknown;
                 }
-                let Some(path) = source
-                    .get("PATH")
-                    .and_then(|p| p.to_str())
+                let Some(path) = effective_path
+                    .as_deref()
                     .into_iter()
-                    .flat_map(|p| p.split(':'))
-                    .map(Path::new)
+                    .flat_map(std::env::split_paths)
                     .filter(|p| p.is_absolute())
                     .map(|p| p.join(name))
-                    .filter_map(|p| p.canonicalize().ok())
-                    .filter(|p| !forbidden_roots.iter().any(|root| p.starts_with(root)))
-                    .find(|p| {
-                        p.metadata()
-                            .is_ok_and(|m| m.is_file() && m.mode() & 0o111 != 0)
+                    .find(|candidate| {
+                        let Ok(canonical) = candidate.canonicalize() else {
+                            return false;
+                        };
+                        !forbidden_roots
+                            .iter()
+                            .any(|root| canonical.starts_with(root))
+                            && canonical
+                                .metadata()
+                                .is_ok_and(|m| m.is_file() && m.mode() & 0o111 != 0)
                     })
                 else {
                     return S::Absent;
                 };
-                let mut child = match std::process::Command::new(path)
-                    .args(args)
-                    .current_dir("/")
-                    .env_clear()
-                    .envs(source)
+                // Conserver le chemin candidat (et non la cible canonique) pour les
+                // binaires multi-appels comme rustup (`cargo -> rustup`) ou corepack.
+                let mut command = std::process::Command::new(&path);
+                command.args(args).current_dir("/").env_clear().envs(source);
+                if let Some(effective_path) = effective_path.as_deref() {
+                    command.env("PATH", effective_path);
+                }
+                let mut child = match command
                     // Les shims peuvent installer une version sur un simple --version.
                     // La qualification observe l'installation existante seulement.
                     .env("RUSTUP_AUTO_INSTALL", "0")

@@ -1563,10 +1563,8 @@ impl WorkerStore {
             .map_err(|_| WorkerStoreError::Quarantined)?;
         self.health()?;
         let commands = self.command_receipts()?;
-        let known_commands: HashSet<_> = commands
-            .iter()
-            .map(|c| command_key(&c.identity))
-            .collect();
+        let known_commands: HashSet<_> =
+            commands.iter().map(|c| command_key(&c.identity)).collect();
         let slots = self.slot_receipts_with_commands(Some(&known_commands))?;
         let mut results = Vec::new();
         let mut next_retry: Option<i64> = None;
@@ -2020,10 +2018,8 @@ impl WorkerStore {
         let mut used =
             private_tree_bytes(&self.root)?.saturating_add(2 * MAX_METADATA_BYTES as u64);
         let commands = self.command_receipts()?;
-        let known_commands: HashSet<_> = commands
-            .iter()
-            .map(|c| command_key(&c.identity))
-            .collect();
+        let known_commands: HashSet<_> =
+            commands.iter().map(|c| command_key(&c.identity)).collect();
         let slots = self.slot_receipts_with_commands(Some(&known_commands))?;
         for command in &commands {
             // Les 4 Kio gardent la preuve de drainage et les détails de sortie tardifs.
@@ -3226,10 +3222,8 @@ impl WorkerStore {
         }
         // Vérifier le fence de commande et les slots avant toute lecture de l'archive workspaces.
         let commands = self.command_receipts()?;
-        let known_commands: HashSet<_> = commands
-            .iter()
-            .map(|c| command_key(&c.identity))
-            .collect();
+        let known_commands: HashSet<_> =
+            commands.iter().map(|c| command_key(&c.identity)).collect();
         let slots = self.slot_receipts_with_commands(Some(&known_commands))?;
         let mut exact_fence = false;
         for command in commands
@@ -3320,10 +3314,8 @@ impl WorkerStore {
             return Err(WorkerStoreError::Unknown);
         }
         let commands = self.command_receipts()?;
-        let known_commands: HashSet<_> = commands
-            .iter()
-            .map(|c| command_key(&c.identity))
-            .collect();
+        let known_commands: HashSet<_> =
+            commands.iter().map(|c| command_key(&c.identity)).collect();
         let slots = self.slot_receipts_with_commands(Some(&known_commands))?;
         let related = commands
             .iter()
@@ -4533,15 +4525,15 @@ mod refuse243_tests {
             WorkerRefusal::WorkerUnavailable
         );
         assert_eq!(
-            refuse_managed_spawn(&ManagedProcessError::Io(
-                std::io::Error::from_raw_os_error(libc::ENOSPC)
-            )),
+            refuse_managed_spawn(&ManagedProcessError::Io(std::io::Error::from_raw_os_error(
+                libc::ENOSPC
+            ))),
             WorkerRefusal::DiskFull
         );
         assert_eq!(
-            refuse_managed_spawn(&ManagedProcessError::Io(
-                std::io::Error::from_raw_os_error(libc::EACCES)
-            )),
+            refuse_managed_spawn(&ManagedProcessError::Io(std::io::Error::from_raw_os_error(
+                libc::EACCES
+            ))),
             WorkerRefusal::FilesystemAccessDenied
         );
         assert_eq!(
@@ -8479,17 +8471,18 @@ impl WorkerRuntime {
                     .map_err(unavailable)?,
                 ),
             );
-            let executable = check_worker_executable(std::env::current_exe()).inspect_err(|_| {
-                eprintln!(
-                    "bridget_remote_start_error {}",
-                    serde_json::json!({
-                        "command_id": command.command_id,
-                        "stage": "current_exe",
-                        "reason": "worker_executable_missing",
-                        "refusal": "worker_unavailable"
-                    })
-                );
-            })?;
+            let executable =
+                check_worker_executable(std::env::current_exe()).inspect_err(|_| {
+                    eprintln!(
+                        "bridget_remote_start_error {}",
+                        serde_json::json!({
+                            "command_id": command.command_id,
+                            "stage": "current_exe",
+                            "reason": "worker_executable_missing",
+                            "refusal": "worker_unavailable"
+                        })
+                    );
+                })?;
             let managed = ManagedLaunch {
                 bootstrap_executable: executable.clone(),
                 wrapper_executable: executable,
@@ -9104,10 +9097,8 @@ impl WorkerRuntime {
             let _guard = self.store.transition.lock().map_err(unavailable)?;
             self.store.health().map_err(refuse)?;
             let commands = self.store.command_receipts().map_err(refuse)?;
-            let known_commands: HashSet<_> = commands
-                .iter()
-                .map(|c| command_key(&c.identity))
-                .collect();
+            let known_commands: HashSet<_> =
+                commands.iter().map(|c| command_key(&c.identity)).collect();
             let slots = self
                 .store
                 .slot_receipts_with_commands(Some(&known_commands))
@@ -9170,10 +9161,7 @@ impl WorkerRuntime {
                 log::warn!("worker_reconcile_pending reason={reason:?}");
             }
         }
-        let cancelled_empty = self
-            .cancelled
-            .lock()
-            .map_or(false, |set| set.is_empty());
+        let cancelled_empty = self.cancelled.lock().map_or(false, |set| set.is_empty());
         if !has_active_work
             && self.running.is_empty()
             && self.held.is_empty()
@@ -10909,5 +10897,76 @@ fn spec241_tool_probe_distinguishes_presence_usability_and_timeout() {
     let start = Instant::now();
     assert_eq!(probe(start + Duration::from_millis(30)), S::Unknown);
     assert!(start.elapsed() < Duration::from_millis(400));
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[cfg(test)]
+#[test]
+fn tool_probe_finds_home_cargo_and_local_bin_and_preserves_multicall_argv0() {
+    use bridget_transport::protocol::{WorkloadTool as T, WorkloadToolState as S};
+    use std::os::unix::fs::symlink;
+
+    let root = std::env::temp_dir().join(format!("b-tools-home-{}", uuid::Uuid::new_v4()));
+    let sys_bin = root.join("sys-bin");
+    let home = root.join("home");
+    let cargo_bin = home.join(".cargo/bin");
+    let local_bin = home.join(".local/bin");
+    let forbidden = root.join("forbidden-repo");
+    fs::create_dir_all(&sys_bin).unwrap();
+    fs::create_dir_all(&cargo_bin).unwrap();
+    fs::create_dir_all(&local_bin).unwrap();
+    fs::create_dir_all(&forbidden).unwrap();
+
+    // Multi-appel rustup : exige argv[0] se terminant par `/cargo` et un PATH
+    // contenant `.cargo/bin` (comme le ferait un vrai toolchain cargo/rustc).
+    let rustup = cargo_bin.join("rustup");
+    fs::write(
+        &rustup,
+        "#!/bin/sh\nbase=${0##*/}\n[ \"$base\" = \"cargo\" ] && [ \"$RUSTUP_AUTO_INSTALL\" = 0 ] && case \":$PATH:\" in *\":$HOME/.cargo/bin:\"*) exit 0 ;; esac\nexit 1\n",
+    )
+    .unwrap();
+    fs::set_permissions(&rustup, fs::Permissions::from_mode(0o700)).unwrap();
+    symlink(&rustup, cargo_bin.join("cargo")).unwrap();
+
+    let pnpm = local_bin.join("pnpm");
+    fs::write(&pnpm, "#!/bin/sh\nexit 0\n").unwrap();
+    fs::set_permissions(&pnpm, fs::Permissions::from_mode(0o700)).unwrap();
+
+    // Un lien symbolique dans ~/.local/bin pointant vers une racine interdite reste refusé.
+    let bad_node = forbidden.join("node");
+    fs::write(&bad_node, "#!/bin/sh\nexit 0\n").unwrap();
+    fs::set_permissions(&bad_node, fs::Permissions::from_mode(0o700)).unwrap();
+    symlink(&bad_node, local_bin.join("node")).unwrap();
+
+    let mut env = crate::lifecycle::SourceEnvironment::new();
+    env.insert("PATH".into(), sys_bin.clone().into_os_string());
+    env.insert("HOME".into(), home.clone().into_os_string());
+
+    let observed = qualify_workload_tools(
+        &env,
+        &[T::Cargo, T::Pnpm, T::Node],
+        &[forbidden.canonicalize().unwrap()],
+        Instant::now() + Duration::from_secs(2),
+    );
+    assert_eq!(observed[0].state, S::Available, "cargo dans ~/.cargo/bin");
+    assert_eq!(observed[1].state, S::Available, "pnpm dans ~/.local/bin");
+    assert_eq!(
+        observed[2].state,
+        S::Absent,
+        "cible canonique dans forbidden_roots refusée"
+    );
+
+    // L'ordre du PATH existant prime : un cargo présent dans sys_bin reste prioritaire.
+    let failing_sys_cargo = sys_bin.join("cargo");
+    fs::write(&failing_sys_cargo, "#!/bin/sh\nexit 17\n").unwrap();
+    fs::set_permissions(&failing_sys_cargo, fs::Permissions::from_mode(0o700)).unwrap();
+    let overridden = qualify_workload_tools(
+        &env,
+        &[T::Cargo],
+        &[],
+        Instant::now() + Duration::from_secs(2),
+    );
+    assert_eq!(overridden[0].state, S::Unusable);
+
     fs::remove_dir_all(root).unwrap();
 }

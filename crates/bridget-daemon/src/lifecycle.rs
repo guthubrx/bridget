@@ -702,7 +702,12 @@ pub fn build_environment(
     env.entry("PATH".to_string())
         .or_insert_with(|| OsString::from(FALLBACK_PATH));
     if let Some(path) = env.get("PATH").cloned() {
-        env.insert("PATH".to_string(), prepend_current_exe_dir(&path));
+        let enriched = path_with_standard_user_tool_dirs(
+            Some(path.as_os_str()),
+            env.get("HOME").map(OsString::as_os_str),
+        )
+        .unwrap_or(path);
+        env.insert("PATH".to_string(), prepend_current_exe_dir(&enriched));
     }
     env.entry("TMPDIR".to_string())
         .or_insert_with(|| OsString::from("/tmp"));
@@ -801,6 +806,33 @@ fn prepend_current_exe_dir(path: &OsString) -> OsString {
         Some(prefixed) => OsString::from(prefixed),
         None => path.clone(),
     }
+}
+
+/// Ajoute en fin de `PATH` les répertoires utilisateur standards existants
+/// (`.cargo/bin`, `.local/bin`) lorsque `HOME` est un chemin absolu et que ces
+/// répertoires n'y figurent pas déjà. Les entrées déjà présentes gardent leur
+/// priorité exacte ; les entrées vides (`.` implicite POSIX) sont ignorées.
+pub(crate) fn path_with_standard_user_tool_dirs(
+    existing: Option<&std::ffi::OsStr>,
+    home: Option<&std::ffi::OsStr>,
+) -> Option<OsString> {
+    let mut entries: Vec<PathBuf> = existing
+        .into_iter()
+        .flat_map(std::env::split_paths)
+        .filter(|dir| !dir.as_os_str().is_empty())
+        .collect();
+    if let Some(home) = home.map(Path::new).filter(|path| path.is_absolute()) {
+        for suffix in [".cargo/bin", ".local/bin"] {
+            let candidate = home.join(suffix);
+            if candidate.is_dir() && !entries.iter().any(|dir| dir == &candidate) {
+                entries.push(candidate);
+            }
+        }
+    }
+    if entries.is_empty() {
+        return None;
+    }
+    std::env::join_paths(entries).ok()
 }
 
 fn command_exists(command: &str, env: &SourceEnvironment) -> bool {
