@@ -9133,13 +9133,16 @@ fn handle_rate_limit(
                         })
                 })
                 .unwrap_or(state.host.as_str());
-            let obs_profile = state.registry.get(&agent_type).ok().and_then(|def| {
-                match engine_name {
-                    "claude" => def.claude_config_dir.as_deref(),
-                    "codex" => def.codex_home.as_deref(),
-                    _ => None,
-                }
-            });
+            let obs_profile =
+                state
+                    .registry
+                    .get(&agent_type)
+                    .ok()
+                    .and_then(|def| match engine_name {
+                        "claude" => def.claude_config_dir.as_deref(),
+                        "codex" => def.codex_home.as_deref(),
+                        _ => None,
+                    });
             crate::usage_quotas::record_passive_observation(
                 engine_name,
                 obs_machine,
@@ -11164,7 +11167,11 @@ fn announce_communication_project_inner(
         let diag =
             project_resolution_diagnostic277(&owner, unchanged, conflicting, &resolution_cause)
                 .to_string();
-        if st.communication_project_last_diag.get(conn_id).map(String::as_str) == Some(diag.as_str())
+        if st
+            .communication_project_last_diag
+            .get(conn_id)
+            .map(String::as_str)
+            == Some(diag.as_str())
         {
             None
         } else {
@@ -17992,6 +17999,25 @@ pub struct DaemonStatus {
     /// Machine et base attestées par le daemon lui-même.
     pub daemon_host: Option<String>,
     pub daemon_db_path: Option<String>,
+}
+
+/// Compte les agents réellement actifs (ni `stopped`, ni `unreachable`, ni `unobserved`),
+/// ainsi que les agents `unreachable` et `stopped` pour un affichage fidèle de `status`.
+pub fn status_agent_counts(
+    agents: &[bridget_transport::protocol::AgentInfo],
+) -> (usize, usize, usize) {
+    let mut connected = 0usize;
+    let mut unreachable = 0usize;
+    let mut stopped = 0usize;
+    for agent in agents {
+        match agent.state.as_str() {
+            "stopped" => stopped += 1,
+            "unreachable" => unreachable += 1,
+            "unobserved" => {}
+            _ => connected += 1,
+        }
+    }
+    (connected, unreachable, stopped)
 }
 
 /// Absence déterminée : aucune socket ne répond, donc l'inventaire vide est

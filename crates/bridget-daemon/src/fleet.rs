@@ -611,18 +611,26 @@ impl FleetSupervisor {
         Ok(())
     }
 
+    /// Purge en une seule écriture les entrées retenues par le prédicat.
+    pub fn prune_desired_where(
+        &self,
+        predicate: impl Fn(&str, &DesiredEquipier) -> bool,
+    ) -> Result<usize, FleetError> {
+        let removed = self.desired.remove_where(predicate)?;
+        for name in &removed {
+            self.roster.forget(name);
+        }
+        Ok(removed.len())
+    }
+
     /// Purge en une seule écriture les entrées déjà `decommissioned` retenues par le prédicat.
     pub fn prune_decommissioned_desired(
         &self,
         predicate: impl Fn(&str, &DesiredEquipier) -> bool,
     ) -> Result<usize, FleetError> {
-        let removed = self.desired.remove_where(|name, entry| {
+        self.prune_desired_where(|name, entry| {
             entry.lifecycle_state == DesiredLifecycleState::Decommissioned && predicate(name, entry)
-        })?;
-        for name in &removed {
-            self.roster.forget(name);
-        }
-        Ok(removed.len())
+        })
     }
 
     pub fn drain_legacy_non_persistent_named(

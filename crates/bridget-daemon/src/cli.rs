@@ -8335,7 +8335,19 @@ fn cmd_status(args: &[String]) {
             .as_deref()
             .unwrap_or(crate::build_info::MACHINE_NON_ATTESTEE)
     );
-    println!("Agents connectés: {}", status.agents.len());
+    let (connected, unreachable, stopped) = crate::daemon::status_agent_counts(&status.agents);
+    let mut extras = Vec::new();
+    if unreachable > 0 {
+        extras.push(format!("{unreachable} injoignable(s)"));
+    }
+    if stopped > 0 {
+        extras.push(format!("{stopped} arrêté(s)"));
+    }
+    if extras.is_empty() {
+        println!("Agents connectés: {connected}");
+    } else {
+        println!("Agents connectés: {connected} ({})", extras.join(", "));
+    }
     match status.message_count {
         Some(count) => println!("Messages en base: {count}"),
         None => println!("Messages en base: total non publié par le daemon — consulter ledger"),

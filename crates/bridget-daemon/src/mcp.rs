@@ -1828,10 +1828,14 @@ fn execute_status(
         code: "daemon_status_unavailable",
         message,
     })?;
+    let (connected, unreachable, stopped) = crate::daemon::status_agent_counts(&status.agents);
     Ok(json!({
         "running": status.running,
         "agents_inventory_available": status.agents_inventory_available,
-        "agent_count": status.agents_inventory_available.then_some(status.agents.len()),
+        "agent_count": status.agents_inventory_available.then_some(connected),
+        "unreachable_agent_count": status.agents_inventory_available.then_some(unreachable),
+        "stopped_agent_count": status.agents_inventory_available.then_some(stopped),
+        "total_directory_count": status.agents_inventory_available.then_some(status.agents.len()),
         "build_id": status.build_id,
         "daemon_host": status.daemon_host,
     }))
@@ -3142,8 +3146,12 @@ fn flatten_top_level_schema_for_discovery(schema: &mut serde_json::Map<String, V
     for key in ["allOf", "anyOf", "oneOf", "enum", "const", "not", "$ref"] {
         schema.remove(key);
     }
-    schema.entry("type".to_owned()).or_insert_with(|| json!("object"));
-    schema.entry("properties".to_owned()).or_insert_with(|| json!({}));
+    schema
+        .entry("type".to_owned())
+        .or_insert_with(|| json!("object"));
+    schema
+        .entry("properties".to_owned())
+        .or_insert_with(|| json!({}));
 }
 
 fn discovery_tools() -> Vec<Value> {

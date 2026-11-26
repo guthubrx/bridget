@@ -318,10 +318,7 @@ fn routing_decision_request(
     Ok(decision)
 }
 
-fn record_plan_connection(
-    connections: &mut Vec<RoutingDecisionFact>,
-    fact: RoutingDecisionFact,
-) {
+fn record_plan_connection(connections: &mut Vec<RoutingDecisionFact>, fact: RoutingDecisionFact) {
     if let Some(existing) = connections.iter_mut().find(|entry| entry.id == fact.id) {
         *existing = fact;
     } else {
@@ -2668,7 +2665,11 @@ fn score_routing_candidates(
             .policy
             .model_catalog
             .get(&candidate.connection_id)
-            .and_then(|models| models.iter().position(|entry| entry.model == candidate.model))
+            .and_then(|models| {
+                models
+                    .iter()
+                    .position(|entry| entry.model == candidate.model)
+            })
             .unwrap_or(usize::MAX);
         (conn_rank, model_rank)
     };
@@ -6567,7 +6568,10 @@ pub(super) fn factual_summary(task: &Task, result_bytes: Option<usize>) -> Value
     let duration_secs = task
         .completed_at
         .or_else(|| task.terminal().then_some(task.updated_at))
-        .map(|end| end.saturating_sub(task.started_at.unwrap_or(task.created_at)).max(0));
+        .map(|end| {
+            end.saturating_sub(task.started_at.unwrap_or(task.created_at))
+                .max(0)
+        });
     let rounds_used = task.round_no();
     let mut warnings: Vec<String> = Vec::new();
 
@@ -6592,7 +6596,10 @@ pub(super) fn factual_summary(task: &Task, result_bytes: Option<usize>) -> Value
     };
 
     let (git_value, repo_line, commits_line) = if let Some(ws) = &task.workspace {
-        let is_view = matches!(ws.strategy, crate::delegation::WorkspaceStrategy::CommitView);
+        let is_view = matches!(
+            ws.strategy,
+            crate::delegation::WorkspaceStrategy::CommitView
+        );
         let report_observed = workspace_report_ready(task) && ws.dirty.is_some();
         if !report_observed {
             if task.terminal() {
@@ -6629,7 +6636,11 @@ pub(super) fn factual_summary(task: &Task, result_bytes: Option<usize>) -> Value
                 format!(
                     "Dépôt : vue de commit ({}) · {}",
                     short_sha(&ws.base_commit),
-                    if diverged { "divergence détectée" } else { "intacte" }
+                    if diverged {
+                        "divergence détectée"
+                    } else {
+                        "intacte"
+                    }
                 ),
                 None,
             )
@@ -6637,17 +6648,14 @@ pub(super) fn factual_summary(task: &Task, result_bytes: Option<usize>) -> Value
             let dirty = ws.dirty == Some(true);
             let commit_count = ws.commit_count.unwrap_or(0);
             if dirty {
-                warnings.push(
-                    "Modifications non commitées présentes dans le worktree".into(),
-                );
+                warnings.push("Modifications non commitées présentes dans le worktree".into());
             }
             if ws.head_on_branch == Some(false) {
                 warnings.push("HEAD n’est plus sur la branche attendue du worktree".into());
             }
             if commit_count == 0 && !dirty && task.state == "result_available" {
-                warnings.push(
-                    "Aucun commit ni modification locale produit dans le worktree".into(),
-                );
+                warnings
+                    .push("Aucun commit ni modification locale produit dans le worktree".into());
             }
             let top_commits: Vec<String> = ws
                 .commits
@@ -7146,11 +7154,7 @@ fn task_view(task: &Task, phase: Option<&str>, full: bool) -> Value {
                 | "timeout ACP pour session/prompt:provider_output_unobserved"
         )
     }
-    if task.state == "failed"
-        && task
-            .projected_error()
-            .is_some_and(is_mission_timeout_error)
-    {
+    if task.state == "failed" && task.projected_error().is_some_and(is_mission_timeout_error) {
         let duration = task.reply_timeout.unwrap_or(MISSION_REPLY_LIMIT_SECS);
         let unobserved = task
             .projected_error()
@@ -16913,9 +16917,9 @@ pub(super) fn tick(state: &Arc<Mutex<DaemonState>>) {
                         .filter(|quota| quota.launch_blocked)
                     {
                         let waitable = quota_enabled(&task)
-                            && quota
-                                .resets_at
-                                .is_some_and(|reset| reset > now && reset <= now.saturating_add(21600));
+                            && quota.resets_at.is_some_and(|reset| {
+                                reset > now && reset <= now.saturating_add(21600)
+                            });
                         if waitable {
                             if let Some(event) = record_locked(
                                 &mut st,
@@ -18428,7 +18432,16 @@ pub(super) fn maintain_retention(st: &DaemonState, now: i64) {
             "entretien: {pruned} sous-agent(s) natif(s) décommissionné(s) purgé(s) de fleet.json"
         );
     }
+    let pruned_stopped = prune_stopped_fleet_children(st, now);
+    if pruned_stopped > 0 {
+        info!(
+            "entretien: {pruned_stopped} sous-agent(s) natif(s) arrêté(s) purgé(s) de fleet.json"
+        );
+    }
 }
+
+/// Délai de grâce avant retrait d'une entrée UUID `stopped` sans tâche associée dans `fleet.json`.
+const STOPPED_ORPHAN_FLEET_GRACE_SECS: i64 = 24 * 3600;
 
 /// Retire de `fleet.json` les seuls sous-agents natifs déjà `decommissioned`,
 /// identifiés par UUID avec `agent_link`, dont aucune tâche ni activité ne subsiste.
@@ -18480,6 +18493,83 @@ pub(super) fn prune_decommissioned_fleet_children(st: &DaemonState) -> usize {
         Ok(count) => count,
         Err(error) => {
             warn!("entretien: purge fleet.json des sous-agents décommissionnés : {error}");
+            0
+        }
+    }
+}
+
+/// Retire de `fleet.json` les sous-agents UUID déjà `stopped` qui n'ont plus aucune activité :
+/// - soit liés à une tâche terminale nettoyée et sans garde `keep_alive` active (le résultat reste en SQLite),
+/// - soit orphelins sans tâche dans `delegation_store` et créés depuis plus de 24 h.
+/// Les agents nommés (non-UUID), les tâches actives/gardées et les présences vivantes restent toujours protégés.
+pub(super) fn prune_stopped_fleet_children(st: &DaemonState, now: i64) -> usize {
+    let (tasks, launching) = match (
+        st.delegation_store.tasks(),
+        st.idempotency.spawn_commands(&st.fleet.supervisor_scope()),
+    ) {
+        (Ok(tasks), Ok(sagas)) => (tasks, sagas),
+        (Err(error), _) => {
+            warn!(
+                "entretien: tâches natives illisibles, purge fleet.json (stopped) suspendue : {error}"
+            );
+            return 0;
+        }
+        (_, Err(error)) => {
+            warn!("entretien: sagas illisibles, purge fleet.json (stopped) suspendue : {error}");
+            return 0;
+        }
+    };
+    let mut protected: HashSet<&str> = HashSet::new();
+    let mut finished_children: HashSet<&str> = HashSet::new();
+    for task in &tasks {
+        let guarded = task.guarded && !task.guard_released;
+        if !task.terminal() || !task.cleanup_done || guarded {
+            protected.insert(task.child.as_str());
+        } else {
+            finished_children.insert(task.child.as_str());
+        }
+    }
+    for presence in st.presences.values() {
+        if matches!(presence.state.as_str(), "connected" | "busy") {
+            protected.insert(presence.name.as_str());
+        }
+    }
+    for name in &st.decommissioning_names {
+        protected.insert(name.as_str());
+    }
+    for spawn in st.managed_spawns.values() {
+        protected.insert(spawn.lease.name.as_str());
+    }
+    for saga in &launching {
+        if matches!(
+            saga.state,
+            crate::idempotency::SpawnCommandState::Requested
+                | crate::idempotency::SpawnCommandState::Reserved
+                | crate::idempotency::SpawnCommandState::Starting
+        ) {
+            protected.insert(saga.name.as_str());
+        }
+    }
+    match st.fleet.prune_desired_where(|name, entry| {
+        if entry.lifecycle_state != DesiredLifecycleState::Stopped
+            || uuid::Uuid::parse_str(name).is_err()
+            || st.router.get_agent(name).is_some()
+            || protected.contains(name)
+        {
+            return false;
+        }
+        if finished_children.contains(name) {
+            return true;
+        }
+        entry
+            .created
+            .trim()
+            .parse::<i64>()
+            .is_ok_and(|created| now.saturating_sub(created) >= STOPPED_ORPHAN_FLEET_GRACE_SECS)
+    }) {
+        Ok(count) => count,
+        Err(error) => {
+            warn!("entretien: purge fleet.json des sous-agents arrêtés : {error}");
             0
         }
     }

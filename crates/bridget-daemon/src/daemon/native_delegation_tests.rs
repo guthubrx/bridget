@@ -3425,19 +3425,20 @@ fn spec338_score_tiebreak_follows_declared_catalog_order_for_fallback() {
             },
         ],
     );
-    let make_candidate = |conn: &str, engine: &str, model: &str| crate::registry::RoutingCandidate {
-        machine_id: "cartae".into(),
-        engine: engine.into(),
-        connection_id: conn.into(),
-        agent_type: engine.into(),
-        enabled: true,
-        model: model.into(),
-        supported_efforts: vec![],
-        service_tiers: vec![],
-        default_effort: None,
-        provenance: crate::registry::RoutingModelProvenance::Declared,
-        observed_at: None,
-    };
+    let make_candidate =
+        |conn: &str, engine: &str, model: &str| crate::registry::RoutingCandidate {
+            machine_id: "cartae".into(),
+            engine: engine.into(),
+            connection_id: conn.into(),
+            agent_type: engine.into(),
+            enabled: true,
+            model: model.into(),
+            supported_efforts: vec![],
+            service_tiers: vec![],
+            default_effort: None,
+            provenance: crate::registry::RoutingModelProvenance::Declared,
+            observed_at: None,
+        };
     // Mettre volontairement les candidats dans l'ordre alphabétique inverse de l'ordre déclaré.
     plan.candidates = vec![
         make_candidate("antigravity-cartae", "antigravity", "gemini-3.8-flash-high"),
@@ -22789,7 +22790,9 @@ fn native174_delai_transport_statut_failed_guide_sans_reouvrir() {
         );
     }
     // Variante ACP silencieuse : doit guider vers le diagnostic, pas vers un délai plus long seul.
-    task.error = Some("livraison échouée: timeout ACP pour session/prompt:provider_output_unobserved".into());
+    task.error = Some(
+        "livraison échouée: timeout ACP pour session/prompt:provider_output_unobserved".into(),
+    );
     let silent = task_view(&task, None, true);
     assert!(
         silent["error_diagnostic"]
@@ -28775,6 +28778,178 @@ fn purge_fleet_retire_uniquement_les_sous_agents_natifs_decommissionnes_orphelin
 }
 
 #[test]
+fn spec359_prune_stopped_fleet_children_evicts_finished_and_stale_orphans_only() {
+    use crate::desired_state::{DesiredEquipier, DesiredLifecycleState, DesiredStateStore};
+
+    let (mut st, config, _rx, _reader) = fixture("n359");
+    let active_view = handle_locked("conn-1", request("task-active-359"), &mut st).unwrap();
+    let done_view = handle_locked("conn-1", request("task-done-359"), &mut st).unwrap();
+    let mut guarded_req = request("task-guarded-359");
+    if let NativeDelegationRequest::Delegate {
+        keep_alive_secs, ..
+    } = &mut guarded_req
+    {
+        *keep_alive_secs = Some(600);
+    }
+    let guarded_view = handle_locked("conn-1", guarded_req, &mut st).unwrap();
+    let uncleaned_view = handle_locked("conn-1", request("task-uncleaned-359"), &mut st).unwrap();
+
+    let active_child = st
+        .delegation_store
+        .get(active_view["task_id"].as_str().unwrap())
+        .unwrap()
+        .unwrap()
+        .child;
+    let mut done_task = st
+        .delegation_store
+        .get(done_view["task_id"].as_str().unwrap())
+        .unwrap()
+        .unwrap();
+    done_task.state = "result_available".into();
+    done_task.cleanup_done = true;
+    done_task.guarded = false;
+    st.delegation_store.save(&done_task).unwrap();
+
+    let mut guarded_task = st
+        .delegation_store
+        .get(guarded_view["task_id"].as_str().unwrap())
+        .unwrap()
+        .unwrap();
+    guarded_task.state = "result_available".into();
+    guarded_task.cleanup_done = true;
+    guarded_task.guarded = true;
+    guarded_task.guard_released = false;
+    st.delegation_store.save(&guarded_task).unwrap();
+
+    let mut uncleaned_task = st
+        .delegation_store
+        .get(uncleaned_view["task_id"].as_str().unwrap())
+        .unwrap()
+        .unwrap();
+    uncleaned_task.state = "failed".into();
+    uncleaned_task.cleanup_done = false;
+    st.delegation_store.save(&uncleaned_task).unwrap();
+
+    let now = unix_timestamp();
+    let stale_orphan = uuid::Uuid::new_v4().to_string();
+    let fresh_orphan = uuid::Uuid::new_v4().to_string();
+    let named_stopped = "equipier-permanent".to_string();
+
+    let make_stopped = |created: i64| DesiredEquipier {
+        agent_type: "native-test".to_string(),
+        cwd: config.db_path.parent().unwrap().to_path_buf(),
+        command_id: "cmd-359".to_string(),
+        generation: 1,
+        created: created.to_string(),
+        persistent: true,
+        lifecycle_state: DesiredLifecycleState::Stopped,
+        resolved_definition: None,
+        domain: None,
+        project: None,
+        agent_link: None,
+        runtime_execution: None,
+        remote_placement: None,
+    };
+
+    let desired_store =
+        DesiredStateStore::at_path(st.fixture_root.as_ref().unwrap().0.join("fleet.json"));
+    for (name, created) in [
+        (active_child.clone(), now - 90_000),
+        (done_task.child.clone(), now),
+        (guarded_task.child.clone(), now - 90_000),
+        (uncleaned_task.child.clone(), now - 90_000),
+        (
+            stale_orphan.clone(),
+            now - STOPPED_ORPHAN_FLEET_GRACE_SECS - 60,
+        ),
+        (fresh_orphan.clone(), now - 60),
+        (named_stopped.clone(), now - 90_000),
+    ] {
+        desired_store.upsert(name, make_stopped(created)).unwrap();
+    }
+
+    let pruned = prune_stopped_fleet_children(&st, now);
+    assert!(
+        st.fleet.desired_entry(&done_task.child).unwrap().is_none(),
+        "done_task should be evicted"
+    );
+    assert!(
+        st.fleet.desired_entry(&stale_orphan).unwrap().is_none(),
+        "stale_orphan should be evicted"
+    );
+    assert!(
+        st.fleet.desired_entry(&active_child).unwrap().is_some(),
+        "active_child should be kept"
+    );
+    assert!(
+        st.fleet
+            .desired_entry(&guarded_task.child)
+            .unwrap()
+            .is_some(),
+        "guarded_task should be kept"
+    );
+    assert!(
+        st.fleet
+            .desired_entry(&uncleaned_task.child)
+            .unwrap()
+            .is_some(),
+        "uncleaned_task should be kept"
+    );
+    assert!(
+        st.fleet.desired_entry(&fresh_orphan).unwrap().is_some(),
+        "fresh_orphan should be kept"
+    );
+    assert!(
+        st.fleet.desired_entry(&named_stopped).unwrap().is_some(),
+        "named_stopped should be kept"
+    );
+    assert_eq!(pruned, 2);
+
+    // Idempotent au second passage.
+    assert_eq!(prune_stopped_fleet_children(&st, now), 0);
+    cleanup(&config);
+}
+
+#[test]
+fn spec359_status_agent_counts_excludes_stopped_unreachable_unobserved() {
+    let mk = |state: &str| bridget_transport::protocol::AgentInfo {
+        agent_id: format!("id-{state}"),
+        display_name: state.to_string(),
+        agent_type: "codex".to_string(),
+        connection_id: String::new(),
+        host: "cartae".to_string(),
+        transport: "t3code".to_string(),
+        channel: None,
+        mode: None,
+        location: None,
+        execution: None,
+        agent_link: None,
+        os: "linux".to_string(),
+        state: state.to_string(),
+        last_seen_secs: 0,
+        reconnect_count: 0,
+        domain: None,
+        model: None,
+        effort: None,
+        rate_limits: Vec::new(),
+        model_mismatch: None,
+        disk_space: None,
+        persistent: None,
+        provider: None,
+    };
+    let agents = vec![
+        mk("connected"),
+        mk("busy"),
+        mk("dnd"),
+        mk("unreachable"),
+        mk("stopped"),
+        mk("stopped"),
+        mk("unobserved"),
+    ];
+    assert_eq!(crate::daemon::status_agent_counts(&agents), (3, 1, 2));
+}
+
+#[test]
 fn spec325_ack_suppresses_pending_tick_notifications_and_cancels_queued_deliveries() {
     let (mut st, config, _rx, _reader) = fixture("n325");
     let ok_view = handle_locked("conn-1", request("req-ok-325"), &mut st).unwrap();
@@ -28945,10 +29120,14 @@ fn spec340_factual_summary_projects_authoritative_execution_git_and_warnings() {
     assert!(
         lines
             .iter()
-            .any(|l| l.contains("worktree bridget/f340 · 2 commits (11111111..22222222) · arbre propre")),
+            .any(|l| l
+                .contains("worktree bridget/f340 · 2 commits (11111111..22222222) · arbre propre")),
         "{lines:?}"
     );
-    assert!(lines.iter().any(|l| l.contains("22222222 fix: second")), "{lines:?}");
+    assert!(
+        lines.iter().any(|l| l.contains("22222222 fix: second")),
+        "{lines:?}"
+    );
 
     // 2. Worktree sale + bascule de secours + arrêt non confirmé → 3 alertes factuelles.
     task.cleanup_done = false;
@@ -28976,9 +29155,17 @@ fn spec340_factual_summary_projects_authoritative_execution_git_and_warnings() {
         .iter()
         .filter_map(Value::as_str)
         .collect();
-    assert!(warnings.iter().any(|w| w.contains("Modifications non commitées")));
+    assert!(
+        warnings
+            .iter()
+            .any(|w| w.contains("Modifications non commitées"))
+    );
     assert!(warnings.iter().any(|w| w.contains("Bascule de secours")));
-    assert!(warnings.iter().any(|w| w.contains("Arrêt du processus enfant")));
+    assert!(
+        warnings
+            .iter()
+            .any(|w| w.contains("Arrêt du processus enfant"))
+    );
 
     // 3. Worktree vide malgré result_available → alerte dédiée.
     task.cleanup_done = true;
@@ -28993,7 +29180,10 @@ fn spec340_factual_summary_projects_authoritative_execution_git_and_warnings() {
             .as_array()
             .unwrap()
             .iter()
-            .any(|w| w.as_str().unwrap().contains("Aucun commit ni modification locale"))
+            .any(|w| w
+                .as_str()
+                .unwrap()
+                .contains("Aucun commit ni modification locale"))
     );
 
     // 4. Dossier partagé → strategy=shared, report_status=not_applicable.
@@ -29076,8 +29266,14 @@ fn spec355_provider_quota_exhausted_diagnostic_and_mission_pending_failure() {
         assert_eq!(err, "provider_quota_exhausted");
         let st = state.lock().unwrap();
         let view = current_task_view(&st, &task, true).unwrap();
-        assert_eq!(view["detail"]["dispatch_refusal"]["stage"], "final_permissions");
-        assert_eq!(view["detail"]["dispatch_refusal"]["code"], "provider_quota_exhausted");
+        assert_eq!(
+            view["detail"]["dispatch_refusal"]["stage"],
+            "final_permissions"
+        );
+        assert_eq!(
+            view["detail"]["dispatch_refusal"]["code"],
+            "provider_quota_exhausted"
+        );
         assert!(
             view["detail"]["dispatch_refusal"]["message"]
                 .as_str()
@@ -29162,8 +29358,14 @@ fn spec355_provider_quota_exhausted_diagnostic_and_mission_pending_failure() {
         assert_eq!(updated.state, expected_state, "reset_at={reset_at}");
         let view = current_task_view(&st, &updated, true).unwrap();
         if expected_state == "mission_pending" {
-            assert_eq!(view["detail"]["dispatch_refusal"]["stage"], "final_permissions");
-            assert_eq!(view["detail"]["dispatch_refusal"]["code"], "provider_quota_exhausted");
+            assert_eq!(
+                view["detail"]["dispatch_refusal"]["stage"],
+                "final_permissions"
+            );
+            assert_eq!(
+                view["detail"]["dispatch_refusal"]["code"],
+                "provider_quota_exhausted"
+            );
         } else {
             assert_eq!(view["error"], "usage_limit");
             assert_eq!(view["detail"]["limit_reset_at"], reset_at);
