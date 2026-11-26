@@ -251,7 +251,7 @@ OLD={shlex.quote(old_binary)}
 NEW={shlex.quote(new_binary)}
 [ -x "$OLD" ] || exit 11
 [ -x "$NEW" ] || exit 12
-OLD_REPORT=$("$OLD" formats report --nonce {nonce} --json 2>/dev/null || true)
+OLD_REPORT=$("$OLD" formats report --nonce {nonce} 2>/dev/null || true)
 NEW_POLICY=$("$NEW" formats policy --json 2>/dev/null || true)
 python3 - "$OLD_REPORT" "$NEW_POLICY" <<'PY'
 import json, sys
@@ -357,7 +357,7 @@ def deploy_one_host(
     plan["rollback"] = rollback_target
 
     # 4. Activation atomique + mise à jour 0600 de update-host-state.json + redémarrage services.
-    rb_json = json.dumps(rollback_target)
+    rb_py = repr(rollback_target)
     if os_name == "Linux":
         svc_args = " ".join(shlex.quote(s) for s in services)
         activate_script = f"""
@@ -380,7 +380,7 @@ with open(lock_path, "a+") as lf:
             data = json.load(f)
         shutil.copy2(state_path, state_path + ".bak")
         os.chmod(state_path + ".bak", 0o600)
-    data["rollback"] = {rb_json}
+    data["rollback"] = {rb_py}
     tmp = state_path + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, separators=(",", ":"))
@@ -438,7 +438,7 @@ with open(lock_path, "a+") as lf:
             data = json.load(f)
         shutil.copy2(state_path, state_path + ".bak")
         os.chmod(state_path + ".bak", 0o600)
-    data["rollback"] = {rb_json}
+    data["rollback"] = {rb_py}
     tmp = state_path + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, separators=(",", ":"))
