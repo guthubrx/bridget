@@ -7,14 +7,17 @@
 //! `on_failure`, et réveille le parent une seule fois avec le bilan consolidé.
 
 use super::*;
+use crate::convergence_metrics::ConvergenceMetricRawRow;
 use crate::delegation::{
     NativeGraphConvergenceIteration, NativeGraphConvergenceState, NativeGraphRecord,
     NativeGraphStepRecord,
 };
 use bridget_transport::protocol::{
-    AutoDelegateV2, DelegateGraphRequest, GraphFailurePolicy, GraphNotifyPolicy,
-    MAX_CONVERGENCE_ITERATIONS, MIN_CONVERGENCE_ITERATIONS, NativeDelegationRequest,
-    ProviderPermissions, WorkspaceRequest,
+    AutoDelegateV2, ConvergenceMetricsPolicyUpdate, DelegateGraphRequest,
+    GraphConvergenceEscalation, GraphDeterministicGate, GraphFailurePolicy, GraphNotifyPolicy,
+    GraphStepCondition, MAX_CONVERGENCE_ITERATIONS, MAX_ESCALATION_EXTRA_ITERATIONS,
+    MAX_TOTAL_CONVERGENCE_ITERATIONS, MIN_CONVERGENCE_ITERATIONS, MIN_ESCALATION_EXTRA_ITERATIONS,
+    NativeDelegationRequest, ProviderPermissions, SpawnPosture, WorkspaceRequest,
 };
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -27,6 +30,17 @@ const MAX_TASK_BYTES: usize = 65_536;
 const CONVERGENCE_KEEP_ALIVE_SECS: u64 = 900;
 const MAX_KEEP_ALIVE_SECS: u64 = 7200;
 
+/// Issues d'échec autorisées dans `when_outcomes` (jamais `"cancelled"` : une annulation humaine
+/// ne déclenche jamais une branche de repli automatique).
+pub(crate) const ALLOWED_WHEN_OUTCOMES: &[&str] = &[
+    "failed",
+    "stagnated",
+    "max_iterations_reached",
+    "escalated",
+    "gate_unavailable",
+    "verdict_unparseable",
+];
+
 fn valid_step_id(id: &str) -> bool {
     !id.is_empty()
         && id.len() <= MAX_STEP_ID_LEN
@@ -38,12 +52,29 @@ fn valid_step_id(id: &str) -> bool {
 fn step_is_terminal(state: &str) -> bool {
     matches!(
         state,
-        "completed" | "failed" | "cancelled" | "skipped_dependency_failed"
+        "completed"
+            | "failed"
+            | "cancelled"
+            | "skipped_dependency_failed"
+            | "skipped_condition_not_met"
     )
 }
 
+/// Issue normalisée d'une dépendance en échec pour l'évaluation des branches de repli.
+/// Renvoie `None` pour `completed`, `cancelled` (annulation humaine) et les états sautés.
+fn step_dependency_failure_outcome(dep: &NativeGraphStepRecord) -> Option<&str> {
+    if dep.state != "failed" {
+        return None;
+    }
+    dep.convergence_state
+        .as_ref()
+        .and_then(|cs| cs.outcome.as_deref())
+        .or(Some("failed"))
+}
+
 /// Valide la structure DAG (1..=16 étapes, `step_id` uniques, dépendances existantes,
-/// absence de cycles via tri topologique de Kahn) et renvoie l'ordre topologique déterministe.
+/// absence de cycles via tri topologique de Kahn, portes déterministes, escalade, branches de repli)
+/// et renvoie l'ordre topologique déterministe.
 pub(crate) fn validate_and_order_graph(
     request: &DelegateGraphRequest,
 ) -> Result<Vec<String>, (String, String)> {
@@ -57,6 +88,17 @@ pub(crate) fn validate_and_order_graph(
         return Err((
             "graph_invalid".into(),
             format!("steps doit contenir entre 1 et {MAX_GRAPH_STEPS} étapes."),
+        ));
+    }
+
+    let has_fallback_branch = request
+        .steps
+        .iter()
+        .any(|s| s.when != GraphStepCondition::AllSucceeded);
+    if has_fallback_branch && request.on_failure == GraphFailurePolicy::CancelGraph {
+        return Err((
+            "graph_invalid".into(),
+            "on_failure='cancel_graph' est incompatible avec une étape conditionnelle (when != 'all_succeeded') : utilisez on_failure='stop_dependents' pour permettre aux branches de repli de s'exécuter.".into(),
         ));
     }
 
@@ -91,6 +133,72 @@ pub(crate) fn validate_and_order_graph(
                 "graph_invalid".into(),
                 format!("étape '{}' : cwd est obligatoire.", step.step_id),
             ));
+        }
+        match step.when {
+            GraphStepCondition::AllSucceeded => {
+                if !step.when_outcomes.is_empty() {
+                    return Err((
+                        "graph_invalid".into(),
+                        format!(
+                            "étape '{}' : when_outcomes ne peut être renseigné qu'avec when='on_outcome'.",
+                            step.step_id
+                        ),
+                    ));
+                }
+            }
+            GraphStepCondition::AnyFailed => {
+                if step.depends_on.is_empty() {
+                    return Err((
+                        "graph_invalid".into(),
+                        format!(
+                            "étape '{}' : when='any_failed' exige au moins une dépendance dans depends_on.",
+                            step.step_id
+                        ),
+                    ));
+                }
+                if !step.when_outcomes.is_empty() {
+                    return Err((
+                        "graph_invalid".into(),
+                        format!(
+                            "étape '{}' : when_outcomes ne peut être renseigné qu'avec when='on_outcome'.",
+                            step.step_id
+                        ),
+                    ));
+                }
+            }
+            GraphStepCondition::OnOutcome => {
+                if step.depends_on.is_empty() {
+                    return Err((
+                        "graph_invalid".into(),
+                        format!(
+                            "étape '{}' : when='on_outcome' exige au moins une dépendance dans depends_on.",
+                            step.step_id
+                        ),
+                    ));
+                }
+                if step.when_outcomes.is_empty() || step.when_outcomes.len() > 8 {
+                    return Err((
+                        "graph_invalid".into(),
+                        format!(
+                            "étape '{}' : when='on_outcome' exige 1 à 8 issues dans when_outcomes.",
+                            step.step_id
+                        ),
+                    ));
+                }
+                for outcome in &step.when_outcomes {
+                    if !ALLOWED_WHEN_OUTCOMES.contains(&outcome.as_str()) {
+                        return Err((
+                            "graph_invalid".into(),
+                            format!(
+                                "étape '{}' : when_outcomes contient une issue invalide '{}' (autorisées : {}).",
+                                step.step_id,
+                                outcome,
+                                ALLOWED_WHEN_OUTCOMES.join(", ")
+                            ),
+                        ));
+                    }
+                }
+            }
         }
         if let Some(conv) = &step.convergence {
             if !(MIN_CONVERGENCE_ITERATIONS..=MAX_CONVERGENCE_ITERATIONS)
@@ -132,6 +240,34 @@ pub(crate) fn validate_and_order_graph(
                         step.step_id
                     ),
                 ));
+            }
+            if let Some(gate) = &conv.gate {
+                crate::deterministic_gate::validate_gate_spec(gate).map_err(|msg| {
+                    (
+                        "graph_invalid".into(),
+                        format!(
+                            "étape '{}' : convergence.gate invalide : {msg}",
+                            step.step_id
+                        ),
+                    )
+                })?;
+                if step.delegation.posture == Some(SpawnPosture::Discovery) {
+                    return Err((
+                        "graph_invalid".into(),
+                        format!(
+                            "étape '{}' : convergence.gate exige une étape productrice en posture 'development' (interdit en 'discovery').",
+                            step.step_id
+                        ),
+                    ));
+                }
+            }
+            if let Some(esc) = &conv.escalation {
+                validate_escalation_spec(
+                    &step.step_id,
+                    conv.max_iterations,
+                    conv.stop_on_stagnation,
+                    esc,
+                )?;
             }
         }
     }
@@ -205,6 +341,65 @@ pub(crate) fn validate_and_order_graph(
     Ok(order)
 }
 
+pub(crate) fn validate_escalation_spec(
+    step_id: &str,
+    base_max_iterations: u8,
+    stop_on_stagnation: bool,
+    esc: &GraphConvergenceEscalation,
+) -> Result<(), (String, String)> {
+    let has_override = esc.engine.as_deref().is_some_and(|s| !s.trim().is_empty())
+        || esc.model.as_deref().is_some_and(|s| !s.trim().is_empty())
+        || esc.effort.as_deref().is_some_and(|s| !s.trim().is_empty())
+        || esc
+            .machine_id
+            .as_deref()
+            .is_some_and(|s| !s.trim().is_empty());
+    if !has_override {
+        return Err((
+            "graph_invalid".into(),
+            format!(
+                "étape '{step_id}' : convergence.escalation exige au moins une surcharge (engine, model, effort ou machine_id)."
+            ),
+        ));
+    }
+    if !(MIN_ESCALATION_EXTRA_ITERATIONS..=MAX_ESCALATION_EXTRA_ITERATIONS)
+        .contains(&esc.extra_iterations)
+    {
+        return Err((
+            "graph_invalid".into(),
+            format!(
+                "étape '{step_id}' : convergence.escalation.extra_iterations doit être compris entre {MIN_ESCALATION_EXTRA_ITERATIONS} et {MAX_ESCALATION_EXTRA_ITERATIONS}."
+            ),
+        ));
+    }
+    if base_max_iterations.saturating_add(esc.extra_iterations) > MAX_TOTAL_CONVERGENCE_ITERATIONS {
+        return Err((
+            "graph_invalid".into(),
+            format!(
+                "étape '{step_id}' : max_iterations ({base_max_iterations}) + extra_iterations ({}) dépasse la borne totale de {MAX_TOTAL_CONVERGENCE_ITERATIONS}.",
+                esc.extra_iterations
+            ),
+        ));
+    }
+    if !esc.on_stagnation && !esc.on_max_iterations {
+        return Err((
+            "graph_invalid".into(),
+            format!(
+                "étape '{step_id}' : convergence.escalation exige au moins un déclencheur (on_stagnation ou on_max_iterations)."
+            ),
+        ));
+    }
+    if !stop_on_stagnation && esc.on_stagnation {
+        return Err((
+            "graph_invalid".into(),
+            format!(
+                "étape '{step_id}' : convergence.escalation.on_stagnation=true est incompatible avec stop_on_stagnation=false."
+            ),
+        ));
+    }
+    Ok(())
+}
+
 /// Dérive la `request_id` déterministe d'une étape à partir de la clé du graphe si l'étape
 /// n'en fournit pas ou reprend la clé brute.
 pub(crate) fn step_request_id(graph_request_id: &str, step_id: &str, explicit: &str) -> String {
@@ -223,19 +418,25 @@ pub(crate) fn step_request_id(graph_request_id: &str, step_id: &str, explicit: &
 }
 
 /// Clé déterministe et bornée (`<= 128` octets) pour chaque sous-tâche d'itération
-/// (`produce` ou `verify`) d'une étape de convergence bornée.
+/// (`produce` ou `verify`) d'une étape de convergence bornée, isolée par palier `tier` (`0` ou `1`).
 pub(crate) fn convergence_step_request_id(
     graph_request_id: &str,
     step_id: &str,
+    tier: u8,
     iteration: u8,
     role: &str,
 ) -> String {
-    let raw = format!("{graph_request_id}:{step_id}:i{iteration}:{role}");
+    let tier_seg = if tier == 0 {
+        String::new()
+    } else {
+        format!(":t{tier}")
+    };
+    let raw = format!("{graph_request_id}:{step_id}{tier_seg}:i{iteration}:{role}");
     if raw.len() <= 128 {
         return raw;
     }
     let digest = format!("{:x}", Sha256::digest(raw.as_bytes()));
-    let suffix = format!(":i{iteration}:{role}:{}", &digest[..12]);
+    let suffix = format!("{tier_seg}:i{iteration}:{role}:{}", &digest[..12]);
     let prefix_len = 128usize.saturating_sub(suffix.len());
     let prefix: String = raw.chars().take(prefix_len).collect();
     format!("{prefix}{suffix}")
@@ -333,10 +534,11 @@ pub(crate) fn parse_convergence_verdict(text: &str) -> ParsedVerdict {
         if trimmed.is_empty() || trimmed.starts_with("```") {
             continue;
         }
-        if trimmed.starts_with('{') && trimmed.ends_with('}') {
-            if let Some(parsed) = try_parse_verdict_json(trimmed) {
-                return parsed;
-            }
+        if trimmed.starts_with('{')
+            && trimmed.ends_with('}')
+            && let Some(parsed) = try_parse_verdict_json(trimmed)
+        {
+            return parsed;
         }
     }
     // 2) Repli borné : dernier objet JSON multi-lignes entre `{` et `}` en fin de réponse.
@@ -374,10 +576,9 @@ pub(crate) fn parse_convergence_verdict(text: &str) -> ParsedVerdict {
                         && let Some(start) = starts.last().copied()
                         && idx == end
                         && bytes.get(start) == Some(&b'{')
+                        && let Some(parsed) = try_parse_verdict_json(&text[start..=end])
                     {
-                        if let Some(parsed) = try_parse_verdict_json(&text[start..=end]) {
-                            return parsed;
-                        }
+                        return parsed;
                     }
                 }
                 _ => {}
@@ -429,14 +630,14 @@ fn build_verifier_task(
         "## Vérification de convergence — étape `{}` (itération {}/{})\n",
         step.step_id, iteration, max_iterations
     );
-    if let Some(cs) = step.convergence_state.as_ref() {
-        if let Some(tid) = cs.producer_task_id.as_deref() {
-            header.push_str(&format!("- Producteur : task_id={tid}"));
-            if let Some(commit) = cs.last_producer_commit.as_deref() {
-                header.push_str(&format!(", commit={commit}"));
-            }
-            header.push('\n');
+    if let Some(cs) = step.convergence_state.as_ref()
+        && let Some(tid) = cs.producer_task_id.as_deref()
+    {
+        header.push_str(&format!("- Producteur : task_id={tid}"));
+        if let Some(commit) = cs.last_producer_commit.as_deref() {
+            header.push_str(&format!(", commit={commit}"));
         }
+        header.push('\n');
     }
     if let Some(fs) = step.factual_summary.as_ref()
         && let Some(files) = fs.get("files_changed").and_then(Value::as_u64)
@@ -473,20 +674,36 @@ Termine ta réponse par UNE ligne JSON autonome respectant exactement l'un des t
 
 fn build_producer_revision_task(
     step_id: &str,
+    tier: u8,
     iteration: u8,
     max_iterations: u8,
     reason: &str,
     blocking_points: &[String],
     original_task: &str,
     for_fallback_new_task: bool,
+    from_gate: bool,
 ) -> String {
+    let source = if from_gate {
+        "La porte déterministe (vérification objective 0 jeton) a échoué."
+    } else {
+        "Le vérificateur indépendant a demandé une correction (`verdict=revise`)."
+    };
+    let tier_note = if tier > 0 {
+        format!(
+            "\nEscalade de modèle activée (palier {tier}) : le palier précédent a stagné ou atteint son plafond. Repars proprement depuis le commit courant en analysant la cause racine.\n"
+        )
+    } else {
+        String::new()
+    };
     let mut out = format!(
-        "## Reprise corrective — étape `{step_id}` (itération {iteration}/{max_iterations})\n\
-Le vérificateur indépendant a demandé une correction (`verdict=revise`).\n\
-Motif : {reason}\n"
+        "## Reprise corrective — étape `{step_id}` (palier {tier}, itération {iteration}/{max_iterations})\n{source}{tier_note}\nMotif : {reason}\n"
     );
     if !blocking_points.is_empty() {
-        out.push_str("Points bloquants à corriger :\n");
+        out.push_str(if from_gate {
+            "Sortie de la porte déterministe :\n"
+        } else {
+            "Points bloquants à corriger :\n"
+        });
         for point in blocking_points {
             out.push_str(&format!("- {point}\n"));
         }
@@ -507,6 +724,8 @@ Motif : {reason}\n"
 
 /// Construit la consigne finale d'une étape dépendante en y préfixant un contexte court et
 /// factuel des résultats de ses dépendances terminées (borné à `MAX_TASK_BYTES`).
+/// Pour une branche de repli (`when != all_succeeded`), inclut aussi l'issue d'échec,
+/// l'erreur et les derniers points bloquants de la dépendance en échec.
 pub(crate) fn build_enriched_step_task(
     step: &NativeGraphStepRecord,
     all_steps: &[NativeGraphStepRecord],
@@ -533,7 +752,34 @@ pub(crate) fn build_enriched_step_task(
                 header.push_str(&format!(", fichiers_modifies={files}"));
             }
         }
+        if let Some(cs) = dep.convergence_state.as_ref() {
+            if let Some(outcome) = cs.outcome.as_deref() {
+                header.push_str(&format!(", outcome={outcome}"));
+            }
+            if cs.tier_escalated {
+                header.push_str(", tier_escalated=true");
+            }
+        }
         header.push('\n');
+        if let Some(err) = dep.error.as_deref()
+            && !err.trim().is_empty()
+        {
+            let clipped: String = err.trim().chars().take(400).collect();
+            header.push_str(&format!("  Erreur : {clipped}\n"));
+        }
+        if dep.state == "failed"
+            && let Some(last_iter) = dep
+                .convergence_state
+                .as_ref()
+                .and_then(|cs| cs.iterations.last())
+            && !last_iter.blocking_points.is_empty()
+        {
+            header.push_str("  Derniers points bloquants :\n");
+            for pt in last_iter.blocking_points.iter().take(6) {
+                let clipped: String = pt.chars().take(300).collect();
+                header.push_str(&format!("  - {clipped}\n"));
+            }
+        }
         if let Some(excerpt) = dep.result_excerpt.as_deref()
             && !excerpt.trim().is_empty()
         {
@@ -566,8 +812,8 @@ pub(crate) fn build_enriched_step_task(
     }
 }
 
-/// Propage les échecs/annulations sur les étapes du graphe et renvoie la liste des `task_id`
-/// d'étapes actives à annuler immédiatement si `on_failure == CancelGraph`.
+/// Propage les échecs, annulations et conditions de branches de repli sur les étapes du graphe
+/// et renvoie la liste des `task_id` d'étapes actives à annuler si `on_failure == CancelGraph`.
 pub(crate) fn propagate_graph_state(graph: &mut NativeGraphRecord, now: i64) -> Vec<String> {
     let mut to_cancel_tasks = Vec::new();
     let any_failed = graph
@@ -600,34 +846,107 @@ pub(crate) fn propagate_graph_state(graph: &mut NativeGraphRecord, now: i64) -> 
                         {
                             to_cancel_tasks.push(vtid.clone());
                         }
+                        for prior in &cs.prior_producer_task_ids {
+                            if !to_cancel_tasks.contains(prior) {
+                                to_cancel_tasks.push(prior.clone());
+                            }
+                        }
                     }
                 }
                 _ => {}
             }
         }
     } else {
-        // Point fixe pour propager `skipped_dependency_failed` sur toute la descendance transitive.
+        // Point fixe pour propager `skipped_dependency_failed` et `skipped_condition_not_met`
+        // en respectant strictement la condition `when` de chaque étape (aucun blocage).
         loop {
-            let failed_ids: BTreeSet<String> = graph
+            let snapshots: BTreeMap<String, (String, Option<String>)> = graph
                 .steps
                 .iter()
-                .filter(|s| {
-                    matches!(
-                        s.state.as_str(),
-                        "failed" | "cancelled" | "skipped_dependency_failed"
+                .map(|s| {
+                    (
+                        s.step_id.clone(),
+                        (
+                            s.state.clone(),
+                            step_dependency_failure_outcome(s).map(str::to_string),
+                        ),
                     )
                 })
-                .map(|s| s.step_id.clone())
                 .collect();
             let mut changed = false;
             for step in &mut graph.steps {
-                if step.state == "waiting_dependencies"
-                    && let Some(bad_dep) = step.depends_on.iter().find(|d| failed_ids.contains(*d))
-                {
-                    step.state = "skipped_dependency_failed".into();
-                    step.error = Some(format!("dependency_failed:{bad_dep}"));
-                    step.finished_at = Some(now);
-                    changed = true;
+                if step.state != "waiting_dependencies" {
+                    continue;
+                }
+                match step.when {
+                    GraphStepCondition::AllSucceeded => {
+                        if let Some(bad_dep) = step.depends_on.iter().find(|d| {
+                            snapshots.get(*d).is_some_and(|(st, _)| {
+                                matches!(
+                                    st.as_str(),
+                                    "failed" | "cancelled" | "skipped_dependency_failed"
+                                )
+                            })
+                        }) {
+                            step.state = "skipped_dependency_failed".into();
+                            step.error = Some(format!("dependency_failed:{bad_dep}"));
+                            step.finished_at = Some(now);
+                            changed = true;
+                        } else if !step.depends_on.is_empty()
+                            && step.depends_on.iter().all(|d| {
+                                snapshots.get(d).is_some_and(|(st, _)| step_is_terminal(st))
+                            })
+                            && step.depends_on.iter().any(|d| {
+                                snapshots
+                                    .get(d)
+                                    .is_some_and(|(st, _)| st == "skipped_condition_not_met")
+                            })
+                        {
+                            step.state = "skipped_condition_not_met".into();
+                            step.error = None;
+                            step.finished_at = Some(now);
+                            changed = true;
+                        }
+                    }
+                    GraphStepCondition::AnyFailed => {
+                        let all_deps_terminal = step
+                            .depends_on
+                            .iter()
+                            .all(|d| snapshots.get(d).is_some_and(|(st, _)| step_is_terminal(st)));
+                        if all_deps_terminal {
+                            let any_dep_failed = step
+                                .depends_on
+                                .iter()
+                                .any(|d| snapshots.get(d).is_some_and(|(st, _)| st == "failed"));
+                            if !any_dep_failed {
+                                step.state = "skipped_condition_not_met".into();
+                                step.error = None;
+                                step.finished_at = Some(now);
+                                changed = true;
+                            }
+                        }
+                    }
+                    GraphStepCondition::OnOutcome => {
+                        let all_deps_terminal = step
+                            .depends_on
+                            .iter()
+                            .all(|d| snapshots.get(d).is_some_and(|(st, _)| step_is_terminal(st)));
+                        if all_deps_terminal {
+                            let matched = step.depends_on.iter().any(|d| {
+                                snapshots.get(d).is_some_and(|(_, outcome)| {
+                                    outcome
+                                        .as_deref()
+                                        .is_some_and(|o| step.when_outcomes.iter().any(|w| w == o))
+                                })
+                            });
+                            if !matched {
+                                step.state = "skipped_condition_not_met".into();
+                                step.error = None;
+                                step.finished_at = Some(now);
+                                changed = true;
+                            }
+                        }
+                    }
                 }
             }
             if !changed {
@@ -637,10 +956,14 @@ pub(crate) fn propagate_graph_state(graph: &mut NativeGraphRecord, now: i64) -> 
     }
 
     if graph.steps.iter().all(|s| step_is_terminal(&s.state)) {
-        let all_completed = graph.steps.iter().all(|s| s.state == "completed");
+        let all_completed_or_unused_fallback = graph
+            .steps
+            .iter()
+            .all(|s| matches!(s.state.as_str(), "completed" | "skipped_condition_not_met"))
+            && graph.steps.iter().any(|s| s.state == "completed");
         let any_completed = graph.steps.iter().any(|s| s.state == "completed");
         let all_cancelled = graph.steps.iter().all(|s| s.state == "cancelled");
-        graph.state = if all_completed {
+        graph.state = if all_completed_or_unused_fallback {
             "completed".into()
         } else if all_cancelled {
             "cancelled".into()
@@ -654,20 +977,54 @@ pub(crate) fn propagate_graph_state(graph: &mut NativeGraphRecord, now: i64) -> 
     to_cancel_tasks
 }
 
-/// Renvoie les `step_id` en attente dont TOUTES les dépendances sont `completed`.
+/// Renvoie les `step_id` en attente dont les dépendances satisfont la condition `when`.
 pub(crate) fn ready_waiting_steps(graph: &NativeGraphRecord) -> Vec<String> {
-    let completed: BTreeSet<&str> = graph
+    let by_id: BTreeMap<&str, &NativeGraphStepRecord> = graph
         .steps
         .iter()
-        .filter(|s| s.state == "completed")
-        .map(|s| s.step_id.as_str())
+        .map(|s| (s.step_id.as_str(), s))
         .collect();
     graph
         .steps
         .iter()
         .filter(|s| {
-            s.state == "waiting_dependencies"
-                && s.depends_on.iter().all(|d| completed.contains(d.as_str()))
+            if s.state != "waiting_dependencies" {
+                return false;
+            }
+            match s.when {
+                GraphStepCondition::AllSucceeded => s.depends_on.iter().all(|d| {
+                    by_id
+                        .get(d.as_str())
+                        .is_some_and(|dep| dep.state == "completed")
+                }),
+                GraphStepCondition::AnyFailed => {
+                    !s.depends_on.is_empty()
+                        && s.depends_on.iter().all(|d| {
+                            by_id
+                                .get(d.as_str())
+                                .is_some_and(|dep| step_is_terminal(&dep.state))
+                        })
+                        && s.depends_on.iter().any(|d| {
+                            by_id
+                                .get(d.as_str())
+                                .is_some_and(|dep| dep.state == "failed")
+                        })
+                }
+                GraphStepCondition::OnOutcome => {
+                    !s.depends_on.is_empty()
+                        && s.depends_on.iter().all(|d| {
+                            by_id
+                                .get(d.as_str())
+                                .is_some_and(|dep| step_is_terminal(&dep.state))
+                        })
+                        && s.depends_on.iter().any(|d| {
+                            by_id
+                                .get(d.as_str())
+                                .and_then(|dep| step_dependency_failure_outcome(dep))
+                                .is_some_and(|o| s.when_outcomes.iter().any(|w| w == o))
+                        })
+                }
+            }
         })
         .map(|s| s.step_id.clone())
         .collect()
@@ -695,11 +1052,41 @@ pub(crate) fn graph_view(graph: &NativeGraphRecord) -> Value {
         .iter()
         .filter(|s| matches!(s.state.as_str(), "failed" | "skipped_dependency_failed"))
         .count();
+    let skipped_condition_not_met = graph
+        .steps
+        .iter()
+        .filter(|s| s.state == "skipped_condition_not_met")
+        .count();
+    let fallback_steps_completed = graph
+        .steps
+        .iter()
+        .filter(|s| s.when != GraphStepCondition::AllSucceeded && s.state == "completed")
+        .count();
+    let fallback_recovered =
+        fallback_steps_completed > 0 && graph.steps.iter().any(|s| s.state == "failed");
     let cancelled = graph
         .steps
         .iter()
         .filter(|s| s.state == "cancelled")
         .count();
+    let mut gate_runs_total = 0u32;
+    let mut gate_failures_total = 0u32;
+    let mut gate_saved_verifier_calls_total = 0u32;
+    let mut tier_escalated_steps = 0usize;
+    let mut stagnation_saved_iterations_total = 0u32;
+    for s in &graph.steps {
+        if let Some(cs) = s.convergence_state.as_ref() {
+            gate_runs_total = gate_runs_total.saturating_add(cs.gate_runs);
+            gate_failures_total = gate_failures_total.saturating_add(cs.gate_failures);
+            gate_saved_verifier_calls_total =
+                gate_saved_verifier_calls_total.saturating_add(cs.gate_saved_verifier_calls);
+            if cs.tier_escalated {
+                tier_escalated_steps += 1;
+            }
+            stagnation_saved_iterations_total =
+                stagnation_saved_iterations_total.saturating_add(cs.stagnation_saved_iterations);
+        }
+    }
     let steps: Vec<Value> = graph
         .steps
         .iter()
@@ -707,6 +1094,8 @@ pub(crate) fn graph_view(graph: &NativeGraphRecord) -> Value {
             json!({
                 "step_id": s.step_id,
                 "depends_on": s.depends_on,
+                "when": s.when,
+                "when_outcomes": s.when_outcomes,
                 "state": s.state,
                 "task_id": s.task_id,
                 "error": s.error,
@@ -730,6 +1119,7 @@ pub(crate) fn graph_view(graph: &NativeGraphRecord) -> Value {
         "request_id": graph.request_id,
         "title": graph.title,
         "state": graph.state,
+        "fallback_recovered": fallback_recovered,
         "on_failure": graph.on_failure,
         "notify_policy": graph.notify_policy,
         "topological_order": graph.topological_order,
@@ -739,7 +1129,16 @@ pub(crate) fn graph_view(graph: &NativeGraphRecord) -> Value {
             "running": running,
             "waiting_dependencies": waiting,
             "failed_or_skipped": failed,
+            "skipped_condition_not_met": skipped_condition_not_met,
+            "fallback_steps_completed": fallback_steps_completed,
             "cancelled": cancelled,
+        },
+        "metrics_summary": {
+            "gate_runs": gate_runs_total,
+            "gate_failures": gate_failures_total,
+            "gate_saved_verifier_calls": gate_saved_verifier_calls_total,
+            "tier_escalated_steps": tier_escalated_steps,
+            "stagnation_saved_iterations": stagnation_saved_iterations_total,
         },
         "steps": steps,
         "notice_sent": graph.notice_sent,
@@ -766,9 +1165,21 @@ fn format_graph_summary_message(graph: &NativeGraphRecord) -> String {
         .as_deref()
         .filter(|t| !t.trim().is_empty())
         .unwrap_or(&graph.request_id);
+    let fallback_recovered = graph
+        .steps
+        .iter()
+        .any(|s| s.when != GraphStepCondition::AllSucceeded && s.state == "completed")
+        && graph.steps.iter().any(|s| s.state == "failed");
     let mut out = format!(
-        "Graphe Bridget `{}` ({}) terminé — état : `{}`.\n",
-        title, graph.graph_id, graph.state
+        "Graphe Bridget `{}` ({}) terminé — état : `{}`{}.\n",
+        title,
+        graph.graph_id,
+        graph.state,
+        if fallback_recovered {
+            " (repli réussi)"
+        } else {
+            ""
+        }
     );
     for step in &graph.steps {
         out.push_str(&format!("- `{}` : {}", step.step_id, step.state));
@@ -789,6 +1200,17 @@ fn format_graph_summary_message(graph: &NativeGraphRecord) -> String {
                 " · convergence={outcome} ({}/{})",
                 cs.current_iteration, cs.max_iterations
             ));
+            if cs.gate_runs > 0 {
+                out.push_str(&format!(
+                    " · gate={}/{} (verif_epargnees={})",
+                    cs.gate_runs.saturating_sub(cs.gate_failures),
+                    cs.gate_runs,
+                    cs.gate_saved_verifier_calls
+                ));
+            }
+            if cs.tier_escalated {
+                out.push_str(" · escalade_modele=palier1");
+            }
         }
         if let Some(err) = step.error.as_deref() {
             out.push_str(&format!(" · erreur={err}"));
@@ -850,6 +1272,20 @@ pub(super) fn handle_submit(
             }
             Err(code) => return graph_failure(&code, &format!("Refus d'autorisation : {code}")),
         };
+        if request
+            .steps
+            .iter()
+            .any(|s| s.convergence.as_ref().is_some_and(|c| c.gate.is_some()))
+            && !crate::native_permissions::permits_command_execution(
+                &attested.provider_policy,
+                true,
+            )
+        {
+            return graph_failure(
+                "permission_not_inherited",
+                "convergence.gate exige un parent attesté autorisé à exécuter des commandes en posture development (refusé en lecture seule / discovery).",
+            );
+        }
         if let Ok(Some(existing)) = st
             .delegation_store
             .graph_by_owner_request(&owner, &request.request_id)
@@ -869,7 +1305,7 @@ pub(super) fn handle_submit(
             .map(|s| {
                 let mut delegation = s.delegation.clone();
                 delegation.request_id = if s.convergence.is_some() {
-                    convergence_step_request_id(&request.request_id, &s.step_id, 1, "produce")
+                    convergence_step_request_id(&request.request_id, &s.step_id, 0, 1, "produce")
                 } else {
                     step_request_id(&request.request_id, &s.step_id, &delegation.request_id)
                 };
@@ -882,13 +1318,25 @@ pub(super) fn handle_submit(
                         .map(|conv| NativeGraphConvergenceState {
                             current_iteration: 1,
                             max_iterations: conv.max_iterations,
+                            total_max_iterations: conv.max_iterations,
                             stop_on_stagnation: conv.stop_on_stagnation,
                             phase: "waiting".into(),
+                            escalation_tier: 0,
+                            tier_escalated: false,
+                            escalated_from_reason: None,
                             producer_task_id: None,
+                            prior_producer_task_ids: Vec::new(),
                             producer_expected_round: 1,
                             verifier_task_id: None,
                             last_producer_commit: None,
                             last_blocking_fingerprint: None,
+                            seen_commits: Vec::new(),
+                            seen_blocking_fingerprints: Vec::new(),
+                            gate_runs: 0,
+                            gate_failures: 0,
+                            gate_saved_verifier_calls: 0,
+                            stagnation_saved_iterations: 0,
+                            metrics_recorded: false,
                             outcome: None,
                             iterations: Vec::new(),
                         });
@@ -896,6 +1344,8 @@ pub(super) fn handle_submit(
                     step_id: s.step_id.clone(),
                     depends_on: s.depends_on.clone(),
                     pass_dependency_results: s.pass_dependency_results,
+                    when: s.when,
+                    when_outcomes: s.when_outcomes.clone(),
                     delegation,
                     convergence: s.convergence.clone(),
                     convergence_state,
@@ -912,7 +1362,9 @@ pub(super) fn handle_submit(
         let root_indices: Vec<usize> = steps
             .iter()
             .enumerate()
-            .filter_map(|(i, s)| s.depends_on.is_empty().then_some(i))
+            .filter_map(|(i, s)| {
+                (s.depends_on.is_empty() && s.when == GraphStepCondition::AllSucceeded).then_some(i)
+            })
             .collect();
         let graph = NativeGraphRecord {
             graph_id: format!("graph-{}", uuid::Uuid::new_v4().simple()),
@@ -968,7 +1420,7 @@ pub(super) fn handle_submit(
     graph.updated_at = now;
     {
         let st = state.lock().recover_poison();
-        let _ = st.delegation_store.save_graph(&graph);
+        persist_graph_with_pending_metrics(&st, &mut graph, now);
     }
     for task_id in to_cancel {
         let _ = cancel_task_for_graph(&graph, &task_id, state);
@@ -985,7 +1437,27 @@ fn apply_admission_response(
     suppress_step_notices: bool,
     state: &Arc<Mutex<DaemonState>>,
 ) {
-    let now = unix_timestamp();
+    let st = state.lock().recover_poison();
+    apply_admission_response_locked(
+        graph,
+        idx,
+        step_id,
+        response,
+        suppress_step_notices,
+        &st,
+        unix_timestamp(),
+    );
+}
+
+fn apply_admission_response_locked(
+    graph: &mut NativeGraphRecord,
+    idx: usize,
+    step_id: &str,
+    response: DaemonToWrapper,
+    suppress_step_notices: bool,
+    st: &DaemonState,
+    now: i64,
+) {
     match response {
         DaemonToWrapper::NativeDelegationResult { result } => {
             if result["status"] != "refused"
@@ -994,16 +1466,29 @@ fn apply_admission_response(
                 graph.steps[idx].state = "running".into();
                 graph.steps[idx].task_id = Some(task_id.to_string());
                 graph.steps[idx].started_at.get_or_insert(now);
+                let prod_engine = graph.steps[idx].delegation.engine.clone();
+                let prod_model = graph.steps[idx].delegation.model.clone();
                 if let Some(cs) = graph.steps[idx].convergence_state.as_mut() {
                     cs.phase = "producing".into();
                     cs.producer_task_id = Some(task_id.to_string());
                     cs.producer_expected_round = 1;
                     cs.iterations.push(NativeGraphConvergenceIteration {
                         iteration: cs.current_iteration,
+                        tier: cs.escalation_tier,
                         producer_task_id: Some(task_id.to_string()),
                         producer_round: 1,
                         producer_commit: None,
+                        producer_engine: prod_engine,
+                        producer_model: prod_model,
+                        gate_passed: None,
+                        gate_exit_code: None,
+                        gate_timed_out: false,
+                        gate_duration_ms: None,
+                        gate_output_excerpt: None,
                         verifier_task_id: None,
+                        verifier_engine: None,
+                        verifier_model: None,
+                        verifier_orthogonal: None,
                         verdict: None,
                         reason: None,
                         blocking_points: Vec::new(),
@@ -1012,7 +1497,6 @@ fn apply_admission_response(
                         finished_at: None,
                     });
                 }
-                let st = state.lock().recover_poison();
                 let _ = st.delegation_store.bind_graph_step_task(
                     task_id,
                     &graph.graph_id,
@@ -1075,6 +1559,198 @@ pub(super) fn handle_status(
     graph_view(&graph)
 }
 
+fn require_local_control_principal(st: &DaemonState, conn: &str) -> Result<(), Value> {
+    if st.connection_roles.get(conn) != Some(&ConnectionRole::Client)
+        || control_client_actor(st, conn).is_none()
+        || st.conn_names.contains_key(conn)
+        || !st.client_negotiations.get(conn).is_some_and(|client| {
+            client
+                .capabilities
+                .contains(&ClientCapability::ControlStateV1)
+        })
+    {
+        return Err(graph_failure(
+            "human_principal_required",
+            "Cette opération d'administration des métriques de graphe est réservée à la CLI locale du principal humain.",
+        ));
+    }
+    Ok(())
+}
+
+/// Lecture consolidée des métriques durables de convergence (tous paliers Time-Machine :
+/// brut + journalier + mensuel) pour `bridget graphs metrics`.
+pub(super) fn handle_metrics(
+    conn: &str,
+    project: Option<&str>,
+    window_days: Option<u32>,
+    state: &Arc<Mutex<DaemonState>>,
+) -> Value {
+    let st = state.lock().recover_poison();
+    if let Err(refusal) = require_local_control_principal(&st, conn) {
+        return refusal;
+    }
+    let now = unix_timestamp();
+    match st
+        .delegation_store
+        .query_convergence_metrics(project, window_days, now)
+    {
+        Ok(report) => json!({
+            "version": 1,
+            "status": "ok",
+            "report": report,
+        }),
+        Err(error) => graph_failure("metrics_query_failed", &error),
+    }
+}
+
+/// Lecture, mise à jour et/ou exécution immédiate de la politique Time-Machine d'agrégation
+/// et de purge (`bridget graphs metrics-policy`).
+pub(super) fn handle_metrics_policy(
+    conn: &str,
+    update: Option<ConvergenceMetricsPolicyUpdate>,
+    run_now: bool,
+    state: &Arc<Mutex<DaemonState>>,
+) -> Value {
+    let mut st = state.lock().recover_poison();
+    if let Err(refusal) = require_local_control_principal(&st, conn) {
+        return refusal;
+    }
+    let now = unix_timestamp();
+    let policy = if let Some(patch) = update {
+        match st
+            .delegation_store
+            .update_convergence_metrics_policy(&patch, now)
+        {
+            Ok(p) => p,
+            Err(error) => return graph_failure("metrics_policy_invalid", &error),
+        }
+    } else {
+        match st.delegation_store.load_convergence_metrics_policy() {
+            Ok(p) => p,
+            Err(error) => return graph_failure("metrics_policy_unavailable", &error),
+        }
+    };
+    let rollup = if run_now {
+        match st
+            .delegation_store
+            .rollup_and_purge_convergence_metrics(now)
+        {
+            Ok(r) => Some(r),
+            Err(error) => return graph_failure("metrics_rollup_failed", &error),
+        }
+    } else {
+        None
+    };
+    json!({
+        "version": 1,
+        "status": "ok",
+        "policy": policy,
+        "rollup": rollup,
+    })
+}
+
+/// Collecte les métriques de toutes les étapes de convergence nouvellement terminales
+/// (`metrics_recorded == false`), positionne `metrics_recorded = true` et enregistre
+/// atomiquement le graphe + les lignes de métriques dans une unique transaction SQLite.
+fn persist_graph_with_pending_metrics(st: &DaemonState, graph: &mut NativeGraphRecord, now: i64) {
+    let project = graph
+        .communication_project
+        .as_ref()
+        .map(|p| p.root.clone())
+        .unwrap_or_default();
+    let mut rows = Vec::new();
+    for step in &mut graph.steps {
+        if !step_is_terminal(&step.state) {
+            continue;
+        }
+        let Some(cs) = step.convergence_state.as_mut() else {
+            continue;
+        };
+        if cs.metrics_recorded {
+            continue;
+        }
+        let outcome = cs.outcome.clone().unwrap_or_else(|| step.state.clone());
+        let producer_engine = step
+            .delegation
+            .engine
+            .as_deref()
+            .map(super::native_delegation::normalize_engine_family)
+            .filter(|s| !s.is_empty())
+            .unwrap_or("auto")
+            .to_string();
+        let producer_model = step.delegation.model.clone().unwrap_or_default();
+        let verifier_engine = cs
+            .iterations
+            .iter()
+            .rev()
+            .find_map(|it| it.verifier_engine.as_deref())
+            .or_else(|| {
+                step.convergence
+                    .as_ref()
+                    .and_then(|c| c.verify.engine.as_deref())
+            })
+            .map(super::native_delegation::normalize_engine_family)
+            .filter(|s| !s.is_empty())
+            .unwrap_or("auto")
+            .to_string();
+        let verifier_model = cs
+            .iterations
+            .iter()
+            .rev()
+            .find_map(|it| it.verifier_model.clone())
+            .or_else(|| {
+                step.convergence
+                    .as_ref()
+                    .and_then(|c| c.verify.model.clone())
+            })
+            .unwrap_or_default();
+        let verifier_orthogonal = cs
+            .iterations
+            .iter()
+            .any(|it| it.verifier_orthogonal == Some(true));
+        let started = step.started_at.unwrap_or(graph.created_at);
+        let finished = step.finished_at.unwrap_or(now);
+        let duration_secs = finished.saturating_sub(started).max(0);
+        let tier1_iterations = cs.iterations.iter().filter(|it| it.tier == 0).count() as u32;
+        let tier2_iterations = cs.iterations.iter().filter(|it| it.tier > 0).count() as u32;
+        let iterations_used = (cs.iterations.len() as u32)
+            .max(u32::from(cs.current_iteration))
+            .min(u32::from(MAX_TOTAL_CONVERGENCE_ITERATIONS));
+        let gate_configured = step.convergence.as_ref().is_some_and(|c| c.gate.is_some());
+        rows.push(ConvergenceMetricRawRow {
+            graph_id: graph.graph_id.clone(),
+            step_id: step.step_id.clone(),
+            project: project.clone(),
+            producer_engine,
+            producer_model,
+            verifier_engine,
+            verifier_model,
+            verifier_orthogonal,
+            outcome,
+            iterations_used,
+            tier1_iterations,
+            tier2_iterations,
+            tier_escalated: cs.tier_escalated,
+            gate_configured,
+            gate_runs: cs.gate_runs,
+            gate_failures: cs.gate_failures,
+            gate_saved_verifier_calls: cs.gate_saved_verifier_calls,
+            stagnation_saved_iterations: cs.stagnation_saved_iterations,
+            duration_secs,
+            finished_at: finished,
+        });
+        cs.metrics_recorded = true;
+    }
+    if rows.is_empty() {
+        let _ = st.delegation_store.save_graph(graph);
+    } else if let Err(error) = st.delegation_store.save_graph_with_metrics(graph, &rows) {
+        warn!(
+            "graphe {}: échec sauvegarde atomique graphe+métriques : {error}",
+            graph.graph_id
+        );
+    }
+}
+
 /// Annulation d'un graphe appartenant au parent (`bridget_graph_cancel`).
 pub(super) fn handle_cancel(
     conn: &str,
@@ -1111,27 +1787,27 @@ pub(super) fn handle_cancel(
                         tasks_to_cancel.push(tid);
                     }
                     if let Some(cs) = step.convergence_state.as_mut() {
-                        if let Some(ptid) = cs.producer_task_id.as_ref()
-                            && !tasks_to_cancel.contains(ptid)
-                            && st
-                                .delegation_store
-                                .get(ptid)
-                                .ok()
-                                .flatten()
-                                .is_some_and(|t| t.state == "working")
-                        {
-                            tasks_to_cancel.push(ptid.clone());
+                        let mut candidates: Vec<String> = Vec::new();
+                        if let Some(ptid) = cs.producer_task_id.as_ref() {
+                            candidates.push(ptid.clone());
                         }
-                        if let Some(vtid) = cs.verifier_task_id.as_ref()
-                            && !tasks_to_cancel.contains(vtid)
-                            && st
-                                .delegation_store
-                                .get(vtid)
-                                .ok()
-                                .flatten()
-                                .is_some_and(|t| t.state == "working")
-                        {
-                            tasks_to_cancel.push(vtid.clone());
+                        if let Some(vtid) = cs.verifier_task_id.as_ref() {
+                            candidates.push(vtid.clone());
+                        }
+                        for prior in &cs.prior_producer_task_ids {
+                            candidates.push(prior.clone());
+                        }
+                        for cid in candidates {
+                            if !tasks_to_cancel.contains(&cid)
+                                && st
+                                    .delegation_store
+                                    .get(&cid)
+                                    .ok()
+                                    .flatten()
+                                    .is_some_and(|t| t.state == "working")
+                            {
+                                tasks_to_cancel.push(cid);
+                            }
                         }
                         cs.phase = "done".into();
                         cs.outcome.get_or_insert_with(|| "cancelled".into());
@@ -1145,17 +1821,18 @@ pub(super) fn handle_cancel(
         }
         graph.state = "cancelled".into();
         graph.updated_at = now;
-        let _ = st.delegation_store.save_graph(&graph);
+        persist_graph_with_pending_metrics(&st, &mut graph, now);
         (graph, tasks_to_cancel)
     };
 
     for tid in running_tasks {
         let _ = cancel_task_for_graph(&graph, &tid, state);
     }
-    graph.updated_at = unix_timestamp();
+    let done_at = unix_timestamp();
+    graph.updated_at = done_at;
     {
         let st = state.lock().recover_poison();
-        let _ = st.delegation_store.save_graph(&graph);
+        persist_graph_with_pending_metrics(&st, &mut graph, done_at);
     }
     graph_view(&graph)
 }
@@ -1322,8 +1999,74 @@ pub(crate) fn sync_convergence_step_from_tasks(
     }
 }
 
-/// Applique la remise d'une itération producteur sur une étape de convergence
-/// et déclenche l'arrêt sur stagnation si le commit produit est identique au tour précédent.
+/// Tente une escalade unique et bornée vers le palier 1 (modèle/moteur/effort/machine plus fort)
+/// sur `stagnated` ou `max_iterations_reached`. Ne se déclenche JAMAIS sur `verdict == "escalate"`.
+/// Si l'escalade n'est pas configurée ou déjà consommée (`tier_escalated == true`), termine
+/// l'étape en échec avec `trigger` comme `outcome` et renvoie `false`.
+fn try_trigger_escalation(
+    step: &mut NativeGraphStepRecord,
+    trigger: &str,
+    reason: String,
+    now: i64,
+) -> bool {
+    let escalation_cfg = step.convergence.as_ref().and_then(|c| c.escalation.clone());
+    let Some(cs) = step.convergence_state.as_mut() else {
+        return false;
+    };
+    let eligible = escalation_cfg.as_ref().is_some_and(|esc| {
+        !cs.tier_escalated
+            && cs.escalation_tier == 0
+            && ((trigger == "stagnated" && esc.on_stagnation)
+                || (trigger == "max_iterations_reached" && esc.on_max_iterations))
+    });
+    if eligible && let Some(esc) = escalation_cfg {
+        if let Some(old_ptid) = cs.producer_task_id.take()
+            && !cs.prior_producer_task_ids.contains(&old_ptid)
+        {
+            cs.prior_producer_task_ids.push(old_ptid);
+        }
+        cs.verifier_task_id = None;
+        cs.escalation_tier = 1;
+        cs.tier_escalated = true;
+        cs.escalated_from_reason = Some(trigger.to_string());
+        cs.max_iterations = cs
+            .max_iterations
+            .saturating_add(esc.extra_iterations)
+            .min(MAX_TOTAL_CONVERGENCE_ITERATIONS);
+        cs.total_max_iterations = cs.max_iterations;
+        cs.seen_commits.clear();
+        cs.seen_blocking_fingerprints.clear();
+        cs.last_blocking_fingerprint = None;
+        cs.current_iteration = cs.current_iteration.saturating_add(1);
+        cs.phase = "pending_produce".into();
+        if let Some(iter_rec) = cs.iterations.last_mut() {
+            if iter_rec.reason.is_none() {
+                iter_rec.reason = Some(reason);
+            }
+            iter_rec.finished_at.get_or_insert(now);
+        }
+        return true;
+    }
+
+    if trigger == "stagnated" {
+        cs.stagnation_saved_iterations =
+            u32::from(cs.max_iterations.saturating_sub(cs.current_iteration));
+    }
+    if let Some(iter_rec) = cs.iterations.last_mut() {
+        iter_rec.finished_at.get_or_insert(now);
+    }
+    cs.phase = "done".into();
+    cs.outcome = Some(trigger.into());
+    step.state = "failed".into();
+    step.finished_at = Some(now);
+    step.error = Some(reason);
+    false
+}
+
+/// Applique la remise d'une itération producteur sur une étape de convergence,
+/// détecte la stagnation / oscillation (`A -> B -> A`) sur l'ensemble des commits vus
+/// dans le palier courant, puis bascule vers `pending_gate` (si porte déterministe)
+/// ou `pending_verify`.
 pub(crate) fn apply_producer_iteration_result(
     step: &mut NativeGraphStepRecord,
     task_round: u32,
@@ -1332,6 +2075,7 @@ pub(crate) fn apply_producer_iteration_result(
     fs: Value,
     now: i64,
 ) {
+    let has_gate = step.convergence.as_ref().is_some_and(|c| c.gate.is_some());
     let Some(cs) = step.convergence_state.as_mut() else {
         return;
     };
@@ -1342,31 +2086,160 @@ pub(crate) fn apply_producer_iteration_result(
     step.result_excerpt = excerpt;
     step.factual_summary = Some(fs);
 
-    // Détection de stagnation #1 : même commit non vide sur 2 tours consécutifs.
+    // Détection de stagnation / oscillation #1 : commit déjà vu dans le palier courant
+    // (couvre à la fois deux tours consécutifs identiques ET une oscillation A -> B -> A).
+    // Le repli `last_producer_commit` n'est utilisé que pour les anciens enregistrements Spec 313
+    // désérialisés avec `seen_commits` vide au palier 0.
+    let repeated_commit = producer_commit.as_deref().is_some_and(|commit| {
+        cs.seen_commits.iter().any(|c| c == commit)
+            || (!cs.tier_escalated
+                && cs.seen_commits.is_empty()
+                && cs.current_iteration >= 2
+                && cs.last_producer_commit.as_deref() == Some(commit))
+    });
     if cs.stop_on_stagnation
-        && cs.current_iteration >= 2
+        && repeated_commit
         && let Some(commit) = producer_commit.as_deref()
-        && cs.last_producer_commit.as_deref() == Some(commit)
     {
-        if let Some(iter_rec) = cs.iterations.last_mut() {
-            iter_rec.finished_at = Some(now);
-        }
-        cs.phase = "done".into();
-        cs.outcome = Some("stagnated".into());
-        step.state = "failed".into();
-        step.finished_at = Some(now);
-        step.error = Some(format!(
-            "convergence_stagnated: commit identique sur les itérations {} et {} ({commit})",
-            cs.current_iteration - 1,
+        let err = format!(
+            "convergence_stagnated: commit identique ou oscillant détecté à l'itération {} ({commit})",
             cs.current_iteration
-        ));
+        );
+        try_trigger_escalation(step, "stagnated", err, now);
         return;
     }
 
-    if producer_commit.is_some() {
-        cs.last_producer_commit = producer_commit;
+    if let Some(commit) = producer_commit {
+        if !cs.seen_commits.iter().any(|c| c == &commit) {
+            cs.seen_commits.push(commit.clone());
+        }
+        cs.last_producer_commit = Some(commit);
     }
-    cs.phase = "pending_verify".into();
+
+    if has_gate {
+        if cs.last_producer_commit.is_none() {
+            if let Some(iter_rec) = cs.iterations.last_mut() {
+                iter_rec.finished_at = Some(now);
+            }
+            cs.phase = "done".into();
+            cs.outcome = Some("gate_unavailable".into());
+            step.state = "failed".into();
+            step.finished_at = Some(now);
+            step.error = Some(
+                "convergence_gate_unavailable: le producteur n'a pas fourni de commit Git attesté pour exécuter la porte déterministe."
+                    .into(),
+            );
+            return;
+        }
+        cs.phase = "pending_gate".into();
+    } else {
+        cs.phase = "pending_verify".into();
+    }
+}
+
+/// Applique le résultat d'une porte déterministe (0 jeton LLM) sur une étape de convergence.
+/// - `unavailable_reason.is_some()` : échec fail-closed (`outcome = "gate_unavailable"`).
+/// - `passed == true` : porte réussie -> passe à `pending_verify`.
+/// - sinon : court-circuite le vérificateur LLM (`gate_saved_verifier_calls += 1`),
+///   vérifie stagnation/oscillation + plafond + escalade éventuelle, sinon renvoie au producteur.
+pub(crate) fn apply_gate_result(
+    step: &mut NativeGraphStepRecord,
+    outcome: crate::deterministic_gate::GateExecOutput,
+    now: i64,
+) {
+    let Some(cs) = step.convergence_state.as_mut() else {
+        return;
+    };
+    cs.gate_runs = cs.gate_runs.saturating_add(1);
+    if let Some(err) = outcome.unavailable_reason {
+        if let Some(iter_rec) = cs.iterations.last_mut() {
+            iter_rec.gate_passed = Some(false);
+            iter_rec.gate_duration_ms = Some(outcome.duration_ms);
+            iter_rec.verdict = Some("gate_unavailable".into());
+            iter_rec.reason = Some(err.clone());
+            iter_rec.finished_at = Some(now);
+        }
+        cs.phase = "done".into();
+        cs.outcome = Some("gate_unavailable".into());
+        step.state = "failed".into();
+        step.finished_at = Some(now);
+        step.error = Some(format!("convergence_gate_unavailable: {err}"));
+        return;
+    }
+    if outcome.passed && !outcome.timed_out && outcome.exit_code == Some(0) {
+        if let Some(iter_rec) = cs.iterations.last_mut() {
+            iter_rec.gate_passed = Some(true);
+            iter_rec.gate_exit_code = Some(0);
+            iter_rec.gate_timed_out = false;
+            iter_rec.gate_duration_ms = Some(outcome.duration_ms);
+            if !outcome.output_excerpt.trim().is_empty() {
+                iter_rec.gate_output_excerpt = Some(outcome.output_excerpt);
+            }
+        }
+        cs.phase = "pending_verify".into();
+        return;
+    }
+    cs.gate_failures = cs.gate_failures.saturating_add(1);
+    cs.gate_saved_verifier_calls = cs.gate_saved_verifier_calls.saturating_add(1);
+    let fp = crate::deterministic_gate::gate_failure_fingerprint(
+        outcome.exit_code,
+        outcome.timed_out,
+        &outcome.output_excerpt,
+    );
+    let reason = if outcome.timed_out {
+        format!(
+            "porte déterministe expirée après {} ms",
+            outcome.duration_ms
+        )
+    } else {
+        format!(
+            "porte déterministe en échec (code {:?}, {} ms)",
+            outcome.exit_code, outcome.duration_ms
+        )
+    };
+    let excerpt = outcome.output_excerpt.clone();
+    if let Some(iter_rec) = cs.iterations.last_mut() {
+        iter_rec.gate_passed = Some(false);
+        iter_rec.gate_exit_code = outcome.exit_code;
+        iter_rec.gate_timed_out = outcome.timed_out;
+        iter_rec.gate_duration_ms = Some(outcome.duration_ms);
+        iter_rec.gate_output_excerpt = Some(excerpt.clone());
+        iter_rec.verdict = Some("gate_failed".into());
+        iter_rec.reason = Some(reason.clone());
+        iter_rec.blocking_points = if excerpt.trim().is_empty() {
+            vec![reason.clone()]
+        } else {
+            vec![excerpt]
+        };
+        iter_rec.blocking_fingerprint = Some(fp.clone());
+        iter_rec.finished_at = Some(now);
+    }
+
+    let repeated_fp = cs.seen_blocking_fingerprints.iter().any(|s| s == &fp)
+        || (cs.current_iteration >= 2
+            && cs.last_blocking_fingerprint.as_deref() == Some(fp.as_str()));
+    if cs.stop_on_stagnation && repeated_fp {
+        let err = format!(
+            "convergence_stagnated: même échec de porte déterministe répété à l'itération {} ({reason})",
+            cs.current_iteration
+        );
+        try_trigger_escalation(step, "stagnated", err, now);
+        return;
+    }
+    if cs.current_iteration >= cs.max_iterations {
+        let err = format!(
+            "convergence_max_iterations_reached: {} itérations sans passage de la porte ({reason})",
+            cs.max_iterations
+        );
+        try_trigger_escalation(step, "max_iterations_reached", err, now);
+        return;
+    }
+    if !cs.seen_blocking_fingerprints.iter().any(|s| s == &fp) {
+        cs.seen_blocking_fingerprints.push(fp.clone());
+    }
+    cs.last_blocking_fingerprint = Some(fp);
+    cs.current_iteration = cs.current_iteration.saturating_add(1);
+    cs.phase = "pending_produce".into();
 }
 
 /// Applique la transition déterministe d'un verdict de vérificateur sur une étape de convergence.
@@ -1398,6 +2271,8 @@ pub(crate) fn apply_verifier_verdict(
             }
         }
         ParsedVerdict::Escalate { reason } => {
+            // Un verdict `escalate` court-circuite TOUJOURS l'escalade de modèle intra-étape
+            // et remonte immédiatement au parent / humain.
             if let Some(iter_rec) = cs.iterations.last_mut() {
                 iter_rec.verdict = Some("escalate".into());
                 iter_rec.reason = Some(reason.clone());
@@ -1419,35 +2294,38 @@ pub(crate) fn apply_verifier_verdict(
                 iter_rec.blocking_points = blocking_points;
                 iter_rec.blocking_fingerprint = Some(fingerprint.clone());
             }
-            // Détection de stagnation #2 : mêmes motifs bloquants normalisés deux tours de suite.
-            if cs.stop_on_stagnation
-                && cs.current_iteration >= 2
-                && cs.last_blocking_fingerprint.as_deref() == Some(fingerprint.as_str())
-            {
-                cs.phase = "done".into();
-                cs.outcome = Some("stagnated".into());
-                step.state = "failed".into();
-                step.finished_at = Some(now);
-                step.error = Some(format!(
-                    "convergence_stagnated: motifs bloquants identiques sur les itérations {} et {} ({reason})",
-                    cs.current_iteration - 1,
+            // Détection de stagnation / oscillation #2 : empreinte bloquante déjà vue dans le palier.
+            let repeated_fp = cs
+                .seen_blocking_fingerprints
+                .iter()
+                .any(|s| s == &fingerprint)
+                || (cs.current_iteration >= 2
+                    && cs.last_blocking_fingerprint.as_deref() == Some(fingerprint.as_str()));
+            if cs.stop_on_stagnation && repeated_fp {
+                let err = format!(
+                    "convergence_stagnated: motifs bloquants identiques ou oscillants détectés à l'itération {} ({reason})",
                     cs.current_iteration
-                ));
+                );
+                try_trigger_escalation(step, "stagnated", err, now);
                 return;
             }
             if cs.current_iteration >= cs.max_iterations {
-                cs.phase = "done".into();
-                cs.outcome = Some("max_iterations_reached".into());
-                step.state = "failed".into();
-                step.finished_at = Some(now);
-                step.error = Some(format!(
+                let err = format!(
                     "convergence_max_iterations_reached: {} itérations sans approbation ({reason})",
                     cs.max_iterations
-                ));
+                );
+                try_trigger_escalation(step, "max_iterations_reached", err, now);
                 return;
             }
+            if !cs
+                .seen_blocking_fingerprints
+                .iter()
+                .any(|s| s == &fingerprint)
+            {
+                cs.seen_blocking_fingerprints.push(fingerprint.clone());
+            }
             cs.last_blocking_fingerprint = Some(fingerprint);
-            cs.current_iteration += 1;
+            cs.current_iteration = cs.current_iteration.saturating_add(1);
             cs.phase = "pending_produce".into();
         }
         ParsedVerdict::Unparseable => {
@@ -1551,15 +2429,26 @@ enum GraphLaunchJob {
         idx: usize,
         delegation: AutoDelegateV2,
     },
+    ConvergenceGate {
+        graph: NativeGraphRecord,
+        idx: usize,
+        tier: u8,
+        iteration: u8,
+        producer_task_id: String,
+        expected_commit: String,
+        gate: GraphDeterministicGate,
+    },
     ConvergenceVerify {
         graph: NativeGraphRecord,
         idx: usize,
+        tier: u8,
         iteration: u8,
         delegation: AutoDelegateV2,
     },
     ConvergenceNextProduce {
         graph: NativeGraphRecord,
         idx: usize,
+        tier: u8,
         iteration: u8,
         continue_task_id: Option<String>,
         continue_request_id: String,
@@ -1625,7 +2514,7 @@ pub(super) fn tick(state: &Arc<Mutex<DaemonState>>) {
                     }
                 }
 
-                // Transitions internes des étapes de convergence (`pending_verify` / `pending_produce`).
+                // Transitions internes des étapes de convergence (`pending_gate` / `pending_verify` / `pending_produce`).
                 for idx in 0..graph.steps.len() {
                     if graph.steps[idx].state != "running" {
                         continue;
@@ -1637,10 +2526,54 @@ pub(super) fn tick(state: &Arc<Mutex<DaemonState>>) {
                         continue;
                     };
                     let step_id = graph.steps[idx].step_id.clone();
-                    if matches!(cs.phase.as_str(), "pending_verify" | "launching_verify") {
+                    if matches!(cs.phase.as_str(), "pending_gate" | "launching_gate")
+                        && let Some(gate) = conv.gate.clone()
+                    {
                         let launch_key = format!(
-                            "{}:{}:verify:{}",
-                            graph.graph_id, step_id, cs.current_iteration
+                            "{}:{}:gate:t{}:i{}",
+                            graph.graph_id, step_id, cs.escalation_tier, cs.current_iteration
+                        );
+                        if !st.graph_launching_steps.insert(launch_key) {
+                            continue;
+                        }
+                        let (Some(producer_task_id), Some(expected_commit)) =
+                            (cs.producer_task_id.clone(), cs.last_producer_commit.clone())
+                        else {
+                            apply_gate_result(
+                                &mut graph.steps[idx],
+                                crate::deterministic_gate::GateExecOutput {
+                                    passed: false,
+                                    exit_code: None,
+                                    timed_out: false,
+                                    duration_ms: 0,
+                                    output_excerpt: String::new(),
+                                    unavailable_reason: Some(
+                                        "tâche productrice ou commit absent pour la porte déterministe"
+                                            .into(),
+                                    ),
+                                },
+                                now,
+                            );
+                            dirty = true;
+                            continue;
+                        };
+                        if let Some(state_mut) = graph.steps[idx].convergence_state.as_mut() {
+                            state_mut.phase = "launching_gate".into();
+                        }
+                        dirty = true;
+                        launches.push(GraphLaunchJob::ConvergenceGate {
+                            graph: graph.clone(),
+                            idx,
+                            tier: cs.escalation_tier,
+                            iteration: cs.current_iteration,
+                            producer_task_id,
+                            expected_commit,
+                            gate,
+                        });
+                    } else if matches!(cs.phase.as_str(), "pending_verify" | "launching_verify") {
+                        let launch_key = format!(
+                            "{}:{}:verify:t{}:i{}",
+                            graph.graph_id, step_id, cs.escalation_tier, cs.current_iteration
                         );
                         if !st.graph_launching_steps.insert(launch_key) {
                             continue;
@@ -1649,9 +2582,47 @@ pub(super) fn tick(state: &Arc<Mutex<DaemonState>>) {
                         verify_del.request_id = convergence_step_request_id(
                             &graph.request_id,
                             &step_id,
+                            cs.escalation_tier,
                             cs.current_iteration,
                             "verify",
                         );
+                        // Vérificateur orthogonal (`different_provider: true`) : préférer un moteur
+                        // sain différent de la famille du producteur, avec repli gracieux.
+                        let mut orthogonal_flag: Option<bool> = None;
+                        if conv.different_provider {
+                            let prod_engine_raw = cs
+                                .producer_task_id
+                                .as_deref()
+                                .and_then(|ptid| st.delegation_store.get(ptid).ok().flatten())
+                                .map(|t| t.definition.command)
+                                .or_else(|| graph.steps[idx].delegation.engine.clone());
+                            let prod_fam = prod_engine_raw
+                                .as_deref()
+                                .map(super::native_delegation::normalize_engine_family)
+                                .unwrap_or("");
+                            let verify_fam = verify_del
+                                .engine
+                                .as_deref()
+                                .map(super::native_delegation::normalize_engine_family)
+                                .unwrap_or("");
+                            if prod_fam.is_empty() {
+                                orthogonal_flag = Some(false);
+                            } else if !verify_fam.is_empty() && verify_fam != prod_fam {
+                                orthogonal_flag = Some(true);
+                            } else if let Some(orth) =
+                                super::native_delegation::pick_orthogonal_engine_pub(
+                                    &st,
+                                    prod_engine_raw.as_deref(),
+                                )
+                            {
+                                verify_del.engine = Some(orth);
+                                verify_del.model = None;
+                                verify_del.effort = None;
+                                orthogonal_flag = Some(true);
+                            } else {
+                                orthogonal_flag = Some(false);
+                            }
+                        }
                         apply_commit_to_delegation(
                             &mut verify_del,
                             cs.last_producer_commit.as_deref(),
@@ -1664,54 +2635,87 @@ pub(super) fn tick(state: &Arc<Mutex<DaemonState>>) {
                         );
                         if let Some(state_mut) = graph.steps[idx].convergence_state.as_mut() {
                             state_mut.phase = "launching_verify".into();
+                            if let Some(iter_rec) = state_mut.iterations.last_mut() {
+                                iter_rec.verifier_engine = verify_del.engine.clone();
+                                iter_rec.verifier_model = verify_del.model.clone();
+                                if orthogonal_flag.is_some() {
+                                    iter_rec.verifier_orthogonal = orthogonal_flag;
+                                }
+                            }
                         }
                         dirty = true;
                         launches.push(GraphLaunchJob::ConvergenceVerify {
                             graph: graph.clone(),
                             idx,
+                            tier: cs.escalation_tier,
                             iteration: cs.current_iteration,
                             delegation: verify_del,
                         });
                     } else if matches!(cs.phase.as_str(), "pending_produce" | "launching_produce") {
                         let launch_key = format!(
-                            "{}:{}:produce:{}",
-                            graph.graph_id, step_id, cs.current_iteration
+                            "{}:{}:produce:t{}:i{}",
+                            graph.graph_id, step_id, cs.escalation_tier, cs.current_iteration
                         );
                         if !st.graph_launching_steps.insert(launch_key) {
                             continue;
                         }
-                        let (last_reason, last_points) = cs
+                        let (last_reason, last_points, from_gate) = cs
                             .iterations
                             .last()
                             .map(|it| {
                                 (
                                     it.reason
                                         .as_deref()
-                                        .unwrap_or("corrections demandées par le vérificateur")
+                                        .unwrap_or("corrections demandées")
                                         .to_string(),
                                     it.blocking_points.clone(),
+                                    it.verdict.as_deref() == Some("gate_failed"),
                                 )
                             })
-                            .unwrap_or_else(|| ("corrections demandées".into(), Vec::new()));
+                            .unwrap_or_else(|| ("corrections demandées".into(), Vec::new(), false));
                         let continue_request_id = convergence_step_request_id(
                             &graph.request_id,
                             &step_id,
+                            cs.escalation_tier,
                             cs.current_iteration,
                             "produce",
                         );
                         let continue_task = build_producer_revision_task(
                             &step_id,
+                            cs.escalation_tier,
                             cs.current_iteration,
                             cs.max_iterations,
                             &last_reason,
                             &last_points,
                             &graph.steps[idx].delegation.task,
                             false,
+                            from_gate,
                         );
                         let mut fallback_del = graph.steps[idx].delegation.clone();
+                        // Appliquer les surcharges d'escalade sur tout lancement neuf du palier 1.
+                        if cs.escalation_tier > 0
+                            && let Some(esc) = conv.escalation.as_ref()
+                        {
+                            if let Some(eng) = esc.engine.as_ref() {
+                                fallback_del.engine = Some(eng.clone());
+                                if esc.model.is_none() {
+                                    fallback_del.model = None;
+                                }
+                            }
+                            if let Some(model) = esc.model.as_ref() {
+                                fallback_del.model = Some(model.clone());
+                            }
+                            if let Some(effort) = esc.effort.as_ref() {
+                                fallback_del.effort = Some(effort.clone());
+                            }
+                            if let Some(machine_id) = esc.machine_id.as_ref() {
+                                fallback_del.machine_id = Some(machine_id.clone());
+                            }
+                        }
                         fallback_del.request_id = convergence_step_request_id(
                             &graph.request_id,
                             &step_id,
+                            cs.escalation_tier,
                             cs.current_iteration,
                             "produce-new",
                         );
@@ -1722,12 +2726,14 @@ pub(super) fn tick(state: &Arc<Mutex<DaemonState>>) {
                         );
                         fallback_del.task = build_producer_revision_task(
                             &step_id,
+                            cs.escalation_tier,
                             cs.current_iteration,
                             cs.max_iterations,
                             &last_reason,
                             &last_points,
                             &graph.steps[idx].delegation.task,
                             true,
+                            from_gate,
                         );
                         if let Some(state_mut) = graph.steps[idx].convergence_state.as_mut() {
                             state_mut.phase = "launching_produce".into();
@@ -1736,6 +2742,7 @@ pub(super) fn tick(state: &Arc<Mutex<DaemonState>>) {
                         launches.push(GraphLaunchJob::ConvergenceNextProduce {
                             graph: graph.clone(),
                             idx,
+                            tier: cs.escalation_tier,
                             iteration: cs.current_iteration,
                             continue_task_id: cs.producer_task_id.clone(),
                             continue_request_id,
@@ -1795,7 +2802,7 @@ pub(super) fn tick(state: &Arc<Mutex<DaemonState>>) {
 
             if dirty {
                 graph.updated_at = now;
-                let _ = st.delegation_store.save_graph(&graph);
+                persist_graph_with_pending_metrics(&st, &mut graph, now);
             }
         }
     }
@@ -1806,6 +2813,17 @@ pub(super) fn tick(state: &Arc<Mutex<DaemonState>>) {
 
     for (graph, task_id) in cancellations {
         let _ = cancel_task_for_graph(&graph, &task_id, state);
+    }
+
+    struct LaunchKeyGuard {
+        state: Arc<Mutex<DaemonState>>,
+        key: String,
+    }
+    impl Drop for LaunchKeyGuard {
+        fn drop(&mut self) {
+            let mut st = self.state.lock().recover_poison();
+            st.graph_launching_steps.remove(&self.key);
+        }
     }
 
     for job in launches {
@@ -1824,6 +2842,10 @@ pub(super) fn tick(state: &Arc<Mutex<DaemonState>>) {
                     .name(format!("bridget-graph-{}", &step_id))
                     .spawn(move || {
                         let launch_key = format!("{graph_id}:{step_id}:start:1");
+                        let _key_guard = LaunchKeyGuard {
+                            state: Arc::clone(&state_bg),
+                            key: launch_key.clone(),
+                        };
                         let response = match prepare_exec_conn(&graph_snapshot, &step_id, &state_bg)
                         {
                             Ok((exec_conn, _guard)) => {
@@ -1852,26 +2874,79 @@ pub(super) fn tick(state: &Arc<Mutex<DaemonState>>) {
                                 current.steps.iter().position(|s| s.step_id == step_id)
                             && current.steps[pos].state == "launching"
                         {
-                            drop(st);
-                            apply_admission_response(
+                            let now = unix_timestamp();
+                            apply_admission_response_locked(
                                 &mut current,
                                 pos,
                                 &step_id,
                                 response,
                                 suppress,
-                                &state_bg,
+                                &st,
+                                now,
                             );
-                            let now = unix_timestamp();
                             let _ = propagate_graph_state(&mut current, now);
                             current.updated_at = now;
-                            let st2 = state_bg.lock().recover_poison();
-                            let _ = st2.delegation_store.save_graph(&current);
+                            persist_graph_with_pending_metrics(&st, &mut current, now);
+                        } else if let DaemonToWrapper::NativeDelegationResult { result } = response
+                            && result["status"] != "refused"
+                            && let Some(orphan_tid) = result["task_id"].as_str().map(str::to_owned)
+                        {
+                            // Étape ou graphe annulé pendant l'admission : éviter toute tâche orpheline.
+                            drop(st);
+                            let _ = cancel_task_for_graph(&graph_snapshot, &orphan_tid, &state_bg);
+                        }
+                    });
+            }
+            GraphLaunchJob::ConvergenceGate {
+                graph: graph_snapshot,
+                idx,
+                tier,
+                iteration,
+                producer_task_id,
+                expected_commit,
+                gate,
+            } => {
+                let graph_id = graph_snapshot.graph_id.clone();
+                let step_id = graph_snapshot.steps[idx].step_id.clone();
+                let _ = thread::Builder::new()
+                    .name(format!("bridget-graph-gate-{}", &step_id))
+                    .spawn(move || {
+                        let launch_key = format!("{graph_id}:{step_id}:gate:t{tier}:i{iteration}");
+                        let _key_guard = LaunchKeyGuard {
+                            state: Arc::clone(&state_bg),
+                            key: launch_key.clone(),
+                        };
+                        let gate_res =
+                            super::native_delegation::run_deterministic_gate_for_task_pub(
+                                &state_bg,
+                                &producer_task_id,
+                                &expected_commit,
+                                &gate.argv,
+                                gate.timeout_secs,
+                            );
+                        let mut st = state_bg.lock().recover_poison();
+                        st.graph_launching_steps.remove(&launch_key);
+                        if let Ok(Some(mut current)) = st.delegation_store.get_graph(&graph_id)
+                            && let Some(pos) =
+                                current.steps.iter().position(|s| s.step_id == step_id)
+                            && current.steps[pos].state == "running"
+                            && current.steps[pos]
+                                .convergence_state
+                                .as_ref()
+                                .is_some_and(|cs| cs.phase == "launching_gate")
+                        {
+                            let now = unix_timestamp();
+                            apply_gate_result(&mut current.steps[pos], gate_res, now);
+                            let _ = propagate_graph_state(&mut current, now);
+                            current.updated_at = now;
+                            persist_graph_with_pending_metrics(&st, &mut current, now);
                         }
                     });
             }
             GraphLaunchJob::ConvergenceVerify {
                 graph: graph_snapshot,
                 idx,
+                tier,
                 iteration,
                 delegation,
             } => {
@@ -1882,8 +2957,13 @@ pub(super) fn tick(state: &Arc<Mutex<DaemonState>>) {
                 let _ = thread::Builder::new()
                     .name(format!("bridget-graph-verify-{}", &step_id))
                     .spawn(move || {
-                        let launch_key = format!("{graph_id}:{step_id}:verify:{iteration}");
-                        let exec_tag = format!("{step_id}-verify-i{iteration}");
+                        let launch_key =
+                            format!("{graph_id}:{step_id}:verify:t{tier}:i{iteration}");
+                        let _key_guard = LaunchKeyGuard {
+                            state: Arc::clone(&state_bg),
+                            key: launch_key.clone(),
+                        };
+                        let exec_tag = format!("{step_id}-verify-t{tier}-i{iteration}");
                         let response =
                             match prepare_exec_conn(&graph_snapshot, &exec_tag, &state_bg) {
                                 Ok((exec_conn, _guard)) => {
@@ -1974,7 +3054,7 @@ pub(super) fn tick(state: &Arc<Mutex<DaemonState>>) {
                             }
                             let _ = propagate_graph_state(&mut current, now);
                             current.updated_at = now;
-                            let _ = st.delegation_store.save_graph(&current);
+                            persist_graph_with_pending_metrics(&st, &mut current, now);
                         } else if let DaemonToWrapper::NativeDelegationResult { result } = response
                             && result["status"] != "refused"
                             && let Some(orphan_tid) = result["task_id"].as_str().map(str::to_owned)
@@ -1988,6 +3068,7 @@ pub(super) fn tick(state: &Arc<Mutex<DaemonState>>) {
             GraphLaunchJob::ConvergenceNextProduce {
                 graph: graph_snapshot,
                 idx,
+                tier,
                 iteration,
                 continue_task_id,
                 continue_request_id,
@@ -2001,8 +3082,13 @@ pub(super) fn tick(state: &Arc<Mutex<DaemonState>>) {
                 let _ = thread::Builder::new()
                     .name(format!("bridget-graph-produce-{}", &step_id))
                     .spawn(move || {
-                        let launch_key = format!("{graph_id}:{step_id}:produce:{iteration}");
-                        let exec_tag = format!("{step_id}-produce-i{iteration}");
+                        let launch_key =
+                            format!("{graph_id}:{step_id}:produce:t{tier}:i{iteration}");
+                        let _key_guard = LaunchKeyGuard {
+                            state: Arc::clone(&state_bg),
+                            key: launch_key.clone(),
+                        };
+                        let exec_tag = format!("{step_id}-produce-t{tier}-i{iteration}");
                         let mut continued: Option<(String, u32)> = None;
                         let mut fallback_response: Option<DaemonToWrapper> = None;
 
@@ -2073,6 +3159,8 @@ pub(super) fn tick(state: &Arc<Mutex<DaemonState>>) {
                             let now = unix_timestamp();
                             if let Some((ptid, expected_round)) = continued {
                                 current.steps[pos].task_id = Some(ptid.clone());
+                                let prod_engine = current.steps[pos].delegation.engine.clone();
+                                let prod_model = current.steps[pos].delegation.model.clone();
                                 if let Some(cs) = current.steps[pos].convergence_state.as_mut() {
                                     cs.phase = "producing".into();
                                     cs.producer_task_id = Some(ptid.clone());
@@ -2080,10 +3168,21 @@ pub(super) fn tick(state: &Arc<Mutex<DaemonState>>) {
                                     cs.verifier_task_id = None;
                                     cs.iterations.push(NativeGraphConvergenceIteration {
                                         iteration,
+                                        tier: cs.escalation_tier,
                                         producer_task_id: Some(ptid),
                                         producer_round: expected_round,
                                         producer_commit: None,
+                                        producer_engine: prod_engine,
+                                        producer_model: prod_model,
+                                        gate_passed: None,
+                                        gate_exit_code: None,
+                                        gate_timed_out: false,
+                                        gate_duration_ms: None,
+                                        gate_output_excerpt: None,
                                         verifier_task_id: None,
+                                        verifier_engine: None,
+                                        verifier_model: None,
+                                        verifier_orthogonal: None,
                                         verdict: None,
                                         reason: None,
                                         blocking_points: Vec::new(),
@@ -2101,6 +3200,24 @@ pub(super) fn tick(state: &Arc<Mutex<DaemonState>>) {
                                         let new_tid =
                                             result["task_id"].as_str().unwrap().to_string();
                                         current.steps[pos].task_id = Some(new_tid.clone());
+                                        let prod_engine = current.steps[pos]
+                                            .convergence
+                                            .as_ref()
+                                            .and_then(|c| c.escalation.as_ref())
+                                            .filter(|_| tier > 0)
+                                            .and_then(|e| e.engine.clone())
+                                            .or_else(|| {
+                                                current.steps[pos].delegation.engine.clone()
+                                            });
+                                        let prod_model = current.steps[pos]
+                                            .convergence
+                                            .as_ref()
+                                            .and_then(|c| c.escalation.as_ref())
+                                            .filter(|_| tier > 0)
+                                            .and_then(|e| e.model.clone())
+                                            .or_else(|| {
+                                                current.steps[pos].delegation.model.clone()
+                                            });
                                         if let Some(cs) =
                                             current.steps[pos].convergence_state.as_mut()
                                         {
@@ -2110,10 +3227,21 @@ pub(super) fn tick(state: &Arc<Mutex<DaemonState>>) {
                                             cs.verifier_task_id = None;
                                             cs.iterations.push(NativeGraphConvergenceIteration {
                                                 iteration,
+                                                tier: cs.escalation_tier,
                                                 producer_task_id: Some(new_tid.clone()),
                                                 producer_round: 1,
                                                 producer_commit: None,
+                                                producer_engine: prod_engine,
+                                                producer_model: prod_model,
+                                                gate_passed: None,
+                                                gate_exit_code: None,
+                                                gate_timed_out: false,
+                                                gate_duration_ms: None,
+                                                gate_output_excerpt: None,
                                                 verifier_task_id: None,
+                                                verifier_engine: None,
+                                                verifier_model: None,
+                                                verifier_orthogonal: None,
                                                 verdict: None,
                                                 reason: None,
                                                 blocking_points: Vec::new(),
@@ -2167,7 +3295,7 @@ pub(super) fn tick(state: &Arc<Mutex<DaemonState>>) {
                             }
                             let _ = propagate_graph_state(&mut current, now);
                             current.updated_at = now;
-                            let _ = st.delegation_store.save_graph(&current);
+                            persist_graph_with_pending_metrics(&st, &mut current, now);
                         } else {
                             let orphan_tid = continued.map(|(ptid, _)| ptid).or_else(|| {
                                 fallback_response.and_then(|resp| match resp {
@@ -2230,6 +3358,8 @@ mod tests {
             step_id: id.into(),
             depends_on: deps.iter().map(|s| (*s).into()).collect(),
             pass_dependency_results: true,
+            when: GraphStepCondition::AllSucceeded,
+            when_outcomes: Vec::new(),
             delegation: sample_auto(task),
             convergence: None,
         }
@@ -2272,6 +3402,8 @@ mod tests {
                     step_id: s.step_id,
                     depends_on: s.depends_on,
                     pass_dependency_results: s.pass_dependency_results,
+                    when: s.when,
+                    when_outcomes: s.when_outcomes,
                     delegation: s.delegation,
                     convergence: s.convergence,
                     convergence_state: None,
@@ -2355,6 +3487,8 @@ mod tests {
                     step_id: "A".into(),
                     depends_on: vec![],
                     pass_dependency_results: true,
+                    when: GraphStepCondition::AllSucceeded,
+                    when_outcomes: Vec::new(),
                     delegation: sample_auto("A"),
                     convergence: None,
                     convergence_state: None,
@@ -2370,6 +3504,8 @@ mod tests {
                     step_id: "B".into(),
                     depends_on: vec!["A".into()],
                     pass_dependency_results: true,
+                    when: GraphStepCondition::AllSucceeded,
+                    when_outcomes: Vec::new(),
                     delegation: sample_auto("B"),
                     convergence: None,
                     convergence_state: None,
@@ -2385,6 +3521,8 @@ mod tests {
                     step_id: "C".into(),
                     depends_on: vec!["B".into()],
                     pass_dependency_results: true,
+                    when: GraphStepCondition::AllSucceeded,
+                    when_outcomes: Vec::new(),
                     delegation: sample_auto("C"),
                     convergence: None,
                     convergence_state: None,
@@ -2400,6 +3538,8 @@ mod tests {
                     step_id: "X".into(),
                     depends_on: vec![],
                     pass_dependency_results: true,
+                    when: GraphStepCondition::AllSucceeded,
+                    when_outcomes: Vec::new(),
                     delegation: sample_auto("X"),
                     convergence: None,
                     convergence_state: None,
@@ -2491,6 +3631,9 @@ mod tests {
             verify: sample_auto("review"),
             max_iterations: 1,
             stop_on_stagnation: true,
+            gate: None,
+            escalation: None,
+            different_provider: false,
         });
         let req = DelegateGraphRequest {
             request_id: "conv-bad-min".into(),
@@ -2556,8 +3699,45 @@ mod tests {
         // Clé d'itération toujours <= 128 octets même avec longs identifiants.
         let long_req = "r".repeat(120);
         let long_step = "s".repeat(60);
-        let derived = convergence_step_request_id(&long_req, &long_step, 3, "verify");
+        let derived = convergence_step_request_id(&long_req, &long_step, 0, 3, "verify");
         assert!(derived.len() <= 128, "len={}", derived.len());
+        let derived_t1 = convergence_step_request_id(&long_req, &long_step, 1, 3, "verify");
+        assert!(derived_t1.len() <= 128, "len={}", derived_t1.len());
+        assert_ne!(derived, derived_t1);
+    }
+
+    fn mk_test_iter(
+        iteration: u8,
+        tier: u8,
+        producer_task_id: &str,
+        producer_round: u32,
+        producer_commit: Option<String>,
+        verifier_task_id: Option<&str>,
+    ) -> NativeGraphConvergenceIteration {
+        NativeGraphConvergenceIteration {
+            iteration,
+            tier,
+            producer_task_id: Some(producer_task_id.into()),
+            producer_round,
+            producer_commit,
+            producer_engine: None,
+            producer_model: None,
+            gate_passed: None,
+            gate_exit_code: None,
+            gate_timed_out: false,
+            gate_duration_ms: None,
+            gate_output_excerpt: None,
+            verifier_task_id: verifier_task_id.map(str::to_string),
+            verifier_engine: None,
+            verifier_model: None,
+            verifier_orthogonal: None,
+            verdict: None,
+            reason: None,
+            blocking_points: Vec::new(),
+            blocking_fingerprint: None,
+            started_at: Some(10),
+            finished_at: None,
+        }
     }
 
     #[test]
@@ -2566,36 +3746,48 @@ mod tests {
             step_id: "build-review".into(),
             depends_on: vec![],
             pass_dependency_results: true,
+            when: GraphStepCondition::AllSucceeded,
+            when_outcomes: Vec::new(),
             delegation: sample_auto("impl"),
             convergence: Some(GraphConvergenceLoop {
                 verify: sample_auto("review"),
                 max_iterations,
                 stop_on_stagnation,
+                gate: None,
+                escalation: None,
+                different_provider: false,
             }),
             convergence_state: Some(NativeGraphConvergenceState {
                 current_iteration: 1,
                 max_iterations,
+                total_max_iterations: max_iterations,
                 stop_on_stagnation,
                 phase: "verifying".into(),
+                escalation_tier: 0,
+                tier_escalated: false,
+                escalated_from_reason: None,
                 producer_task_id: Some("prod-1".into()),
+                prior_producer_task_ids: Vec::new(),
                 producer_expected_round: 1,
                 verifier_task_id: Some("ver-1".into()),
                 last_producer_commit: Some("a".repeat(40)),
                 last_blocking_fingerprint: None,
+                seen_commits: vec!["a".repeat(40)],
+                seen_blocking_fingerprints: Vec::new(),
+                gate_runs: 0,
+                gate_failures: 0,
+                gate_saved_verifier_calls: 0,
+                stagnation_saved_iterations: 0,
+                metrics_recorded: false,
                 outcome: None,
-                iterations: vec![NativeGraphConvergenceIteration {
-                    iteration: 1,
-                    producer_task_id: Some("prod-1".into()),
-                    producer_round: 1,
-                    producer_commit: Some("a".repeat(40)),
-                    verifier_task_id: Some("ver-1".into()),
-                    verdict: None,
-                    reason: None,
-                    blocking_points: Vec::new(),
-                    blocking_fingerprint: None,
-                    started_at: Some(10),
-                    finished_at: None,
-                }],
+                iterations: vec![mk_test_iter(
+                    1,
+                    0,
+                    "prod-1",
+                    1,
+                    Some("a".repeat(40)),
+                    Some("ver-1"),
+                )],
             }),
             state: "running".into(),
             task_id: Some("ver-1".into()),
@@ -2627,19 +3819,14 @@ mod tests {
             .as_mut()
             .unwrap()
             .iterations
-            .push(NativeGraphConvergenceIteration {
-                iteration: 2,
-                producer_task_id: Some("prod-1".into()),
-                producer_round: 2,
-                producer_commit: Some("b".repeat(40)),
-                verifier_task_id: Some("ver-2".into()),
-                verdict: None,
-                reason: None,
-                blocking_points: Vec::new(),
-                blocking_fingerprint: None,
-                started_at: Some(25),
-                finished_at: None,
-            });
+            .push(mk_test_iter(
+                2,
+                0,
+                "prod-1",
+                2,
+                Some("b".repeat(40)),
+                Some("ver-2"),
+            ));
         apply_verifier_verdict(
             &mut step,
             ParsedVerdict::Approve {
@@ -2669,19 +3856,14 @@ mod tests {
             .as_mut()
             .unwrap()
             .iterations
-            .push(NativeGraphConvergenceIteration {
-                iteration: 2,
-                producer_task_id: Some("prod-1".into()),
-                producer_round: 2,
-                producer_commit: Some("c".repeat(40)),
-                verifier_task_id: Some("ver-2".into()),
-                verdict: None,
-                reason: None,
-                blocking_points: Vec::new(),
-                blocking_fingerprint: None,
-                started_at: Some(25),
-                finished_at: None,
-            });
+            .push(mk_test_iter(
+                2,
+                0,
+                "prod-1",
+                2,
+                Some("c".repeat(40)),
+                Some("ver-2"),
+            ));
         apply_verifier_verdict(&mut stag, same_revise, 30);
         assert_eq!(stag.state, "failed");
         assert_eq!(
@@ -2773,6 +3955,8 @@ mod tests {
                     step_id: "A".into(),
                     depends_on: vec![],
                     pass_dependency_results: true,
+                    when: GraphStepCondition::AllSucceeded,
+                    when_outcomes: Vec::new(),
                     delegation: sample_auto("prep"),
                     convergence: None,
                     convergence_state: None,
@@ -2794,6 +3978,8 @@ mod tests {
                     step_id: "D".into(),
                     depends_on: vec!["B".into()],
                     pass_dependency_results: true,
+                    when: GraphStepCondition::AllSucceeded,
+                    when_outcomes: Vec::new(),
                     delegation: sample_auto("deploy"),
                     convergence: None,
                     convergence_state: None,
@@ -2863,5 +4049,366 @@ mod tests {
                 .unwrap()
                 .contains("commit identique")
         );
+    }
+
+    #[test]
+    fn spec314_gate_escalation_anti_oscillation_and_fallback_branches() {
+        use crate::deterministic_gate::GateExecOutput;
+
+        let mk_conv_step = |gate: Option<GraphDeterministicGate>,
+                            escalation: Option<GraphConvergenceEscalation>,
+                            max_iterations: u8| NativeGraphStepRecord {
+            step_id: "impl".into(),
+            depends_on: vec![],
+            pass_dependency_results: true,
+            when: GraphStepCondition::AllSucceeded,
+            when_outcomes: Vec::new(),
+            delegation: sample_auto("impl"),
+            convergence: Some(GraphConvergenceLoop {
+                verify: sample_auto("review"),
+                max_iterations,
+                stop_on_stagnation: true,
+                gate,
+                escalation,
+                different_provider: true,
+            }),
+            convergence_state: Some(NativeGraphConvergenceState {
+                current_iteration: 1,
+                max_iterations,
+                total_max_iterations: max_iterations,
+                stop_on_stagnation: true,
+                phase: "producing".into(),
+                escalation_tier: 0,
+                tier_escalated: false,
+                escalated_from_reason: None,
+                producer_task_id: Some("prod-t0".into()),
+                prior_producer_task_ids: Vec::new(),
+                producer_expected_round: 1,
+                verifier_task_id: None,
+                last_producer_commit: None,
+                last_blocking_fingerprint: None,
+                seen_commits: Vec::new(),
+                seen_blocking_fingerprints: Vec::new(),
+                gate_runs: 0,
+                gate_failures: 0,
+                gate_saved_verifier_calls: 0,
+                stagnation_saved_iterations: 0,
+                metrics_recorded: false,
+                outcome: None,
+                iterations: vec![mk_test_iter(1, 0, "prod-t0", 1, None, None)],
+            }),
+            state: "running".into(),
+            task_id: Some("prod-t0".into()),
+            error: None,
+            result_excerpt: None,
+            factual_summary: None,
+            started_at: Some(10),
+            finished_at: None,
+        };
+
+        // 1) Porte déterministe : échec tour 1 (0 appel vérificateur) -> reprise -> réussite tour 2 -> pending_verify.
+        let gate_cfg = GraphDeterministicGate {
+            argv: vec!["cargo".into(), "test".into()],
+            timeout_secs: 60,
+        };
+        let mut s = mk_conv_step(Some(gate_cfg.clone()), None, 3);
+        apply_producer_iteration_result(
+            &mut s,
+            1,
+            Some("1".repeat(40)),
+            Some("v1".into()),
+            json!({"commit": "1".repeat(40)}),
+            20,
+        );
+        assert_eq!(s.convergence_state.as_ref().unwrap().phase, "pending_gate");
+        apply_gate_result(
+            &mut s,
+            GateExecOutput {
+                passed: false,
+                exit_code: Some(101),
+                timed_out: false,
+                duration_ms: 420,
+                output_excerpt: "test foo FAILED in 0.42s".into(),
+                unavailable_reason: None,
+            },
+            21,
+        );
+        let cs = s.convergence_state.as_ref().unwrap();
+        assert_eq!(cs.phase, "pending_produce");
+        assert_eq!(cs.current_iteration, 2);
+        assert_eq!(cs.gate_runs, 1);
+        assert_eq!(cs.gate_failures, 1);
+        assert_eq!(cs.gate_saved_verifier_calls, 1);
+        // Tour 2 : nouveau commit -> porte verte -> pending_verify.
+        s.convergence_state.as_mut().unwrap().phase = "producing".into();
+        s.convergence_state
+            .as_mut()
+            .unwrap()
+            .iterations
+            .push(mk_test_iter(2, 0, "prod-t0", 2, None, None));
+        apply_producer_iteration_result(
+            &mut s,
+            2,
+            Some("2".repeat(40)),
+            Some("v2".into()),
+            json!({"commit": "2".repeat(40)}),
+            35,
+        );
+        assert_eq!(s.convergence_state.as_ref().unwrap().phase, "pending_gate");
+        apply_gate_result(
+            &mut s,
+            GateExecOutput {
+                passed: true,
+                exit_code: Some(0),
+                timed_out: false,
+                duration_ms: 310,
+                output_excerpt: "ok".into(),
+                unavailable_reason: None,
+            },
+            36,
+        );
+        assert_eq!(
+            s.convergence_state.as_ref().unwrap().phase,
+            "pending_verify"
+        );
+        assert_eq!(s.convergence_state.as_ref().unwrap().gate_runs, 2);
+        assert_eq!(s.convergence_state.as_ref().unwrap().gate_failures, 1);
+
+        // 2) Porte indisponible (fail-closed) -> outcome = gate_unavailable.
+        let mut s_unavail = mk_conv_step(Some(gate_cfg.clone()), None, 3);
+        apply_producer_iteration_result(&mut s_unavail, 1, None, None, json!({}), 20);
+        assert_eq!(s_unavail.state, "failed");
+        assert_eq!(
+            s_unavail
+                .convergence_state
+                .as_ref()
+                .unwrap()
+                .outcome
+                .as_deref(),
+            Some("gate_unavailable")
+        );
+
+        // 3) Anti-oscillation A -> B -> A + Escalade palier 0 -> palier 1 + borne dure.
+        let esc_cfg = GraphConvergenceEscalation {
+            engine: Some("claude".into()),
+            model: Some("claude-opus-4-6".into()),
+            effort: Some("high".into()),
+            machine_id: None,
+            extra_iterations: 2,
+            on_stagnation: true,
+            on_max_iterations: true,
+        };
+        let mut osc = mk_conv_step(None, Some(esc_cfg.clone()), 4);
+        // Tour 1 : commit A -> revise fp1
+        apply_producer_iteration_result(&mut osc, 1, Some("a".repeat(40)), None, json!({}), 15);
+        osc.convergence_state.as_mut().unwrap().phase = "verifying".into();
+        apply_verifier_verdict(
+            &mut osc,
+            parse_convergence_verdict(
+                "{\"verdict\":\"revise\",\"reason\":\"r1\",\"blocking_points\":[\"p1\"]}",
+            ),
+            20,
+        );
+        // Tour 2 : commit B -> revise fp2
+        osc.convergence_state.as_mut().unwrap().phase = "producing".into();
+        apply_producer_iteration_result(&mut osc, 2, Some("b".repeat(40)), None, json!({}), 25);
+        osc.convergence_state.as_mut().unwrap().phase = "verifying".into();
+        apply_verifier_verdict(
+            &mut osc,
+            parse_convergence_verdict(
+                "{\"verdict\":\"revise\",\"reason\":\"r2\",\"blocking_points\":[\"p2\"]}",
+            ),
+            30,
+        );
+        // Tour 3 : retour au commit A (oscillation A->B->A) -> déclenche escalade palier 1 !
+        osc.convergence_state.as_mut().unwrap().phase = "producing".into();
+        apply_producer_iteration_result(&mut osc, 3, Some("a".repeat(40)), None, json!({}), 35);
+        assert_eq!(osc.state, "running");
+        let cs_osc = osc.convergence_state.as_ref().unwrap();
+        assert_eq!(cs_osc.escalation_tier, 1);
+        assert!(cs_osc.tier_escalated);
+        assert_eq!(cs_osc.max_iterations, 6);
+        assert_eq!(cs_osc.current_iteration, 4);
+        assert!(cs_osc.producer_task_id.is_none());
+        assert_eq!(cs_osc.prior_producer_task_ids, vec!["prod-t0".to_string()]);
+        assert!(cs_osc.seen_commits.is_empty());
+        assert_eq!(cs_osc.phase, "pending_produce");
+
+        // 4) Verdict verifier == "escalate" court-circuite TOUJOURS l'escalade de modèle !
+        let mut v_esc = mk_conv_step(None, Some(esc_cfg), 3);
+        v_esc.convergence_state.as_mut().unwrap().phase = "verifying".into();
+        apply_verifier_verdict(
+            &mut v_esc,
+            ParsedVerdict::Escalate {
+                reason: "décision métier".into(),
+            },
+            40,
+        );
+        assert_eq!(v_esc.state, "failed");
+        assert!(!v_esc.convergence_state.as_ref().unwrap().tier_escalated);
+        assert_eq!(
+            v_esc.convergence_state.as_ref().unwrap().outcome.as_deref(),
+            Some("escalated")
+        );
+
+        // 5) Validation DAG : cancel_graph + fallback interdit ; cancelled interdit dans when_outcomes.
+        let mut fb_step = sample_step("B_repli", &["A"], "plan B");
+        fb_step.when = GraphStepCondition::OnOutcome;
+        fb_step.when_outcomes = vec!["stagnated".into()];
+        let bad_cancel_req = DelegateGraphRequest {
+            request_id: "r-fb-cancel".into(),
+            title: None,
+            on_failure: GraphFailurePolicy::CancelGraph,
+            notify_policy: GraphNotifyPolicy::OnGraphDoneOrFailure,
+            steps: vec![sample_step("A", &[], "plan A"), fb_step.clone()],
+        };
+        assert_eq!(
+            validate_and_order_graph(&bad_cancel_req).unwrap_err().0,
+            "graph_invalid"
+        );
+        let mut bad_cancelled = fb_step.clone();
+        bad_cancelled.when_outcomes = vec!["cancelled".into()];
+        let bad_cancelled_req = DelegateGraphRequest {
+            request_id: "r-fb-cancelled".into(),
+            title: None,
+            on_failure: GraphFailurePolicy::StopDependents,
+            notify_policy: GraphNotifyPolicy::OnGraphDoneOrFailure,
+            steps: vec![sample_step("A", &[], "plan A"), bad_cancelled],
+        };
+        assert_eq!(
+            validate_and_order_graph(&bad_cancelled_req).unwrap_err().0,
+            "graph_invalid"
+        );
+
+        // 6) Exécution conditionnelle : nominal (A réussit) -> B_repli et son aval C sautés -> graphe completed !
+        let mk_fb_graph = |a_state: &str, a_outcome: Option<&str>| NativeGraphRecord {
+            graph_id: "g-fb".into(),
+            request_id: "r-fb".into(),
+            owner: "o".into(),
+            owner_instance: "i".into(),
+            parent_thread: None,
+            communication_project: Some(bridget_transport::protocol::CommunicationProject {
+                host: "local".into(),
+                root: "bridget".into(),
+            }),
+            attested_permissions: None,
+            title: None,
+            on_failure: GraphFailurePolicy::StopDependents,
+            notify_policy: GraphNotifyPolicy::OnGraphDoneOrFailure,
+            state: "running".into(),
+            topological_order: vec!["A".into(), "B_repli".into(), "C_post_repli".into()],
+            steps: vec![
+                NativeGraphStepRecord {
+                    step_id: "A".into(),
+                    depends_on: vec![],
+                    pass_dependency_results: true,
+                    when: GraphStepCondition::AllSucceeded,
+                    when_outcomes: Vec::new(),
+                    delegation: sample_auto("plan A"),
+                    convergence: None,
+                    convergence_state: a_outcome.map(|o| NativeGraphConvergenceState {
+                        current_iteration: 2,
+                        max_iterations: 2,
+                        total_max_iterations: 2,
+                        stop_on_stagnation: true,
+                        phase: "done".into(),
+                        escalation_tier: 0,
+                        tier_escalated: false,
+                        escalated_from_reason: None,
+                        producer_task_id: None,
+                        prior_producer_task_ids: Vec::new(),
+                        producer_expected_round: 1,
+                        verifier_task_id: None,
+                        last_producer_commit: None,
+                        last_blocking_fingerprint: None,
+                        seen_commits: Vec::new(),
+                        seen_blocking_fingerprints: Vec::new(),
+                        gate_runs: 0,
+                        gate_failures: 0,
+                        gate_saved_verifier_calls: 0,
+                        stagnation_saved_iterations: 0,
+                        metrics_recorded: false,
+                        outcome: Some(o.into()),
+                        iterations: Vec::new(),
+                    }),
+                    state: a_state.into(),
+                    task_id: Some("t-a".into()),
+                    error: (a_state == "failed").then(|| "stagnation".into()),
+                    result_excerpt: None,
+                    factual_summary: None,
+                    started_at: Some(1),
+                    finished_at: Some(5),
+                },
+                NativeGraphStepRecord {
+                    step_id: "B_repli".into(),
+                    depends_on: vec!["A".into()],
+                    pass_dependency_results: true,
+                    when: GraphStepCondition::OnOutcome,
+                    when_outcomes: vec!["stagnated".into()],
+                    delegation: sample_auto("plan B"),
+                    convergence: None,
+                    convergence_state: None,
+                    state: "waiting_dependencies".into(),
+                    task_id: None,
+                    error: None,
+                    result_excerpt: None,
+                    factual_summary: None,
+                    started_at: None,
+                    finished_at: None,
+                },
+                NativeGraphStepRecord {
+                    step_id: "C_post_repli".into(),
+                    depends_on: vec!["B_repli".into()],
+                    pass_dependency_results: true,
+                    when: GraphStepCondition::AllSucceeded,
+                    when_outcomes: Vec::new(),
+                    delegation: sample_auto("post repli"),
+                    convergence: None,
+                    convergence_state: None,
+                    state: "waiting_dependencies".into(),
+                    task_id: None,
+                    error: None,
+                    result_excerpt: None,
+                    factual_summary: None,
+                    started_at: None,
+                    finished_at: None,
+                },
+            ],
+            canonical: vec![1],
+            notice_sent: false,
+            created_at: 1,
+            updated_at: 5,
+        };
+
+        let mut g_nom = mk_fb_graph("completed", None);
+        propagate_graph_state(&mut g_nom, 10);
+        assert_eq!(g_nom.steps[1].state, "skipped_condition_not_met");
+        assert_eq!(g_nom.steps[2].state, "skipped_condition_not_met");
+        assert_eq!(g_nom.state, "completed");
+
+        // A échoue sur stagnated -> B_repli devient prêt ! Une fois B_repli + C_post_repli terminés,
+        // le graphe termine en partial_failure avec fallback_recovered=true.
+        let mut g_fb = mk_fb_graph("failed", Some("stagnated"));
+        propagate_graph_state(&mut g_fb, 10);
+        assert_eq!(ready_waiting_steps(&g_fb), vec!["B_repli"]);
+        let enriched = build_enriched_step_task(&g_fb.steps[1], &g_fb.steps);
+        assert!(enriched.contains("outcome=stagnated"));
+        assert!(enriched.contains("Erreur : stagnation"));
+        g_fb.steps[1].state = "completed".into();
+        g_fb.steps[2].state = "completed".into();
+        propagate_graph_state(&mut g_fb, 20);
+        assert_eq!(g_fb.state, "partial_failure");
+        let view = graph_view(&g_fb);
+        assert_eq!(view["fallback_recovered"], true);
+        assert_eq!(view["counts"]["fallback_steps_completed"], 1);
+
+        // Annulation humaine de A ne déclenche JAMAIS B_repli (even with AnyFailed).
+        let mut g_cancel = mk_fb_graph("cancelled", None);
+        g_cancel.steps[1].when = GraphStepCondition::AnyFailed;
+        g_cancel.steps[1].when_outcomes.clear();
+        propagate_graph_state(&mut g_cancel, 10);
+        assert!(ready_waiting_steps(&g_cancel).is_empty());
+        assert_eq!(g_cancel.steps[1].state, "skipped_condition_not_met");
+        assert_eq!(g_cancel.steps[2].state, "skipped_condition_not_met");
     }
 }

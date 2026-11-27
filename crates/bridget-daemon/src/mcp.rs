@@ -2945,7 +2945,7 @@ fn compact_tool_description(name: &str, raw: &str) -> String {
         "bridget_auto_delegate" => "Déléguer (flotte V2).".to_owned(),
         "bridget_delegate" => "Déléguer (explicite).".to_owned(),
         "bridget_delegate_graph" => {
-            "DAG 1-16 étapes + convergence bornée (verify, max_iterations 2..5).".to_owned()
+            "DAG 1-16 étapes + convergence (gate, escalation, verify, when).".to_owned()
         }
         _ => truncate_compact_description(raw, 128),
     }
@@ -2953,9 +2953,9 @@ fn compact_tool_description(name: &str, raw: &str) -> String {
 
 fn compact_field_hint(tool_name: &str, field: &str) -> Option<&'static str> {
     match (tool_name, field) {
-        ("bridget_delegate_graph", "steps") => {
-            Some("[{step_id,depends_on?,delegation,convergence?:{verify,max_iterations?:2..5}}]")
-        }
+        ("bridget_delegate_graph", "steps") => Some(
+            "[{step_id,depends_on?,when?,when_outcomes?,delegation,convergence?:{verify,gate?,escalation?,different_provider?,max_iterations?:2..5}}]",
+        ),
         ("bridget_task_continue", "brief") => Some(
             "Objet fermé : objective et summary (requis), results, decisions, questions, next_step, references, limitations.",
         ),

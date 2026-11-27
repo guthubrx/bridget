@@ -2027,6 +2027,61 @@ pub enum NativeDelegationRequest {
     GraphCancel {
         graph_id: String,
     },
+    /// Lecture des métriques de convergence (brutes + agrégats journaliers/mensuels).
+    GraphMetrics {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        project: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        window_days: Option<u32>,
+    },
+    /// Lecture ou mise à jour de la politique de rétention/rollup Time-Machine des métriques.
+    GraphMetricsPolicy {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        update: Option<ConvergenceMetricsPolicyUpdate>,
+        #[serde(default)]
+        run_now: bool,
+    },
+}
+
+/// Politique paramétrable de rétention et d'auto-agrégation multi-paliers façon Time Machine.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ConvergenceMetricsPolicy {
+    pub raw_retention_days: u32,
+    pub daily_retention_days: u32,
+    pub monthly_retention_months: u32,
+    pub graph_retention_days: u32,
+    pub max_raw_rows: u32,
+    pub updated_at: i64,
+}
+
+impl Default for ConvergenceMetricsPolicy {
+    fn default() -> Self {
+        Self {
+            raw_retention_days: 30,
+            daily_retention_days: 180,
+            monthly_retention_months: 24,
+            graph_retention_days: 30,
+            max_raw_rows: 10_000,
+            updated_at: 0,
+        }
+    }
+}
+
+/// Mise à jour partielle de la politique de rétention Time-Machine.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+pub struct ConvergenceMetricsPolicyUpdate {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub raw_retention_days: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub daily_retention_days: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub monthly_retention_months: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub graph_retention_days: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_raw_rows: Option<u32>,
 }
 
 /// Politique de gestion d'échec dans un graphe de missions Bridget.
@@ -2057,23 +2112,94 @@ pub enum GraphNotifyPolicy {
 pub const MIN_CONVERGENCE_ITERATIONS: u8 = 2;
 pub const DEFAULT_CONVERGENCE_ITERATIONS: u8 = 3;
 pub const MAX_CONVERGENCE_ITERATIONS: u8 = 5;
+pub const MAX_TOTAL_CONVERGENCE_ITERATIONS: u8 = 8;
+pub const MIN_ESCALATION_EXTRA_ITERATIONS: u8 = 1;
+pub const DEFAULT_ESCALATION_EXTRA_ITERATIONS: u8 = 2;
+pub const MAX_ESCALATION_EXTRA_ITERATIONS: u8 = 3;
+pub const MIN_GATE_TIMEOUT_SECS: u64 = 5;
+pub const DEFAULT_GATE_TIMEOUT_SECS: u64 = 120;
+pub const MAX_GATE_TIMEOUT_SECS: u64 = 300;
+pub const MAX_GATE_ARGV: usize = 32;
+pub const MAX_GATE_ARG_BYTES: usize = 1024;
+pub const MAX_GATE_OUTPUT_BYTES: usize = 8192;
 
 fn default_convergence_max_iterations() -> u8 {
     DEFAULT_CONVERGENCE_ITERATIONS
 }
 
-/// Boucle de convergence bornée encapsulée dans une étape d'un DAG (`produce <-> verify`).
+fn default_gate_timeout_secs() -> u64 {
+    DEFAULT_GATE_TIMEOUT_SECS
+}
+
+fn default_escalation_extra_iterations() -> u8 {
+    DEFAULT_ESCALATION_EXTRA_ITERATIONS
+}
+
+/// Porte déterministe exécutée à 0 token dans le worktree attesté du producteur
+/// avant tout appel au vérificateur LLM (argv strict sans shell).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GraphDeterministicGate {
+    pub argv: Vec<String>,
+    #[serde(default = "default_gate_timeout_secs")]
+    pub timeout_secs: u64,
+}
+
+/// Escalade de modèle/moteur/effort intra-étape (palier 1 -> palier 2 borné)
+/// lorsque le palier initial stagne, oscille ou atteint son plafond.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GraphConvergenceEscalation {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub engine: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effort: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub machine_id: Option<String>,
+    #[serde(default = "default_escalation_extra_iterations")]
+    pub extra_iterations: u8,
+    #[serde(default = "default_true")]
+    pub on_stagnation: bool,
+    #[serde(default = "default_true")]
+    pub on_max_iterations: bool,
+}
+
+/// Boucle de convergence bornée encapsulée dans une étape d'un DAG (`produce <-> [gate] <-> verify`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct GraphConvergenceLoop {
     /// Délégation du vérificateur indépendant exécuté après chaque itération du producteur.
     pub verify: AutoDelegateV2,
-    /// Plafond strict d'itérations (`2..=5`, défaut `3`).
+    /// Porte déterministe optionnelle (0 token) exécutée avant le vérificateur LLM.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gate: Option<GraphDeterministicGate>,
+    /// Escalade optionnelle vers un palier supérieur (modèle/moteur/effort) sur blocage.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub escalation: Option<GraphConvergenceEscalation>,
+    /// Demande au routeur de privilégier un fournisseur différent du producteur pour `verify`.
+    #[serde(default)]
+    pub different_provider: bool,
+    /// Plafond strict d'itérations du palier initial (`2..=5`, défaut `3`).
     #[serde(default = "default_convergence_max_iterations")]
     pub max_iterations: u8,
-    /// Arrêt anticipé dès que 2 tours consécutifs stagnent (même commit ou mêmes motifs bloquants).
+    /// Arrêt anticipé (ou escalade) dès que stagnation ou oscillation `A->B->A` est détectée.
     #[serde(default = "default_true")]
     pub stop_on_stagnation: bool,
+}
+
+/// Condition de déclenchement d'une étape aval dans un DAG Bridget (branches de repli).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum GraphStepCondition {
+    /// Toutes les dépendances doivent être `completed` (comportement par défaut).
+    #[default]
+    AllSucceeded,
+    /// Au moins une dépendance terminale a échoué (hors annulation humaine).
+    AnyFailed,
+    /// Au moins une dépendance terminale a fini avec un motif présent dans `when_outcomes`.
+    OnOutcome,
 }
 
 /// Étape déclarée dans un graphe de missions Bridget (`bridget_delegate_graph`).
@@ -2083,12 +2209,18 @@ pub struct DelegateGraphStep {
     pub step_id: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub depends_on: Vec<String>,
+    /// Condition de déclenchement sur les dépendances (`all_succeeded` par défaut).
+    #[serde(default)]
+    pub when: GraphStepCondition,
+    /// Liste de motifs ciblés (requis uniquement quand `when == on_outcome`, excluant `cancelled`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub when_outcomes: Vec<String>,
     /// Si vrai (défaut), Bridget préfixe la consigne de cette étape par un bloc court
     /// factuel résumant les étapes préalables terminées (`task_id`, commit, fichiers, résumé).
     #[serde(default = "default_true")]
     pub pass_dependency_results: bool,
     pub delegation: AutoDelegateV2,
-    /// Boucle de convergence bornée optionnelle (`produce <-> verify`).
+    /// Boucle de convergence bornée optionnelle (`produce <-> [gate] <-> verify`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub convergence: Option<GraphConvergenceLoop>,
 }
@@ -3923,6 +4055,14 @@ pub enum WorkerRequestOperation {
         execution: WorkerResultIdentity,
         path: String,
     },
+    /// Exécution d'une porte déterministe (`argv` sans shell) dans le worktree attesté
+    /// d'une tâche productrice de convergence bornée (Spec 314).
+    RunDeterministicGate {
+        execution: WorkerResultIdentity,
+        expected_commit: String,
+        argv: Vec<String>,
+        timeout_secs: u64,
+    },
     /// Une enveloppe de diagnostic seulement, jamais une nouvelle autorité.
     PrepareDiagnosed {
         prepare: Box<WorkerRequestOperation>,
@@ -4010,6 +4150,16 @@ pub enum WorkerResponseOperation {
         available: bool,
         reason: Option<WorkerRefusal>,
         failure: Option<CommitViewFailure>,
+    },
+    DeterministicGateResult {
+        execution: WorkerResultIdentity,
+        passed: bool,
+        exit_code: Option<i32>,
+        timed_out: bool,
+        duration_ms: u64,
+        output_excerpt: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reason: Option<String>,
     },
     CommitViewRejected {
         reason: WorkerRefusal,
@@ -4415,6 +4565,27 @@ impl WorkerRequest {
                 execution.validate()?;
                 worker_require(execution.command == self.command && commit_view_file_path(path))
             }
+            WorkerRequestOperation::RunDeterministicGate {
+                execution,
+                expected_commit,
+                argv,
+                timeout_secs,
+            } => {
+                execution.validate()?;
+                worker_require(
+                    execution.command == self.command
+                        && expected_commit.len() == 40
+                        && expected_commit.bytes().all(|b| b.is_ascii_hexdigit())
+                        && !argv.is_empty()
+                        && argv.len() <= MAX_GATE_ARGV
+                        && !argv[0].trim().is_empty()
+                        && argv.iter().all(|a| {
+                            a.len() <= MAX_GATE_ARG_BYTES
+                                && !a.chars().any(bridget_core::is_disallowed_control)
+                        })
+                        && (MIN_GATE_TIMEOUT_SECS..=MAX_GATE_TIMEOUT_SECS).contains(timeout_secs),
+                )
+            }
             WorkerRequestOperation::ConserveCommitView { prepare_digest } => {
                 worker_require(worker_digest(prepare_digest))
             }
@@ -4658,6 +4829,24 @@ impl WorkerResponse {
                         .ok_or(WorkerRefusal::InvalidEnvelope)?
                         .validate(reason)
                 }
+            }
+            WorkerResponseOperation::DeterministicGateResult {
+                execution,
+                passed: _,
+                exit_code: _,
+                timed_out: _,
+                duration_ms: _,
+                output_excerpt,
+                reason,
+            } => {
+                execution.validate()?;
+                worker_require(
+                    execution.command == self.command
+                        && output_excerpt.len() <= MAX_GATE_OUTPUT_BYTES + 256
+                        && reason
+                            .as_ref()
+                            .is_none_or(|r| !r.is_empty() && r.len() <= 512),
+                )
             }
             WorkerResponseOperation::CommitViewRejected { reason, failure } => {
                 failure.validate(*reason)

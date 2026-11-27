@@ -152,6 +152,9 @@ fn command_requires_principal(command: &str, subcommand: Option<&str>) -> bool {
             Some("status" | "plan" | "acquire" | "renew" | "release")
         );
     }
+    if command == "graphs" {
+        return !matches!(subcommand, Some("metrics"));
+    }
     !matches!(
         command,
         "daemon"
@@ -556,6 +559,7 @@ fn run_with_args(args: Vec<String>) {
                 crate::cli_table::exit(1);
             }
         },
+        "graphs" => cmd_graphs(&args[2..]),
         "version" | "--version" | "-v" => {
             println!("bridget {}", env!("CARGO_PKG_VERSION"));
         }
@@ -2614,6 +2618,264 @@ fn parse_delegate_grant(
         posture.ok_or("--posture est obligatoire")?,
         revoke,
     ))
+}
+
+const GRAPHS_CLI_USAGE: &str = "\
+usage:
+  bridget graphs metrics [--project NOM] [--window JOURS] [--json]
+  bridget graphs metrics-policy [--raw-days N] [--daily-days N] [--monthly-months N] [--graph-days N] [--max-raw-rows N] [--run-now] [--json]";
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ParsedGraphsCli {
+    Metrics {
+        project: Option<String>,
+        window_days: Option<u32>,
+        as_json: bool,
+    },
+    MetricsPolicy {
+        update: Option<bridget_transport::protocol::ConvergenceMetricsPolicyUpdate>,
+        run_now: bool,
+        as_json: bool,
+    },
+}
+
+fn parse_graphs_cli(args: &[String]) -> Result<ParsedGraphsCli, String> {
+    let Some((sub, rest)) = args.split_first() else {
+        return Err(GRAPHS_CLI_USAGE.into());
+    };
+    let next_u32 = |flag: &str, slice: &[String], idx: &mut usize| -> Result<u32, String> {
+        *idx += 1;
+        let raw = slice
+            .get(*idx)
+            .ok_or_else(|| format!("{flag} attend un entier positif"))?;
+        raw.parse::<u32>()
+            .map_err(|_| format!("{flag} attend un entier positif (reçu '{raw}')"))
+    };
+    match sub.as_str() {
+        "metrics" => {
+            let mut project = None;
+            let mut window_days = None;
+            let mut as_json = false;
+            let mut idx = 0;
+            while idx < rest.len() {
+                match rest[idx].as_str() {
+                    "--project" => {
+                        idx += 1;
+                        let val = rest
+                            .get(idx)
+                            .ok_or("--project attend un nom de projet")?
+                            .trim()
+                            .to_string();
+                        if val.is_empty() {
+                            return Err("--project ne peut pas être vide".into());
+                        }
+                        project = Some(val);
+                    }
+                    "--window" => {
+                        let days = next_u32("--window", rest, &mut idx)?;
+                        if days == 0 || days > 3650 {
+                            return Err("--window doit être compris entre 1 et 3650 jours".into());
+                        }
+                        window_days = Some(days);
+                    }
+                    "--json" => as_json = true,
+                    other => {
+                        return Err(format!(
+                            "graphs metrics : argument inconnu '{other}'\n{GRAPHS_CLI_USAGE}"
+                        ));
+                    }
+                }
+                idx += 1;
+            }
+            Ok(ParsedGraphsCli::Metrics {
+                project,
+                window_days,
+                as_json,
+            })
+        }
+        "metrics-policy" => {
+            let mut patch = bridget_transport::protocol::ConvergenceMetricsPolicyUpdate::default();
+            let mut has_patch = false;
+            let mut run_now = false;
+            let mut as_json = false;
+            let mut idx = 0;
+            while idx < rest.len() {
+                match rest[idx].as_str() {
+                    "--raw-days" => {
+                        patch.raw_retention_days = Some(next_u32("--raw-days", rest, &mut idx)?);
+                        has_patch = true;
+                    }
+                    "--daily-days" => {
+                        patch.daily_retention_days =
+                            Some(next_u32("--daily-days", rest, &mut idx)?);
+                        has_patch = true;
+                    }
+                    "--monthly-months" => {
+                        patch.monthly_retention_months =
+                            Some(next_u32("--monthly-months", rest, &mut idx)?);
+                        has_patch = true;
+                    }
+                    "--graph-days" => {
+                        patch.graph_retention_days =
+                            Some(next_u32("--graph-days", rest, &mut idx)?);
+                        has_patch = true;
+                    }
+                    "--max-raw-rows" => {
+                        patch.max_raw_rows = Some(next_u32("--max-raw-rows", rest, &mut idx)?);
+                        has_patch = true;
+                    }
+                    "--run-now" => run_now = true,
+                    "--json" => as_json = true,
+                    other => {
+                        return Err(format!(
+                            "graphs metrics-policy : argument inconnu '{other}'\n{GRAPHS_CLI_USAGE}"
+                        ));
+                    }
+                }
+                idx += 1;
+            }
+            Ok(ParsedGraphsCli::MetricsPolicy {
+                update: has_patch.then_some(patch),
+                run_now,
+                as_json,
+            })
+        }
+        other => Err(format!(
+            "graphs : sous-commande inconnue '{other}'\n{GRAPHS_CLI_USAGE}"
+        )),
+    }
+}
+
+fn cmd_graphs(args: &[String]) {
+    let parsed = parse_graphs_cli(args).unwrap_or_else(|error| exit_argument_error(&error));
+    let (request, as_json) = match parsed {
+        ParsedGraphsCli::Metrics {
+            project,
+            window_days,
+            as_json,
+        } => (
+            bridget_transport::protocol::NativeDelegationRequest::GraphMetrics {
+                project,
+                window_days,
+            },
+            as_json,
+        ),
+        ParsedGraphsCli::MetricsPolicy {
+            update,
+            run_now,
+            as_json,
+        } => (
+            bridget_transport::protocol::NativeDelegationRequest::GraphMetricsPolicy {
+                update,
+                run_now,
+            },
+            as_json,
+        ),
+    };
+    match send_control_request(WrapperToDaemon::NativeDelegation { request }) {
+        Ok(DaemonToWrapper::NativeDelegationResult { result }) => {
+            if result.get("status").and_then(serde_json::Value::as_str) != Some("ok") {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&result).unwrap_or_else(|_| result.to_string())
+                );
+                crate::cli_table::exit(1);
+            }
+            if as_json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&result).unwrap_or_else(|_| result.to_string())
+                );
+                return;
+            }
+            if let Some(report) = result.get("report") {
+                let totals = &report["totals"];
+                let total = totals["steps"].as_u64().unwrap_or(0);
+                let approved = totals["approved"].as_u64().unwrap_or(0);
+                let rate = totals["approval_rate_pct"].as_u64().unwrap_or(0);
+                let iters = totals["total_iterations"].as_u64().unwrap_or(0);
+                let avg_it = if total > 0 {
+                    iters as f64 / total as f64
+                } else {
+                    0.0
+                };
+                let gate_runs = totals["gate_runs"].as_u64().unwrap_or(0);
+                let gate_saved = totals["gate_saved_verifier_calls"].as_u64().unwrap_or(0);
+                let esc = totals["tier_escalated"].as_u64().unwrap_or(0);
+                let orth = totals["verifier_orthogonal"].as_u64().unwrap_or(0);
+                let stag_saved = totals["stagnation_saved_iterations"].as_u64().unwrap_or(0);
+                let storage = &report["storage"];
+                println!(
+                    "Métriques de convergence Bridget (fenêtre {} j) :",
+                    report["window_days"].as_u64().unwrap_or(30)
+                );
+                println!(
+                    "  Étapes convergées   : {total} (approuvées : {approved}, taux : {rate}%, itérations moy. : {avg_it:.2})"
+                );
+                println!(
+                    "  Portes déterministes: {gate_runs} exécutions, {gate_saved} appel(s) vérificateur LLM épargné(s)"
+                );
+                println!(
+                    "  Escalades palier 1  : {esc} · Vérificateurs orthogonaux : {orth} · Itérations épargnées (stagnation) : {stag_saved}"
+                );
+                println!(
+                    "  Stockage SQLite     : raw={} · daily={} · monthly={}",
+                    storage["raw_rows"].as_u64().unwrap_or(0),
+                    storage["daily_rows"].as_u64().unwrap_or(0),
+                    storage["monthly_rows"].as_u64().unwrap_or(0)
+                );
+                if let Some(outcomes) = report["outcomes"].as_object()
+                    && !outcomes.is_empty()
+                {
+                    println!("  Par issue :");
+                    for (outcome, count) in outcomes {
+                        println!("    - {:24} : {}", outcome, count.as_u64().unwrap_or(0));
+                    }
+                }
+            } else if let Some(policy) = result.get("policy") {
+                println!("Politique Time-Machine de rétention / agrégation des graphes :");
+                println!(
+                    "  Brut (raw)             : {} jour(s) (plafond {} lignes)",
+                    policy["raw_retention_days"].as_u64().unwrap_or(0),
+                    policy["max_raw_rows"].as_u64().unwrap_or(0)
+                );
+                println!(
+                    "  Journalier (daily)     : {} jour(s)",
+                    policy["daily_retention_days"].as_u64().unwrap_or(0)
+                );
+                println!(
+                    "  Mensuel (monthly)      : {} mois",
+                    policy["monthly_retention_months"].as_u64().unwrap_or(0)
+                );
+                println!(
+                    "  Graphes terminaux      : {} jour(s)",
+                    policy["graph_retention_days"].as_u64().unwrap_or(0)
+                );
+                if let Some(rollup) = result.get("rollup").filter(|v| !v.is_null()) {
+                    println!(
+                        "  Agrégation exécutée    : raw->daily={}, daily->monthly={}, monthly_purged={}, graphs_purged={}",
+                        rollup["raw_rolled_to_daily"].as_u64().unwrap_or(0),
+                        rollup["daily_rolled_to_monthly"].as_u64().unwrap_or(0),
+                        rollup["monthly_purged"].as_u64().unwrap_or(0),
+                        rollup["graphs_purged"].as_u64().unwrap_or(0),
+                    );
+                }
+            } else {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&result).unwrap_or_else(|_| result.to_string())
+                );
+            }
+        }
+        Ok(other) => {
+            eprintln!("bridget graphs : réponse inattendue : {other:?}");
+            crate::cli_table::exit(1);
+        }
+        Err(error) => {
+            eprintln!("bridget graphs : daemon indisponible : {error}");
+            crate::cli_table::exit(1);
+        }
+    }
 }
 
 fn cmd_delegate_grant(args: &[String]) {
@@ -9468,5 +9730,71 @@ mod message244_tests {
             super::filter_who_agents(vec![stopped_uuid, active_uuid, stopped_named], true);
         assert_eq!(all_hidden, 0);
         assert_eq!(all_visible.len(), 3);
+    }
+
+    #[test]
+    fn spec314_graphs_cli_parses_metrics_and_policy_flags() {
+        let m = super::parse_graphs_cli(&[
+            "metrics".into(),
+            "--project".into(),
+            "bridget".into(),
+            "--window".into(),
+            "30".into(),
+            "--json".into(),
+        ])
+        .unwrap();
+        assert_eq!(
+            m,
+            super::ParsedGraphsCli::Metrics {
+                project: Some("bridget".into()),
+                window_days: Some(30),
+                as_json: true,
+            }
+        );
+
+        let p = super::parse_graphs_cli(&[
+            "metrics-policy".into(),
+            "--raw-days".into(),
+            "14".into(),
+            "--daily-days".into(),
+            "180".into(),
+            "--monthly-months".into(),
+            "24".into(),
+            "--graph-days".into(),
+            "45".into(),
+            "--max-raw-rows".into(),
+            "25000".into(),
+            "--run-now".into(),
+        ])
+        .unwrap();
+        match p {
+            super::ParsedGraphsCli::MetricsPolicy {
+                update: Some(u),
+                run_now,
+                as_json,
+            } => {
+                assert_eq!(u.raw_retention_days, Some(14));
+                assert_eq!(u.daily_retention_days, Some(180));
+                assert_eq!(u.monthly_retention_months, Some(24));
+                assert_eq!(u.graph_retention_days, Some(45));
+                assert_eq!(u.max_raw_rows, Some(25_000));
+                assert!(run_now);
+                assert!(!as_json);
+            }
+            other => panic!("unexpected {other:?}"),
+        }
+
+        assert!(
+            super::parse_graphs_cli(&["metrics".into(), "--window".into(), "0".into()]).is_err()
+        );
+        assert!(super::parse_graphs_cli(&["unknown".into()]).is_err());
+        assert!(!super::command_requires_principal(
+            "graphs",
+            Some("metrics")
+        ));
+        assert!(super::command_requires_principal(
+            "graphs",
+            Some("metrics-policy")
+        ));
     }
 }

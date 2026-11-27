@@ -1492,6 +1492,12 @@ or polling loops:
     outcome, and per-iteration history); the MCP client pre-validates `steps`,
     DAG acyclicity, and `convergence` locally before connecting so invalid calls
     never consume `request_id`.
+- **Adaptive convergence, deterministic gates, escalation, DAG fallbacks & Time-Machine metrics (spec 314):**
+  - **Zero-token deterministic gate (`convergence.gate`):** `{ argv, timeout_secs (5..=300, default 120) }` executed directly without a shell inside the producer's attested worktree (local or remote worker via `RunDeterministicGate`) before `verify`. Requires `development` posture on both parent and step; fails closed (`gate_unavailable`) if the commit is missing or the worktree is dirty or mutated. On non-zero exit or timeout, skips the LLM verifier (`gate_saved_verifier_calls += 1`) and feeds the bounded output straight back to the producer.
+  - **Anti-oscillation & bounded model escalation (`convergence.escalation`):** detects `A -> B -> A` oscillation across all commits and blocking fingerprints seen in the current tier, and allows one bounded escalation to tier 1 (`engine`, `model`, `effort`, `machine_id`, `extra_iterations` `1..=3`, global cap `<= 8`) via a fresh `AutoDelegateV2` anchored on the last commit. A verifier `escalate` verdict always short-circuits tier escalation directly to the parent/human.
+  - **Orthogonal verifier (`convergence.different_provider: true`):** prefers a healthy engine family different from the producer's for `verify`, falling back gracefully if none is available.
+  - **Conditional DAG fallback branches (`steps[j].when`, `when_outcomes`):** `all_succeeded` (default), `any_failed`, or `on_outcome` (`failed`, `stagnated`, `max_iterations_reached`, `escalated`, `gate_unavailable`, `verdict_unparseable`; never `cancelled`). Incompatible with `on_failure: "cancel_graph"`. Unused fallbacks transition to `skipped_condition_not_met` (nominal graphs stay `completed`); a recovered fallback exposes `fallback_recovered: true` and `counts.fallback_steps_completed`.
+  - **Durable SQLite metrics & Time-Machine multi-tier retention:** atomically recorded in the same SQLite transaction as the graph state, then rolled up and purged periodically in `maintain_retention` (`raw -> daily -> monthly -> purge`, plus `max_raw_rows` cap and terminal notified graph purge). Inspected and configured via `bridget graphs metrics` and `bridget graphs metrics-policy`.
 
 ## Default quota resilience, automatic fallback and Cursor ACP
 

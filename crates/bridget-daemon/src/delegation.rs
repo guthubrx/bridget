@@ -1459,6 +1459,7 @@ CREATE TABLE IF NOT EXISTS native_delegation_graph_tasks(
 );
 ")?;
         migrate_auto_admission_receipts_168(&tx)?;
+        crate::convergence_metrics::ensure_schema(&tx)?;
         const LEGACY_INDEX: &str = "CREATE INDEX native_delegations_state ON native_delegations(json_extract(payload,'$.state'))";
         const CURRENT_INDEX: &str = "CREATE INDEX native_delegations_state ON native_delegations(json_extract(payload,'$.state'),coalesce(json_extract(payload,'$.guarded'),0),coalesce(json_extract(payload,'$.cleanup_done'),0),owner_instance)";
         let existing: Option<String> = tx.query_row(
@@ -3214,12 +3215,89 @@ CREATE TABLE IF NOT EXISTS native_delegation_graph_tasks(
         }
         Ok(out)
     }
+
+    /// Persiste atomiquement un graphe et ses nouvelles lignes de métriques de convergence
+    /// dans une seule transaction SQLite (zéro double comptage même après rollup).
+    pub fn save_graph_with_metrics(
+        &self,
+        graph: &NativeGraphRecord,
+        metrics: &[crate::convergence_metrics::ConvergenceMetricRawRow],
+    ) -> Result<(), String> {
+        if metrics.is_empty() {
+            return self.save_graph(graph);
+        }
+        let payload = serde_json::to_string(graph).map_err(|e| e.to_string())?;
+        let tx = rusqlite::Transaction::new_unchecked(
+            &self.conn,
+            rusqlite::TransactionBehavior::Immediate,
+        )
+        .map_err(|e| e.to_string())?;
+        tx.execute(
+            "INSERT INTO native_delegation_graphs
+                (graph_id, owner, owner_instance, request_id, state, canonical, payload, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+             ON CONFLICT(graph_id) DO UPDATE SET
+                state = excluded.state,
+                payload = excluded.payload,
+                updated_at = excluded.updated_at",
+            params![
+                &graph.graph_id,
+                &graph.owner,
+                &graph.owner_instance,
+                &graph.request_id,
+                &graph.state,
+                &graph.canonical,
+                &payload,
+                graph.created_at,
+                graph.updated_at,
+            ],
+        )
+        .map_err(|e| e.to_string())?;
+        for row in metrics {
+            crate::convergence_metrics::insert_raw_in_tx(&tx, row)?;
+        }
+        tx.commit().map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    pub fn load_convergence_metrics_policy(
+        &self,
+    ) -> Result<bridget_transport::protocol::ConvergenceMetricsPolicy, String> {
+        crate::convergence_metrics::load_policy(&self.conn)
+    }
+
+    pub fn update_convergence_metrics_policy(
+        &self,
+        update: &bridget_transport::protocol::ConvergenceMetricsPolicyUpdate,
+        now: i64,
+    ) -> Result<bridget_transport::protocol::ConvergenceMetricsPolicy, String> {
+        crate::convergence_metrics::update_policy(&self.conn, update, now)
+    }
+
+    pub fn rollup_and_purge_convergence_metrics(
+        &mut self,
+        now: i64,
+    ) -> Result<crate::convergence_metrics::ConvergenceMaintenanceReport, String> {
+        crate::convergence_metrics::run_rollup_and_purge(&mut self.conn, now)
+    }
+
+    pub fn query_convergence_metrics(
+        &self,
+        project: Option<&str>,
+        window_days: Option<u32>,
+        now: i64,
+    ) -> Result<serde_json::Value, String> {
+        crate::convergence_metrics::query_metrics_report(&self.conn, project, window_days, now)
+    }
 }
 
-/// Historique durable d'une itération d'une étape de convergence bornée (`produce <-> verify`).
+/// Historique durable d'une itération d'une étape de convergence bornée (`produce <-> [gate] <-> verify`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NativeGraphConvergenceIteration {
     pub iteration: u8,
+    /// Palier d'exécution (`0` = initial, `1` = escaladé).
+    #[serde(default)]
+    pub tier: u8,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub producer_task_id: Option<String>,
     #[serde(default)]
@@ -3227,8 +3305,28 @@ pub struct NativeGraphConvergenceIteration {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub producer_commit: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub producer_engine: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub producer_model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gate_passed: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gate_exit_code: Option<i32>,
+    #[serde(default)]
+    pub gate_timed_out: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gate_duration_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gate_output_excerpt: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub verifier_task_id: Option<String>,
-    /// `approve` | `revise` | `escalate` | `unparseable`
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verifier_engine: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verifier_model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verifier_orthogonal: Option<bool>,
+    /// `approve` | `revise` | `escalate` | `unparseable` | `gate_failed` | `gate_unavailable`
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub verdict: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -3248,11 +3346,24 @@ pub struct NativeGraphConvergenceIteration {
 pub struct NativeGraphConvergenceState {
     pub current_iteration: u8,
     pub max_iterations: u8,
+    /// Plafond courant total (initialement `max_iterations`, augmenté lors d'une escalade, `<= 8`).
+    #[serde(default)]
+    pub total_max_iterations: u8,
     pub stop_on_stagnation: bool,
-    /// `waiting` | `producing` | `verifying` | `done`
+    /// `waiting` | `producing` | `pending_gate` | `running_gate` | `pending_verify` | `launching_verify` | `verifying` | `pending_produce` | `launching_produce` | `done`
     pub phase: String,
+    /// Palier d'escalade courant (`0` = initial, `1` = escaladé).
+    #[serde(default)]
+    pub escalation_tier: u8,
+    /// Vrai si le palier d'escalade de modèle/effort a été déclenché (distinct de `outcome == "escalated"`).
+    #[serde(default)]
+    pub tier_escalated: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub escalated_from_reason: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub producer_task_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub prior_producer_task_ids: Vec<String>,
     #[serde(default)]
     pub producer_expected_round: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -3261,7 +3372,22 @@ pub struct NativeGraphConvergenceState {
     pub last_producer_commit: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_blocking_fingerprint: Option<String>,
-    /// `approved` | `escalated` | `stagnated` | `max_iterations_reached` | `verdict_unparseable` | `failed`
+    /// Empreintes vues dans le palier courant (détection stagnation + oscillation `A->B->A`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub seen_commits: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub seen_blocking_fingerprints: Vec<String>,
+    #[serde(default)]
+    pub gate_runs: u32,
+    #[serde(default)]
+    pub gate_failures: u32,
+    #[serde(default)]
+    pub gate_saved_verifier_calls: u32,
+    #[serde(default)]
+    pub stagnation_saved_iterations: u32,
+    #[serde(default)]
+    pub metrics_recorded: bool,
+    /// `approved` | `escalated` | `stagnated` | `max_iterations_reached` | `gate_unavailable` | `verdict_unparseable` | `failed` | `cancelled`
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub outcome: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -3273,13 +3399,17 @@ pub struct NativeGraphConvergenceState {
 pub struct NativeGraphStepRecord {
     pub step_id: String,
     pub depends_on: Vec<String>,
+    #[serde(default)]
+    pub when: bridget_transport::protocol::GraphStepCondition,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub when_outcomes: Vec<String>,
     pub pass_dependency_results: bool,
     pub delegation: bridget_transport::protocol::AutoDelegateV2,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub convergence: Option<bridget_transport::protocol::GraphConvergenceLoop>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub convergence_state: Option<NativeGraphConvergenceState>,
-    /// `waiting_dependencies` | `launching` | `running` | `completed` | `failed` | `cancelled` | `skipped_dependency_failed`
+    /// `waiting_dependencies` | `launching` | `running` | `completed` | `failed` | `cancelled` | `skipped_dependency_failed` | `skipped_condition_not_met`
     pub state: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub task_id: Option<String>,

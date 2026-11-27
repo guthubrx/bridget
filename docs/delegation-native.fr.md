@@ -2180,6 +2180,12 @@ de veille ni réveil périodique :
     issue et historique détaillé par itération) ; le client MCP pré-valide
     localement `steps`, les cycles DAG et `convergence` avant connexion sans
     consommer `request_id`.
+- **Convergence adaptative, portes déterministes, escalade, replis et métriques Time-Machine (spec 314) :**
+  - **Porte déterministe 0 jeton (`convergence.gate`) :** `{ argv, timeout_secs (5..=300, défaut 120) }` exécutée directement sans shell dans le worktree attesté du producteur (local ou worker distant via `RunDeterministicGate`) avant `verify`. Exige la posture `development` (parent et étape) ; échoue en mode *fail-closed* (`gate_unavailable`) si le commit manque ou si le worktree est sale ou muté. Sur code retour ≠ 0 ou timeout, court-circuite le vérificateur LLM (`gate_saved_verifier_calls += 1`) et renvoie la sortie bornée au producteur.
+  - **Anti-oscillation et escalade de modèle bornée (`convergence.escalation`) :** détecte les cycles `A -> B -> A` (commits et empreintes bloquantes déjà vus dans le palier) et autorise une unique escalade vers un palier 1 (`engine`, `model`, `effort`, `machine_id`, `extra_iterations` `1..=3`, plafond global `<= 8`) via nouvelle session `AutoDelegateV2` ancrée sur le dernier commit. Un verdict vérificateur `escalate` court-circuite toujours cette escalade vers le parent/humain.
+  - **Vérificateur orthogonal (`convergence.different_provider: true`) :** privilégie un moteur fournisseur sain différent de la famille du producteur pour `verify`, avec repli gracieux si indisponible.
+  - **Branches de repli conditionnelles (`steps[j].when`, `when_outcomes`) :** `all_succeeded` (défaut), `any_failed` ou `on_outcome` (`failed`, `stagnated`, `max_iterations_reached`, `escalated`, `gate_unavailable`, `verdict_unparseable` ; jamais `cancelled`). Incompatible avec `on_failure: "cancel_graph"`. Les replis non déclenchés passent `skipped_condition_not_met` (un graphe nominal reste `completed`) ; un repli réussi expose `fallback_recovered: true` et `counts.fallback_steps_completed`.
+  - **Métriques SQLite durables et rétention Time-Machine multi-paliers :** enregistrement atomique (même transaction SQLite que le graphe), puis auto-agrégation et purge périodiques dans `maintain_retention` (`raw -> daily -> monthly -> purge`, plus plafond `max_raw_rows` et purge des graphes terminaux notifiés). Consultables et configurables via `bridget graphs metrics` et `bridget graphs metrics-policy`.
 
 ## Résilience quota par défaut, bascule automatique et Cursor ACP
 

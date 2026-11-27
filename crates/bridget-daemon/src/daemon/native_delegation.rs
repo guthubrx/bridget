@@ -8855,6 +8855,18 @@ fn handle_with_fact_inner(
             let result = super::native_graphs::handle_cancel(conn, &graph_id, thread, state);
             return DaemonToWrapper::NativeDelegationResult { result };
         }
+        NativeDelegationRequest::GraphMetrics {
+            project,
+            window_days,
+        } => {
+            let result =
+                super::native_graphs::handle_metrics(conn, project.as_deref(), window_days, state);
+            DaemonToWrapper::NativeDelegationResult { result }
+        }
+        NativeDelegationRequest::GraphMetricsPolicy { update, run_now } => {
+            let result = super::native_graphs::handle_metrics_policy(conn, update, run_now, state);
+            DaemonToWrapper::NativeDelegationResult { result }
+        }
         other => {
             let request = other;
             return handle_with_fact_inner_core(
@@ -13328,7 +13340,9 @@ fn handle_locked_with_remote_proof(
         | NativeDelegationRequest::Specialists { .. }
         | NativeDelegationRequest::DelegateGraph(_)
         | NativeDelegationRequest::GraphStatus { .. }
-        | NativeDelegationRequest::GraphCancel { .. } => {
+        | NativeDelegationRequest::GraphCancel { .. }
+        | NativeDelegationRequest::GraphMetrics { .. }
+        | NativeDelegationRequest::GraphMetricsPolicy { .. } => {
             unreachable!()
         }
     }
@@ -18476,7 +18490,7 @@ pub(super) fn copy_delivery_acks(st: &DaemonState) -> Result<usize, String> {
 /// Passage d'entretien de la rétention : arbres soldés de plus de 7 jours, puis
 /// purge de borne, puis pierres tombales de plus de 30 jours. Au plus 128 arbres
 /// supprimés par passage, âge et borne cumulés.
-pub(super) fn maintain_retention(st: &DaemonState, now: i64) {
+pub(super) fn maintain_retention(st: &mut DaemonState, now: i64) {
     let max_trees = crate::disk_hygiene::MAX_ENTRIES_PER_PASS;
     let mut trees = purge_retained(st, now, None, max_trees);
     let auto_limit = max_trees.saturating_sub(trees);
@@ -18537,6 +18551,212 @@ pub(super) fn maintain_retention(st: &DaemonState, now: i64) {
         info!(
             "entretien: {pruned_stopped} sous-agent(s) natif(s) arrêté(s) purgé(s) de fleet.json"
         );
+    }
+    match st
+        .delegation_store
+        .rollup_and_purge_convergence_metrics(now)
+    {
+        Ok(report)
+            if report.raw_rolled_to_daily > 0
+                || report.daily_rolled_to_monthly > 0
+                || report.monthly_purged > 0
+                || report.graphs_purged > 0 =>
+        {
+            info!(
+                "entretien: convergence metrics rollup/purge (raw->daily={}, daily->monthly={}, monthly_purged={}, graphs_purged={})",
+                report.raw_rolled_to_daily,
+                report.daily_rolled_to_monthly,
+                report.monthly_purged,
+                report.graphs_purged
+            );
+        }
+        Ok(_) => {}
+        Err(error) => warn!("entretien: convergence metrics rollup/purge : {error}"),
+    }
+}
+
+/// Normalise un nom de moteur / fournisseur vers sa famille canonique pour l'orthogonalité
+/// producteur / vérificateur (`different_provider: true`) et les métriques durables.
+pub(super) fn normalize_engine_family(raw: &str) -> &'static str {
+    let lower = raw.trim().to_ascii_lowercase();
+    if lower.starts_with("claude") || lower.starts_with("anthropic") {
+        "claude"
+    } else if lower.starts_with("codex") || lower.starts_with("openai") {
+        "codex"
+    } else if lower.starts_with("antigravity") || lower.starts_with("gemini") {
+        "antigravity"
+    } else if lower.starts_with("cursor") {
+        "cursor"
+    } else if lower.starts_with("glm") || lower.starts_with("zhipu") {
+        "glm"
+    } else {
+        ""
+    }
+}
+
+/// Sélectionne un moteur orthogonal disponible (non épuisé/bloqué) différent de la famille
+/// productrice pour la vérification croisée (`different_provider: true`).
+/// Repli gracieux : renvoie `None` si aucun autre moteur sain n'est disponible.
+pub(super) fn pick_orthogonal_engine_pub(
+    st: &DaemonState,
+    producer_engine: Option<&str>,
+) -> Option<String> {
+    let prod_family = producer_engine.map(normalize_engine_family).unwrap_or("");
+    let now = unix_timestamp();
+    let mut healthy_families = std::collections::BTreeSet::new();
+
+    if let Ok(defs) = st.registry.resolved_definitions() {
+        for (name, _) in defs {
+            let fam = normalize_engine_family(&name);
+            if fam.is_empty() || fam == prod_family {
+                continue;
+            }
+            let blocked = st
+                .provider_limits
+                .quota(&name, now)
+                .is_some_and(|q| q.launch_blocked || q.exhausted);
+            if !blocked {
+                healthy_families.insert(fam);
+            }
+        }
+    }
+    for worker in st.remote_workers.values() {
+        for key in worker.catalogues.keys() {
+            let fam = normalize_engine_family(key);
+            if fam.is_empty() || fam == prod_family {
+                continue;
+            }
+            let blocked = st
+                .provider_limits
+                .quota(fam, now)
+                .is_some_and(|q| q.launch_blocked || q.exhausted);
+            if !blocked {
+                healthy_families.insert(fam);
+            }
+        }
+    }
+
+    for preferred in ["claude", "codex", "antigravity", "cursor", "glm"] {
+        if healthy_families.contains(preferred) {
+            return Some(preferred.to_string());
+        }
+    }
+    None
+}
+
+/// Exécute une porte déterministe (0 jeton LLM) dans le worktree exact attesté d'une tâche
+/// productrice, en local ou via le worker distant (`WorkerRequestOperation::RunDeterministicGate`).
+/// Ne conserve JAMAIS le verrou `DaemonState` pendant l'exécution du processus ou du RPC worker.
+pub(super) fn run_deterministic_gate_for_task_pub(
+    state: &Arc<Mutex<DaemonState>>,
+    producer_task_id: &str,
+    expected_commit: &str,
+    argv: &[String],
+    timeout_secs: u64,
+) -> crate::deterministic_gate::GateExecOutput {
+    use bridget_transport::protocol::{
+        WorkerRequestOperation, WorkerResponseOperation, WorkerResultIdentity,
+    };
+    let unavailable = |reason: String| crate::deterministic_gate::GateExecOutput {
+        passed: false,
+        exit_code: None,
+        timed_out: false,
+        duration_ms: 0,
+        output_excerpt: String::new(),
+        unavailable_reason: Some(reason),
+    };
+
+    let target = {
+        let st = state.lock().recover_poison();
+        let task = match st.delegation_store.get(producer_task_id) {
+            Ok(Some(t)) => t,
+            Ok(None) => {
+                return unavailable(format!("gate_producer_task_not_found: {producer_task_id}"));
+            }
+            Err(e) => return unavailable(format!("gate_store_unavailable: {e}")),
+        };
+        if let Some(placement) = task.remote_placement.as_ref() {
+            let worker = remote_worker_identity(placement);
+            let command = match remote_command_identity(&st, &task) {
+                Ok(c) => c,
+                Err(e) => return unavailable(format!("gate_remote_command_unavailable: {e:?}")),
+            };
+            let execution = task
+                .remote_result_slots
+                .iter()
+                .rev()
+                .find(|slot| {
+                    slot.identity.command == command && slot.identity.mission_id == task.mission
+                })
+                .map(|slot| slot.identity.clone())
+                .unwrap_or(WorkerResultIdentity {
+                    command: command.clone(),
+                    mission_id: task.mission.clone(),
+                    round: task.round_no(),
+                    execution_id: format!("gate-{}", task.task_id),
+                    execution_generation: 1,
+                });
+            Ok((worker, command, execution))
+        } else {
+            let dir = task
+                .workspace
+                .as_ref()
+                .map(|w| w.path.clone())
+                .filter(|p| !p.trim().is_empty())
+                .unwrap_or_else(|| task.cwd.clone());
+            Err(dir)
+        }
+    };
+
+    match target {
+        Ok((worker, command, execution)) => {
+            let response = match remote_worker_roundtrip_with_send_deadline(
+                state,
+                &worker,
+                &command,
+                WorkerRequestOperation::RunDeterministicGate {
+                    execution: execution.clone(),
+                    expected_commit: expected_commit.to_string(),
+                    argv: argv.to_vec(),
+                    timeout_secs,
+                },
+                Instant::now() + Duration::from_secs(timeout_secs.saturating_add(15)),
+                Instant::now() + Duration::from_secs(2),
+            ) {
+                Ok(r) => r,
+                Err(reason) => return unavailable(format!("gate_worker_unavailable: {reason:?}")),
+            };
+
+            let WorkerResponseOperation::DeterministicGateResult {
+                execution: observed,
+                passed,
+                exit_code,
+                timed_out,
+                duration_ms,
+                output_excerpt,
+                reason,
+            } = response
+            else {
+                return unavailable("gate_worker_unexpected_response".into());
+            };
+            if observed != execution {
+                return unavailable("gate_worker_execution_mismatch".into());
+            }
+            crate::deterministic_gate::GateExecOutput {
+                passed,
+                exit_code,
+                timed_out,
+                duration_ms,
+                output_excerpt,
+                unavailable_reason: reason,
+            }
+        }
+        Err(local_dir) => crate::deterministic_gate::execute_gate_in_dir(
+            Path::new(&local_dir),
+            expected_commit,
+            argv,
+            timeout_secs,
+        ),
     }
 }
 

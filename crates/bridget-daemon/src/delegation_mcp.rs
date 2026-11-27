@@ -6,9 +6,12 @@ use crate::communication::client::{
 use crate::mcp_identity::ResolvedIdentity;
 use bridget_transport::protocol::{
     AutoDelegateV2, AutoDelegateWorkload, ChildRequestDecision, DEFAULT_CONVERGENCE_ITERATIONS,
-    DelegateGraphRequest, DelegateGraphStep, FallbackTarget, GraphConvergenceLoop,
-    GraphFailurePolicy, GraphNotifyPolicy, MAX_CONVERGENCE_ITERATIONS, MIN_CONVERGENCE_ITERATIONS,
-    NativeDelegationRequest, SpawnPosture, WorkspaceRequest,
+    DEFAULT_ESCALATION_EXTRA_ITERATIONS, DEFAULT_GATE_TIMEOUT_SECS, DelegateGraphRequest,
+    DelegateGraphStep, FallbackTarget, GraphConvergenceEscalation, GraphConvergenceLoop,
+    GraphDeterministicGate, GraphFailurePolicy, GraphNotifyPolicy, GraphStepCondition,
+    MAX_CONVERGENCE_ITERATIONS, MAX_ESCALATION_EXTRA_ITERATIONS, MAX_GATE_TIMEOUT_SECS,
+    MAX_TOTAL_CONVERGENCE_ITERATIONS, MIN_CONVERGENCE_ITERATIONS, MIN_ESCALATION_EXTRA_ITERATIONS,
+    MIN_GATE_TIMEOUT_SECS, NativeDelegationRequest, SpawnPosture, WorkspaceRequest,
 };
 use bridget_transport::{DaemonToWrapper, WrapperToDaemon};
 use serde_json::{Value, json};
@@ -437,6 +440,176 @@ fn parse_auto_delegate_object(
     })
 }
 
+fn parse_convergence_gate(raw: &Value, idx: usize) -> Result<GraphDeterministicGate, ClientError> {
+    let decoded = raw
+        .as_str()
+        .and_then(|txt| serde_json::from_str::<Value>(txt).ok())
+        .filter(Value::is_object);
+    let val = decoded.as_ref().unwrap_or(raw);
+    let obj = val.as_object().ok_or_else(|| {
+        ClientError::InvalidParams(format!(
+            "steps[{idx}].convergence.gate doit être un objet {{argv, timeout_secs?}}. {GRAPH_LOCAL_REFUSAL_FOOTER}"
+        ))
+    })?;
+    for k in obj.keys() {
+        if !matches!(k.as_str(), "argv" | "timeout_secs") {
+            return Err(ClientError::InvalidParams(format!(
+                "steps[{idx}].convergence.gate : champ inconnu '{k}'. Champs acceptés : argv, timeout_secs. {GRAPH_LOCAL_REFUSAL_FOOTER}"
+            )));
+        }
+    }
+    let argv = obj
+        .get("argv")
+        .and_then(Value::as_array)
+        .ok_or_else(|| {
+            ClientError::InvalidParams(format!(
+                "steps[{idx}].convergence.gate.argv est requis (tableau de chaînes sans shell). {GRAPH_LOCAL_REFUSAL_FOOTER}"
+            ))
+        })?
+        .iter()
+        .map(|v| {
+            v.as_str().map(str::to_string).ok_or_else(|| {
+                ClientError::InvalidParams(format!(
+                    "steps[{idx}].convergence.gate.argv ne doit contenir que des chaînes. {GRAPH_LOCAL_REFUSAL_FOOTER}"
+                ))
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let timeout_secs = match obj.get("timeout_secs") {
+        None => DEFAULT_GATE_TIMEOUT_SECS,
+        Some(Value::Number(n))
+            if n.as_u64()
+                .is_some_and(|v| (MIN_GATE_TIMEOUT_SECS..=MAX_GATE_TIMEOUT_SECS).contains(&v)) =>
+        {
+            n.as_u64().unwrap()
+        }
+        _ => {
+            return Err(ClientError::InvalidParams(format!(
+                "steps[{idx}].convergence.gate.timeout_secs doit être un entier entre {MIN_GATE_TIMEOUT_SECS} et {MAX_GATE_TIMEOUT_SECS} (défaut {DEFAULT_GATE_TIMEOUT_SECS}). {GRAPH_LOCAL_REFUSAL_FOOTER}"
+            )));
+        }
+    };
+    let gate = GraphDeterministicGate { argv, timeout_secs };
+    crate::deterministic_gate::validate_gate_spec(&gate).map_err(|msg| {
+        ClientError::InvalidParams(format!(
+            "steps[{idx}].convergence.gate invalide : {msg} {GRAPH_LOCAL_REFUSAL_FOOTER}"
+        ))
+    })?;
+    Ok(gate)
+}
+
+fn parse_convergence_escalation(
+    raw: &Value,
+    idx: usize,
+    base_max_iterations: u8,
+    stop_on_stagnation: bool,
+) -> Result<GraphConvergenceEscalation, ClientError> {
+    let decoded = raw
+        .as_str()
+        .and_then(|txt| serde_json::from_str::<Value>(txt).ok())
+        .filter(Value::is_object);
+    let val = decoded.as_ref().unwrap_or(raw);
+    let obj = val.as_object().ok_or_else(|| {
+        ClientError::InvalidParams(format!(
+            "steps[{idx}].convergence.escalation doit être un objet {{engine?, model?, effort?, machine_id?, extra_iterations?, on_stagnation?, on_max_iterations?}}. {GRAPH_LOCAL_REFUSAL_FOOTER}"
+        ))
+    })?;
+    for k in obj.keys() {
+        if !matches!(
+            k.as_str(),
+            "engine"
+                | "model"
+                | "effort"
+                | "machine_id"
+                | "extra_iterations"
+                | "on_stagnation"
+                | "on_max_iterations"
+        ) {
+            return Err(ClientError::InvalidParams(format!(
+                "steps[{idx}].convergence.escalation : champ inconnu '{k}'. {GRAPH_LOCAL_REFUSAL_FOOTER}"
+            )));
+        }
+    }
+    let opt_str = |key: &str| -> Result<Option<String>, ClientError> {
+        match obj.get(key) {
+            None | Some(Value::Null) => Ok(None),
+            Some(Value::String(s)) if !s.trim().is_empty() && s.len() <= 256 => {
+                Ok(Some(s.trim().to_string()))
+            }
+            _ => Err(ClientError::InvalidParams(format!(
+                "steps[{idx}].convergence.escalation.{key} doit être une chaîne non vide (<= 256). {GRAPH_LOCAL_REFUSAL_FOOTER}"
+            ))),
+        }
+    };
+    let engine = opt_str("engine")?;
+    let model = opt_str("model")?;
+    let effort = opt_str("effort")?;
+    let machine_id = opt_str("machine_id")?;
+    if engine.is_none() && model.is_none() && effort.is_none() && machine_id.is_none() {
+        return Err(ClientError::InvalidParams(format!(
+            "steps[{idx}].convergence.escalation exige au moins une surcharge (engine, model, effort ou machine_id). {GRAPH_LOCAL_REFUSAL_FOOTER}"
+        )));
+    }
+    let extra_iterations = match obj.get("extra_iterations") {
+        None => DEFAULT_ESCALATION_EXTRA_ITERATIONS,
+        Some(Value::Number(n))
+            if n.as_u64().is_some_and(|v| {
+                (MIN_ESCALATION_EXTRA_ITERATIONS as u64..=MAX_ESCALATION_EXTRA_ITERATIONS as u64)
+                    .contains(&v)
+            }) =>
+        {
+            n.as_u64().unwrap() as u8
+        }
+        _ => {
+            return Err(ClientError::InvalidParams(format!(
+                "steps[{idx}].convergence.escalation.extra_iterations doit être un entier entre {MIN_ESCALATION_EXTRA_ITERATIONS} et {MAX_ESCALATION_EXTRA_ITERATIONS}. {GRAPH_LOCAL_REFUSAL_FOOTER}"
+            )));
+        }
+    };
+    if base_max_iterations.saturating_add(extra_iterations) > MAX_TOTAL_CONVERGENCE_ITERATIONS {
+        return Err(ClientError::InvalidParams(format!(
+            "steps[{idx}].convergence : max_iterations ({base_max_iterations}) + escalation.extra_iterations ({extra_iterations}) dépasse {MAX_TOTAL_CONVERGENCE_ITERATIONS}. {GRAPH_LOCAL_REFUSAL_FOOTER}"
+        )));
+    }
+    let on_stagnation = match obj.get("on_stagnation") {
+        None => true,
+        Some(Value::Bool(b)) => *b,
+        _ => {
+            return Err(ClientError::InvalidParams(format!(
+                "steps[{idx}].convergence.escalation.on_stagnation doit être un booléen. {GRAPH_LOCAL_REFUSAL_FOOTER}"
+            )));
+        }
+    };
+    let on_max_iterations = match obj.get("on_max_iterations") {
+        None => true,
+        Some(Value::Bool(b)) => *b,
+        _ => {
+            return Err(ClientError::InvalidParams(format!(
+                "steps[{idx}].convergence.escalation.on_max_iterations doit être un booléen. {GRAPH_LOCAL_REFUSAL_FOOTER}"
+            )));
+        }
+    };
+    if !on_stagnation && !on_max_iterations {
+        return Err(ClientError::InvalidParams(format!(
+            "steps[{idx}].convergence.escalation exige au moins un déclencheur (on_stagnation ou on_max_iterations). {GRAPH_LOCAL_REFUSAL_FOOTER}"
+        )));
+    }
+    if !stop_on_stagnation && on_stagnation {
+        return Err(ClientError::InvalidParams(format!(
+            "steps[{idx}].convergence.escalation.on_stagnation=true est incompatible avec stop_on_stagnation=false. {GRAPH_LOCAL_REFUSAL_FOOTER}"
+        )));
+    }
+    Ok(GraphConvergenceEscalation {
+        engine,
+        model,
+        effort,
+        machine_id,
+        extra_iterations,
+        on_stagnation,
+        on_max_iterations,
+    })
+}
+
 fn parse_convergence_loop(
     raw: &Value,
     idx: usize,
@@ -450,16 +623,21 @@ fn parse_convergence_loop(
     let val = decoded.as_ref().unwrap_or(raw);
     let obj = val.as_object().ok_or_else(|| {
         ClientError::InvalidParams(format!(
-            "steps[{idx}].convergence doit être un objet {{verify, max_iterations?, stop_on_stagnation?}}. {GRAPH_MINIMAL_EXAMPLE} {GRAPH_LOCAL_REFUSAL_FOOTER}"
+            "steps[{idx}].convergence doit être un objet {{verify, max_iterations?, stop_on_stagnation?, gate?, escalation?, different_provider?}}. {GRAPH_MINIMAL_EXAMPLE} {GRAPH_LOCAL_REFUSAL_FOOTER}"
         ))
     })?;
     for k in obj.keys() {
         if !matches!(
             k.as_str(),
-            "verify" | "max_iterations" | "stop_on_stagnation"
+            "verify"
+                | "max_iterations"
+                | "stop_on_stagnation"
+                | "gate"
+                | "escalation"
+                | "different_provider"
         ) {
             return Err(ClientError::InvalidParams(format!(
-                "steps[{idx}].convergence : champ inconnu '{k}'. Champs acceptés : verify, max_iterations (2..=5), stop_on_stagnation. {GRAPH_MINIMAL_EXAMPLE} {GRAPH_LOCAL_REFUSAL_FOOTER}"
+                "steps[{idx}].convergence : champ inconnu '{k}'. Champs acceptés : verify, max_iterations (2..=5), stop_on_stagnation, gate, escalation, different_provider. {GRAPH_MINIMAL_EXAMPLE} {GRAPH_LOCAL_REFUSAL_FOOTER}"
             )));
         }
     }
@@ -487,6 +665,28 @@ fn parse_convergence_loop(
             )));
         }
     };
+    let different_provider = match obj.get("different_provider") {
+        None => false,
+        Some(Value::Bool(b)) => *b,
+        _ => {
+            return Err(ClientError::InvalidParams(format!(
+                "steps[{idx}].convergence.different_provider doit être un booléen. {GRAPH_LOCAL_REFUSAL_FOOTER}"
+            )));
+        }
+    };
+    let gate = match obj.get("gate") {
+        None | Some(Value::Null) => None,
+        Some(raw_gate) => Some(parse_convergence_gate(raw_gate, idx)?),
+    };
+    let escalation = match obj.get("escalation") {
+        None | Some(Value::Null) => None,
+        Some(raw_esc) => Some(parse_convergence_escalation(
+            raw_esc,
+            idx,
+            max_iterations,
+            stop_on_stagnation,
+        )?),
+    };
     let raw_verify = obj.get("verify").ok_or_else(|| {
         ClientError::InvalidParams(format!(
             "steps[{idx}].convergence.verify est requis (objet au format bridget_auto_delegate). {GRAPH_MINIMAL_EXAMPLE} {GRAPH_LOCAL_REFUSAL_FOOTER}"
@@ -501,6 +701,9 @@ fn parse_convergence_loop(
         verify,
         max_iterations,
         stop_on_stagnation,
+        gate,
+        escalation,
+        different_provider,
     })
 }
 
@@ -630,10 +833,16 @@ fn parse_delegate_graph(args: &Value) -> Result<DelegateGraphRequest, ClientErro
         for k in step_obj.keys() {
             if !matches!(
                 k.as_str(),
-                "step_id" | "depends_on" | "pass_dependency_results" | "delegation" | "convergence"
+                "step_id"
+                    | "depends_on"
+                    | "pass_dependency_results"
+                    | "when"
+                    | "when_outcomes"
+                    | "delegation"
+                    | "convergence"
             ) {
                 return Err(ClientError::InvalidParams(format!(
-                    "steps[{idx}] : champ inconnu '{k}'. Champs acceptés : step_id, depends_on, pass_dependency_results, delegation, convergence. {GRAPH_MINIMAL_EXAMPLE} {GRAPH_LOCAL_REFUSAL_FOOTER}"
+                    "steps[{idx}] : champ inconnu '{k}'. Champs acceptés : step_id, depends_on, pass_dependency_results, when, when_outcomes, delegation, convergence. {GRAPH_MINIMAL_EXAMPLE} {GRAPH_LOCAL_REFUSAL_FOOTER}"
                 )));
             }
         }
@@ -677,6 +886,84 @@ fn parse_delegate_graph(args: &Value) -> Result<DelegateGraphRequest, ClientErro
                 )));
             }
         };
+        let when = match step_obj.get("when") {
+            None => GraphStepCondition::AllSucceeded,
+            Some(Value::String(s)) if s == "all_succeeded" => GraphStepCondition::AllSucceeded,
+            Some(Value::String(s)) if s == "any_failed" => GraphStepCondition::AnyFailed,
+            Some(Value::String(s)) if s == "on_outcome" => GraphStepCondition::OnOutcome,
+            _ => {
+                return Err(ClientError::InvalidParams(format!(
+                    "steps[{idx}].when invalide (all_succeeded | any_failed | on_outcome). {GRAPH_LOCAL_REFUSAL_FOOTER}"
+                )));
+            }
+        };
+        let when_outcomes = match step_obj.get("when_outcomes") {
+            None => Vec::new(),
+            Some(Value::Array(arr)) => arr
+                .iter()
+                .map(|v| {
+                    v.as_str()
+                        .map(str::trim)
+                        .filter(|s| !s.is_empty())
+                        .map(str::to_string)
+                        .ok_or_else(|| {
+                            ClientError::InvalidParams(format!(
+                                "steps[{idx}].when_outcomes doit contenir des chaînes non vides. {GRAPH_LOCAL_REFUSAL_FOOTER}"
+                            ))
+                        })
+                })
+                .collect::<Result<Vec<_>, _>>()?,
+            _ => {
+                return Err(ClientError::InvalidParams(format!(
+                    "steps[{idx}].when_outcomes doit être un tableau de chaînes. {GRAPH_LOCAL_REFUSAL_FOOTER}"
+                )));
+            }
+        };
+        match when {
+            GraphStepCondition::AllSucceeded if !when_outcomes.is_empty() => {
+                return Err(ClientError::InvalidParams(format!(
+                    "steps[{idx}].when_outcomes n'est autorisé qu'avec when='on_outcome'. {GRAPH_LOCAL_REFUSAL_FOOTER}"
+                )));
+            }
+            GraphStepCondition::AnyFailed if depends_on.is_empty() => {
+                return Err(ClientError::InvalidParams(format!(
+                    "steps[{idx}] : when='any_failed' exige au moins une dépendance dans depends_on. {GRAPH_LOCAL_REFUSAL_FOOTER}"
+                )));
+            }
+            GraphStepCondition::AnyFailed if !when_outcomes.is_empty() => {
+                return Err(ClientError::InvalidParams(format!(
+                    "steps[{idx}].when_outcomes n'est autorisé qu'avec when='on_outcome'. {GRAPH_LOCAL_REFUSAL_FOOTER}"
+                )));
+            }
+            GraphStepCondition::OnOutcome => {
+                if depends_on.is_empty() {
+                    return Err(ClientError::InvalidParams(format!(
+                        "steps[{idx}] : when='on_outcome' exige au moins une dépendance dans depends_on. {GRAPH_LOCAL_REFUSAL_FOOTER}"
+                    )));
+                }
+                if when_outcomes.is_empty() || when_outcomes.len() > 8 {
+                    return Err(ClientError::InvalidParams(format!(
+                        "steps[{idx}].when_outcomes exige 1 à 8 issues autorisées. {GRAPH_LOCAL_REFUSAL_FOOTER}"
+                    )));
+                }
+                for outcome in &when_outcomes {
+                    if !matches!(
+                        outcome.as_str(),
+                        "failed"
+                            | "stagnated"
+                            | "max_iterations_reached"
+                            | "escalated"
+                            | "gate_unavailable"
+                            | "verdict_unparseable"
+                    ) {
+                        return Err(ClientError::InvalidParams(format!(
+                            "steps[{idx}].when_outcomes : issue '{outcome}' invalide (autorisées : failed, stagnated, max_iterations_reached, escalated, gate_unavailable, verdict_unparseable ; jamais cancelled). {GRAPH_LOCAL_REFUSAL_FOOTER}"
+                        )));
+                    }
+                }
+            }
+            _ => {}
+        }
         let raw_del = step_obj.get("delegation").ok_or_else(|| {
             ClientError::InvalidParams(format!(
                 "steps[{idx}].delegation requis. {GRAPH_MINIMAL_EXAMPLE} {GRAPH_LOCAL_REFUSAL_FOOTER}"
@@ -696,13 +983,32 @@ fn parse_delegate_graph(args: &Value) -> Result<DelegateGraphRequest, ClientErro
                 &step_id,
             )?),
         };
+        if convergence.as_ref().is_some_and(|c| c.gate.is_some())
+            && delegation.posture == Some(SpawnPosture::Discovery)
+        {
+            return Err(ClientError::InvalidParams(format!(
+                "steps[{idx}] : convergence.gate est interdit sur une étape en posture 'discovery'. {GRAPH_LOCAL_REFUSAL_FOOTER}"
+            )));
+        }
         steps.push(DelegateGraphStep {
             step_id,
             depends_on,
             pass_dependency_results,
+            when,
+            when_outcomes,
             delegation,
             convergence,
         });
+    }
+
+    if on_failure == GraphFailurePolicy::CancelGraph
+        && steps
+            .iter()
+            .any(|s| s.when != GraphStepCondition::AllSucceeded)
+    {
+        return Err(ClientError::InvalidParams(format!(
+            "on_failure='cancel_graph' est incompatible avec les branches de repli (when != 'all_succeeded') : utilisez on_failure='stop_dependents'. {GRAPH_LOCAL_REFUSAL_FOOTER}"
+        )));
     }
 
     validate_dag_topology_locally(&steps)?;
@@ -721,6 +1027,34 @@ pub(crate) fn tools(brief_schema: &Value) -> Vec<Value> {
         {"type":"object","properties":{"strategy":{"const":"shared","description":"Dossier partagé : strategy est le seul champ autorisé. Le SHA source appartient à expected_base_commit ; ne pas ajouter base_ref ou branch. Peut renvoyer workspace_busy si un worktree descendant est actif sur le même dépôt ; en lecture seule, préférer strategy=commit_view avec posture=discovery."}},"required":["strategy"],"additionalProperties":false},
         {"type":"object","properties":{"strategy":{"const":"worktree","description":"Dossier de travail isolé : seuls strategy et les chaînes facultatives base_ref et branch sont acceptés."},"base_ref":{"type":"string","description":"Référence Git disponible dans cwd sur la machine du parent. Pour une base figée, fournir le même SHA complet que expected_base_commit ; un nom de branche peut avancer. Un commit présent uniquement sur la destination doit d’abord être récupéré dans le dépôt source."},"branch":{"type":"string"}},"required":["strategy"],"additionalProperties":false}
     ]});
+    let convergence_schema = json!({
+        "type":"object",
+        "description":"Boucle de convergence adaptative sur cette étape (le DAG global reste acyclique). Exécute gate (0 jeton) avant verify ; le vérificateur rend une ligne JSON fermée {\"verdict\":\"approve\"|\"revise\"|\"escalate\",\"reason\":\"...\",\"blocking_points\":[...]}.",
+        "properties":{
+            "verify":{"type":"object","description":"Mission vérificateur au format bridget_auto_delegate (recommandé : posture='discovery', workspace.strategy='commit_view')."},
+            "max_iterations":{"type":"integer","minimum":2,"maximum":5,"default":3,"description":"Nombre maximal d'itérations du palier initial (2 à 5, défaut 3)."},
+            "stop_on_stagnation":{"type":"boolean","default":true,"description":"Arrête (ou déclenche escalation) si un commit ou une empreinte bloquante se répète dans le palier (stagnation et oscillation A->B->A)."},
+            "different_provider":{"type":"boolean","default":false,"description":"Préfère un moteur fournisseur orthogonal au producteur pour verify (repli gracieux si indisponible)."},
+            "gate":{"type":"object","description":"Porte déterministe 0 jeton (argv sans shell) exécutée dans le worktree du producteur avant verify ; exige posture development.","properties":{"argv":{"type":"array","minItems":1,"maxItems":32,"items":{"type":"string"}},"timeout_secs":{"type":"integer","minimum":5,"maximum":300,"default":120}},"required":["argv"],"additionalProperties":false},
+            "escalation":{"type":"object","description":"Escalade bornée unique vers un palier 1 (modèle/moteur/effort/machine plus fort) sur stagnation ou max_iterations_reached (jamais sur verdict escalate).","properties":{"engine":{"type":"string"},"model":{"type":"string"},"effort":{"type":"string"},"machine_id":{"type":"string"},"extra_iterations":{"type":"integer","minimum":1,"maximum":3,"default":2},"on_stagnation":{"type":"boolean","default":true},"on_max_iterations":{"type":"boolean","default":true}},"additionalProperties":false}
+        },
+        "required":["verify"],
+        "additionalProperties":false
+    });
+    let graph_step_schema = json!({
+        "type":"object",
+        "properties":{
+            "step_id":{"type":"string","minLength":1,"maxLength":64},
+            "depends_on":{"type":"array","items":{"type":"string"}},
+            "pass_dependency_results":{"type":"boolean","default":true},
+            "when":{"type":"string","enum":["all_succeeded","any_failed","on_outcome"],"default":"all_succeeded","description":"Condition de déclenchement sur depends_on : all_succeeded (défaut), any_failed (repli si une dépendance échoue, jamais sur cancelled) ou on_outcome (repli ciblé sur when_outcomes)."},
+            "when_outcomes":{"type":"array","items":{"type":"string","enum":["failed","stagnated","max_iterations_reached","escalated","gate_unavailable","verdict_unparseable"]},"description":"Issues d'échec déclenchant l'étape lorsque when='on_outcome'."},
+            "delegation":{"type":"object","description":"Mission producteur au format bridget_auto_delegate."},
+            "convergence":convergence_schema
+        },
+        "required":["step_id","delegation"],
+        "additionalProperties":false
+    });
     let mut definitions = vec![
         json!({"name":"bridget_specialists","description":"Catalogue des spécialistes. Fournir version:1 comme nombre JSON (sans guillemets) à chaque appel. Lecture : action search (role_id obligatoire ; optionnels : project_id, cursor, limit), list (sans filtre de rôle) avec cursor/limit optionnels, ou get (specialist_agent_id requis). Le champ query sert uniquement à memory_recall. Exemple : {version:1,action:search,role_id:mainteneur-bridget}. L’action catalogue n’existe pas. Le schéma expose les autres actions de profils, rôles et mémoire sourcée. Déclarer ses rôles ne donne aucun droit. request_role choisit un responsable unique et conserve sa clé ; request_status relit la demande sans réveil. Une activation durable ou un mandat permanent exige l'administration humaine. Budget Bridget sans plafond par défaut ; restrictions techniques et fournisseur restent distinctes.","inputSchema":specialists_schema(),"annotations":{"readOnlyHint":false,"destructiveHint":false,"idempotentHint":true}}),
         json!({"name":"bridget_read_commit_file","description":"Rend disponible un fichier omis dans la vue privée du commit exact de sa tâche active. path est le chemin relatif indiqué dans la carte de la vue, sans ../ ni chemin absolu. Sans task_id, l'enfant lit sa propre tâche ; avec task_id, le parent doit en être propriétaire. Copie privée contrôlée, aucun changement du dépôt source, de la base, des comptes ou des droits. Un fichier existant divergent n'est jamais écrasé. Après succès, lire le chemin de données renvoyé. Une ancienne tâche clôturée ne redémarre pas par cette lecture.",
@@ -738,7 +1072,7 @@ pub(crate) fn tools(brief_schema: &Value) -> Vec<Value> {
         json!({"name":"bridget_task_wait","description":"Attend le résultat d'une ou plusieurs de ses tâches natives, sans polling ni modification de la remise. Une expiration n'annule aucun enfant. Le message de résultat peut arriver après ce retour.","inputSchema":{"type":"object","properties":{"task_ids":{"type":"array","minItems":1,"maxItems":16,"uniqueItems":true,"items":{"type":"string","minLength":1}},"wait_timeout":{"type":"integer","minimum":1,"maximum":WAIT_TIMEOUT_MAX_SECS,"default":WAIT_TIMEOUT_DEFAULT_SECS}},"required":["task_ids"],"additionalProperties":false},"annotations":{"readOnlyHint":true,"destructiveHint":false,"idempotentHint":true}}),
         json!({"name":"bridget_task_ack","description":"Déclare avoir lu le résultat ou l'échec de ses tâches natives et annule les avis asynchrones encore en attente (native-result-*, native-failure-*) pour éviter tout doublon en fin de tour. Ne modifie ni nettoyage ni rétention. Tout le groupe est refusé sans ACK partiel si une tâche n’est pas prête ; le refus identifie ses task_id, ronde et état après contrôle de propriété du groupe.","inputSchema":{"type":"object","properties":{"task_ids":{"type":"array","minItems":1,"maxItems":16,"uniqueItems":true,"items":{"type":"string","minLength":1}}},"required":["task_ids"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":false,"idempotentHint":true}}),
         json!({"name":"bridget_task_cancel","description":"Annule sa mission native et sa descendance ; aucune mission d'un autre parent n'est accessible.","inputSchema":{"type":"object","properties":{"task_id":{"type":"string"}},"required":["task_id"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":true,"idempotentHint":true}}),
-        json!({"name":"bridget_delegate_graph","description":"Enchaîne des missions A->B+C avec dépendances, sans ronde de garde. Déclarez 1 à 16 étapes DAG (step_id, depends_on, delegation au format bridget_auto_delegate) et, en option par étape, une boucle de convergence bornée producteur<->vérificateur (`convergence`: verify, max_iterations 2..=5, stop_on_stagnation). Bridget déclenche automatiquement les itérations et les étapes aval puis réveille le parent une seule fois en fin de graphe.","inputSchema":{"type":"object","properties":{"request_id":{"type":"string","minLength":1,"maxLength":128},"title":{"type":"string","minLength":1,"maxLength":256},"on_failure":{"type":"string","enum":["stop_dependents","cancel_graph"],"default":"stop_dependents","description":"stop_dependents (défaut) saute les étapes dépendantes et laisse finir les branches indépendantes ; cancel_graph annule tout le graphe dès le premier échec."},"notify_policy":{"type":"string","enum":["on_graph_done_or_failure","each_step"],"default":"on_graph_done_or_failure","description":"on_graph_done_or_failure (défaut) réveille le parent une seule fois en fin de graphe ; each_step conserve aussi chaque avis intermédiaire."},"steps":{"type":"array","minItems":1,"maxItems":16,"items":{"type":"object","properties":{"step_id":{"type":"string","minLength":1,"maxLength":64},"depends_on":{"type":"array","items":{"type":"string"}},"pass_dependency_results":{"type":"boolean","default":true},"delegation":{"type":"object","description":"Mission producteur au format bridget_auto_delegate."},"convergence":{"type":"object","description":"Boucle de convergence bornée producteur<->vérificateur sur cette étape (le DAG global reste acyclique). Le vérificateur rend une ligne JSON fermée {\"verdict\":\"approve\"|\"revise\"|\"escalate\",\"reason\":\"...\",\"blocking_points\":[...]}.","properties":{"verify":{"type":"object","description":"Mission vérificateur au format bridget_auto_delegate (recommandé : posture='discovery', workspace.strategy='commit_view')."},"max_iterations":{"type":"integer","minimum":2,"maximum":5,"default":3,"description":"Nombre maximal d'itérations producteur<->vérificateur (2 à 5, défaut 3)."},"stop_on_stagnation":{"type":"boolean","default":true,"description":"Arrête la boucle si deux tours consécutifs ont le même commit ou les mêmes motifs bloquants normalisés."}},"required":["verify"],"additionalProperties":false}},"required":["step_id","delegation"],"additionalProperties":false}}},"required":["request_id","steps"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":true,"idempotentHint":true,"openWorldHint":true}}),
+        json!({"name":"bridget_delegate_graph","description":"Enchaîne des missions A->B+C avec dépendances, sans ronde de garde. Déclarez 1 à 16 étapes DAG (step_id, depends_on, when/when_outcomes pour branches de repli conditionnelles, delegation au format bridget_auto_delegate) et, en option par étape, une boucle de convergence adaptative (`convergence`: verify, gate déterministe 0 jeton, escalation de modèle bornée, different_provider orthogonal, max_iterations 2..=5, stop_on_stagnation anti-oscillation). Bridget orchestre portes, itérations, escalade et branches de repli puis réveille le parent une seule fois en fin de graphe.","inputSchema":{"type":"object","properties":{"request_id":{"type":"string","minLength":1,"maxLength":128},"title":{"type":"string","minLength":1,"maxLength":256},"on_failure":{"type":"string","enum":["stop_dependents","cancel_graph"],"default":"stop_dependents","description":"stop_dependents (défaut, requis avec branches de repli) saute les étapes dépendantes et laisse finir branches indépendantes ou replis ; cancel_graph annule tout le graphe dès le premier échec."},"notify_policy":{"type":"string","enum":["on_graph_done_or_failure","each_step"],"default":"on_graph_done_or_failure","description":"on_graph_done_or_failure (défaut) réveille le parent une seule fois en fin de graphe ; each_step conserve aussi chaque avis intermédiaire."},"steps":{"type":"array","minItems":1,"maxItems":16,"items":graph_step_schema}},"required":["request_id","steps"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":true,"idempotentHint":true,"openWorldHint":true}}),
         json!({"name":"bridget_graph_status","description":"Lit l'état d'un graphe de missions Bridget. Sans effet ni polling obligatoire.","inputSchema":{"type":"object","properties":{"graph_id":{"type":"string","minLength":1,"maxLength":128}},"required":["graph_id"],"additionalProperties":false},"annotations":{"readOnlyHint":true,"destructiveHint":false,"idempotentHint":true}}),
         json!({"name":"bridget_graph_cancel","description":"Annule un graphe de missions Bridget. Stoppe les étapes actives et annule celles en attente.","inputSchema":{"type":"object","properties":{"graph_id":{"type":"string","minLength":1,"maxLength":128}},"required":["graph_id"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":true,"idempotentHint":true}}),
     ];
@@ -2564,6 +2898,141 @@ mod workspace_text321_tests {
         assert_eq!(
             conv_schema["properties"]["stop_on_stagnation"]["default"],
             true
+        );
+    }
+
+    #[test]
+    fn spec314_delegate_graph_prevalidates_gate_escalation_and_fallback_locally() {
+        let identity = ResolvedIdentity {
+            name: "owner".into(),
+            instance_id: "instance".into(),
+            delegated_origin: None,
+        };
+        let never_touched = Path::new("/missing-never-touched.sock");
+
+        // 1) Gate avec shell explicite interdit localement sans toucher le socket.
+        let Err(ClientError::InvalidParams(msg)) = execute_with_proof(
+            &identity,
+            "bridget_delegate_graph",
+            &json!({
+                "request_id": "g314-shell",
+                "steps": [{
+                    "step_id": "impl",
+                    "delegation": {"task":"code","cwd":"/tmp"},
+                    "convergence": {
+                        "gate": {"argv": ["sh", "-c", "cargo test"]},
+                        "verify": {"task":"review","cwd":"/tmp","posture":"discovery"}
+                    }
+                }]
+            }),
+            never_touched,
+            None,
+        ) else {
+            panic!("InvalidParams attendu sur gate shell");
+        };
+        assert!(msg.contains("convergence.gate invalide"));
+        assert!(msg.contains("request_id n'a pas été consommée"));
+
+        // 2) Gate interdit en posture discovery.
+        let Err(ClientError::InvalidParams(msg)) = execute_with_proof(
+            &identity,
+            "bridget_delegate_graph",
+            &json!({
+                "request_id": "g314-gate-disc",
+                "steps": [{
+                    "step_id": "impl",
+                    "delegation": {"task":"code","cwd":"/tmp","posture":"discovery"},
+                    "convergence": {
+                        "gate": {"argv": ["cargo", "test"]},
+                        "verify": {"task":"review","cwd":"/tmp","posture":"discovery"}
+                    }
+                }]
+            }),
+            never_touched,
+            None,
+        ) else {
+            panic!("InvalidParams attendu sur gate en discovery");
+        };
+        assert!(msg.contains("discovery"));
+
+        // 3) cancel_graph incompatible avec branche de repli.
+        let Err(ClientError::InvalidParams(msg)) = execute_with_proof(
+            &identity,
+            "bridget_delegate_graph",
+            &json!({
+                "request_id": "g314-cancel-fb",
+                "on_failure": "cancel_graph",
+                "steps": [
+                    {"step_id":"a","delegation":{"task":"t1","cwd":"/tmp"}},
+                    {"step_id":"b","depends_on":["a"],"when":"any_failed","delegation":{"task":"t2","cwd":"/tmp"}}
+                ]
+            }),
+            never_touched,
+            None,
+        ) else {
+            panic!("InvalidParams attendu sur cancel_graph + fallback");
+        };
+        assert!(msg.contains("cancel_graph"));
+
+        // 4) escalation on_stagnation=true avec stop_on_stagnation=false refusé.
+        let Err(ClientError::InvalidParams(msg)) = execute_with_proof(
+            &identity,
+            "bridget_delegate_graph",
+            &json!({
+                "request_id": "g314-esc-stag",
+                "steps": [{
+                    "step_id": "impl",
+                    "delegation": {"task":"code","cwd":"/tmp"},
+                    "convergence": {
+                        "stop_on_stagnation": false,
+                        "escalation": {"model": "claude-opus-4-6", "on_stagnation": true},
+                        "verify": {"task":"review","cwd":"/tmp","posture":"discovery"}
+                    }
+                }]
+            }),
+            never_touched,
+            None,
+        ) else {
+            panic!("InvalidParams attendu sur on_stagnation + !stop_on_stagnation");
+        };
+        assert!(msg.contains("stop_on_stagnation=false"));
+
+        // 5) Parsing nominal complet : gate + escalation + different_provider + branche on_outcome.
+        let parsed = parse_delegate_graph(&json!({
+            "request_id": "g314-ok",
+            "steps": [
+                {
+                    "step_id": "impl",
+                    "delegation": {"task":"code","cwd":"/tmp","posture":"development"},
+                    "convergence": {
+                        "max_iterations": 3,
+                        "different_provider": true,
+                        "gate": {"argv": ["cargo", "test", "--lib"], "timeout_secs": 90},
+                        "escalation": {"engine": "claude", "model": "claude-opus-4-6", "extra_iterations": 2},
+                        "verify": {"task":"review","cwd":"/tmp","posture":"discovery"}
+                    }
+                },
+                {
+                    "step_id": "plan_b",
+                    "depends_on": ["impl"],
+                    "when": "on_outcome",
+                    "when_outcomes": ["stagnated", "max_iterations_reached"],
+                    "delegation": {"task":"fallback","cwd":"/tmp"}
+                }
+            ]
+        }))
+        .expect("graphe Spec 314 valide attendu");
+        let conv = parsed.steps[0].convergence.as_ref().unwrap();
+        assert!(conv.different_provider);
+        assert_eq!(conv.gate.as_ref().unwrap().timeout_secs, 90);
+        assert_eq!(conv.escalation.as_ref().unwrap().extra_iterations, 2);
+        assert_eq!(parsed.steps[1].when, GraphStepCondition::OnOutcome);
+        assert_eq!(
+            parsed.steps[1].when_outcomes,
+            vec![
+                "stagnated".to_string(),
+                "max_iterations_reached".to_string()
+            ]
         );
     }
 }

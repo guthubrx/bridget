@@ -47,7 +47,7 @@ seulement les propriétaires des tâches/commandes/processus réellement affect�
 Ne pas réveiller les autres agents pour annoncer une version ou leur disponibilité.
 Regrouper les états avec les fils et supersedes_seq, sans effacer les preuves.
 
-## Graphes de missions et boucles de convergence bornée (313)
+## Graphes de missions et boucles de convergence adaptative (313 / 314)
 
 Choisir l'outil selon la structure réelle du travail (sans boucle de veille ni réveil périodique) :
 
@@ -55,22 +55,32 @@ Choisir l'outil selon la structure réelle du travail (sans boucle de veille ni 
 |---|---|---|
 | Une mission isolée | `bridget_auto_delegate` | Une tâche native unique avec placement de flotte V2. |
 | Étapes dépendantes `A -> B + C -> D` (1 à 16 étapes) | `bridget_delegate_graph` | DAG acyclique ; Bridget lance les branches prêtes en parallèle avec les résultats amont et réveille le parent une seule fois. |
-| Étape nécessitant allers-retours `produire <-> vérifier` bornés | `bridget_delegate_graph` + `steps[i].convergence` | Le DAG global reste acyclique ; l'étape itère automatiquement entre producteur et vérificateur jusqu'au verdict ou garde-fou. |
+| Étape nécessitant allers-retours `produire <-> vérifier` bornés | `bridget_delegate_graph` + `steps[i].convergence` | Le DAG global reste acyclique ; l'étape enchaîne porte déterministe 0 jeton, vérificateur LLM orthogonal, anti-oscillation et escalade bornée de modèle. |
+| Branche de repli conditionnelle si une étape échoue ou stagne | `steps[j].when` (`any_failed` ou `on_outcome`) + `when_outcomes` | Repli automatique sur un Plan B (qui peut lui-même avoir sa propre `convergence`) ; jamais déclenché sur annulation humaine (`cancelled`). |
+| Observabilité et politique Time-Machine SQLite | `bridget graphs metrics` / `bridget graphs metrics-policy` | Taux d'approbation, appels vérificateur épargnés par les portes, escalades, et agrégation/purge multi-paliers (`raw -> daily -> monthly -> purge`). |
 
-### Contrat `convergence` sur une étape
+### Contrat `convergence` et branches de repli sur une étape
 
-- Champs de `steps[i].convergence` : `verify` (obligatoire, objet au format `bridget_auto_delegate` — recommandé : `posture: "discovery"`, `workspace: {"strategy": "commit_view"}`), `max_iterations` (`2..=5`, défaut `3`), `stop_on_stagnation` (booléen, défaut `true`).
+- Champs de `steps[i].convergence` :
+  - `verify` (obligatoire, objet au format `bridget_auto_delegate` — recommandé : `posture: "discovery"`, `workspace: {"strategy": "commit_view"}`) ;
+  - `max_iterations` (`2..=5`, défaut `3`) ;
+  - `stop_on_stagnation` (booléen, défaut `true`) : détecte la stagnation consécutive ET l'oscillation (`A -> B -> A`) sur l'ensemble des commits et empreintes bloquantes du palier courant ;
+  - `gate` (optionnel, `{argv: [...], timeout_secs?: 5..=300}`) : **porte déterministe 0 jeton** exécutée sans shell dans le worktree attesté du producteur (local ou worker distant) avant `verify`. Exige un parent et une étape en posture `development` (refusé en `discovery`, fail-closed `gate_unavailable` si commit absent ou worktree sale). Un échec de porte court-circuite le vérificateur LLM (`gate_saved_verifier_calls += 1`) et renvoie directement la sortie bornée au producteur ;
+  - `escalation` (optionnel, `{engine?, model?, effort?, machine_id?, extra_iterations?: 1..=3, on_stagnation?: true, on_max_iterations?: true}`) : **escalade unique bornée** vers un palier 1 plus fort (`max_iterations + extra_iterations <= 8`) avec nouvelle session `AutoDelegateV2` ancrée sur le dernier commit ; **jamais** déclenchée si le vérificateur rend `verdict: "escalate"` (qui remonte toujours directement au parent/humain) ;
+  - `different_provider` (booléen, défaut `false`) : préfère automatiquement un moteur fournisseur orthogonal au producteur pour `verify` (repli gracieux si aucun autre moteur sain n'est disponible).
+- **Branches de repli conditionnelles dans le DAG** : `steps[j].when` (`all_succeeded` par défaut | `any_failed` | `on_outcome`) et `when_outcomes` (issues autorisées : `failed`, `stagnated`, `max_iterations_reached`, `escalated`, `gate_unavailable`, `verdict_unparseable` ; jamais `cancelled`). Exige `on_failure: "stop_dependents"` (incompatible avec `cancel_graph`). Un repli non déclenché passe `skipped_condition_not_met` (graphe nominal reste `completed`) ; un repli déclenché et réussi marque `fallback_recovered: true`.
 - **Verdict fermé obligatoire du vérificateur** (injecté automatiquement par Bridget dans le préambule) : dernière ligne JSON pure `{"verdict":"approve"|"revise"|"escalate","reason":"...","blocking_points":["..."]}` (`blocking_points` requis si `revise`). Toute sortie sans JSON fermé échoue en mode *fail-closed* (`verdict_unparseable`).
-- **Garde-fous automatiques** : arrêt immédiat sur `approve` (débloque les étapes aval), `escalate`, stagnation (même SHA de commit ou mêmes `blocking_points` normalisés sur deux tours consécutifs à partir du tour 2), ou plafond `max_iterations`.
-- **Continuité d'état** : Bridget garde le producteur vivant (`keep_alive_secs >= 900`) et le reprend au tour `k >= 2` via `Continue`, avec repli transparent sur une nouvelle admission ancrée sur le dernier commit ; le SHA produit est propagé au vérificateur (`expected_base_commit` / `worktree.base_ref`).
-- **Pré-validation locale** : toute erreur de champ, cycle DAG ou borne `convergence` est refusée avant connexion au daemon **sans consommer `request_id`**. Suivi via `bridget_graph_status` (`convergence_state`) et annulation complète via `bridget_graph_cancel`.
+- **Continuité d'état** : Bridget garde le producteur vivant (`keep_alive_secs >= 900`) et le reprend au tour `k >= 2` via `Continue` au sein d'un même palier, avec repli transparent sur une nouvelle admission ancrée sur le dernier commit ; le SHA produit est propagé au vérificateur (`expected_base_commit` / `worktree.base_ref`).
+- **Pré-validation locale** : toute erreur de champ, cycle DAG, porte shell, escalade ou conflit `cancel_graph` + repli est refusée avant connexion au daemon **sans consommer `request_id`**. Suivi via `bridget_graph_status` (`convergence_state`, `fallback_recovered`) et annulation complète via `bridget_graph_cancel`.
+- **Métriques durables et rétention Time-Machine (CLI)** : `bridget graphs metrics [--project NOM] [--window JOURS] [--json]` lit la vue consolidée (`raw + daily + monthly`) ; `bridget graphs metrics-policy [--raw-days N] [--daily-days N] [--monthly-months N] [--graph-days N] [--max-raw-rows N] [--run-now] [--json]` règle et déclenche l'agrégation/purge automatique (défauts : brut 30 j / 50 000 lignes, journalier 365 j, mensuel 36 mois, graphes terminaux 30 j).
 
-Exemple minimal :
+Exemple complet (porte déterministe + escalade + vérificateur orthogonal + branche de repli) :
 
 ```json
 {
   "request_id": "graph-fix-auth-1",
-  "title": "Implémentation et revue bornée",
+  "title": "Implémentation adaptative et branche de repli",
+  "on_failure": "stop_dependents",
   "steps": [
     {
       "step_id": "impl",
@@ -84,6 +94,9 @@ Exemple minimal :
       "convergence": {
         "max_iterations": 3,
         "stop_on_stagnation": true,
+        "different_provider": true,
+        "gate": { "argv": ["cargo", "test", "--lib"], "timeout_secs": 120 },
+        "escalation": { "engine": "claude", "model": "claude-opus-4-6", "extra_iterations": 2 },
         "verify": {
           "task": "Vérifier le diff et les tests ; rendre la ligne JSON de verdict.",
           "cwd": "/chemin/absolu/du/depot",
@@ -91,6 +104,19 @@ Exemple minimal :
           "posture": "discovery",
           "workspace": { "strategy": "commit_view" }
         }
+      }
+    },
+    {
+      "step_id": "plan_b",
+      "depends_on": ["impl"],
+      "when": "on_outcome",
+      "when_outcomes": ["stagnated", "max_iterations_reached"],
+      "delegation": {
+        "task": "Proposer et implémenter une approche alternative plus simple.",
+        "cwd": "/chemin/absolu/du/depot",
+        "expected_base_commit": "<SHA-40-HEX>",
+        "posture": "development",
+        "workspace": { "strategy": "worktree" }
       }
     }
   ]

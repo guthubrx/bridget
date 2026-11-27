@@ -5090,6 +5090,13 @@ struct ViewSourceProcess {
     materialization: Option<(WorkerResultIdentity, crate::workspace_git::ViewJobRequest)>,
 }
 
+struct PendingDeterministicGate {
+    request: WorkerRequest,
+    execution: WorkerResultIdentity,
+    rx: mpsc::Receiver<crate::deterministic_gate::GateExecOutput>,
+    correlations: BTreeSet<String>,
+}
+
 struct WorkerRuntime {
     config: WorkerRuntimeConfig,
     identity: WorkerIdentity,
@@ -5107,6 +5114,7 @@ struct WorkerRuntime {
     view_controls: BTreeMap<String, PendingViewControl>,
     view_files: BTreeMap<String, PendingViewFile>,
     view_file_audits: BTreeMap<String, ViewFileAudit>,
+    deterministic_gates: BTreeMap<String, PendingDeterministicGate>,
     last_maintenance: Instant,
     last_collection: Instant,
     idle_reconciled_seq: Option<u64>,
@@ -6738,7 +6746,139 @@ impl WorkerRuntime {
         responses
     }
 
-    /// Le runtime possède la matérialisation ; aucun acteur ni chemin de preuve
+    /// Exécute de façon non bloquante une porte déterministe (`argv` sans shell)
+    /// dans le worktree attesté du reçu producteur (Spec 314).
+    fn defer_deterministic_gate(&mut self, request: &WorkerRequest) -> Result<bool, WorkerRefusal> {
+        let WorkerRequestOperation::RunDeterministicGate {
+            execution,
+            expected_commit,
+            argv,
+            timeout_secs,
+        } = &request.request
+        else {
+            return Ok(false);
+        };
+        request.validate()?;
+        if request.worker != self.identity {
+            return Err(WorkerRefusal::PlacementMismatch);
+        }
+        let key = json_digest(&(execution, expected_commit, argv, timeout_secs))
+            .map_err(|_| WorkerRefusal::InvalidEnvelope)?;
+        if let Some(pending) = self.deterministic_gates.get_mut(&key) {
+            if pending.request.command != request.command
+                || pending.request.request != request.request
+            {
+                return Err(WorkerRefusal::CommandMismatch);
+            }
+            if pending.request.connection_epoch != request.connection_epoch {
+                pending.correlations.clear();
+                pending.request.connection_epoch = request.connection_epoch.clone();
+            }
+            if pending.correlations.len() >= 8
+                && !pending.correlations.contains(&request.correlation_id)
+            {
+                return Err(WorkerRefusal::ResourceLimit);
+            }
+            pending.correlations.insert(request.correlation_id.clone());
+            return Ok(true);
+        }
+        if self.deterministic_gates.len() >= 16 {
+            return Err(WorkerRefusal::ResourceLimit);
+        }
+        let receipt = self
+            .store
+            .command(&request.command)
+            .map_err(|_| WorkerRefusal::UnknownExecution)?;
+        let exec_cwd = PathBuf::from(&receipt.effective_placement().execution_cwd);
+        let commit = expected_commit.clone();
+        let argv_owned = argv.clone();
+        let timeout = *timeout_secs;
+        let (tx, rx) = mpsc::channel();
+        if std::thread::Builder::new()
+            .name("bridget-worker-gate".into())
+            .spawn(move || {
+                let output = crate::deterministic_gate::execute_gate_in_dir(
+                    &exec_cwd,
+                    &commit,
+                    &argv_owned,
+                    timeout,
+                );
+                let _ = tx.send(output);
+            })
+            .is_err()
+        {
+            return Err(WorkerRefusal::ResourceLimit);
+        }
+        self.deterministic_gates.insert(
+            key,
+            PendingDeterministicGate {
+                request: request.clone(),
+                execution: execution.clone(),
+                rx,
+                correlations: BTreeSet::from([request.correlation_id.clone()]),
+            },
+        );
+        Ok(true)
+    }
+
+    fn poll_deterministic_gates(&mut self, epoch: &str) -> Vec<WorkerResponse> {
+        let keys = self.deterministic_gates.keys().cloned().collect::<Vec<_>>();
+        let mut responses = Vec::new();
+        for key in keys {
+            let mut pending = self.deterministic_gates.remove(&key).unwrap();
+            if pending.request.connection_epoch != epoch {
+                pending.correlations.clear();
+            }
+            match pending.rx.try_recv() {
+                Err(mpsc::TryRecvError::Empty) => {
+                    self.deterministic_gates.insert(key, pending);
+                }
+                Ok(out) => {
+                    let response = WorkerResponseOperation::DeterministicGateResult {
+                        execution: pending.execution.clone(),
+                        passed: out.passed,
+                        exit_code: out.exit_code,
+                        timed_out: out.timed_out,
+                        duration_ms: out.duration_ms,
+                        output_excerpt: out.output_excerpt,
+                        reason: out.unavailable_reason,
+                    };
+                    for correlation_id in pending.correlations {
+                        responses.push(WorkerResponse {
+                            version: REMOTE_WORKER_VERSION,
+                            correlation_id,
+                            connection_epoch: epoch.into(),
+                            worker: self.identity.clone(),
+                            command: pending.request.command.clone(),
+                            response: response.clone(),
+                        });
+                    }
+                }
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    let response = WorkerResponseOperation::DeterministicGateResult {
+                        execution: pending.execution.clone(),
+                        passed: false,
+                        exit_code: None,
+                        timed_out: false,
+                        duration_ms: 0,
+                        output_excerpt: String::new(),
+                        reason: Some("gate_worker_thread_disconnected".into()),
+                    };
+                    for correlation_id in pending.correlations {
+                        responses.push(WorkerResponse {
+                            version: REMOTE_WORKER_VERSION,
+                            correlation_id,
+                            connection_epoch: epoch.into(),
+                            worker: self.identity.clone(),
+                            command: pending.request.command.clone(),
+                            response: response.clone(),
+                        });
+                    }
+                }
+            }
+        }
+        responses
+    }
     /// n'est accepté depuis le lecteur.
     fn begin_view_file(
         &mut self,
@@ -7471,6 +7611,7 @@ impl WorkerRuntime {
             view_controls: BTreeMap::new(),
             view_files: BTreeMap::new(),
             view_file_audits: BTreeMap::new(),
+            deterministic_gates: BTreeMap::new(),
             last_maintenance: Instant::now() - Duration::from_secs(1),
             last_collection: Instant::now() - Duration::from_secs(10),
             idle_reconciled_seq: None,
@@ -9400,7 +9541,8 @@ impl WorkerRuntime {
         }
         match &request.request {
             // Le port différé possède le helper ; jamais de boucle d'attente ici.
-            WorkerRequestOperation::ReadCommitViewFile { .. } => {
+            WorkerRequestOperation::ReadCommitViewFile { .. }
+            | WorkerRequestOperation::RunDeterministicGate { .. } => {
                 Err(WorkerRefusal::CapabilityRequired)
             }
             WorkerRequestOperation::ConserveCommitView { prepare_digest } => {
@@ -10657,6 +10799,19 @@ pub fn run_worker(config: WorkerRuntimeConfig) -> Result<(), String> {
                     }
                 }
             }
+            for response in runtime.poll_deterministic_gates(&epoch) {
+                if response.validate().is_err() {
+                    fatal = Some("worker_deterministic_gate_response_invalid".into());
+                    disconnected.store(true, Ordering::Release);
+                    break;
+                }
+                if send_worker_frame(&writer, &WrapperToDaemon::WorkerResponse { response })
+                    .is_err()
+                {
+                    disconnected.store(true, Ordering::Release);
+                    break;
+                }
+            }
             if probe_lane
                 .drive(
                     &runtime,
@@ -10670,6 +10825,32 @@ pub fn run_worker(config: WorkerRuntimeConfig) -> Result<(), String> {
             }
             match receiver.recv_timeout(Duration::from_millis(50)) {
                 Ok(WorkerInbound::Request(request)) => {
+                    if !disconnected.load(Ordering::Acquire) {
+                        match runtime.defer_deterministic_gate(&request) {
+                            Ok(true) => continue,
+                            Ok(false) => {}
+                            Err(reason) => {
+                                let response = WorkerResponse {
+                                    version: REMOTE_WORKER_VERSION,
+                                    correlation_id: request.correlation_id,
+                                    connection_epoch: epoch.clone(),
+                                    worker: runtime.identity.clone(),
+                                    command: request.command,
+                                    response: WorkerResponseOperation::Rejected { reason },
+                                };
+                                if send_worker_frame(
+                                    &writer,
+                                    &WrapperToDaemon::WorkerResponse { response },
+                                )
+                                .is_err()
+                                {
+                                    disconnected.store(true, Ordering::Release);
+                                    break;
+                                }
+                                continue;
+                            }
+                        }
+                    }
                     let file = if workspace_view_negotiated && !disconnected.load(Ordering::Acquire)
                     {
                         runtime.defer_view_file(&request)
