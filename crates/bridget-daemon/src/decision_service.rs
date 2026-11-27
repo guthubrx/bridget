@@ -186,7 +186,7 @@ pub fn validate_routing_request(
 ) -> Result<(), DecisionServiceError> {
     if !printable(&request.admission_id, 256)
         || request.policy_revision == 0
-        || !printable(&request.brief, 4096)
+        || !printable_multiline(&request.brief, 4096)
         || !matches!(request.workload.as_str(), "general" | "compilation")
         || request.constraints.len() > 16
         || request.machines.len() > MAX_ROUTING_CANDIDATES
@@ -651,6 +651,16 @@ fn printable(value: &str, maximum: usize) -> bool {
     !value.is_empty()
         && value.len() <= maximum
         && !value.chars().any(bridget_core::is_disallowed_control)
+}
+
+/// Autorise les retours à la ligne et tabulations usuels dans un `brief` de mission
+/// tout en continuant de bloquer tout autre caractère de contrôle ou de formatage (bidi).
+fn printable_multiline(value: &str, maximum: usize) -> bool {
+    !value.is_empty()
+        && value.len() <= maximum
+        && !value
+            .chars()
+            .any(|ch| !matches!(ch, '\n' | '\r' | '\t') && bridget_core::is_disallowed_control(ch))
 }
 
 fn laya_request_payload(

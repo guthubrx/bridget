@@ -6884,6 +6884,15 @@ pub fn run(config: DaemonConfig) -> Result<(), Box<dyn std::error::Error>> {
             };
             user_input::tick(&st_reminder);
             remote_worker_contact_tick(&st_reminder);
+            {
+                let reg_path = st_reminder
+                    .lock()
+                    .recover_poison()
+                    .registry
+                    .source()
+                    .to_path_buf();
+                crate::usage_quotas::maybe_spawn_background_refresh(reg_path);
+            }
             let tick_start = Instant::now();
             native_delegation::tick(&st_reminder);
             let tick_elapsed = tick_start.elapsed();

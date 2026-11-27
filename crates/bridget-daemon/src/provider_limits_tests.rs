@@ -471,6 +471,36 @@ fn spec168_quota_connexion_instance_definition_epoque_ttl_et_credits_100() {
             .unwrap()
             .launch_blocked
     );
+    // Incident 27/11 : un épuisement Codex sans crédits utilisables doit rester
+    // launch_blocked même après la sortie de l'enfant (!instance_live) et au-delà
+    // du TTL télémétrie (30 s), jusqu'à resets_at.
+    assert!(
+        limits
+            .routing_quota(
+                "work",
+                "digest-b",
+                7,
+                "scope",
+                &std::collections::HashSet::new(),
+                250,
+                30
+            )
+            .unwrap()
+            .launch_blocked
+    );
+    assert!(
+        limits
+            .routing_quota(
+                "work",
+                "digest-b",
+                7,
+                "scope",
+                &std::collections::HashSet::new(),
+                500,
+                30
+            )
+            .is_none()
+    );
     assert!(
         limits
             .routing_quota("personal", "digest-b", 7, "scope", &live, 100, 30)

@@ -379,6 +379,11 @@ impl ProviderLimits {
             .by_instance
             .get(&(binding.agent_type.clone(), binding.instance.clone()))?;
         let fresh = |at: i64| at > 0 && at <= now && now.saturating_sub(at) <= max_age_secs as i64;
+        let scoped_credits_usable = scoped
+            .codex_credits
+            .get(&binding.agent_type)
+            .and_then(|(credits, _)| credits.as_ref())
+            .is_some_and(|credits| credits.usable());
         let mut filtered = ProviderLimits::default();
         for seen in scoped
             .by_agent_type
@@ -386,12 +391,18 @@ impl ProviderLimits {
             .into_iter()
             .flat_map(|v| v.values())
         {
-            let rejection = seen.source == RateLimitSource::ClaudeStreamJson
+            let claude_rejection = seen.source == RateLimitSource::ClaudeStreamJson
                 && seen.fact.status == "rejected"
                 && seen.fact.resets_at.map_or_else(
                     || now.saturating_sub(seen.observed_at) <= CLAUDE_UNKNOWN_REFUSAL_RETRY_SECS,
                     |at| at > now,
                 );
+            let codex_exhausted_rejection = seen.source == RateLimitSource::CodexAppServer
+                && !scoped_credits_usable
+                && seen.fact.resets_at.is_some_and(|at| at > now)
+                && (seen.fact.used_percent.is_some_and(|p| p >= 100)
+                    || matches!(seen.fact.status.as_str(), "rejected" | "rate_limit_reached"));
+            let rejection = claude_rejection || codex_exhausted_rejection;
             if seen.observed_at > 0
                 && seen.observed_at <= now
                 && (rejection || (same_definition && instance_live && fresh(seen.observed_at)))
@@ -424,12 +435,27 @@ impl ProviderLimits {
                     && seen.fact.status == "rejected"
                     && seen.fact.resets_at.is_none_or(|at| at > now)
             });
-        if !instance_live && !claude_rejected {
+        let codex_rejected = !scoped_credits_usable
+            && filtered
+                .by_agent_type
+                .get(&binding.agent_type)
+                .into_iter()
+                .flat_map(|windows| windows.values())
+                .any(|seen| {
+                    seen.source == RateLimitSource::CodexAppServer
+                        && seen.fact.resets_at.is_some_and(|at| at > now)
+                        && (seen.fact.used_percent.is_some_and(|p| p >= 100)
+                            || matches!(
+                                seen.fact.status.as_str(),
+                                "rejected" | "rate_limit_reached"
+                            ))
+                });
+        if !instance_live && !claude_rejected && !codex_rejected {
             return None;
         }
         let mut quota = filtered.quota_with_credits(&binding.agent_type, now, true)?;
-        quota.limit_reached |= claude_rejected;
-        quota.launch_blocked |= claude_rejected;
+        quota.limit_reached |= claude_rejected || codex_rejected;
+        quota.launch_blocked |= claude_rejected || codex_rejected;
         Some(quota)
     }
 

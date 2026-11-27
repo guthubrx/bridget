@@ -2189,10 +2189,16 @@ de veille ni réveil périodique :
   désactiver). Lorsqu'une fenêtre de quota observée se réinitialise sous six
   heures, Bridget met l'enfant en attente puis relance automatiquement la même
   mission (jusqu'à deux rondes quota), sans consommer les reprises après panne.
-- **Bascule automatique sur quota :** déclarer `quota_fallback_authorized: true`
-  (ou activer `BRIDGET_AUTO_QUOTA_FALLBACK=1` sur le daemon) autorise Bridget à
-  basculer vers un autre compte ou moteur admissible lorsque la fenêtre choisie
-  est épuisée, à droits constants.
+- **Bascule quota et évitement proactif des comptes épuisés :** déclarer
+  `quota_fallback_authorized: true` (ou activer `BRIDGET_AUTO_QUOTA_FALLBACK=1`
+  sur le daemon) dispense d'ouvrir une question humaine bloquante (`bridget_ask_user`)
+  lorsqu'une mission échoue sur `usage_limit` (`automatic_restart: false`), afin
+  que le parent puisse relancer immédiatement sur un autre compte ou moteur à
+  droits constants. En amont, le placement automatique (`bridget_auto_delegate`)
+  croise les faits `provider_limits` (y compris les refus Codex persistés après
+  sortie de l'enfant) avec le cache 0-jeton `usage-quotas.json` rafraîchi en
+  arrière-plan pour écarter directement les connexions épuisées et scorer les
+  comptes par quota restant réel.
 - **Nettoyage des orphelins (`BRIDGET_REAPER_MODE=cleanup`) :** active le
   nettoyage contrôlé des processus orphelins confirmés selon les gardes du daemon.
 - **Cursor ACP :** Cursor CLI (`agent`) est pris en charge comme moteur de

@@ -898,6 +898,41 @@ fn spec163_sante_laya_accepte_les_metadonnees_connues_sans_leur_donner_autorite(
 }
 
 #[test]
+fn incident_validate_routing_request_accepts_multiline_brief_and_blocks_controls() {
+    let mut req = RoutingDecisionRequest {
+        admission_id: "a-multiline".into(),
+        policy_revision: 1,
+        brief: "Enquête A : concurrents B2B.\n\nContexte :\n\t- point 1\n\t- point 2".into(),
+        workload: "general".into(),
+        constraints: Vec::new(),
+        machines: Vec::new(),
+        connections: Vec::new(),
+        candidates: vec![RoutingDecisionCandidate {
+            candidate_id: "c001".into(),
+            model: "claude-opus-5-5".into(),
+            engine: "claude".into(),
+            machine_id: "monordinateur".into(),
+            connection_id: "claude-mac".into(),
+            supported_efforts: vec!["low".into(), "medium".into(), "high".into()],
+            default_effort: Some("high".into()),
+            score: 75,
+            facts: Vec::new(),
+        }],
+    };
+    assert_eq!(validate_routing_request(&req), Ok(()));
+    req.brief = "texte\u{202E}bidi".into();
+    assert_eq!(
+        validate_routing_request(&req),
+        Err(DecisionServiceError::RequestInvalid)
+    );
+    req.brief = "x".repeat(4097);
+    assert_eq!(
+        validate_routing_request(&req),
+        Err(DecisionServiceError::RequestInvalid)
+    );
+}
+
+#[test]
 fn spec163_endpoint_et_runtime_sont_refuses_avant_reseau() {
     assert!(decision_endpoint_allowed("https://decision.internal/v1"));
     assert!(decision_endpoint_allowed("http://127.0.0.1:8792/v1"));

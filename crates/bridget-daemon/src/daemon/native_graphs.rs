@@ -12,9 +12,9 @@ use crate::delegation::{
     NativeGraphStepRecord,
 };
 use bridget_transport::protocol::{
-    AutoDelegateV2, DelegateGraphRequest, GraphConvergenceLoop, GraphFailurePolicy,
-    GraphNotifyPolicy, MAX_CONVERGENCE_ITERATIONS, MIN_CONVERGENCE_ITERATIONS,
-    NativeDelegationRequest, ProviderPermissions, WorkspaceRequest,
+    AutoDelegateV2, DelegateGraphRequest, GraphFailurePolicy, GraphNotifyPolicy,
+    MAX_CONVERGENCE_ITERATIONS, MIN_CONVERGENCE_ITERATIONS, NativeDelegationRequest,
+    ProviderPermissions, WorkspaceRequest,
 };
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -2194,6 +2194,7 @@ pub(super) fn tick(state: &Arc<Mutex<DaemonState>>) {
 mod tests {
     use super::*;
     use crate::delegation::DelegationStore;
+    use bridget_transport::protocol::GraphConvergenceLoop;
     use bridget_transport::protocol::{AutoDelegateWorkload, DelegateGraphStep};
 
     fn sample_auto(task: &str) -> AutoDelegateV2 {

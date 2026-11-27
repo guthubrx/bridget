@@ -28,10 +28,13 @@ use std::io::{BufRead, BufReader, Write};
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
+use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 pub(crate) const USAGE_CACHE_TTL_SECS: u64 = 300;
+const ROUTING_POSITIVE_CACHE_MAX_AGE_SECS: i64 = 1800;
+const ROUTING_UNKNOWN_EXHAUSTION_TTL_SECS: i64 = 300;
 const CODEX_PROBE_TIMEOUT_SECS: u64 = 6;
 const AGY_PROBE_TIMEOUT_SECS: u64 = 12;
 const CLAUDE_AUTH_PROBE_TIMEOUT_SECS: u64 = 5;
@@ -43,6 +46,244 @@ const HISTORY_MAX_LINES: usize = 512;
 const LOW_QUOTA_ALERT_THRESHOLD_PCT: u8 = 15;
 
 static CACHE_LOCK: Mutex<i64> = Mutex::new(0);
+static BG_REFRESH_IN_FLIGHT: AtomicBool = AtomicBool::new(false);
+static BG_REFRESH_LAST_SECS: AtomicI64 = AtomicI64::new(0);
+
+#[derive(Clone)]
+struct RoutingCacheSnapshot {
+    path: PathBuf,
+    mtime: Option<SystemTime>,
+    len: u64,
+    cache: UsageCacheFile,
+}
+
+static ROUTING_CACHE_SNAPSHOT: OnceLock<Mutex<Option<RoutingCacheSnapshot>>> = OnceLock::new();
+
+fn load_routing_cache_cached(path: &Path) -> Option<UsageCacheFile> {
+    let meta = fs::metadata(path).ok()?;
+    let mtime = meta.modified().ok();
+    let len = meta.len();
+    let slot = ROUTING_CACHE_SNAPSHOT.get_or_init(|| Mutex::new(None));
+    if let Ok(guard) = slot.lock()
+        && let Some(snap) = guard.as_ref()
+        && snap.path == path
+        && snap.mtime == mtime
+        && snap.len == len
+    {
+        return Some(snap.cache.clone());
+    }
+    let cache = load_cache_from(path);
+    if let Ok(mut guard) = slot.lock() {
+        *guard = Some(RoutingCacheSnapshot {
+            path: path.to_path_buf(),
+            mtime,
+            len,
+            cache: cache.clone(),
+        });
+    }
+    Some(cache)
+}
+
+fn entry_credits_usable(entry: &CachedQuotaEntry) -> bool {
+    entry.credits_unlimited
+        || entry
+            .credits_balance
+            .as_deref()
+            .and_then(|raw| raw.trim().parse::<f64>().ok())
+            .is_some_and(|val| val > 0.0)
+}
+
+fn normalized_profile_key(profile_dir: Option<&str>) -> Option<&str> {
+    profile_dir
+        .map(str::trim)
+        .filter(|s| !s.is_empty() && *s != "default")
+}
+
+/// Projette le cache 0-jeton `usage-quotas.json` vers un fait `Quota` exploitable
+/// par le routage (`observe_routing_candidates_for_project`) :
+/// - bloque immédiatement toute connexion dont une fenêtre active est à 100 % / `rejected` /
+///   `rate_limit_reached` (sans crédits Codex utilisables), y compris pour les profils frères
+///   partageant le même `account_id` attesté ;
+/// - fournit le `used_percent` réel (si observé depuis <= 30 min) afin que les connexions saines
+///   reçoivent leur véritable score `quota_remaining`.
+pub(crate) fn routing_quota_from_cache_at(
+    path: &Path,
+    connection_id: &str,
+    engine: &str,
+    machine_id: &str,
+    profile_dir: Option<&str>,
+    now: i64,
+) -> Option<crate::provider_limits::Quota> {
+    let cache = load_routing_cache_cached(path)?;
+    let target_engine = engine.to_ascii_lowercase();
+    let target_profile = normalized_profile_key(profile_dir);
+
+    let mut matched: Vec<&CachedQuotaEntry> = cache
+        .entries
+        .values()
+        .filter(|entry| {
+            if entry.engine.to_ascii_lowercase() != target_engine {
+                return false;
+            }
+            if entry.connection_id.as_deref() == Some(connection_id) {
+                return true;
+            }
+            entry.machine_id == machine_id
+                && normalized_profile_key(entry.profile_dir.as_deref()) == target_profile
+        })
+        .collect();
+    if matched.is_empty() {
+        return None;
+    }
+
+    // Si une entrée directe porte un `account_id` attesté, inclure les entrées
+    // partageant exactement ce même `(engine, account_id)` (même abonnement,
+    // sans jamais transposer entre deux comptes distincts).
+    let account_ids: BTreeSet<&str> = matched
+        .iter()
+        .filter_map(|e| {
+            e.account_id
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+        })
+        .collect();
+    if !account_ids.is_empty() {
+        for entry in cache.entries.values() {
+            if entry.engine.to_ascii_lowercase() == target_engine
+                && entry
+                    .account_id
+                    .as_deref()
+                    .map(str::trim)
+                    .is_some_and(|acc| account_ids.contains(acc))
+                && !matched
+                    .iter()
+                    .any(|existing| std::ptr::eq(*existing, entry))
+            {
+                matched.push(entry);
+            }
+        }
+    }
+
+    if matched.iter().all(|entry| entry.logged_in == Some(false)) {
+        return None;
+    }
+
+    // Pour chaque fenêtre, conserver l'observation la plus récente non expirée.
+    let mut best_windows: BTreeMap<&str, (&CachedWindow, &CachedQuotaEntry)> = BTreeMap::new();
+    for entry in &matched {
+        for (wkey, win) in &entry.windows {
+            if win.observed_at <= 0 || win.observed_at > now + 60 {
+                continue;
+            }
+            if win.resets_at.is_some_and(|at| at <= now) {
+                continue;
+            }
+            match best_windows.get(wkey.as_str()) {
+                Some((prev, _)) if prev.observed_at >= win.observed_at => {}
+                _ => {
+                    best_windows.insert(wkey.as_str(), (win, entry));
+                }
+            }
+        }
+    }
+    if best_windows.is_empty() {
+        return None;
+    }
+
+    let mut windows = Vec::new();
+    let mut exhausted = false;
+    let mut launch_blocked = false;
+    let mut limit_reached = false;
+    let mut resets_at: Option<i64> = None;
+    let mut observed_at: Option<i64> = None;
+    let mut codex_credits: Option<bridget_transport::protocol::CodexCredits> = None;
+
+    for (win, entry) in best_windows.values() {
+        let is_exhausted = matches!(win.status.as_str(), "rejected" | "rate_limit_reached")
+            || win.used_percent.is_some_and(|p| p >= 100);
+        let fresh_enough = if is_exhausted {
+            win.resets_at.map_or_else(
+                || now.saturating_sub(win.observed_at) <= ROUTING_UNKNOWN_EXHAUSTION_TTL_SECS,
+                |at| at > now,
+            )
+        } else {
+            now.saturating_sub(win.observed_at) <= ROUTING_POSITIVE_CACHE_MAX_AGE_SECS
+        };
+        if !fresh_enough {
+            continue;
+        }
+        let credits_usable = target_engine == "codex" && entry_credits_usable(entry);
+        if target_engine == "codex" && (entry.credits_unlimited || entry.credits_balance.is_some())
+        {
+            codex_credits = Some(bridget_transport::protocol::CodexCredits {
+                has_credits: Some(credits_usable),
+                unlimited: Some(entry.credits_unlimited),
+                spend_control_reached: false,
+            });
+        }
+        exhausted |= is_exhausted;
+        launch_blocked |= is_exhausted && !credits_usable;
+        limit_reached |= is_exhausted;
+        if is_exhausted {
+            resets_at = resets_at.max(win.resets_at);
+        } else if resets_at.is_none() {
+            resets_at = win.resets_at;
+        }
+        observed_at = observed_at.max(Some(win.observed_at));
+        windows.push(serde_json::json!({
+            "window": win.window,
+            "used_percent": win.used_percent,
+            "resets_at": win.resets_at,
+            "exhausted": is_exhausted,
+        }));
+    }
+
+    let observed_at = observed_at?;
+    Some(crate::provider_limits::Quota {
+        windows,
+        exhausted,
+        launch_blocked,
+        credits: codex_credits,
+        limit_reached,
+        resets_at,
+        observed_at,
+    })
+}
+
+/// Rafraîchit `usage-quotas.json` en arrière-plan (0 jeton LLM, cadence `USAGE_CACHE_TTL_SECS`)
+/// afin que le maître dispose en continu des quotas réels de la flotte pour le routage.
+pub(crate) fn maybe_spawn_background_refresh(registry_path: PathBuf) {
+    if cfg!(test)
+        || std::env::var("BRIDGET_DISABLE_USAGE_BG_PROBE")
+            .is_ok_and(|v| matches!(v.trim(), "1" | "true" | "TRUE"))
+    {
+        return;
+    }
+    let now = now_secs();
+    let last = BG_REFRESH_LAST_SECS.load(Ordering::Relaxed);
+    if last > 0 && now.saturating_sub(last) < USAGE_CACHE_TTL_SECS as i64 {
+        return;
+    }
+    if BG_REFRESH_IN_FLIGHT
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Relaxed)
+        .is_err()
+    {
+        return;
+    }
+    BG_REFRESH_LAST_SECS.store(now, Ordering::Relaxed);
+    if std::thread::Builder::new()
+        .name("bridget-usage-probe".into())
+        .spawn(move || {
+            let _ = collect_usage(None, false, Some(&registry_path));
+            BG_REFRESH_LAST_SECS.store(now_secs(), Ordering::Relaxed);
+            BG_REFRESH_IN_FLIGHT.store(false, Ordering::Release);
+        })
+        .is_err()
+    {
+        BG_REFRESH_IN_FLIGHT.store(false, Ordering::Release);
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub(crate) struct QuotaWindow {
@@ -420,7 +661,11 @@ pub(crate) fn format_window_label(window: &str) -> String {
     if lower == "3p-weekly" {
         return "Claude/GPT · 7j".to_string();
     }
-    if lower == "five_hour" || lower.contains("five_hour") || lower == "primary/300m" || lower == "secondary/300m" {
+    if lower == "five_hour"
+        || lower.contains("five_hour")
+        || lower == "primary/300m"
+        || lower == "secondary/300m"
+    {
         return "5h".to_string();
     }
     if lower == "seven_day"
@@ -612,7 +857,13 @@ fn update_history(path: &Path, subs: &[SubscriptionQuota], now: i64) -> Vec<Hist
     pts
 }
 
-fn compute_delta_1h(pts: &[HistoryPoint], sub_id: &str, window: &str, cur_rem: u8, now: i64) -> Option<i16> {
+fn compute_delta_1h(
+    pts: &[HistoryPoint],
+    sub_id: &str,
+    window: &str,
+    cur_rem: u8,
+    now: i64,
+) -> Option<i16> {
     let target_ts = now.saturating_sub(3600);
     let baseline = pts
         .iter()
@@ -646,25 +897,28 @@ pub(crate) fn record_passive_observation(
     };
     let mut cache = load_cache_from(&path);
     let key = cache_entry_key(engine, machine_id, profile_dir, connection_id, agent_type);
-    let entry = cache.entries.entry(key).or_insert_with(|| CachedQuotaEntry {
-        engine: engine.to_string(),
-        machine_id: machine_id.to_string(),
-        agent_type: agent_type.to_string(),
-        connection_id: connection_id.map(str::to_string),
-        profile_dir: profile_dir.map(str::to_string),
-        account_id: None,
-        account_email: None,
-        logged_in: None,
-        plan_type: None,
-        source: format!("{source}"),
-        windows: BTreeMap::new(),
-        credits_balance: None,
-        credits_unlimited: false,
-        manual_resets_available: None,
-        manual_reset_expirations: Vec::new(),
-        auth_checked_at: None,
-        observed_at: now,
-    });
+    let entry = cache
+        .entries
+        .entry(key)
+        .or_insert_with(|| CachedQuotaEntry {
+            engine: engine.to_string(),
+            machine_id: machine_id.to_string(),
+            agent_type: agent_type.to_string(),
+            connection_id: connection_id.map(str::to_string),
+            profile_dir: profile_dir.map(str::to_string),
+            account_id: None,
+            account_email: None,
+            logged_in: None,
+            plan_type: None,
+            source: format!("{source}"),
+            windows: BTreeMap::new(),
+            credits_balance: None,
+            credits_unlimited: false,
+            manual_resets_available: None,
+            manual_reset_expirations: Vec::new(),
+            auth_checked_at: None,
+            observed_at: now,
+        });
     entry.observed_at = entry.observed_at.max(now);
     entry.source = format!("{source}");
     if let Some(conn) = connection_id {
@@ -913,7 +1167,9 @@ fn read_local_antigravity_email(profile_dir: Option<&str>) -> Option<String> {
         }
     }
     let home = std::env::var("HOME").ok()?;
-    let p = PathBuf::from(home).join(".gemini").join("google_accounts.json");
+    let p = PathBuf::from(home)
+        .join(".gemini")
+        .join("google_accounts.json");
     let raw = fs::read_to_string(p).ok()?;
     parse_antigravity_google_account_email(&raw)
 }
@@ -1083,7 +1339,9 @@ fn probe_antigravity_usage(
         Err(_) => {
             let _ = child.kill();
             let _ = child.wait();
-            return Err(format!("délai sonde agy dépassé ({AGY_PROBE_TIMEOUT_SECS}s)"));
+            return Err(format!(
+                "délai sonde agy dépassé ({AGY_PROBE_TIMEOUT_SECS}s)"
+            ));
         }
     };
     let _ = child.wait();
@@ -1106,8 +1364,8 @@ fn probe_antigravity_usage(
         .find('{')
         .map(|idx| &trimmed[idx..])
         .unwrap_or(trimmed);
-    let val: Value = serde_json::from_str(json_slice)
-        .map_err(|_| "sortie agy /usage non JSON".to_string())?;
+    let val: Value =
+        serde_json::from_str(json_slice).map_err(|_| "sortie agy /usage non JSON".to_string())?;
     let mut parsed = parse_antigravity_usage_response(&val, now)
         .ok_or_else(|| "réponse agy /usage sans groupes de quota".to_string())?;
     parsed.account_email = local_email.or(remote_email);
@@ -1124,7 +1382,8 @@ fn probe_codex_app_server(
     let init = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"clientInfo":{"name":"bridget","version":"0.8.53"},"capabilities":{"experimentalApi":true}}}"#;
     let inited = r#"{"jsonrpc":"2.0","method":"initialized"}"#;
     let read_req = r#"{"jsonrpc":"2.0","id":2,"method":"account/rateLimits/read","params":{}}"#;
-    let acc_req = r#"{"jsonrpc":"2.0","id":3,"method":"account/read","params":{"refreshToken":false}}"#;
+    let acc_req =
+        r#"{"jsonrpc":"2.0","id":3,"method":"account/read","params":{"refreshToken":false}}"#;
 
     let mut child = if is_local {
         let mut cmd = Command::new(command);
@@ -1276,7 +1535,10 @@ fn parse_claude_auth_status_response(val: &Value) -> Option<ClaudeAuthProbeResul
     })
 }
 
-fn run_command_with_timeout(mut child: std::process::Child, timeout_secs: u64) -> Result<String, String> {
+fn run_command_with_timeout(
+    mut child: std::process::Child,
+    timeout_secs: u64,
+) -> Result<String, String> {
     let Some(stdout) = child.stdout.take() else {
         let _ = child.kill();
         let _ = child.wait();
@@ -1407,7 +1669,10 @@ fn parse_claude_oauth_usage_response(val: &Value, now: i64) -> Option<ClaudeOAut
         .or_else(|| {
             val.get("limits")
                 .and_then(Value::as_array)
-                .and_then(|arr| arr.iter().find(|l| l.get("kind").and_then(Value::as_str) == Some("weekly_all")))
+                .and_then(|arr| {
+                    arr.iter()
+                        .find(|l| l.get("kind").and_then(Value::as_str) == Some("weekly_all"))
+                })
                 .and_then(|v| parse_win(v, "seven_day"))
         });
 
@@ -1491,7 +1756,9 @@ fn read_local_claude_oauth_token(profile_dir: Option<&str>) -> Option<String> {
         }
     }
     if let Ok(home) = std::env::var("HOME") {
-        let p = PathBuf::from(home).join(".claude").join(".credentials.json");
+        let p = PathBuf::from(home)
+            .join(".claude")
+            .join(".credentials.json");
         if let Ok(raw) = fs::read_to_string(p)
             && let Some(tok) = extract(&raw)
         {
@@ -1501,7 +1768,12 @@ fn read_local_claude_oauth_token(profile_dir: Option<&str>) -> Option<String> {
     #[cfg(target_os = "macos")]
     {
         if let Ok(out) = Command::new("security")
-            .args(["find-generic-password", "-s", "Claude Code-credentials", "-w"])
+            .args([
+                "find-generic-password",
+                "-s",
+                "Claude Code-credentials",
+                "-w",
+            ])
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
@@ -1525,14 +1797,15 @@ fn probe_claude_oauth_usage(
     let body = if is_local {
         let token = read_local_claude_oauth_token(profile_dir)
             .ok_or_else(|| "jeton OAuth Claude introuvable localement".to_string())?;
-        let resp = minreq::get("https://api.anthropic.com/api/oauth/usage?cedar_ember=1&skip_spend=1")
-            .with_header("Authorization", format!("Bearer {token}"))
-            .with_header("anthropic-beta", "oauth-2025-04-20")
-            .with_header("User-Agent", "claude-cli/2.1.332 (external, cli)")
-            .with_header("Content-Type", "application/json")
-            .with_timeout(8)
-            .send()
-            .map_err(|e| format!("requête OAuth usage Claude impossible : {e}"))?;
+        let resp =
+            minreq::get("https://api.anthropic.com/api/oauth/usage?cedar_ember=1&skip_spend=1")
+                .with_header("Authorization", format!("Bearer {token}"))
+                .with_header("anthropic-beta", "oauth-2025-04-20")
+                .with_header("User-Agent", "claude-cli/2.1.332 (external, cli)")
+                .with_header("Content-Type", "application/json")
+                .with_timeout(8)
+                .send()
+                .map_err(|e| format!("requête OAuth usage Claude impossible : {e}"))?;
         if resp.status_code != 200 {
             return Err(format!("OAuth usage Claude HTTP {}", resp.status_code));
         }
@@ -1569,7 +1842,9 @@ with urllib.request.urlopen(req,timeout=8) as r: print(r.read().decode())\n"
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
             .spawn()
-            .map_err(|e| format!("sonde SSH OAuth usage Claude sur {machine_id} impossible : {e}"))?;
+            .map_err(|e| {
+                format!("sonde SSH OAuth usage Claude sur {machine_id} impossible : {e}")
+            })?;
         run_command_with_timeout(child, 10)?
     };
     let trimmed = body.trim();
@@ -1651,7 +1926,11 @@ fn probe_cursor_auth(
     Ok(parse_cursor_list_models_logged_in(&raw))
 }
 
-fn probe_glm_auth(profile_dir: Option<&str>, is_local: bool, machine_id: &str) -> Result<bool, String> {
+fn probe_glm_auth(
+    profile_dir: Option<&str>,
+    is_local: bool,
+    machine_id: &str,
+) -> Result<bool, String> {
     if is_local {
         if let Some(dir) = profile_dir.filter(|s| !s.trim().is_empty()) {
             return Ok(Path::new(dir).exists());
@@ -1693,7 +1972,10 @@ fn shell_single_quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', "'\\''"))
 }
 
-fn fetch_remote_cache_if_useful(local_machine: &str, machines: &[String]) -> Option<UsageCacheFile> {
+fn fetch_remote_cache_if_useful(
+    local_machine: &str,
+    machines: &[String],
+) -> Option<UsageCacheFile> {
     if local_machine == "cartae" || !machines.iter().any(|m| m == "cartae") {
         return None;
     }
@@ -1813,21 +2095,33 @@ fn sort_windows_for_engine(engine: &str, windows: &mut [QuotaWindow]) {
             "3p-weekly" => 3,
             _ => 4,
         };
-        windows.sort_by(|a, b| rank(&a.window).cmp(&rank(&b.window)).then_with(|| a.label.cmp(&b.label)));
+        windows.sort_by(|a, b| {
+            rank(&a.window)
+                .cmp(&rank(&b.window))
+                .then_with(|| a.label.cmp(&b.label))
+        });
     } else {
         let rank = |lbl: &str| match lbl {
             "5h" => 0,
             "7j" => 1,
             _ => 2,
         };
-        windows.sort_by(|a, b| rank(&a.label).cmp(&rank(&b.label)).then_with(|| a.window.cmp(&b.window)));
+        windows.sort_by(|a, b| {
+            rank(&a.label)
+                .cmp(&rank(&b.label))
+                .then_with(|| a.window.cmp(&b.window))
+        });
     }
 }
 
 fn merge_quota_windows(target: &mut Vec<QuotaWindow>, incoming: Vec<QuotaWindow>, engine: &str) {
     for w in incoming {
-        if let Some(existing) = target.iter_mut().find(|e| e.window == w.window || e.label == w.label) {
-            let prefer_new = (w.remaining_percent.is_some() && existing.remaining_percent.is_none())
+        if let Some(existing) = target
+            .iter_mut()
+            .find(|e| e.window == w.window || e.label == w.label)
+        {
+            let prefer_new = (w.remaining_percent.is_some()
+                && existing.remaining_percent.is_none())
                 || (w.status != "reset_elapsed" && existing.status == "reset_elapsed")
                 || (w.remaining_percent.is_some()
                     && existing.remaining_percent.is_some()
@@ -2033,8 +2327,15 @@ fn build_machine_matrix(
     }
     let mut rows = Vec::new();
     for mid in all_machines {
-        let online = machine_online.get(&mid).copied().unwrap_or(mid == local_machine);
-        let for_m = |eng: &str| raw_subs.iter().find(|s| s.machine_id == mid && s.engine == eng);
+        let online = machine_online
+            .get(&mid)
+            .copied()
+            .unwrap_or(mid == local_machine);
+        let for_m = |eng: &str| {
+            raw_subs
+                .iter()
+                .find(|s| s.machine_id == mid && s.engine == eng)
+        };
 
         let codex = for_m("codex").map(|s| {
             let cid = s.connection_ids.first().cloned();
@@ -2045,10 +2346,15 @@ fn build_machine_matrix(
                     .find(|w| w.label == "7j")
                     .or_else(|| s.windows.first());
                 let rem = primary.and_then(|w| w.remaining_percent);
-                let tone = rem.map(tone_for_remaining).unwrap_or_else(|| "ok".to_string());
+                let tone = rem
+                    .map(tone_for_remaining)
+                    .unwrap_or_else(|| "ok".to_string());
                 MachineCell {
                     status: "connected".to_string(),
-                    account: s.account_email.clone().or_else(|| Some(s.account_label.clone())),
+                    account: s
+                        .account_email
+                        .clone()
+                        .or_else(|| Some(s.account_label.clone())),
                     summary: rem.map(|r| format!("{r} %")),
                     extra: None,
                     tone,
@@ -2079,7 +2385,11 @@ fn build_machine_matrix(
         let claude = match for_m("claude") {
             Some(s) => {
                 let cid = s.connection_ids.first().cloned();
-                let extra = if glm_present { Some("+ GLM".to_string()) } else { None };
+                let extra = if glm_present {
+                    Some("+ GLM".to_string())
+                } else {
+                    None
+                };
                 let cell = if s.logged_in == Some(true) {
                     let rem7 = s
                         .windows
@@ -2087,15 +2397,23 @@ fn build_machine_matrix(
                         .find(|w| w.label == "7j")
                         .or_else(|| s.windows.first())
                         .and_then(|w| w.remaining_percent);
-                    let plan_lbl = s.plan_type.clone().unwrap_or_else(|| "Connecté".to_string());
+                    let plan_lbl = s
+                        .plan_type
+                        .clone()
+                        .unwrap_or_else(|| "Connecté".to_string());
                     let summary = match rem7 {
                         Some(r) => Some(format!("{plan_lbl} · {r} %")),
                         None => Some(plan_lbl),
                     };
-                    let tone = rem7.map(tone_for_remaining).unwrap_or_else(|| "ok".to_string());
+                    let tone = rem7
+                        .map(tone_for_remaining)
+                        .unwrap_or_else(|| "ok".to_string());
                     MachineCell {
                         status: "connected".to_string(),
-                        account: s.account_email.clone().or_else(|| Some("Claude".to_string())),
+                        account: s
+                            .account_email
+                            .clone()
+                            .or_else(|| Some("Claude".to_string())),
                         summary,
                         extra,
                         tone,
@@ -2167,10 +2485,15 @@ fn build_machine_matrix(
                     (None, Some(t)) => Some(t),
                     (None, None) => None,
                 };
-                let tone = min_rem.map(tone_for_remaining).unwrap_or_else(|| "ok".to_string());
+                let tone = min_rem
+                    .map(tone_for_remaining)
+                    .unwrap_or_else(|| "ok".to_string());
                 MachineCell {
                     status: "connected".to_string(),
-                    account: s.account_email.clone().or_else(|| Some("Compte Google".to_string())),
+                    account: s
+                        .account_email
+                        .clone()
+                        .or_else(|| Some("Compte Google".to_string())),
                     summary,
                     extra: None,
                     tone,
@@ -2315,7 +2638,11 @@ fn build_provider_totals(subs: &[SubscriptionQuota]) -> Vec<ProviderTotal> {
         .collect();
     if !agy_live.is_empty() {
         for (pool_key, pool_title, win_id) in [
-            ("antigravity-gemini", "Antigravity · Gemini", "gemini-weekly"),
+            (
+                "antigravity-gemini",
+                "Antigravity · Gemini",
+                "gemini-weekly",
+            ),
             ("antigravity-3p", "Antigravity · Claude/GPT", "3p-weekly"),
         ] {
             let mut sum = 0u32;
@@ -2559,7 +2886,11 @@ pub(crate) fn collect_usage_targeted(
             &group.machine_id,
             group.profile_dir.as_deref(),
             group.connection_ids.first().map(String::as_str),
-            group.agent_types.first().map(String::as_str).unwrap_or(&group.engine),
+            group
+                .agent_types
+                .first()
+                .map(String::as_str)
+                .unwrap_or(&group.engine),
         );
         let cached_entry = cache.entries.get(&ckey);
         let cached_acc_id = cached_entry.and_then(|e| e.account_id.as_deref());
@@ -2734,7 +3065,8 @@ pub(crate) fn collect_usage_targeted(
             agy_results.insert(gid, res);
         }
     }
-    let mut claude_results: BTreeMap<String, Result<ClaudeAuthProbeResult, String>> = BTreeMap::new();
+    let mut claude_results: BTreeMap<String, Result<ClaudeAuthProbeResult, String>> =
+        BTreeMap::new();
     for h in claude_handles {
         if let Ok((gid, mid, res)) = h.join() {
             if res.is_ok() {
@@ -2755,11 +3087,17 @@ pub(crate) fn collect_usage_targeted(
             &group.machine_id,
             group.profile_dir.as_deref(),
             group.connection_ids.first().map(String::as_str),
-            group.agent_types.first().map(String::as_str).unwrap_or(&group.engine),
+            group
+                .agent_types
+                .first()
+                .map(String::as_str)
+                .unwrap_or(&group.engine),
         );
         if let Some(Ok(auth)) = claude_results.get(&group.id) {
-            let entry = cache.entries.entry(ckey.clone()).or_insert_with(|| {
-                CachedQuotaEntry {
+            let entry = cache
+                .entries
+                .entry(ckey.clone())
+                .or_insert_with(|| CachedQuotaEntry {
                     engine: "claude".to_string(),
                     machine_id: group.machine_id.clone(),
                     agent_type: group.agent_types.first().cloned().unwrap_or_default(),
@@ -2768,11 +3106,18 @@ pub(crate) fn collect_usage_targeted(
                     source: "claude_auth_probe".to_string(),
                     observed_at: 0,
                     ..CachedQuotaEntry::default()
-                }
-            });
+                });
             entry.logged_in = Some(auth.logged_in);
-            entry.account_email = if auth.logged_in { auth.account_email.clone() } else { None };
-            entry.plan_type = if auth.logged_in { auth.plan_type.clone() } else { None };
+            entry.account_email = if auth.logged_in {
+                auth.account_email.clone()
+            } else {
+                None
+            };
+            entry.plan_type = if auth.logged_in {
+                auth.plan_type.clone()
+            } else {
+                None
+            };
             entry.auth_checked_at = Some(now);
             cache_dirty = true;
         }
@@ -2805,7 +3150,11 @@ pub(crate) fn collect_usage_targeted(
         if !fresh && !claude_oauth_jobs.contains_key(&acc_key) {
             claude_oauth_jobs.insert(
                 acc_key,
-                (group.profile_dir.clone(), group.is_local, group.machine_id.clone()),
+                (
+                    group.profile_dir.clone(),
+                    group.is_local,
+                    group.machine_id.clone(),
+                ),
             );
         }
     }
@@ -2832,7 +3181,11 @@ pub(crate) fn collect_usage_targeted(
             &group.machine_id,
             group.profile_dir.as_deref(),
             group.connection_ids.first().map(String::as_str),
-            group.agent_types.first().map(String::as_str).unwrap_or(&group.engine),
+            group
+                .agent_types
+                .first()
+                .map(String::as_str)
+                .unwrap_or(&group.engine),
         );
         let Some(entry) = cache.entries.get_mut(&ckey) else {
             continue;
@@ -2886,7 +3239,11 @@ pub(crate) fn collect_usage_targeted(
             &group.machine_id,
             group.profile_dir.as_deref(),
             group.connection_ids.first().map(String::as_str),
-            group.agent_types.first().map(String::as_str).unwrap_or(&group.engine),
+            group
+                .agent_types
+                .first()
+                .map(String::as_str)
+                .unwrap_or(&group.engine),
         );
 
         match group.engine.as_str() {
@@ -2939,7 +3296,9 @@ pub(crate) fn collect_usage_targeted(
                     .map(|e| materialize_windows(&e.windows, now))
                     .unwrap_or_else(|| (Vec::new(), false));
                 if any_live {
-                    machine_online.entry(group.machine_id.clone()).or_insert(true);
+                    machine_online
+                        .entry(group.machine_id.clone())
+                        .or_insert(true);
                 }
                 let (source_state, source_label, detail) = if any_live {
                     (
@@ -2969,7 +3328,11 @@ pub(crate) fn collect_usage_targeted(
                     provider_label: provider_display_name("codex").to_string(),
                     account_label: email.clone().unwrap_or(group.account_label),
                     account_email: email,
-                    logged_in: if any_live { Some(true) } else { cached.and_then(|e| e.logged_in) },
+                    logged_in: if any_live {
+                        Some(true)
+                    } else {
+                        cached.and_then(|e| e.logged_in)
+                    },
                     machine_id: group.machine_id.clone(),
                     machines: vec![group.machine_id],
                     account_id: cached.and_then(|e| e.account_id.clone()),
@@ -3040,7 +3403,9 @@ pub(crate) fn collect_usage_targeted(
                     .map(|e| materialize_windows(&e.windows, now))
                     .unwrap_or_else(|| (Vec::new(), false));
                 if any_live {
-                    machine_online.entry(group.machine_id.clone()).or_insert(true);
+                    machine_online
+                        .entry(group.machine_id.clone())
+                        .or_insert(true);
                 }
                 let (source_state, source_label, detail) = if any_live {
                     (
@@ -3070,7 +3435,11 @@ pub(crate) fn collect_usage_targeted(
                     provider_label: provider_display_name("antigravity").to_string(),
                     account_label: email.clone().unwrap_or(group.account_label),
                     account_email: email,
-                    logged_in: if any_live { Some(true) } else { cached.and_then(|e| e.logged_in) },
+                    logged_in: if any_live {
+                        Some(true)
+                    } else {
+                        cached.and_then(|e| e.logged_in)
+                    },
                     machine_id: group.machine_id.clone(),
                     machines: vec![group.machine_id],
                     account_id: cached.and_then(|e| e.account_id.clone()),
@@ -3088,9 +3457,8 @@ pub(crate) fn collect_usage_targeted(
                 });
             }
             "claude" => {
-                let probe_err: Option<String> = claude_results
-                    .remove(&group.id)
-                    .and_then(|r| r.err());
+                let probe_err: Option<String> =
+                    claude_results.remove(&group.id).and_then(|r| r.err());
                 let cached_meta = cache.entries.get(&ckey).cloned();
                 let logged_in = cached_meta.as_ref().and_then(|e| e.logged_in);
                 let account_email = cached_meta.as_ref().and_then(|e| e.account_email.clone());
@@ -3125,7 +3493,8 @@ pub(crate) fn collect_usage_targeted(
                         let same_type = !entry.agent_type.is_empty()
                             && group.agent_types.iter().any(|t| t == &entry.agent_type);
                         if same_conn
-                            || (same_machine && (same_type || entry.profile_dir == group.profile_dir))
+                            || (same_machine
+                                && (same_type || entry.profile_dir == group.profile_dir))
                         {
                             if entry.observed_at > 0 {
                                 latest_obs = latest_obs.max(Some(entry.observed_at));
@@ -3164,11 +3533,7 @@ pub(crate) fn collect_usage_targeted(
 
                 let (windows, any_live) = materialize_windows(&merged_windows, now);
                 let (source_state, source_label, detail) = if logged_in == Some(false) {
-                    (
-                        "disconnected".to_string(),
-                        "Non connecté".to_string(),
-                        None,
-                    )
+                    ("disconnected".to_string(), "Non connecté".to_string(), None)
                 } else if any_live && is_oauth_live {
                     (
                         "live_probe".to_string(),
@@ -3313,7 +3678,10 @@ pub(crate) fn collect_usage_targeted(
                 let logged_in = cache.entries.get(&ckey).and_then(|e| e.logged_in);
                 let (source_state, source_label) = match logged_in {
                     Some(true) => ("connected_no_quota".to_string(), "Connecté".to_string()),
-                    Some(false) => ("not_exposed_by_provider".to_string(), "Non connecté".to_string()),
+                    Some(false) => (
+                        "not_exposed_by_provider".to_string(),
+                        "Non connecté".to_string(),
+                    ),
                     None => ("unavailable".to_string(), "Hors ligne".to_string()),
                 };
                 raw_subscriptions.push(SubscriptionQuota {
@@ -3351,7 +3719,12 @@ pub(crate) fn collect_usage_targeted(
     propagate_known_emails_by_account_id(&mut raw_subscriptions);
 
     let machine_rows = if filter.is_none() {
-        build_machine_matrix(&local_machine, &machines, &raw_subscriptions, &machine_online)
+        build_machine_matrix(
+            &local_machine,
+            &machines,
+            &raw_subscriptions,
+            &machine_online,
+        )
     } else {
         Vec::new()
     };
@@ -3536,7 +3909,10 @@ fn format_resets_terminal(sub: &SubscriptionQuota, now: i64) -> String {
     }
 }
 
-fn vendor_visible_subs<'a>(subs: &'a [SubscriptionQuota], engine: &str) -> Vec<&'a SubscriptionQuota> {
+fn vendor_visible_subs<'a>(
+    subs: &'a [SubscriptionQuota],
+    engine: &str,
+) -> Vec<&'a SubscriptionQuota> {
     let all: Vec<_> = subs.iter().filter(|s| s.engine == engine).collect();
     let active: Vec<_> = all
         .iter()
@@ -3548,11 +3924,7 @@ fn vendor_visible_subs<'a>(subs: &'a [SubscriptionQuota], engine: &str) -> Vec<&
             )
         })
         .collect();
-    if !active.is_empty() {
-        active
-    } else {
-        all
-    }
+    if !active.is_empty() { active } else { all }
 }
 
 /// Rendu terminal compact regroupé par éditeur, comptes réels, banked resets et machines.
@@ -3567,72 +3939,94 @@ pub(crate) fn render_terminal(report: &UsageReport) -> String {
         .filter(|s| matches!(s.engine.as_str(), "glm" | "cursor"))
         .collect();
 
-    if codex_subs.is_empty() && agy_subs.is_empty() && claude_subs.is_empty() && other_subs.is_empty() {
+    if codex_subs.is_empty()
+        && agy_subs.is_empty()
+        && claude_subs.is_empty()
+        && other_subs.is_empty()
+    {
         out.push_str("Aucun abonnement trouvé pour ce filtre.\n");
         return out;
     }
 
-    let render_vendor = |out: &mut String, title: &str, meta: String, list: &[&SubscriptionQuota]| {
-        if list.is_empty() {
-            return;
-        }
-        if meta.is_empty() {
-            out.push_str(&format!("{title}\n"));
-        } else {
-            out.push_str(&format!("{title}  ({meta})\n"));
-        }
-        for sub in list {
-            let plan = sub
-                .plan_type
-                .as_deref()
-                .map(|p| format!(" [{p}]"))
-                .unwrap_or_default();
-            let hosts = if sub.machines.is_empty() {
-                sub.machine_id.clone()
-            } else {
-                sub.machines.join(", ")
-            };
-            let resets = format_resets_terminal(sub, report.generated_at);
-            out.push_str(&format!("  {} {plan} — {hosts}{resets}\n", sub.account_label));
-            if sub.windows.is_empty() {
-                let st = if sub.logged_in == Some(true) {
-                    "Connecté"
-                } else if sub.logged_in == Some(false) {
-                    "Non connecté"
-                } else {
-                    sub.source_label.as_str()
-                };
-                out.push_str(&format!("    {st}\n"));
-                continue;
+    let render_vendor =
+        |out: &mut String, title: &str, meta: String, list: &[&SubscriptionQuota]| {
+            if list.is_empty() {
+                return;
             }
-            for w in &sub.windows {
-                if w.status == "reset_elapsed" {
-                    out.push_str(&format!("    {:>15}  [────────────] réinitialisé\n", w.label));
-                } else if let Some(rem) = w.remaining_percent {
-                    let rst = format_reset_short_fr(w.resets_at, report.generated_at, true);
-                    let rst_part = if rst.is_empty() { String::new() } else { format!(" · {rst}") };
-                    let delta_part = w
-                        .delta_1h
-                        .map(|d| format!(" ({:+} %/1h)", d))
-                        .unwrap_or_default();
-                    out.push_str(&format!(
-                        "    {:>15}  [{}] {:>3} %{delta_part}{rst_part}\n",
-                        w.label,
-                        render_unicode_bar(rem),
-                        rem
-                    ));
-                } else if w.status == "rejected" {
-                    let rst = format_reset_short_fr(w.resets_at, report.generated_at, true);
-                    out.push_str(&format!("    {:>15}  [░░░░░░░░░░░░] 0 % · {rst}\n", w.label));
+            if meta.is_empty() {
+                out.push_str(&format!("{title}\n"));
+            } else {
+                out.push_str(&format!("{title}  ({meta})\n"));
+            }
+            for sub in list {
+                let plan = sub
+                    .plan_type
+                    .as_deref()
+                    .map(|p| format!(" [{p}]"))
+                    .unwrap_or_default();
+                let hosts = if sub.machines.is_empty() {
+                    sub.machine_id.clone()
                 } else {
-                    let rst = format_reset_short_fr(w.resets_at, report.generated_at, true);
-                    let rst_part = if rst.is_empty() { String::new() } else { format!(" · {rst}") };
-                    out.push_str(&format!("    {:>15}  Disponible{rst_part}\n", w.label));
+                    sub.machines.join(", ")
+                };
+                let resets = format_resets_terminal(sub, report.generated_at);
+                out.push_str(&format!(
+                    "  {} {plan} — {hosts}{resets}\n",
+                    sub.account_label
+                ));
+                if sub.windows.is_empty() {
+                    let st = if sub.logged_in == Some(true) {
+                        "Connecté"
+                    } else if sub.logged_in == Some(false) {
+                        "Non connecté"
+                    } else {
+                        sub.source_label.as_str()
+                    };
+                    out.push_str(&format!("    {st}\n"));
+                    continue;
+                }
+                for w in &sub.windows {
+                    if w.status == "reset_elapsed" {
+                        out.push_str(&format!(
+                            "    {:>15}  [────────────] réinitialisé\n",
+                            w.label
+                        ));
+                    } else if let Some(rem) = w.remaining_percent {
+                        let rst = format_reset_short_fr(w.resets_at, report.generated_at, true);
+                        let rst_part = if rst.is_empty() {
+                            String::new()
+                        } else {
+                            format!(" · {rst}")
+                        };
+                        let delta_part = w
+                            .delta_1h
+                            .map(|d| format!(" ({:+} %/1h)", d))
+                            .unwrap_or_default();
+                        out.push_str(&format!(
+                            "    {:>15}  [{}] {:>3} %{delta_part}{rst_part}\n",
+                            w.label,
+                            render_unicode_bar(rem),
+                            rem
+                        ));
+                    } else if w.status == "rejected" {
+                        let rst = format_reset_short_fr(w.resets_at, report.generated_at, true);
+                        out.push_str(&format!(
+                            "    {:>15}  [░░░░░░░░░░░░] 0 % · {rst}\n",
+                            w.label
+                        ));
+                    } else {
+                        let rst = format_reset_short_fr(w.resets_at, report.generated_at, true);
+                        let rst_part = if rst.is_empty() {
+                            String::new()
+                        } else {
+                            format!(" · {rst}")
+                        };
+                        out.push_str(&format!("    {:>15}  Disponible{rst_part}\n", w.label));
+                    }
                 }
             }
-        }
-        out.push('\n');
-    };
+            out.push('\n');
+        };
 
     let codex_meta = report
         .provider_totals
@@ -3693,7 +4087,11 @@ pub(crate) fn render_terminal(report: &UsageReport) -> String {
             if let Some(e) = &c.extra {
                 parts.push(e.clone());
             }
-            if parts.is_empty() { "—".to_string() } else { parts.join(" · ") }
+            if parts.is_empty() {
+                "—".to_string()
+            } else {
+                parts.join(" · ")
+            }
         };
         for m in &report.machines {
             out.push_str(&format!(
@@ -3881,7 +4279,10 @@ pub(crate) fn render_html(report: &UsageReport) -> String {
                     html_esc(&right_sub)
                 )
             } else {
-                format!(r#"<div class="muted">{}</div>"#, html_esc(&sub.source_label))
+                format!(
+                    r#"<div class="muted">{}</div>"#,
+                    html_esc(&sub.source_label)
+                )
             };
             rows.push_str(&format!(
                 r#"<div class="row"><div class="who"><div><span class="email">{}</span>{plan}</div><div class="chips">{chips}</div></div>{gauge}{}</div>"#,
@@ -3906,7 +4307,10 @@ pub(crate) fn render_html(report: &UsageReport) -> String {
         for sub in &agy_subs {
             let chips = render_html_chips(sub);
             let gauges_html = if sub.windows.is_empty() {
-                format!(r#"<div class="muted">{}</div>"#, html_esc(&sub.source_label))
+                format!(
+                    r#"<div class="muted">{}</div>"#,
+                    html_esc(&sub.source_label)
+                )
             } else {
                 let mut g = String::new();
                 for w in &sub.windows {
@@ -4279,13 +4683,25 @@ mod tests {
 
     #[test]
     fn spec342_provider_aliases_normalize_cleanly() {
-        assert_eq!(normalize_provider_alias("anthropic").unwrap(), Some("claude"));
+        assert_eq!(
+            normalize_provider_alias("anthropic").unwrap(),
+            Some("claude")
+        );
         assert_eq!(normalize_provider_alias("Claude").unwrap(), Some("claude"));
         assert_eq!(normalize_provider_alias("openai").unwrap(), Some("codex"));
         assert_eq!(normalize_provider_alias("CODEX").unwrap(), Some("codex"));
-        assert_eq!(normalize_provider_alias("agy").unwrap(), Some("antigravity"));
-        assert_eq!(normalize_provider_alias("google").unwrap(), Some("antigravity"));
-        assert_eq!(normalize_provider_alias("cursor-agent").unwrap(), Some("cursor"));
+        assert_eq!(
+            normalize_provider_alias("agy").unwrap(),
+            Some("antigravity")
+        );
+        assert_eq!(
+            normalize_provider_alias("google").unwrap(),
+            Some("antigravity")
+        );
+        assert_eq!(
+            normalize_provider_alias("cursor-agent").unwrap(),
+            Some("cursor")
+        );
         assert_eq!(normalize_provider_alias("all").unwrap(), None);
         assert!(normalize_provider_alias("inexistant").is_err());
     }
@@ -4294,7 +4710,10 @@ mod tests {
     fn spec345_parse_antigravity_usage_json_and_iso8601_utc() {
         let now = parse_iso8601_utc("2026-11-24T14:48:25Z").unwrap();
         assert_eq!(parse_iso8601_utc("1970-01-01T00:00:00Z"), Some(0));
-        assert_eq!(parse_iso8601_utc("2026-11-30T20:03:03Z"), Some(1_796_068_983));
+        assert_eq!(
+            parse_iso8601_utc("2026-11-30T20:03:03Z"),
+            Some(1_796_068_983)
+        );
 
         let payload = json!({
             "status": "SUCCESS",
@@ -4512,7 +4931,10 @@ mod tests {
         }))
         .unwrap();
         assert!(auth_ok.logged_in);
-        assert_eq!(auth_ok.account_email.as_deref(), Some("fullflare@runbox.com"));
+        assert_eq!(
+            auth_ok.account_email.as_deref(),
+            Some("fullflare@runbox.com")
+        );
         assert_eq!(auth_ok.plan_type.as_deref(), Some("Max 20x"));
 
         let auth_no = parse_claude_auth_status_response(&json!({ "loggedIn": false })).unwrap();
@@ -4522,8 +4944,12 @@ mod tests {
                 .as_deref(),
             Some("fullflare@gmail.com")
         );
-        assert!(parse_cursor_list_models_logged_in("auto\nclaude-4-sonnet\n"));
-        assert!(!parse_cursor_list_models_logged_in("Authentication required. Please run agent login."));
+        assert!(parse_cursor_list_models_logged_in(
+            "auto\nclaude-4-sonnet\n"
+        ));
+        assert!(!parse_cursor_list_models_logged_in(
+            "Authentication required. Please run agent login."
+        ));
 
         let now = 1_795_500_000;
         let raw = vec![
@@ -4630,7 +5056,10 @@ mod tests {
         online.insert("cartae".to_string(), true);
         online.insert("ksstore".to_string(), true);
         let matrix = build_machine_matrix("monordinateur", &[], &raw, &online);
-        let mac_row = matrix.iter().find(|r| r.machine_id == "monordinateur").unwrap();
+        let mac_row = matrix
+            .iter()
+            .find(|r| r.machine_id == "monordinateur")
+            .unwrap();
         let mac_claude = mac_row.claude.as_ref().unwrap();
         assert_eq!(mac_claude.status, "disconnected");
         assert_eq!(mac_claude.extra.as_deref(), Some("+ GLM"));
@@ -4835,7 +5264,10 @@ mod tests {
         let parsed = parse_claude_oauth_usage_response(&payload, now).unwrap();
         assert_eq!(parsed.manual_resets_available, Some(1));
         assert_eq!(parsed.manual_reset_expirations.len(), 1);
-        assert_eq!(format_short_date_fr(parsed.manual_reset_expirations[0]), "9 mars");
+        assert_eq!(
+            format_short_date_fr(parsed.manual_reset_expirations[0]),
+            "9 mars"
+        );
 
         let mut map = BTreeMap::new();
         for w in parsed.windows {
@@ -4899,5 +5331,167 @@ mod tests {
         assert!(html.contains("<strong>1</strong> reset"));
         assert!(html.contains("exp. 9 mars"));
         assert!(!html.contains("non exposé"));
+    }
+
+    #[test]
+    fn incident_routing_quota_from_cache_blocks_exhausted_account_and_scores_healthy() {
+        let dir = std::env::temp_dir().join(format!(
+            "bridget-usage-routing-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        crate::environment::ensure_private_directory(&dir).unwrap();
+        let path = dir.join("usage-quotas.json");
+        let now = 1_795_769_900_i64;
+        let mut cache = UsageCacheFile {
+            version: 1,
+            entries: BTreeMap::new(),
+        };
+        cache.entries.insert(
+            "codex:monordinateur:default".into(),
+            CachedQuotaEntry {
+                engine: "codex".into(),
+                machine_id: "monordinateur".into(),
+                agent_type: "codex-mac-normal".into(),
+                connection_id: Some("codex-mac-normal".into()),
+                profile_dir: None,
+                account_id: Some("82ae4828-611c-4a88-9020-dac5ee4a001c".into()),
+                logged_in: Some(true),
+                credits_balance: Some("0".into()),
+                credits_unlimited: false,
+                observed_at: now - 120,
+                windows: BTreeMap::from([(
+                    "primary/10080m".into(),
+                    CachedWindow {
+                        window: "primary/10080m".into(),
+                        pool: None,
+                        used_percent: Some(100),
+                        resets_at: Some(now + 180_000),
+                        status: "rejected".into(),
+                        observed_at: now - 120,
+                    },
+                )]),
+                ..Default::default()
+            },
+        );
+        // Profil frère partageant le même account_id sur monordinateur (codex-mac-pro).
+        cache.entries.insert(
+            "codex:monordinateur:/Volumes/8TB2/01-workflow/cx-pro".into(),
+            CachedQuotaEntry {
+                engine: "codex".into(),
+                machine_id: "monordinateur".into(),
+                agent_type: "codex-pro".into(),
+                connection_id: Some("codex-mac-pro".into()),
+                profile_dir: Some("/Volumes/8TB2/01-workflow/cx-pro".into()),
+                account_id: Some("82ae4828-611c-4a88-9020-dac5ee4a001c".into()),
+                logged_in: Some(true),
+                credits_balance: Some("0".into()),
+                credits_unlimited: false,
+                observed_at: now - 200,
+                windows: BTreeMap::new(),
+                ..Default::default()
+            },
+        );
+        // Compte Codex distinct sur cartae (19 % restants -> 81 % utilisés).
+        cache.entries.insert(
+            "codex:cartae:default".into(),
+            CachedQuotaEntry {
+                engine: "codex".into(),
+                machine_id: "cartae".into(),
+                agent_type: "codex".into(),
+                connection_id: Some("codex-cartae-normal".into()),
+                profile_dir: None,
+                account_id: Some("bfdfeb93-1d22-482e-9230-34e239451d25".into()),
+                logged_in: Some(true),
+                credits_balance: Some("0".into()),
+                credits_unlimited: false,
+                observed_at: now - 60,
+                windows: BTreeMap::from([(
+                    "primary/10080m".into(),
+                    CachedWindow {
+                        window: "primary/10080m".into(),
+                        pool: None,
+                        used_percent: Some(81),
+                        resets_at: Some(now + 400_000),
+                        status: "available".into(),
+                        observed_at: now - 60,
+                    },
+                )]),
+                ..Default::default()
+            },
+        );
+        // Claude sain (21 % utilisés -> 79 % restants).
+        cache.entries.insert(
+            "claude:monordinateur:default:claude-mac".into(),
+            CachedQuotaEntry {
+                engine: "claude".into(),
+                machine_id: "monordinateur".into(),
+                agent_type: "claude-mac".into(),
+                connection_id: Some("claude-mac".into()),
+                logged_in: Some(true),
+                observed_at: now - 30,
+                windows: BTreeMap::from([(
+                    "seven_day".into(),
+                    CachedWindow {
+                        window: "seven_day".into(),
+                        pool: None,
+                        used_percent: Some(21),
+                        resets_at: Some(now + 240_000),
+                        status: "available".into(),
+                        observed_at: now - 30,
+                    },
+                )]),
+                ..Default::default()
+            },
+        );
+        save_cache_to(&path, &cache).unwrap();
+
+        let mac_normal = routing_quota_from_cache_at(
+            &path,
+            "codex-mac-normal",
+            "codex",
+            "monordinateur",
+            None,
+            now,
+        )
+        .expect("codex-mac-normal observé");
+        assert!(mac_normal.exhausted && mac_normal.launch_blocked);
+
+        let mac_pro = routing_quota_from_cache_at(
+            &path,
+            "codex-mac-pro",
+            "codex",
+            "monordinateur",
+            Some("/Volumes/8TB2/01-workflow/cx-pro"),
+            now,
+        )
+        .expect("codex-mac-pro partage le même account_id");
+        assert!(mac_pro.launch_blocked);
+
+        let cartae_codex =
+            routing_quota_from_cache_at(&path, "codex-cartae-normal", "codex", "cartae", None, now)
+                .expect("codex-cartae-normal distinct");
+        assert!(!cartae_codex.launch_blocked);
+        assert_eq!(cartae_codex.windows[0]["used_percent"], 81);
+
+        let claude =
+            routing_quota_from_cache_at(&path, "claude-mac", "claude", "monordinateur", None, now)
+                .expect("claude-mac sain");
+        assert!(!claude.launch_blocked);
+        assert_eq!(claude.windows[0]["used_percent"], 21);
+
+        // Après resets_at, le blocage expire automatiquement.
+        assert!(
+            routing_quota_from_cache_at(
+                &path,
+                "codex-mac-normal",
+                "codex",
+                "monordinateur",
+                None,
+                now + 180_001,
+            )
+            .is_none()
+        );
+
+        let _ = fs::remove_dir_all(&dir);
     }
 }

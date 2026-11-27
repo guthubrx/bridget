@@ -1501,10 +1501,16 @@ or polling loops:
   observed quota window resets within six hours, Bridget pauses the child and
   relaunches the exact mission automatically (up to two quota rounds) without
   consuming crash-recovery attempts.
-- **Automatic quota fallback:** setting `quota_fallback_authorized: true` on an
-  admission (or enabling `BRIDGET_AUTO_QUOTA_FALLBACK=1` on the daemon) allows
-  Bridget to re-route to another eligible account or engine when the selected
-  window is exhausted, within existing permissions.
+- **Quota fallback policy & proactive avoidance of exhausted accounts:** setting
+  `quota_fallback_authorized: true` on an admission (or enabling
+  `BRIDGET_AUTO_QUOTA_FALLBACK=1` on the daemon) skips opening a blocking human
+  question (`bridget_ask_user`) when a task hits `usage_limit`
+  (`automatic_restart: false`), letting the parent immediately relaunch on
+  another eligible account or engine within existing permissions. Proactively at
+  admission time, `bridget_auto_delegate` combines `provider_limits` (retaining
+  Codex exhaustion after child exit) with the background-refreshed 0-token
+  `usage-quotas.json` cache to exclude exhausted connections and score healthy
+  connections by real remaining quota.
 - **Orphan cleanup (`BRIDGET_REAPER_MODE=cleanup`):** enables controlled cleanup
   of confirmed orphaned processes according to daemon safety checks.
 - **Cursor ACP:** Cursor CLI (`agent`) is supported as a native delegation
