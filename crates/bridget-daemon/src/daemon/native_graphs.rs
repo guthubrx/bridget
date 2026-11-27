@@ -592,8 +592,36 @@ fn is_valid_git_sha40(value: &str) -> bool {
     value.len() == 40 && value.bytes().all(|b| b.is_ascii_hexdigit())
 }
 
+/// Extrait le SHA40 produit depuis un `factual_summary` (schéma réel `/git/head_commit`
+/// ou champ plat `commit` pour rétrocompatibilité tests).
+fn extract_commit_from_factual_summary(fs: &Value) -> Option<&str> {
+    fs.pointer("/git/head_commit")
+        .and_then(Value::as_str)
+        .filter(|sha| is_valid_git_sha40(sha))
+        .or_else(|| {
+            fs.get("commit")
+                .and_then(Value::as_str)
+                .filter(|sha| is_valid_git_sha40(sha))
+        })
+}
+
+/// Épingle automatiquement `workspace.base_ref = expected_base_commit` lorsqu'une étape
+/// ou un vérificateur utilise `strategy = "worktree"` sans `base_ref` explicite.
+/// Empêche `expected_base_commit_mismatch` lorsque `main` avance pendant l'exécution d'un graphe.
+fn pin_worktree_base_ref(delegation: &mut AutoDelegateV2) {
+    if let (Some(WorkspaceRequest::Worktree { base_ref, .. }), Some(sha)) = (
+        &mut delegation.workspace,
+        delegation.expected_base_commit.as_deref(),
+    ) && base_ref.is_none()
+        && is_valid_git_sha40(sha)
+    {
+        *base_ref = Some(sha.to_string());
+    }
+}
+
 fn apply_commit_to_delegation(delegation: &mut AutoDelegateV2, commit: Option<&str>) {
     let Some(commit) = commit.filter(|sha| is_valid_git_sha40(sha)) else {
+        pin_worktree_base_ref(delegation);
         return;
     };
     match &mut delegation.workspace {
@@ -745,10 +773,16 @@ pub(crate) fn build_enriched_step_task(
             header.push_str(&format!(", task_id={tid}"));
         }
         if let Some(fs) = dep.factual_summary.as_ref() {
-            if let Some(commit) = fs.get("commit").and_then(Value::as_str) {
+            if let Some(commit) = extract_commit_from_factual_summary(fs)
+                .or_else(|| fs.get("commit").and_then(Value::as_str))
+            {
                 header.push_str(&format!(", commit={commit}"));
             }
-            if let Some(files) = fs.get("files_changed").and_then(Value::as_u64) {
+            if let Some(files) = fs
+                .get("files_changed")
+                .and_then(Value::as_u64)
+                .or_else(|| fs.pointer("/git/commit_count").and_then(Value::as_u64))
+            {
                 header.push_str(&format!(", fichiers_modifies={files}"));
             }
         }
@@ -1186,12 +1220,10 @@ fn format_graph_summary_message(graph: &NativeGraphRecord) -> String {
         if let Some(tid) = step.task_id.as_deref() {
             out.push_str(&format!(" (task_id={tid})"));
         }
-        if let Some(commit) = step
-            .factual_summary
-            .as_ref()
-            .and_then(|v| v.get("commit"))
-            .and_then(Value::as_str)
-        {
+        if let Some(commit) = step.factual_summary.as_ref().and_then(|v| {
+            extract_commit_from_factual_summary(v)
+                .or_else(|| v.get("commit").and_then(Value::as_str))
+        }) {
             out.push_str(&format!(" · commit={commit}"));
         }
         if let Some(cs) = step.convergence_state.as_ref() {
@@ -1304,6 +1336,7 @@ pub(super) fn handle_submit(
             .iter()
             .map(|s| {
                 let mut delegation = s.delegation.clone();
+                pin_worktree_base_ref(&mut delegation);
                 delegation.request_id = if s.convergence.is_some() {
                     convergence_step_request_id(&request.request_id, &s.step_id, 0, 1, "produce")
                 } else {
@@ -1311,6 +1344,10 @@ pub(super) fn handle_submit(
                 };
                 if s.convergence.is_some() {
                     ensure_convergence_producer_keep_alive(&mut delegation);
+                }
+                let mut convergence = s.convergence.clone();
+                if let Some(conv) = convergence.as_mut() {
+                    pin_worktree_base_ref(&mut conv.verify);
                 }
                 let convergence_state =
                     s.convergence
@@ -1347,7 +1384,7 @@ pub(super) fn handle_submit(
                     when: s.when,
                     when_outcomes: s.when_outcomes.clone(),
                     delegation,
-                    convergence: s.convergence.clone(),
+                    convergence,
                     convergence_state,
                     state: "waiting_dependencies".into(),
                     task_id: None,
@@ -1913,10 +1950,12 @@ pub(crate) fn sync_convergence_step_from_tasks(
                         &task,
                         task.result.as_ref().map(String::len),
                     );
-                    let producer_commit = fs
-                        .get("commit")
-                        .and_then(Value::as_str)
+                    let producer_commit = task
+                        .workspace
+                        .as_ref()
+                        .and_then(|ws| ws.head_commit.as_deref())
                         .filter(|sha| is_valid_git_sha40(sha))
+                        .or_else(|| extract_commit_from_factual_summary(&fs))
                         .map(str::to_owned);
                     let excerpt = task
                         .result
@@ -2500,6 +2539,7 @@ pub(super) fn tick(state: &Arc<Mutex<DaemonState>>) {
                         let enriched_task =
                             build_enriched_step_task(&graph.steps[idx], &graph.steps);
                         let mut delegation = graph.steps[idx].delegation.clone();
+                        pin_worktree_base_ref(&mut delegation);
                         delegation.task = enriched_task;
                         if graph.steps[idx].convergence.is_some() {
                             ensure_convergence_producer_keep_alive(&mut delegation);
@@ -3022,11 +3062,18 @@ pub(super) fn tick(state: &Arc<Mutex<DaemonState>>) {
                                         .or_else(|| result["error"].as_str())
                                         .unwrap_or("verifier_admission_refused");
                                     let msg = result["message"].as_str().unwrap_or(code);
+                                    let hint = if code == "expected_base_commit_mismatch"
+                                        || code == "base_commit_not_found"
+                                    {
+                                        " Conseil : épinglez workspace.base_ref au même SHA que expected_base_commit (ou utilisez strategy='commit_view') ; si le producteur a tourné sur une machine distante différente de l'hôte d'origine, poussez ou placez producteur/vérificateur sur l'hôte source."
+                                    } else {
+                                        ""
+                                    };
                                     current.steps[pos].state = "failed".into();
                                     current.steps[pos].error = Some(
-                                        format!("convergence_verify_failed:{code}: {msg}")
+                                        format!("convergence_verify_failed:{code}: {msg}{hint}")
                                             .chars()
-                                            .take(512)
+                                            .take(640)
                                             .collect(),
                                     );
                                     current.steps[pos].finished_at = Some(now);
@@ -4410,5 +4457,53 @@ mod tests {
         assert!(ready_waiting_steps(&g_cancel).is_empty());
         assert_eq!(g_cancel.steps[1].state, "skipped_condition_not_met");
         assert_eq!(g_cancel.steps[2].state, "skipped_condition_not_met");
+    }
+
+    #[test]
+    fn spec314_worktree_auto_pin_and_nested_git_head_commit_extraction() {
+        let sha_base = "4ed3cbee959cb27c480c3219a173e184eb721ec9";
+        let sha_prod = "84e7d95990efd5ca9c0a732e7f6424d2c2c6f09b";
+
+        // 1) Extraction du commit producteur depuis la vraie structure `factual_summary.git.head_commit`.
+        let real_fs = json!({
+            "git": {
+                "strategy": "worktree",
+                "base_commit": sha_base,
+                "head_commit": sha_prod,
+                "commit_count": 1
+            }
+        });
+        assert_eq!(
+            extract_commit_from_factual_summary(&real_fs),
+            Some(sha_prod)
+        );
+
+        // 2) Auto-épinglage de `workspace.base_ref` quand `worktree` est déclaré sans `base_ref`
+        //    (évite `expected_base_commit_mismatch` quand `main` avance pendant le graphe).
+        let mut verify_del = sample_auto("review");
+        verify_del.expected_base_commit = Some(sha_base.into());
+        verify_del.workspace = Some(WorkspaceRequest::Worktree {
+            base_ref: None,
+            branch: None,
+        });
+        apply_commit_to_delegation(&mut verify_del, None);
+        assert_eq!(
+            verify_del.workspace,
+            Some(WorkspaceRequest::Worktree {
+                base_ref: Some(sha_base.into()),
+                branch: None,
+            })
+        );
+
+        // 3) Quand le producteur fournit `sha_prod`, verify est ré-ancré sur `sha_prod` (SHA + base_ref).
+        apply_commit_to_delegation(&mut verify_del, Some(sha_prod));
+        assert_eq!(verify_del.expected_base_commit.as_deref(), Some(sha_prod));
+        assert_eq!(
+            verify_del.workspace,
+            Some(WorkspaceRequest::Worktree {
+                base_ref: Some(sha_prod.into()),
+                branch: None,
+            })
+        );
     }
 }
