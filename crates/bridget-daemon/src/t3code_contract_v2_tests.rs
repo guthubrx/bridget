@@ -829,3 +829,91 @@ fn guidance156_t3_interrupt_pose_restart() {
     assert_eq!(frame["deliveryIntent"], "restart");
     assert_eq!(frame["text"], "nouvelle direction");
 }
+
+#[test]
+fn shell_snapshot_uses_advertised_trim_capabilities_and_allows_full_subagent_scan() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let client = Client::for_base_url(
+        &format!("http://{}", listener.local_addr().unwrap()),
+        "fixture",
+    );
+    let server = std::thread::spawn(move || {
+        http_reply(
+            &listener,
+            200,
+            r#"{"environmentId":"fixture","serverVersion":"fixture","orchestrationProtocolVersion":2,"capabilities":{"shellThreadFamilies":true,"shellOlderSettled":true}}"#,
+            "GET /.well-known/t3/environment ",
+        );
+        http_reply(
+            &listener,
+            200,
+            &shell().to_string(),
+            "GET /api/orchestration/shell?omitIdleSubagents=1&omitOlderSettled=1 ",
+        );
+        rpc_reply(
+            &listener,
+            "server.getConfig",
+            Some(json!({"providers":[{"instanceId":"claude_glm","driver":"claude"}]})),
+        );
+        http_reply(
+            &listener,
+            200,
+            &shell().to_string(),
+            "GET /api/orchestration/shell?omitOlderSettled=1 ",
+        );
+    });
+    assert_eq!(client.snapshot().unwrap().threads.len(), 1);
+    assert_eq!(
+        client
+            .snapshot_including_idle_subagents()
+            .unwrap()
+            .threads
+            .len(),
+        1
+    );
+    server.join().unwrap();
+}
+
+#[test]
+fn shell_snapshot_sends_only_advertised_trim_capability() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let client = Client::for_base_url(
+        &format!("http://{}", listener.local_addr().unwrap()),
+        "fixture",
+    );
+    let server = std::thread::spawn(move || {
+        http_reply(
+            &listener,
+            200,
+            r#"{"environmentId":"fixture","serverVersion":"fixture","orchestrationProtocolVersion":2,"capabilities":{"shellThreadFamilies":true,"shellOlderSettled":false}}"#,
+            "GET /.well-known/t3/environment ",
+        );
+        http_reply(
+            &listener,
+            200,
+            &shell().to_string(),
+            "GET /api/orchestration/shell?omitIdleSubagents=1 ",
+        );
+        rpc_reply(
+            &listener,
+            "server.getConfig",
+            Some(json!({"providers":[{"instanceId":"claude_glm","driver":"claude"}]})),
+        );
+        http_reply(
+            &listener,
+            200,
+            &shell().to_string(),
+            "GET /api/orchestration/shell ",
+        );
+    });
+    assert_eq!(client.snapshot().unwrap().threads.len(), 1);
+    assert_eq!(
+        client
+            .snapshot_including_idle_subagents()
+            .unwrap()
+            .threads
+            .len(),
+        1
+    );
+    server.join().unwrap();
+}

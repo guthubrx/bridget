@@ -1244,6 +1244,7 @@ fn serve(paths: &Paths) -> Result<(), String> {
     let mut obligations: HashSet<String> = HashSet::new();
     let mut attempted_obligations: HashSet<String> = HashSet::new();
     let mut drain_reopens: HashSet<String> = HashSet::new();
+    let mut linked_subagents: HashSet<String> = HashSet::new();
     let mut obligation_scan_required = true;
     let mut last_relation_counts: Option<RelationCounts> = None;
     let t3_base = contract::base_dir().map_err(|e| e.to_string())?;
@@ -1262,7 +1263,18 @@ fn serve(paths: &Paths) -> Result<(), String> {
         let snapshot_incarnation =
             runtime_incarnation(&t3_base).filter(|(runtime, _)| *runtime == expected_runtime);
         let snapshot_started = Instant::now();
-        let snapshot = match session.call(|client| client.snapshot()) {
+        linked_subagents.retain(|id| links.contains_key(id) || pending_opens.contains_key(id));
+        let need_idle_subagents = obligation_scan_required
+            || !obligations.is_empty()
+            || !drain_reopens.is_empty()
+            || !linked_subagents.is_empty();
+        let snapshot = match session.call(|client| {
+            if need_idle_subagents {
+                client.snapshot_including_idle_subagents()
+            } else {
+                client.snapshot()
+            }
+        }) {
             Ok(snapshot) => snapshot,
             Err(ContractError::Unauthorized) => {
                 identities.clear();
@@ -1318,6 +1330,7 @@ fn serve(paths: &Paths) -> Result<(), String> {
                     link.close();
                 }
                 drain_reopens.clear();
+                linked_subagents.clear();
                 obligation_scan_required = true;
                 publish_status(paths, "waiting", &detail, 0);
                 session.reset_runtime(wait_runtime(paths, poll));
@@ -1584,6 +1597,9 @@ fn serve(paths: &Paths) -> Result<(), String> {
                             Link::open(&paths, session, &thread_summary)
                         }) {
                         Ok(handle) => {
+                            if summary.relationship_to_parent.as_deref() == Some("subagent") {
+                                linked_subagents.insert(summary.id.clone());
+                            }
                             pending_opens.insert(summary.id.clone(), handle);
                         }
                         Err(e) => {
@@ -1603,6 +1619,9 @@ fn serve(paths: &Paths) -> Result<(), String> {
                                 &mut obligations,
                                 &mut drain_reopens,
                             );
+                        }
+                        if summary.relationship_to_parent.as_deref() == Some("subagent") {
+                            linked_subagents.insert(summary.id.clone());
                         }
                         links.insert(summary.id.clone(), link);
                     }

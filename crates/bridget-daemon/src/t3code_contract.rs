@@ -599,8 +599,19 @@ pub struct Client {
     base_url: String,
     token: String,
     v2: Cell<Option<bool>>,
+    shell_omit_idle_subagents: Cell<bool>,
+    shell_omit_older_settled: Cell<bool>,
     providers: RefCell<HashMap<String, String>>,
     providers_at: Cell<Option<Instant>>,
+}
+
+fn shell_snapshot_path(omit_idle_subagents: bool, omit_older_settled: bool) -> &'static str {
+    match (omit_idle_subagents, omit_older_settled) {
+        (true, true) => "/api/orchestration/shell?omitIdleSubagents=1&omitOlderSettled=1",
+        (true, false) => "/api/orchestration/shell?omitIdleSubagents=1",
+        (false, true) => "/api/orchestration/shell?omitOlderSettled=1",
+        (false, false) => "/api/orchestration/shell",
+    }
 }
 
 impl Client {
@@ -613,6 +624,8 @@ impl Client {
             base_url: base_url.trim_end_matches('/').to_string(),
             token: token.to_string(),
             v2: Cell::new(None),
+            shell_omit_idle_subagents: Cell::new(false),
+            shell_omit_older_settled: Cell::new(false),
             providers: RefCell::new(HashMap::new()),
             providers_at: Cell::new(None),
         }
@@ -663,6 +676,14 @@ impl Client {
         let response = request.send_lazy().map_err(http_request_error)?;
         let status = response.status_code;
         let text = read_response_body(response, limit)?;
+        if text.len() as u64 > limit / 2 {
+            log::warn!(
+                "réponse HTTP T3 volumineuse sur {} : {} Mio / {} Mio",
+                path.split('?').next().unwrap_or(path),
+                text.len() / (1024 * 1024),
+                limit / (1024 * 1024),
+            );
+        }
         match status {
             200..=299 => Ok(text),
             401 => Err(ContractError::Unauthorized),
@@ -674,8 +695,26 @@ impl Client {
     }
 
     pub fn snapshot(&self) -> Result<Snapshot, ContractError> {
-        let uses_v2 = match self.v2.get() {
-            Some(version) => version,
+        self.snapshot_with_options(true, true)
+    }
+
+    /// Variante conservant les sous-agents inactifs lorsque le pont analyse
+    /// des obligations de drain ou attend la fin d'un sous-agent lié.
+    pub fn snapshot_including_idle_subagents(&self) -> Result<Snapshot, ContractError> {
+        self.snapshot_with_options(false, true)
+    }
+
+    fn snapshot_with_options(
+        &self,
+        want_omit_idle_subagents: bool,
+        want_omit_older_settled: bool,
+    ) -> Result<Snapshot, ContractError> {
+        let (uses_v2, cap_omit_idle, cap_omit_older) = match self.v2.get() {
+            Some(version) => (
+                version,
+                self.shell_omit_idle_subagents.get(),
+                self.shell_omit_older_settled.get(),
+            ),
             None => {
                 // Les routes inconnues peuvent rendre index.html avec HTTP200.
                 // Le descripteur officiel annonce le protocole ; seule la lecture
@@ -685,12 +724,22 @@ impl Client {
                     serde_json::from_str(&text).map_err(|_| shape("environment", "json"))?;
                 str_field(&value, "environment", "environmentId")?;
                 str_field(&value, "environment", "serverVersion")?;
-                match value.get("orchestrationProtocolVersion") {
+                let uses_v2 = match value.get("orchestrationProtocolVersion") {
                     None => false,
                     Some(version) if version.as_u64() == Some(1) => false,
                     Some(version) if version.as_u64() == Some(2) => true,
                     _ => return Err(shape("environment", "orchestrationProtocolVersion")),
-                }
+                };
+                let caps = value.get("capabilities");
+                let cap_omit_idle = caps
+                    .and_then(|c| c.get("shellThreadFamilies"))
+                    .and_then(Value::as_bool)
+                    == Some(true);
+                let cap_omit_older = caps
+                    .and_then(|c| c.get("shellOlderSettled"))
+                    .and_then(Value::as_bool)
+                    == Some(true);
+                (uses_v2, cap_omit_idle, cap_omit_older)
             }
         };
         if !uses_v2 {
@@ -702,16 +751,24 @@ impl Client {
                 SNAPSHOT_HTTP_TIMEOUT,
             )?)?;
             self.v2.set(Some(false));
+            self.shell_omit_idle_subagents.set(false);
+            self.shell_omit_older_settled.set(false);
             return Ok(snapshot);
         }
+        let path = shell_snapshot_path(
+            want_omit_idle_subagents && cap_omit_idle,
+            want_omit_older_settled && cap_omit_older,
+        );
         let mut snapshot = v2::parse_snapshot(&self.request_with_budget(
             "GET",
-            "/api/orchestration/shell",
+            path,
             None,
             MAX_SNAPSHOT_RESPONSE_BYTES,
             SNAPSHOT_HTTP_TIMEOUT,
         )?)?;
         self.v2.set(Some(true));
+        self.shell_omit_idle_subagents.set(cap_omit_idle);
+        self.shell_omit_older_settled.set(cap_omit_older);
         // Le nom d'une instance personnalisée n'atteste pas son driver.
         // Catalogue borné partagé par les lectures de ce Client, rafraîchi à30s.
         if self
