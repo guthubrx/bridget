@@ -7394,9 +7394,11 @@ fn spec309_compact_discovery_tools_fits_acp_budget_and_keeps_core_delegation_fie
     let mut total_bytes = 0usize;
     for tool in &compact {
         let encoded = serde_json::to_string(tool).unwrap();
+        // Plafond empirique Antigravity ACP constaté le 27/11/2026 sur 109 outils MCP :
+        // max conservé = 575 octets, min écarté = 672 octets. Garder chaque outil <= 550 octets.
         assert!(
-            encoded.len() <= 1800,
-            "outil compact trop volumineux ({} octets): {}",
+            encoded.len() <= 550,
+            "outil compact trop volumineux ({} octets > 550): {}",
             encoded.len(),
             tool["name"]
         );
@@ -7413,10 +7415,8 @@ fn spec309_compact_discovery_tools_fits_acp_budget_and_keeps_core_delegation_fie
         assert!(tool["inputSchema"].get("$defs").is_none());
         assert!(tool["inputSchema"].get("$ref").is_none());
     }
-    // Budget compact ACP (20 outils incluant descriptions complètes et indications
-    // de forme fermée sur workspace/brief/expected_base_commit/effort/reply_timeout).
     assert!(
-        total_bytes <= 10_000,
+        total_bytes <= 6_500,
         "budget compact depasse ({total_bytes} octets)"
     );
     let auto = compact
@@ -7431,17 +7431,12 @@ fn spec309_compact_discovery_tools_fits_acp_budget_and_keeps_core_delegation_fie
         "model",
         "effort",
         "machine_id",
-        "connection_id",
         "posture",
+        "reply_timeout",
+        "keep_alive_secs",
         "expected_base_commit",
         "workspace",
         "brief",
-        "resume_on_limit",
-        "quota_fallback_authorized",
-        "service_tier",
-        "workload",
-        "urgent",
-        "child_requests",
     ] {
         assert!(
             auto["inputSchema"]["properties"].get(field).is_some(),

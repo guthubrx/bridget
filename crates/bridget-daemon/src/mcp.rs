@@ -2862,6 +2862,12 @@ const COMPACT_MCP_TOOLS: &[&str] = &[
     "bridget_read_artifact",
 ];
 
+// Antigravity ACP retire silencieusement tout outil MCP dont le schéma compact
+// dépasse ~600 octets (constat empirique 27/11/2026 sur 109 outils : max conservé
+// 575 octets, min rejeté 672 octets). Garder chaque outil <= 550 octets ici ;
+// les champs avancés (connection_id, resume_on_limit, quota_fallback_authorized,
+// service_tier, workload, urgent, child_requests, project_id) restent acceptés
+// côté serveur et documentés dans le schéma complet et skills/bridget/SKILL.md.
 const COMPACT_AUTO_DELEGATE_FIELDS: &[&str] = &[
     "request_id",
     "task",
@@ -2870,19 +2876,12 @@ const COMPACT_AUTO_DELEGATE_FIELDS: &[&str] = &[
     "model",
     "effort",
     "machine_id",
-    "connection_id",
     "posture",
     "reply_timeout",
     "keep_alive_secs",
     "expected_base_commit",
     "workspace",
     "brief",
-    "resume_on_limit",
-    "quota_fallback_authorized",
-    "service_tier",
-    "workload",
-    "urgent",
-    "child_requests",
 ];
 
 const COMPACT_DELEGATE_FIELDS: &[&str] = &[
@@ -2891,7 +2890,6 @@ const COMPACT_DELEGATE_FIELDS: &[&str] = &[
     "agent_type",
     "cwd",
     "machine_id",
-    "project_id",
     "model",
     "effort",
     "posture",
@@ -2899,9 +2897,6 @@ const COMPACT_DELEGATE_FIELDS: &[&str] = &[
     "keep_alive_secs",
     "workspace",
     "brief",
-    "resume_on_limit",
-    "quota_fallback_authorized",
-    "fallback",
 ];
 
 fn truncate_compact_description(raw: &str, max_chars: usize) -> String {
@@ -2925,7 +2920,7 @@ fn truncate_compact_description(raw: &str, max_chars: usize) -> String {
 fn compact_tool_description(name: &str, raw: &str) -> String {
     match name {
         "bridget_send" => {
-            "Envoyer un message direct (intent=action), ou un avis sans réveil (intent=information, reply=false)."
+            "Envoyer un message (intent=queue|steer|interrupt) ou avis sans réveil (intent=information, reply=false)."
                 .to_owned()
         }
         "bridget_cancel" => {
@@ -2947,13 +2942,10 @@ fn compact_tool_description(name: &str, raw: &str) -> String {
             "Acquitter le résultat ou l'échec de tâches natives (task_ids) et annuler leurs avis en attente."
                 .to_owned()
         }
-        "bridget_auto_delegate" => {
-            "Déléguer une mission via l'admission flotte V2 (axes machine, engine, model, effort indépendants)."
-                .to_owned()
-        }
+        "bridget_auto_delegate" => "Déléguer (flotte V2).".to_owned(),
+        "bridget_delegate" => "Déléguer (explicite).".to_owned(),
         "bridget_delegate_graph" => {
-            "Enchaîne 1 à 16 missions DAG (A->B+C) avec convergence bornée producteur<->vérificateur optionnelle par étape."
-                .to_owned()
+            "DAG 1-16 étapes + convergence bornée (verify, max_iterations 2..5).".to_owned()
         }
         _ => truncate_compact_description(raw, 128),
     }
@@ -2961,26 +2953,11 @@ fn compact_tool_description(name: &str, raw: &str) -> String {
 
 fn compact_field_hint(tool_name: &str, field: &str) -> Option<&'static str> {
     match (tool_name, field) {
-        ("bridget_delegate_graph", "steps") => Some(
-            "Tableau d'objets {step_id, depends_on?, pass_dependency_results?, delegation (format bridget_auto_delegate), convergence?: {verify, max_iterations?:2..5, stop_on_stagnation?:true}}. Verdict vérificateur JSON fermé : approve|revise|escalate.",
-        ),
-        ("bridget_auto_delegate", "workspace") => Some(
-            "Objet {strategy:'shared'|'worktree'|'commit_view', base_ref?, branch?}. En lecture seule sans workspace_busy : strategy='commit_view' avec posture='discovery' et expected_base_commit.",
-        ),
-        ("bridget_delegate", "workspace") => {
-            Some("Objet {strategy:'shared'|'worktree', base_ref?, branch?}.")
+        ("bridget_delegate_graph", "steps") => {
+            Some("[{step_id,depends_on?,delegation,convergence?:{verify,max_iterations?:2..5}}]")
         }
-        ("bridget_auto_delegate" | "bridget_delegate" | "bridget_task_continue", "brief") => Some(
+        ("bridget_task_continue", "brief") => Some(
             "Objet fermé : objective et summary (requis), results, decisions, questions, next_step, references, limitations.",
-        ),
-        ("bridget_auto_delegate", "expected_base_commit") => Some(
-            "SHA Git complet (40 hex), obligatoire en Git, worktree, commit_view ou compilation.",
-        ),
-        ("bridget_auto_delegate" | "bridget_delegate", "effort") => Some(
-            "Optionnel ; doit figurer dans supported_efforts du modèle (omis sur antigravity, supporté sur codex/claude).",
-        ),
-        ("bridget_auto_delegate" | "bridget_delegate", "reply_timeout") => Some(
-            "Délai max par ronde en s (défaut 3600, max 86400 ; augmenter pour mission longue).",
         ),
         _ => None,
     }
@@ -2988,8 +2965,9 @@ fn compact_field_hint(tool_name: &str, field: &str) -> Option<&'static str> {
 
 fn compact_property_schema(schema: &Value) -> Value {
     // Un choix entre objets (workspace) reste un objet simple. Antigravity
-    // retire un outil dont un objet imbriqué déclare ses propriétés (321/322) ;
-    // le texte JSON reçu à la place d'un objet est décodé côté serveur.
+    // retire un outil dont un objet imbriqué déclare ses propriétés (321/322)
+    // ou dont la taille dépasse ~600 octets ; le texte JSON reçu à la place
+    // d'un objet est décodé côté serveur.
     if schema.get("type").is_none()
         && let Some(variants) = schema
             .get("oneOf")
@@ -3022,13 +3000,6 @@ fn compact_property_schema(schema: &Value) -> Value {
             .map(compact_property_schema)
             .unwrap_or_else(|| json!({ "type": "string" }));
         return json!({ "type": ty, "items": items });
-    }
-    if ty == "string"
-        && let Some(values) = schema.get("enum").and_then(Value::as_array)
-        && !values.is_empty()
-        && values.iter().all(Value::is_string)
-    {
-        return json!({ "type": "string", "enum": values });
     }
     json!({ "type": ty })
 }
@@ -4112,65 +4083,21 @@ mod compact318_tests {
             .iter()
             .find(|t| t["name"] == "bridget_auto_delegate")
             .unwrap();
-        // Objet simple, sans propriétés imbriquées : forme gardée par Antigravity,
-        // avec description explicite de strategy/commit_view et des champs fermés de brief.
-        let workspace = &auto["inputSchema"]["properties"]["workspace"];
-        assert_eq!(workspace["type"], "object");
-        assert!(workspace.get("properties").is_none());
-        let ws_desc = workspace["description"].as_str().unwrap();
-        for token in [
-            "strategy",
-            "shared",
-            "worktree",
-            "commit_view",
-            "workspace_busy",
-        ] {
-            assert!(
-                ws_desc.contains(token),
-                "workspace hint manquant ({token}): {ws_desc}"
-            );
-        }
-        let brief = &auto["inputSchema"]["properties"]["brief"];
-        assert_eq!(brief["type"], "object");
-        assert!(brief.get("properties").is_none());
-        let brief_desc = brief["description"].as_str().unwrap();
-        for token in ["objective", "summary", "references"] {
-            assert!(
-                brief_desc.contains(token),
-                "brief hint manquant ({token}): {brief_desc}"
-            );
-        }
-        assert!(
-            auto["inputSchema"]["properties"]["expected_base_commit"]["description"]
-                .as_str()
-                .unwrap()
-                .contains("40")
-        );
-        assert!(
-            auto["inputSchema"]["properties"]["effort"]["description"]
-                .as_str()
-                .unwrap()
-                .contains("supported_efforts")
+        // Objet simple, sans propriétés imbriquées ni descriptions verbeuses afin de
+        // rester strictement sous le plafond Antigravity ACP (~560 octets par outil).
+        assert_eq!(
+            auto["inputSchema"]["properties"]["workspace"],
+            json!({"type":"object"})
         );
         assert_eq!(
-            auto["inputSchema"]["properties"]["posture"]["enum"],
-            json!(["discovery", "development"])
-        );
-        assert_eq!(
-            auto["inputSchema"]["properties"]["workload"]["enum"],
-            json!(["general", "compilation"])
+            auto["inputSchema"]["properties"]["brief"],
+            json!({"type":"object"})
         );
         // 339 : reply_timeout et keep_alive_secs doivent rester visibles en mode compact
         // pour éviter qu'une mission longue ne reste bloquée sur le défaut de 3600 s.
         assert_eq!(
-            auto["inputSchema"]["properties"]["reply_timeout"]["type"],
-            "integer"
-        );
-        assert!(
-            auto["inputSchema"]["properties"]["reply_timeout"]["description"]
-                .as_str()
-                .unwrap()
-                .contains("3600")
+            auto["inputSchema"]["properties"]["reply_timeout"],
+            json!({"type":"integer"})
         );
         assert_eq!(
             auto["inputSchema"]["properties"]["keep_alive_secs"],
@@ -4181,14 +4108,14 @@ mod compact318_tests {
             .find(|t| t["name"] == "bridget_delegate")
             .unwrap();
         assert_eq!(
-            delegate["inputSchema"]["properties"]["reply_timeout"]["type"],
-            "integer"
+            delegate["inputSchema"]["properties"]["reply_timeout"],
+            json!({"type":"integer"})
         );
         assert_eq!(
             delegate["inputSchema"]["properties"]["keep_alive_secs"],
             json!({"type":"integer"})
         );
-        // 313 : bridget_delegate_graph expose convergence et le contrat de verdict
+        // 313 : bridget_delegate_graph expose convergence de façon ultra-compacte
         // dans steps.description sans ajouter de properties imbriquées sur items.
         let graph = compact
             .iter()
@@ -4211,8 +4138,6 @@ mod compact318_tests {
             "convergence",
             "verify",
             "max_iterations",
-            "stop_on_stagnation",
-            "approve|revise|escalate",
         ] {
             assert!(
                 steps_desc.contains(token),
