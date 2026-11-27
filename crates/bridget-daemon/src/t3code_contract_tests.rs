@@ -72,6 +72,31 @@ fn spec221_bounded_response_caps_keep_general_budget_and_utf8() {
 }
 
 #[test]
+fn snapshot_response_cap_exceeds_general_16mib_and_reports_limit() {
+    let over_general = MAX_RESPONSE_BYTES + 1;
+    let err = read_response_body(std::io::repeat(b'x').take(over_general), MAX_RESPONSE_BYTES)
+        .unwrap_err();
+    assert!(
+        matches!(err, ContractError::InvalidShape { source: "HTTP T3", ref field } if field.contains("response limit") && field.contains("16 MiB")),
+        "{err:?}"
+    );
+    assert!(
+        read_response_body(
+            std::io::repeat(b'x').take(over_general),
+            MAX_SNAPSHOT_RESPONSE_BYTES
+        )
+        .is_ok()
+    );
+    assert!(
+        read_response_body(
+            std::io::repeat(b'x').take(MAX_SNAPSHOT_RESPONSE_BYTES + 1),
+            MAX_SNAPSHOT_RESPONSE_BYTES
+        )
+        .is_err()
+    );
+}
+
+#[test]
 fn runtime_valide_reconstruit_la_boucle_locale_et_refuse_le_reste() {
     let runtime = parse_runtime(RUNTIME, |_| true).unwrap();
     assert_eq!(

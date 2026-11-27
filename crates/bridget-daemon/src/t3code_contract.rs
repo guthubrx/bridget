@@ -19,10 +19,15 @@ use std::time::Instant;
 /// Fichier d'état publié par le serveur t3code (`<base>/userdata/`).
 pub const RUNTIME_FILE: &str = "server-runtime.json";
 const HTTP_TIMEOUT: Duration = Duration::from_secs(10);
+const SNAPSHOT_HTTP_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_RESPONSE_BYTES: u64 = 16 * 1024 * 1024;
 // La fenêtre officielle peut conserver un tour volumineux, même lorsque
-// payloadBudgetExceeded=true. Budget réservé à cette route de lecture.
+// payloadBudgetExceeded=true. Budget réservé aux routes de détail de fil.
 const MAX_BOUNDED_THREAD_RESPONSE_BYTES: u64 = 64 * 1024 * 1024;
+// L'instantané global (`/api/orchestration/shell` ou `/snapshot`) croît avec
+// l'historique des fils et des projections natives T3 (>16 Mio observés à
+// ~5 470 fils). Budget dédié, distinct du plafond général de 16 Mio.
+const MAX_SNAPSHOT_RESPONSE_BYTES: u64 = 128 * 1024 * 1024;
 
 fn read_response_body(response: impl Read, limit: u64) -> Result<String, ContractError> {
     let mut bytes = Vec::new();
@@ -30,7 +35,10 @@ fn read_response_body(response: impl Read, limit: u64) -> Result<String, Contrac
         .read_to_end(&mut bytes)
         .map_err(http_read_error)?;
     if bytes.len() as u64 > limit {
-        return Err(shape("HTTP T3", "response limit"));
+        return Err(shape(
+            "HTTP T3",
+            &format!("response limit (> {} MiB)", limit / (1024 * 1024)),
+        ));
     }
     String::from_utf8(bytes).map_err(|_| shape("HTTP T3", "UTF-8"))
 }
@@ -616,7 +624,7 @@ impl Client {
         path: &str,
         body: Option<&Value>,
     ) -> Result<String, ContractError> {
-        self.request_with_limit(method, path, body, MAX_RESPONSE_BYTES)
+        self.request_with_budget(method, path, body, MAX_RESPONSE_BYTES, HTTP_TIMEOUT)
     }
 
     fn request_with_limit(
@@ -625,6 +633,17 @@ impl Client {
         path: &str,
         body: Option<&Value>,
         limit: u64,
+    ) -> Result<String, ContractError> {
+        self.request_with_budget(method, path, body, limit, HTTP_TIMEOUT)
+    }
+
+    fn request_with_budget(
+        &self,
+        method: &str,
+        path: &str,
+        body: Option<&Value>,
+        limit: u64,
+        timeout: Duration,
     ) -> Result<String, ContractError> {
         let url = format!("{}{}", self.base_url, path);
         let mut request = match method {
@@ -635,7 +654,7 @@ impl Client {
         .with_header("Accept", "application/json")
         .with_header("x-t3-orchestration-protocol", "2")
         .with_max_redirects(0)
-        .with_timeout(HTTP_TIMEOUT.as_secs());
+        .with_timeout(timeout.as_secs());
         if let Some(body) = body {
             request = request
                 .with_header("Content-Type", "application/json")
@@ -675,13 +694,23 @@ impl Client {
             }
         };
         if !uses_v2 {
-            let snapshot =
-                parse_snapshot(&self.request("GET", "/api/orchestration/snapshot", None)?)?;
+            let snapshot = parse_snapshot(&self.request_with_budget(
+                "GET",
+                "/api/orchestration/snapshot",
+                None,
+                MAX_SNAPSHOT_RESPONSE_BYTES,
+                SNAPSHOT_HTTP_TIMEOUT,
+            )?)?;
             self.v2.set(Some(false));
             return Ok(snapshot);
         }
-        let mut snapshot =
-            v2::parse_snapshot(&self.request("GET", "/api/orchestration/shell", None)?)?;
+        let mut snapshot = v2::parse_snapshot(&self.request_with_budget(
+            "GET",
+            "/api/orchestration/shell",
+            None,
+            MAX_SNAPSHOT_RESPONSE_BYTES,
+            SNAPSHOT_HTTP_TIMEOUT,
+        )?)?;
         self.v2.set(Some(true));
         // Le nom d'une instance personnalisée n'atteste pas son driver.
         // Catalogue borné partagé par les lectures de ce Client, rafraîchi à30s.
@@ -772,11 +801,8 @@ impl Client {
                 ""
             };
             let path = format!("/api/orchestration/threads/{segment}{suffix}");
-            let text = if turn_limit <= 20 {
-                self.request_with_limit("GET", &path, None, MAX_BOUNDED_THREAD_RESPONSE_BYTES)?
-            } else {
-                self.request("GET", &path, None)?
-            };
+            let text =
+                self.request_with_limit("GET", &path, None, MAX_BOUNDED_THREAD_RESPONSE_BYTES)?;
             return v2::parse_detail(&text, thread_id);
         }
         let path = format!("/api/orchestration/threads/{segment}?turnLimit={turn_limit}");
