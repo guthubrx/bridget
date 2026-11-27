@@ -2162,6 +2162,24 @@ de veille ni réveil périodique :
   et les reçus de chaque étape.
 - **Suivi et annulation :** `bridget_graph_status` lit l'avancement détaillé de
   chaque nœud et `bridget_graph_cancel` arrête un graphe actif et ses descendants.
+- **Boucles de convergence bornée par étape (`convergence`, spec 313) :** le DAG
+  global reste strictement acyclique, mais toute étape peut déclarer un bloc
+  optionnel `convergence: { verify, max_iterations (2..=5, défaut 3), stop_on_stagnation (défaut true) }`.
+  - Le producteur est gardé vivant (`keep_alive_secs >= 900`, borné à `7200`) et
+    rejoué au tour `k >= 2` via `Continue` (repli automatique sur une admission
+    `AutoDelegateV2` ancrée sur le dernier commit si `Continue` est refusé).
+  - Le commit produit est propagé au vérificateur (`expected_base_commit` /
+    `worktree.base_ref`). Le vérificateur doit terminer par une ligne JSON fermée
+    `{"verdict":"approve"|"revise"|"escalate","reason":"...","blocking_points":["..."]}` ;
+    toute absence de verdict JSON valide échoue en mode *fail-closed* (`verdict_unparseable`).
+  - Arrêt automatique dès `approve` (débloque les étapes aval), `escalate`,
+    stagnation (commit identique ou empreinte SHA-256 normalisée identique des
+    `blocking_points` deux tours de suite à partir du tour 2), ou plafond
+    `max_iterations_reached`.
+  - `bridget_graph_status` expose `convergence_state` (itération courante, phase,
+    issue et historique détaillé par itération) ; le client MCP pré-valide
+    localement `steps`, les cycles DAG et `convergence` avant connexion sans
+    consommer `request_id`.
 
 ## Résilience quota par défaut, bascule automatique et Cursor ACP
 

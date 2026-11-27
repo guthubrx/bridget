@@ -3216,6 +3216,58 @@ CREATE TABLE IF NOT EXISTS native_delegation_graph_tasks(
     }
 }
 
+/// Historique durable d'une itération d'une étape de convergence bornée (`produce <-> verify`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NativeGraphConvergenceIteration {
+    pub iteration: u8,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub producer_task_id: Option<String>,
+    #[serde(default)]
+    pub producer_round: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub producer_commit: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verifier_task_id: Option<String>,
+    /// `approve` | `revise` | `escalate` | `unparseable`
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verdict: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub blocking_points: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub blocking_fingerprint: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub started_at: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub finished_at: Option<i64>,
+}
+
+/// État durable d'une boucle de convergence bornée attachée à une étape de graphe.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NativeGraphConvergenceState {
+    pub current_iteration: u8,
+    pub max_iterations: u8,
+    pub stop_on_stagnation: bool,
+    /// `waiting` | `producing` | `verifying` | `done`
+    pub phase: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub producer_task_id: Option<String>,
+    #[serde(default)]
+    pub producer_expected_round: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verifier_task_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_producer_commit: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_blocking_fingerprint: Option<String>,
+    /// `approved` | `escalated` | `stagnated` | `max_iterations_reached` | `verdict_unparseable` | `failed`
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub outcome: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub iterations: Vec<NativeGraphConvergenceIteration>,
+}
+
 /// Enregistrement durable d'une étape dans un graphe de missions Bridget.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NativeGraphStepRecord {
@@ -3223,6 +3275,10 @@ pub struct NativeGraphStepRecord {
     pub depends_on: Vec<String>,
     pub pass_dependency_results: bool,
     pub delegation: bridget_transport::protocol::AutoDelegateV2,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub convergence: Option<bridget_transport::protocol::GraphConvergenceLoop>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub convergence_state: Option<NativeGraphConvergenceState>,
     /// `waiting_dependencies` | `launching` | `running` | `completed` | `failed` | `cancelled` | `skipped_dependency_failed`
     pub state: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]

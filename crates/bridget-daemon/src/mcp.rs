@@ -2951,12 +2951,19 @@ fn compact_tool_description(name: &str, raw: &str) -> String {
             "Déléguer une mission via l'admission flotte V2 (axes machine, engine, model, effort indépendants)."
                 .to_owned()
         }
+        "bridget_delegate_graph" => {
+            "Enchaîne 1 à 16 missions DAG (A->B+C) avec convergence bornée producteur<->vérificateur optionnelle par étape."
+                .to_owned()
+        }
         _ => truncate_compact_description(raw, 128),
     }
 }
 
 fn compact_field_hint(tool_name: &str, field: &str) -> Option<&'static str> {
     match (tool_name, field) {
+        ("bridget_delegate_graph", "steps") => Some(
+            "Tableau d'objets {step_id, depends_on?, pass_dependency_results?, delegation (format bridget_auto_delegate), convergence?: {verify, max_iterations?:2..5, stop_on_stagnation?:true}}. Verdict vérificateur JSON fermé : approve|revise|escalate.",
+        ),
         ("bridget_auto_delegate", "workspace") => Some(
             "Objet {strategy:'shared'|'worktree'|'commit_view', base_ref?, branch?}. En lecture seule sans workspace_busy : strategy='commit_view' avec posture='discovery' et expected_base_commit.",
         ),
@@ -4181,5 +4188,36 @@ mod compact318_tests {
             delegate["inputSchema"]["properties"]["keep_alive_secs"],
             json!({"type":"integer"})
         );
+        // 313 : bridget_delegate_graph expose convergence et le contrat de verdict
+        // dans steps.description sans ajouter de properties imbriquées sur items.
+        let graph = compact
+            .iter()
+            .find(|t| t["name"] == "bridget_delegate_graph")
+            .unwrap();
+        assert!(
+            graph["description"]
+                .as_str()
+                .unwrap()
+                .contains("convergence")
+        );
+        let steps_prop = &graph["inputSchema"]["properties"]["steps"];
+        assert_eq!(steps_prop["type"], "array");
+        assert_eq!(steps_prop["items"], json!({"type": "object"}));
+        assert!(steps_prop["items"].get("properties").is_none());
+        let steps_desc = steps_prop["description"].as_str().unwrap();
+        for token in [
+            "step_id",
+            "delegation",
+            "convergence",
+            "verify",
+            "max_iterations",
+            "stop_on_stagnation",
+            "approve|revise|escalate",
+        ] {
+            assert!(
+                steps_desc.contains(token),
+                "steps hint manquant ({token}): {steps_desc}"
+            );
+        }
     }
 }

@@ -47,6 +47,56 @@ seulement les propriétaires des tâches/commandes/processus réellement affect�
 Ne pas réveiller les autres agents pour annoncer une version ou leur disponibilité.
 Regrouper les états avec les fils et supersedes_seq, sans effacer les preuves.
 
+## Graphes de missions et boucles de convergence bornée (313)
+
+Choisir l'outil selon la structure réelle du travail (sans boucle de veille ni réveil périodique) :
+
+| Besoin | Outil Bridget | Comportement |
+|---|---|---|
+| Une mission isolée | `bridget_auto_delegate` | Une tâche native unique avec placement de flotte V2. |
+| Étapes dépendantes `A -> B + C -> D` (1 à 16 étapes) | `bridget_delegate_graph` | DAG acyclique ; Bridget lance les branches prêtes en parallèle avec les résultats amont et réveille le parent une seule fois. |
+| Étape nécessitant allers-retours `produire <-> vérifier` bornés | `bridget_delegate_graph` + `steps[i].convergence` | Le DAG global reste acyclique ; l'étape itère automatiquement entre producteur et vérificateur jusqu'au verdict ou garde-fou. |
+
+### Contrat `convergence` sur une étape
+
+- Champs de `steps[i].convergence` : `verify` (obligatoire, objet au format `bridget_auto_delegate` — recommandé : `posture: "discovery"`, `workspace: {"strategy": "commit_view"}`), `max_iterations` (`2..=5`, défaut `3`), `stop_on_stagnation` (booléen, défaut `true`).
+- **Verdict fermé obligatoire du vérificateur** (injecté automatiquement par Bridget dans le préambule) : dernière ligne JSON pure `{"verdict":"approve"|"revise"|"escalate","reason":"...","blocking_points":["..."]}` (`blocking_points` requis si `revise`). Toute sortie sans JSON fermé échoue en mode *fail-closed* (`verdict_unparseable`).
+- **Garde-fous automatiques** : arrêt immédiat sur `approve` (débloque les étapes aval), `escalate`, stagnation (même SHA de commit ou mêmes `blocking_points` normalisés sur deux tours consécutifs à partir du tour 2), ou plafond `max_iterations`.
+- **Continuité d'état** : Bridget garde le producteur vivant (`keep_alive_secs >= 900`) et le reprend au tour `k >= 2` via `Continue`, avec repli transparent sur une nouvelle admission ancrée sur le dernier commit ; le SHA produit est propagé au vérificateur (`expected_base_commit` / `worktree.base_ref`).
+- **Pré-validation locale** : toute erreur de champ, cycle DAG ou borne `convergence` est refusée avant connexion au daemon **sans consommer `request_id`**. Suivi via `bridget_graph_status` (`convergence_state`) et annulation complète via `bridget_graph_cancel`.
+
+Exemple minimal :
+
+```json
+{
+  "request_id": "graph-fix-auth-1",
+  "title": "Implémentation et revue bornée",
+  "steps": [
+    {
+      "step_id": "impl",
+      "delegation": {
+        "task": "Implémenter et tester le correctif auth, puis committer.",
+        "cwd": "/chemin/absolu/du/depot",
+        "expected_base_commit": "<SHA-40-HEX>",
+        "posture": "development",
+        "workspace": { "strategy": "worktree" }
+      },
+      "convergence": {
+        "max_iterations": 3,
+        "stop_on_stagnation": true,
+        "verify": {
+          "task": "Vérifier le diff et les tests ; rendre la ligne JSON de verdict.",
+          "cwd": "/chemin/absolu/du/depot",
+          "expected_base_commit": "<SHA-40-HEX>",
+          "posture": "discovery",
+          "workspace": { "strategy": "commit_view" }
+        }
+      }
+    }
+  ]
+}
+```
+
 ## Trouver puis envoyer
 
 ### Aider à préparer une machine ou une connexion

@@ -1473,6 +1473,25 @@ or polling loops:
 - **Inspection & cancellation:** read live step states with
   `bridget_graph_status` and stop an active graph and its running descendants
   with `bridget_graph_cancel`.
+- **Bounded per-step convergence loops (`convergence`, spec 313):** the outer
+  DAG remains strictly acyclic, while any step may declare an optional
+  `convergence: { verify, max_iterations (2..=5, default 3), stop_on_stagnation (default true) }`.
+  - The producer is automatically kept alive (`keep_alive_secs >= 900`, capped at
+    `7200`) and resumed on round `k >= 2` via `Continue` (with transparent
+    fallback to a fresh `AutoDelegateV2` anchored on the last producer commit if
+    `Continue` is refused).
+  - The produced commit SHA is propagated to the verifier (`expected_base_commit`
+    / `worktree.base_ref`). The verifier must end with a closed JSON line
+    `{"verdict":"approve"|"revise"|"escalate","reason":"...","blocking_points":["..."]}`;
+    missing or invalid JSON fails closed (`verdict_unparseable`).
+  - Automatic termination on `approve` (unblocks downstream steps), `escalate`,
+    stagnation (identical commit SHA or identical normalized SHA-256
+    `blocking_points` fingerprint on consecutive rounds from round 2 onward), or
+    `max_iterations_reached`.
+  - `bridget_graph_status` exposes `convergence_state` (current iteration, phase,
+    outcome, and per-iteration history); the MCP client pre-validates `steps`,
+    DAG acyclicity, and `convergence` locally before connecting so invalid calls
+    never consume `request_id`.
 
 ## Default quota resilience, automatic fallback and Cursor ACP
 

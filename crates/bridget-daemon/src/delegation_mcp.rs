@@ -5,13 +5,14 @@ use crate::communication::client::{
 };
 use crate::mcp_identity::ResolvedIdentity;
 use bridget_transport::protocol::{
-    AutoDelegateV2, AutoDelegateWorkload, ChildRequestDecision, DelegateGraphRequest,
-    DelegateGraphStep, FallbackTarget, GraphFailurePolicy, GraphNotifyPolicy,
+    AutoDelegateV2, AutoDelegateWorkload, ChildRequestDecision, DEFAULT_CONVERGENCE_ITERATIONS,
+    DelegateGraphRequest, DelegateGraphStep, FallbackTarget, GraphConvergenceLoop,
+    GraphFailurePolicy, GraphNotifyPolicy, MAX_CONVERGENCE_ITERATIONS, MIN_CONVERGENCE_ITERATIONS,
     NativeDelegationRequest, SpawnPosture, WorkspaceRequest,
 };
 use bridget_transport::{DaemonToWrapper, WrapperToDaemon};
 use serde_json::{Value, json};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::Path;
 use std::time::{Duration, Instant};
 
@@ -201,25 +202,390 @@ fn parse_task_ids(args: &Value) -> Result<Vec<String>, ClientError> {
         .collect()
 }
 
-/// Parse la charge MCP de `bridget_delegate_graph` (1 à 16 étapes DAG).
+const AUTO_DELEGATE_ALLOWED_FIELDS: &[&str] = &[
+    "request_id",
+    "quota_fallback_authorized",
+    "resume_on_limit",
+    "machine_id",
+    "project_id",
+    "engine",
+    "connection_id",
+    "model",
+    "effort",
+    "service_tier",
+    "workload",
+    "expected_base_commit",
+    "task",
+    "cwd",
+    "posture",
+    "reply_timeout",
+    "workspace",
+    "child_requests",
+    "keep_alive_secs",
+    "brief",
+    "urgent",
+    "deliverable",
+];
+
+const GRAPH_LOCAL_REFUSAL_FOOTER: &str = "Refus local avant connexion : cet appel n'a pas été envoyé au serveur et la request_id n'a pas été consommée par cet appel. Corrigez la charge puis relancez ; les autres travaux autorisés suivent leur propre état.";
+const GRAPH_MINIMAL_EXAMPLE: &str = "Exemple minimal : {\"request_id\":\"g-1\",\"steps\":[{\"step_id\":\"impl\",\"delegation\":{\"task\":\"...\",\"cwd\":\"/chemin\"},\"convergence\":{\"verify\":{\"task\":\"...\",\"cwd\":\"/chemin\",\"posture\":\"discovery\"},\"max_iterations\":3,\"stop_on_stagnation\":true}}]}.";
+
+fn parse_auto_delegate_object(
+    raw: &Value,
+    prefix: &str,
+    default_request_id: String,
+) -> Result<AutoDelegateV2, ClientError> {
+    let decoded = raw
+        .as_str()
+        .and_then(|txt| serde_json::from_str::<Value>(txt).ok())
+        .filter(Value::is_object);
+    let val = decoded.as_ref().unwrap_or(raw);
+    let obj = val.as_object().ok_or_else(|| {
+        ClientError::InvalidParams(format!(
+            "{prefix} doit être un objet au format bridget_auto_delegate. {GRAPH_MINIMAL_EXAMPLE} {GRAPH_LOCAL_REFUSAL_FOOTER}"
+        ))
+    })?;
+    if obj.contains_key("agent_type") {
+        return Err(ClientError::InvalidParams(format!(
+            "{prefix} : agent_type est interdit ; utiliser engine / connection_id. {GRAPH_LOCAL_REFUSAL_FOOTER}"
+        )));
+    }
+    if obj.contains_key("service_tier") && !crate::provider_catalogue::MODEL_OPTIONS_LAUNCH_ENABLED
+    {
+        return Err(ClientError::InvalidParams(format!(
+            "{prefix}.service_tier : le choix d'un niveau de service n'est pas encore activé. {GRAPH_LOCAL_REFUSAL_FOOTER}"
+        )));
+    }
+    if let Some(unknown) = obj
+        .keys()
+        .find(|key| !AUTO_DELEGATE_ALLOWED_FIELDS.contains(&key.as_str()))
+    {
+        return Err(ClientError::InvalidParams(format!(
+            "{prefix} : champ inconnu '{unknown}'. Champs acceptés : {}. {GRAPH_LOCAL_REFUSAL_FOOTER}",
+            AUTO_DELEGATE_ALLOWED_FIELDS.join(", ")
+        )));
+    }
+    let del_str = |key: &str| -> Result<String, ClientError> {
+        obj.get(key)
+            .and_then(Value::as_str)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+            .ok_or_else(|| {
+                ClientError::InvalidParams(format!(
+                    "{prefix}.{key} doit être une chaîne non vide. {GRAPH_LOCAL_REFUSAL_FOOTER}"
+                ))
+            })
+    };
+    let req_id = match obj.get("request_id") {
+        None => default_request_id,
+        Some(_) => del_str("request_id")?,
+    };
+    let expected_base_commit = match obj.get("expected_base_commit") {
+        None => None,
+        Some(_) => {
+            let value = del_str("expected_base_commit")?;
+            if value.len() != 40 || !value.bytes().all(|b| b.is_ascii_hexdigit()) {
+                return Err(ClientError::InvalidParams(format!(
+                    "{prefix}.expected_base_commit exige un SHA Git complet (40 hex). {GRAPH_LOCAL_REFUSAL_FOOTER}"
+                )));
+            }
+            Some(value)
+        }
+    };
+    let task = del_str("task")?;
+    if task.len() > 65_536 {
+        return Err(ClientError::InvalidParams(format!(
+            "{prefix}.task dépasse 65536 octets. {GRAPH_LOCAL_REFUSAL_FOOTER}"
+        )));
+    }
+    let cwd = del_str("cwd")?;
+    let posture = match obj.get("posture") {
+        None => None,
+        Some(Value::String(v)) if v == "discovery" => Some(SpawnPosture::Discovery),
+        Some(Value::String(v)) if v == "development" => Some(SpawnPosture::Development),
+        _ => {
+            return Err(ClientError::InvalidParams(format!(
+                "{prefix}.posture invalide (discovery | development). {GRAPH_LOCAL_REFUSAL_FOOTER}"
+            )));
+        }
+    };
+    let workspace = obj
+        .get("workspace")
+        .map(parse_workspace)
+        .transpose()
+        .map_err(|error| match error {
+            ClientError::InvalidParams(message) => {
+                ClientError::InvalidParams(format!("{prefix}.workspace : {message}"))
+            }
+            other => other,
+        })?;
+    if crate::workspace_git::COMMIT_VIEW_LAUNCH_ENABLED
+        && matches!(workspace, Some(WorkspaceRequest::CommitView {}))
+        && (expected_base_commit.is_none() || posture != Some(SpawnPosture::Discovery))
+    {
+        return Err(ClientError::InvalidParams(format!(
+            "{prefix} : strategy=commit_view exige posture=discovery et expected_base_commit (SHA complet 40 hex). {GRAPH_LOCAL_REFUSAL_FOOTER}"
+        )));
+    }
+    Ok(AutoDelegateV2 {
+        quota_fallback_authorized: obj
+            .get("quota_fallback_authorized")
+            .map(|v| {
+                v.as_bool().ok_or_else(|| {
+                    ClientError::InvalidParams(format!(
+                        "{prefix}.quota_fallback_authorized doit être un booléen. {GRAPH_LOCAL_REFUSAL_FOOTER}"
+                    ))
+                })
+            })
+            .transpose()?,
+        resume_on_limit: obj
+            .get("resume_on_limit")
+            .map(|v| {
+                v.as_bool().ok_or_else(|| {
+                    ClientError::InvalidParams(format!(
+                        "{prefix}.resume_on_limit doit être un booléen. {GRAPH_LOCAL_REFUSAL_FOOTER}"
+                    ))
+                })
+            })
+            .transpose()?,
+        service_tier: obj
+            .get("service_tier")
+            .map(|_| del_str("service_tier"))
+            .transpose()?,
+        request_id: req_id,
+        machine_id: obj
+            .get("machine_id")
+            .map(|_| del_str("machine_id"))
+            .transpose()?,
+        project_id: obj
+            .get("project_id")
+            .map(|_| del_str("project_id"))
+            .transpose()?,
+        engine: obj.get("engine").map(|_| del_str("engine")).transpose()?,
+        connection_id: obj
+            .get("connection_id")
+            .map(|_| del_str("connection_id"))
+            .transpose()?,
+        agent_type: None,
+        model: obj.get("model").map(|_| del_str("model")).transpose()?,
+        effort: obj.get("effort").map(|_| del_str("effort")).transpose()?,
+        workload: match obj.get("workload") {
+            None => AutoDelegateWorkload::General,
+            Some(Value::String(v)) if v == "general" => AutoDelegateWorkload::General,
+            Some(Value::String(v)) if v == "compilation" => AutoDelegateWorkload::Compilation,
+            _ => {
+                return Err(ClientError::InvalidParams(format!(
+                    "{prefix}.workload invalide (general | compilation). {GRAPH_LOCAL_REFUSAL_FOOTER}"
+                )));
+            }
+        },
+        expected_base_commit,
+        task,
+        cwd,
+        posture,
+        reply_timeout: match obj.get("reply_timeout") {
+            None => None,
+            Some(Value::Number(v)) if v.is_u64() => v.as_u64(),
+            _ => {
+                return Err(ClientError::InvalidParams(format!(
+                    "{prefix}.reply_timeout doit être un entier positif. {GRAPH_LOCAL_REFUSAL_FOOTER}"
+                )));
+            }
+        },
+        workspace,
+        keep_alive_secs: match obj.get("keep_alive_secs") {
+            None => None,
+            Some(Value::Number(v)) if v.is_u64() => v.as_u64(),
+            _ => {
+                return Err(ClientError::InvalidParams(format!(
+                    "{prefix}.keep_alive_secs doit être un entier positif. {GRAPH_LOCAL_REFUSAL_FOOTER}"
+                )));
+            }
+        },
+        brief: obj
+            .get("brief")
+            .map(parse_brief)
+            .transpose()
+            .map_err(|error| match error {
+                ClientError::InvalidParams(message) => {
+                    ClientError::InvalidParams(format!("{prefix}.brief : {message}"))
+                }
+                other => other,
+            })?,
+        child_requests: match obj.get("child_requests") {
+            None => None,
+            Some(Value::String(m)) if matches!(m.as_str(), "deny" | "forward") => Some(m.clone()),
+            _ => {
+                return Err(ClientError::InvalidParams(format!(
+                    "{prefix}.child_requests invalide (deny | forward). {GRAPH_LOCAL_REFUSAL_FOOTER}"
+                )));
+            }
+        },
+        urgent: match obj.get("urgent") {
+            None => None,
+            Some(Value::Bool(b)) => Some(*b),
+            _ => {
+                return Err(ClientError::InvalidParams(format!(
+                    "{prefix}.urgent doit être un booléen. {GRAPH_LOCAL_REFUSAL_FOOTER}"
+                )));
+            }
+        },
+        deliverable: obj
+            .get("deliverable")
+            .map(|_| del_str("deliverable"))
+            .transpose()?,
+    })
+}
+
+fn parse_convergence_loop(
+    raw: &Value,
+    idx: usize,
+    graph_request_id: &str,
+    step_id: &str,
+) -> Result<GraphConvergenceLoop, ClientError> {
+    let decoded = raw
+        .as_str()
+        .and_then(|txt| serde_json::from_str::<Value>(txt).ok())
+        .filter(Value::is_object);
+    let val = decoded.as_ref().unwrap_or(raw);
+    let obj = val.as_object().ok_or_else(|| {
+        ClientError::InvalidParams(format!(
+            "steps[{idx}].convergence doit être un objet {{verify, max_iterations?, stop_on_stagnation?}}. {GRAPH_MINIMAL_EXAMPLE} {GRAPH_LOCAL_REFUSAL_FOOTER}"
+        ))
+    })?;
+    for k in obj.keys() {
+        if !matches!(
+            k.as_str(),
+            "verify" | "max_iterations" | "stop_on_stagnation"
+        ) {
+            return Err(ClientError::InvalidParams(format!(
+                "steps[{idx}].convergence : champ inconnu '{k}'. Champs acceptés : verify, max_iterations (2..=5), stop_on_stagnation. {GRAPH_MINIMAL_EXAMPLE} {GRAPH_LOCAL_REFUSAL_FOOTER}"
+            )));
+        }
+    }
+    let max_iterations = match obj.get("max_iterations") {
+        None => DEFAULT_CONVERGENCE_ITERATIONS,
+        Some(Value::Number(n))
+            if n.as_u64().is_some_and(|v| {
+                (MIN_CONVERGENCE_ITERATIONS as u64..=MAX_CONVERGENCE_ITERATIONS as u64).contains(&v)
+            }) =>
+        {
+            n.as_u64().unwrap() as u8
+        }
+        _ => {
+            return Err(ClientError::InvalidParams(format!(
+                "steps[{idx}].convergence.max_iterations doit être un entier entre {MIN_CONVERGENCE_ITERATIONS} et {MAX_CONVERGENCE_ITERATIONS} (défaut {DEFAULT_CONVERGENCE_ITERATIONS}). {GRAPH_LOCAL_REFUSAL_FOOTER}"
+            )));
+        }
+    };
+    let stop_on_stagnation = match obj.get("stop_on_stagnation") {
+        None => true,
+        Some(Value::Bool(b)) => *b,
+        _ => {
+            return Err(ClientError::InvalidParams(format!(
+                "steps[{idx}].convergence.stop_on_stagnation doit être un booléen. {GRAPH_LOCAL_REFUSAL_FOOTER}"
+            )));
+        }
+    };
+    let raw_verify = obj.get("verify").ok_or_else(|| {
+        ClientError::InvalidParams(format!(
+            "steps[{idx}].convergence.verify est requis (objet au format bridget_auto_delegate). {GRAPH_MINIMAL_EXAMPLE} {GRAPH_LOCAL_REFUSAL_FOOTER}"
+        ))
+    })?;
+    let verify = parse_auto_delegate_object(
+        raw_verify,
+        &format!("steps[{idx}].convergence.verify"),
+        format!("{graph_request_id}:{step_id}:i1:verify"),
+    )?;
+    Ok(GraphConvergenceLoop {
+        verify,
+        max_iterations,
+        stop_on_stagnation,
+    })
+}
+
+fn validate_dag_topology_locally(steps: &[DelegateGraphStep]) -> Result<(), ClientError> {
+    let mut seen: HashSet<&str> = HashSet::with_capacity(steps.len());
+    for step in steps {
+        if !seen.insert(step.step_id.as_str()) {
+            return Err(ClientError::InvalidParams(format!(
+                "step_id dupliqué '{}' dans steps. Chaque étape doit porter un step_id unique. {GRAPH_LOCAL_REFUSAL_FOOTER}",
+                step.step_id
+            )));
+        }
+    }
+    let mut indegree: HashMap<&str, usize> =
+        steps.iter().map(|s| (s.step_id.as_str(), 0usize)).collect();
+    let mut children: HashMap<&str, Vec<&str>> = HashMap::with_capacity(steps.len());
+    for step in steps {
+        let mut dep_seen: HashSet<&str> = HashSet::new();
+        for dep in &step.depends_on {
+            if dep == &step.step_id {
+                return Err(ClientError::InvalidParams(format!(
+                    "Cycle détecté : l'étape '{}' dépend d'elle-même. Le DAG global doit rester acyclique ; utilisez steps[i].convergence pour une boucle bornée producteur<->vérificateur. {GRAPH_LOCAL_REFUSAL_FOOTER}",
+                    step.step_id
+                )));
+            }
+            if !seen.contains(dep.as_str()) {
+                return Err(ClientError::InvalidParams(format!(
+                    "Dépendance inconnue '{dep}' sur l'étape '{}'. {GRAPH_LOCAL_REFUSAL_FOOTER}",
+                    step.step_id
+                )));
+            }
+            if dep_seen.insert(dep.as_str()) {
+                children
+                    .entry(dep.as_str())
+                    .or_default()
+                    .push(step.step_id.as_str());
+                *indegree.get_mut(step.step_id.as_str()).unwrap() += 1;
+            }
+        }
+    }
+    let mut queue: VecDeque<&str> = steps
+        .iter()
+        .filter(|s| indegree[s.step_id.as_str()] == 0)
+        .map(|s| s.step_id.as_str())
+        .collect();
+    let mut visited = 0usize;
+    while let Some(node) = queue.pop_front() {
+        visited += 1;
+        if let Some(nexts) = children.get(node) {
+            for &next in nexts {
+                let deg = indegree.get_mut(next).unwrap();
+                *deg -= 1;
+                if *deg == 0 {
+                    queue.push_back(next);
+                }
+            }
+        }
+    }
+    if visited != steps.len() {
+        return Err(ClientError::InvalidParams(format!(
+            "Cycle détecté dans depends_on : le graphe global doit être acyclique (DAG). Pour un cycle borné producteur<->vérificateur, déclarez steps[i].convergence sur l'étape concernée. {GRAPH_MINIMAL_EXAMPLE} {GRAPH_LOCAL_REFUSAL_FOOTER}"
+        )));
+    }
+    Ok(())
+}
+
+/// Parse la charge MCP de `bridget_delegate_graph` (1 à 16 étapes DAG + convergence bornée optionnelle).
 fn parse_delegate_graph(args: &Value) -> Result<DelegateGraphRequest, ClientError> {
     let request_id = args
         .get("request_id")
         .and_then(Value::as_str)
         .filter(|s| !s.trim().is_empty() && s.len() <= 128)
         .ok_or_else(|| {
-            ClientError::InvalidParams(
-                "request_id doit être une chaîne non vide (1 à 128 caractères)".into(),
-            )
+            ClientError::InvalidParams(format!(
+                "request_id doit être une chaîne non vide (1 à 128 caractères). {GRAPH_LOCAL_REFUSAL_FOOTER}"
+            ))
         })?
         .to_string();
     let title = match args.get("title") {
         None | Some(Value::Null) => None,
         Some(Value::String(s)) if !s.trim().is_empty() && s.len() <= 256 => Some(s.clone()),
         _ => {
-            return Err(ClientError::InvalidParams(
-                "title invalide (1..=256 caractères)".into(),
-            ));
+            return Err(ClientError::InvalidParams(format!(
+                "title invalide (1..=256 caractères). {GRAPH_LOCAL_REFUSAL_FOOTER}"
+            )));
         }
     };
     let on_failure = match args.get("on_failure") {
@@ -227,9 +593,9 @@ fn parse_delegate_graph(args: &Value) -> Result<DelegateGraphRequest, ClientErro
         Some(Value::String(s)) if s == "stop_dependents" => GraphFailurePolicy::StopDependents,
         Some(Value::String(s)) if s == "cancel_graph" => GraphFailurePolicy::CancelGraph,
         _ => {
-            return Err(ClientError::InvalidParams(
-                "on_failure invalide (stop_dependents | cancel_graph)".into(),
-            ));
+            return Err(ClientError::InvalidParams(format!(
+                "on_failure invalide (stop_dependents | cancel_graph). {GRAPH_LOCAL_REFUSAL_FOOTER}"
+            )));
         }
     };
     let notify_policy = match args.get("notify_policy") {
@@ -239,9 +605,9 @@ fn parse_delegate_graph(args: &Value) -> Result<DelegateGraphRequest, ClientErro
         }
         Some(Value::String(s)) if s == "each_step" => GraphNotifyPolicy::EachStep,
         _ => {
-            return Err(ClientError::InvalidParams(
-                "notify_policy invalide (on_graph_done_or_failure | each_step)".into(),
-            ));
+            return Err(ClientError::InvalidParams(format!(
+                "notify_policy invalide (on_graph_done_or_failure | each_step). {GRAPH_LOCAL_REFUSAL_FOOTER}"
+            )));
         }
     };
     let raw_steps = args
@@ -249,21 +615,25 @@ fn parse_delegate_graph(args: &Value) -> Result<DelegateGraphRequest, ClientErro
         .and_then(Value::as_array)
         .filter(|arr| (1..=16).contains(&arr.len()))
         .ok_or_else(|| {
-            ClientError::InvalidParams("steps doit être un tableau de 1 à 16 étapes".into())
+            ClientError::InvalidParams(format!(
+                "steps doit être un tableau de 1 à 16 étapes. {GRAPH_MINIMAL_EXAMPLE} {GRAPH_LOCAL_REFUSAL_FOOTER}"
+            ))
         })?;
 
     let mut steps = Vec::with_capacity(raw_steps.len());
     for (idx, item) in raw_steps.iter().enumerate() {
         let step_obj = item.as_object().ok_or_else(|| {
-            ClientError::InvalidParams(format!("steps[{idx}] doit être un objet"))
+            ClientError::InvalidParams(format!(
+                "steps[{idx}] doit être un objet. {GRAPH_MINIMAL_EXAMPLE} {GRAPH_LOCAL_REFUSAL_FOOTER}"
+            ))
         })?;
         for k in step_obj.keys() {
             if !matches!(
                 k.as_str(),
-                "step_id" | "depends_on" | "pass_dependency_results" | "delegation"
+                "step_id" | "depends_on" | "pass_dependency_results" | "delegation" | "convergence"
             ) {
                 return Err(ClientError::InvalidParams(format!(
-                    "steps[{idx}] : champ inconnu '{k}'"
+                    "steps[{idx}] : champ inconnu '{k}'. Champs acceptés : step_id, depends_on, pass_dependency_results, delegation, convergence. {GRAPH_MINIMAL_EXAMPLE} {GRAPH_LOCAL_REFUSAL_FOOTER}"
                 )));
             }
         }
@@ -272,7 +642,9 @@ fn parse_delegate_graph(args: &Value) -> Result<DelegateGraphRequest, ClientErro
             .and_then(Value::as_str)
             .filter(|s| !s.trim().is_empty() && s.len() <= 64)
             .ok_or_else(|| {
-                ClientError::InvalidParams(format!("steps[{idx}].step_id requis (1..=64)"))
+                ClientError::InvalidParams(format!(
+                    "steps[{idx}].step_id requis (1..=64). {GRAPH_LOCAL_REFUSAL_FOOTER}"
+                ))
             })?
             .to_string();
         let depends_on = match step_obj.get("depends_on") {
@@ -285,14 +657,14 @@ fn parse_delegate_graph(args: &Value) -> Result<DelegateGraphRequest, ClientErro
                         .map(str::to_string)
                         .ok_or_else(|| {
                             ClientError::InvalidParams(format!(
-                                "steps[{idx}].depends_on doit contenir des chaînes non vides"
+                                "steps[{idx}].depends_on doit contenir des chaînes non vides. {GRAPH_LOCAL_REFUSAL_FOOTER}"
                             ))
                         })
                 })
                 .collect::<Result<Vec<_>, _>>()?,
             _ => {
                 return Err(ClientError::InvalidParams(format!(
-                    "steps[{idx}].depends_on doit être un tableau de chaînes"
+                    "steps[{idx}].depends_on doit être un tableau de chaînes. {GRAPH_LOCAL_REFUSAL_FOOTER}"
                 )));
             }
         };
@@ -301,184 +673,39 @@ fn parse_delegate_graph(args: &Value) -> Result<DelegateGraphRequest, ClientErro
             Some(Value::Bool(b)) => *b,
             _ => {
                 return Err(ClientError::InvalidParams(format!(
-                    "steps[{idx}].pass_dependency_results doit être un booléen"
+                    "steps[{idx}].pass_dependency_results doit être un booléen. {GRAPH_LOCAL_REFUSAL_FOOTER}"
                 )));
             }
         };
-        let raw_del = step_obj
-            .get("delegation")
-            .ok_or_else(|| ClientError::InvalidParams(format!("steps[{idx}].delegation requis")))?;
-        let decoded_del = raw_del
-            .as_str()
-            .and_then(|txt| serde_json::from_str::<Value>(txt).ok())
-            .filter(Value::is_object);
-        let del_val = decoded_del.as_ref().unwrap_or(raw_del);
-        let del_obj = del_val.as_object().ok_or_else(|| {
-            ClientError::InvalidParams(format!("steps[{idx}].delegation doit être un objet"))
+        let raw_del = step_obj.get("delegation").ok_or_else(|| {
+            ClientError::InvalidParams(format!(
+                "steps[{idx}].delegation requis. {GRAPH_MINIMAL_EXAMPLE} {GRAPH_LOCAL_REFUSAL_FOOTER}"
+            ))
         })?;
-        if del_obj.contains_key("agent_type") {
-            return Err(ClientError::InvalidParams(format!(
-                "steps[{idx}].delegation : agent_type est interdit ; utiliser engine / connection_id"
-            )));
-        }
-        let del_str = |key: &str| -> Result<String, ClientError> {
-            del_obj
-                .get(key)
-                .and_then(Value::as_str)
-                .filter(|s| !s.is_empty())
-                .map(str::to_string)
-                .ok_or_else(|| {
-                    ClientError::InvalidParams(format!(
-                        "steps[{idx}].delegation.{key} doit être une chaîne non vide"
-                    ))
-                })
-        };
-        let step_req_id = match del_obj.get("request_id") {
-            None => format!("{request_id}:{step_id}"),
-            Some(_) => del_str("request_id")?,
-        };
-        let expected_base_commit = match del_obj.get("expected_base_commit") {
-            None => None,
-            Some(_) => {
-                let value = del_str("expected_base_commit")?;
-                if value.len() != 40 || !value.bytes().all(|b| b.is_ascii_hexdigit()) {
-                    return Err(ClientError::InvalidParams(format!(
-                        "steps[{idx}].delegation.expected_base_commit exige un SHA Git complet (40 hex)"
-                    )));
-                }
-                Some(value)
-            }
-        };
-        let delegation = AutoDelegateV2 {
-            quota_fallback_authorized: del_obj
-                .get("quota_fallback_authorized")
-                .map(|v| {
-                    v.as_bool().ok_or_else(|| {
-                        ClientError::InvalidParams(format!(
-                            "steps[{idx}].delegation.quota_fallback_authorized doit être un booléen"
-                        ))
-                    })
-                })
-                .transpose()?,
-            resume_on_limit: del_obj
-                .get("resume_on_limit")
-                .map(|v| {
-                    v.as_bool().ok_or_else(|| {
-                        ClientError::InvalidParams(format!(
-                            "steps[{idx}].delegation.resume_on_limit doit être un booléen"
-                        ))
-                    })
-                })
-                .transpose()?,
-            service_tier: del_obj
-                .get("service_tier")
-                .map(|_| del_str("service_tier"))
-                .transpose()?,
-            request_id: step_req_id,
-            machine_id: del_obj
-                .get("machine_id")
-                .map(|_| del_str("machine_id"))
-                .transpose()?,
-            project_id: del_obj
-                .get("project_id")
-                .map(|_| del_str("project_id"))
-                .transpose()?,
-            engine: del_obj
-                .get("engine")
-                .map(|_| del_str("engine"))
-                .transpose()?,
-            connection_id: del_obj
-                .get("connection_id")
-                .map(|_| del_str("connection_id"))
-                .transpose()?,
-            agent_type: None,
-            model: del_obj.get("model").map(|_| del_str("model")).transpose()?,
-            effort: del_obj
-                .get("effort")
-                .map(|_| del_str("effort"))
-                .transpose()?,
-            workload: match del_obj.get("workload") {
-                None => AutoDelegateWorkload::General,
-                Some(Value::String(v)) if v == "general" => AutoDelegateWorkload::General,
-                Some(Value::String(v)) if v == "compilation" => AutoDelegateWorkload::Compilation,
-                _ => {
-                    return Err(ClientError::InvalidParams(format!(
-                        "steps[{idx}].delegation.workload invalide"
-                    )));
-                }
-            },
-            expected_base_commit,
-            task: del_str("task")?,
-            cwd: del_str("cwd")?,
-            posture: match del_obj.get("posture") {
-                None => None,
-                Some(Value::String(v)) if v == "discovery" => Some(SpawnPosture::Discovery),
-                Some(Value::String(v)) if v == "development" => Some(SpawnPosture::Development),
-                _ => {
-                    return Err(ClientError::InvalidParams(format!(
-                        "steps[{idx}].delegation.posture invalide"
-                    )));
-                }
-            },
-            reply_timeout: match del_obj.get("reply_timeout") {
-                None => None,
-                Some(Value::Number(v)) if v.is_u64() => v.as_u64(),
-                _ => {
-                    return Err(ClientError::InvalidParams(format!(
-                        "steps[{idx}].delegation.reply_timeout invalide"
-                    )));
-                }
-            },
-            workspace: del_obj.get("workspace").map(parse_workspace).transpose()?,
-            keep_alive_secs: match del_obj.get("keep_alive_secs") {
-                None => None,
-                Some(Value::Number(v)) if v.is_u64() => v.as_u64(),
-                _ => {
-                    return Err(ClientError::InvalidParams(format!(
-                        "steps[{idx}].delegation.keep_alive_secs invalide"
-                    )));
-                }
-            },
-            brief: del_obj.get("brief").map(parse_brief).transpose().map_err(
-                |error| match error {
-                    ClientError::InvalidParams(message) => ClientError::InvalidParams(format!(
-                        "steps[{idx}].delegation.brief : {message}"
-                    )),
-                    other => other,
-                },
-            )?,
-            child_requests: match del_obj.get("child_requests") {
-                None => None,
-                Some(Value::String(m)) if matches!(m.as_str(), "deny" | "forward") => {
-                    Some(m.clone())
-                }
-                _ => {
-                    return Err(ClientError::InvalidParams(format!(
-                        "steps[{idx}].delegation.child_requests invalide"
-                    )));
-                }
-            },
-            urgent: match del_obj.get("urgent") {
-                None => None,
-                Some(Value::Bool(b)) => Some(*b),
-                _ => {
-                    return Err(ClientError::InvalidParams(format!(
-                        "steps[{idx}].delegation.urgent invalide"
-                    )));
-                }
-            },
-            deliverable: del_obj
-                .get("deliverable")
-                .map(|_| del_str("deliverable"))
-                .transpose()?,
+        let delegation = parse_auto_delegate_object(
+            raw_del,
+            &format!("steps[{idx}].delegation"),
+            format!("{request_id}:{step_id}"),
+        )?;
+        let convergence = match step_obj.get("convergence") {
+            None | Some(Value::Null) => None,
+            Some(raw_conv) => Some(parse_convergence_loop(
+                raw_conv,
+                idx,
+                &request_id,
+                &step_id,
+            )?),
         };
         steps.push(DelegateGraphStep {
             step_id,
             depends_on,
             pass_dependency_results,
             delegation,
+            convergence,
         });
     }
+
+    validate_dag_topology_locally(&steps)?;
 
     Ok(DelegateGraphRequest {
         request_id,
@@ -511,7 +738,7 @@ pub(crate) fn tools(brief_schema: &Value) -> Vec<Value> {
         json!({"name":"bridget_task_wait","description":"Attend le résultat d'une ou plusieurs de ses tâches natives, sans polling ni modification de la remise. Une expiration n'annule aucun enfant. Le message de résultat peut arriver après ce retour.","inputSchema":{"type":"object","properties":{"task_ids":{"type":"array","minItems":1,"maxItems":16,"uniqueItems":true,"items":{"type":"string","minLength":1}},"wait_timeout":{"type":"integer","minimum":1,"maximum":WAIT_TIMEOUT_MAX_SECS,"default":WAIT_TIMEOUT_DEFAULT_SECS}},"required":["task_ids"],"additionalProperties":false},"annotations":{"readOnlyHint":true,"destructiveHint":false,"idempotentHint":true}}),
         json!({"name":"bridget_task_ack","description":"Déclare avoir lu le résultat ou l'échec de ses tâches natives et annule les avis asynchrones encore en attente (native-result-*, native-failure-*) pour éviter tout doublon en fin de tour. Ne modifie ni nettoyage ni rétention. Tout le groupe est refusé sans ACK partiel si une tâche n’est pas prête ; le refus identifie ses task_id, ronde et état après contrôle de propriété du groupe.","inputSchema":{"type":"object","properties":{"task_ids":{"type":"array","minItems":1,"maxItems":16,"uniqueItems":true,"items":{"type":"string","minLength":1}}},"required":["task_ids"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":false,"idempotentHint":true}}),
         json!({"name":"bridget_task_cancel","description":"Annule sa mission native et sa descendance ; aucune mission d'un autre parent n'est accessible.","inputSchema":{"type":"object","properties":{"task_id":{"type":"string"}},"required":["task_id"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":true,"idempotentHint":true}}),
-        json!({"name":"bridget_delegate_graph","description":"Enchaîne des missions A->B+C avec dépendances, sans ronde de garde. Déclarez 1 à 16 étapes (step_id, depends_on, delegation au format bridget_auto_delegate) ; Bridget déclenche automatiquement les étapes suivantes en parallèle avec les résultats factuels des dépendances et réveille le parent une seule fois en fin de graphe.","inputSchema":{"type":"object","properties":{"request_id":{"type":"string","minLength":1,"maxLength":128},"title":{"type":"string","minLength":1,"maxLength":256},"on_failure":{"type":"string","enum":["stop_dependents","cancel_graph"],"default":"stop_dependents","description":"stop_dependents (défaut) saute les étapes dépendantes et laisse finir les branches indépendantes ; cancel_graph annule tout le graphe dès le premier échec."},"notify_policy":{"type":"string","enum":["on_graph_done_or_failure","each_step"],"default":"on_graph_done_or_failure","description":"on_graph_done_or_failure (défaut) réveille le parent une seule fois en fin de graphe ; each_step conserve aussi chaque avis intermédiaire."},"steps":{"type":"array","minItems":1,"maxItems":16,"items":{"type":"object","properties":{"step_id":{"type":"string","minLength":1,"maxLength":64},"depends_on":{"type":"array","items":{"type":"string"}},"pass_dependency_results":{"type":"boolean","default":true},"delegation":{"type":"object"}},"required":["step_id","delegation"],"additionalProperties":false}}},"required":["request_id","steps"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":true,"idempotentHint":true,"openWorldHint":true}}),
+        json!({"name":"bridget_delegate_graph","description":"Enchaîne des missions A->B+C avec dépendances, sans ronde de garde. Déclarez 1 à 16 étapes DAG (step_id, depends_on, delegation au format bridget_auto_delegate) et, en option par étape, une boucle de convergence bornée producteur<->vérificateur (`convergence`: verify, max_iterations 2..=5, stop_on_stagnation). Bridget déclenche automatiquement les itérations et les étapes aval puis réveille le parent une seule fois en fin de graphe.","inputSchema":{"type":"object","properties":{"request_id":{"type":"string","minLength":1,"maxLength":128},"title":{"type":"string","minLength":1,"maxLength":256},"on_failure":{"type":"string","enum":["stop_dependents","cancel_graph"],"default":"stop_dependents","description":"stop_dependents (défaut) saute les étapes dépendantes et laisse finir les branches indépendantes ; cancel_graph annule tout le graphe dès le premier échec."},"notify_policy":{"type":"string","enum":["on_graph_done_or_failure","each_step"],"default":"on_graph_done_or_failure","description":"on_graph_done_or_failure (défaut) réveille le parent une seule fois en fin de graphe ; each_step conserve aussi chaque avis intermédiaire."},"steps":{"type":"array","minItems":1,"maxItems":16,"items":{"type":"object","properties":{"step_id":{"type":"string","minLength":1,"maxLength":64},"depends_on":{"type":"array","items":{"type":"string"}},"pass_dependency_results":{"type":"boolean","default":true},"delegation":{"type":"object","description":"Mission producteur au format bridget_auto_delegate."},"convergence":{"type":"object","description":"Boucle de convergence bornée producteur<->vérificateur sur cette étape (le DAG global reste acyclique). Le vérificateur rend une ligne JSON fermée {\"verdict\":\"approve\"|\"revise\"|\"escalate\",\"reason\":\"...\",\"blocking_points\":[...]}.","properties":{"verify":{"type":"object","description":"Mission vérificateur au format bridget_auto_delegate (recommandé : posture='discovery', workspace.strategy='commit_view')."},"max_iterations":{"type":"integer","minimum":2,"maximum":5,"default":3,"description":"Nombre maximal d'itérations producteur<->vérificateur (2 à 5, défaut 3)."},"stop_on_stagnation":{"type":"boolean","default":true,"description":"Arrête la boucle si deux tours consécutifs ont le même commit ou les mêmes motifs bloquants normalisés."}},"required":["verify"],"additionalProperties":false}},"required":["step_id","delegation"],"additionalProperties":false}}},"required":["request_id","steps"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":true,"idempotentHint":true,"openWorldHint":true}}),
         json!({"name":"bridget_graph_status","description":"Lit l'état d'un graphe de missions Bridget. Sans effet ni polling obligatoire.","inputSchema":{"type":"object","properties":{"graph_id":{"type":"string","minLength":1,"maxLength":128}},"required":["graph_id"],"additionalProperties":false},"annotations":{"readOnlyHint":true,"destructiveHint":false,"idempotentHint":true}}),
         json!({"name":"bridget_graph_cancel","description":"Annule un graphe de missions Bridget. Stoppe les étapes actives et annule celles en attente.","inputSchema":{"type":"object","properties":{"graph_id":{"type":"string","minLength":1,"maxLength":128}},"required":["graph_id"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":true,"idempotentHint":true}}),
     ];
@@ -2203,5 +2430,140 @@ mod workspace_text321_tests {
         };
         assert!(graph_msg.contains("steps[0].delegation.brief"));
         assert!(graph_msg.contains("draft.scope : champ inconnu"));
+    }
+
+    #[test]
+    fn spec313_delegate_graph_prevalidates_convergence_and_dag_locally() {
+        let identity = ResolvedIdentity {
+            name: "owner".into(),
+            instance_id: "instance".into(),
+            delegated_origin: None,
+        };
+        let never_touched = Path::new("/missing-never-touched.sock");
+
+        // 1) Cycle DAG rejeté localement avant socket sans consommer request_id.
+        let Err(ClientError::InvalidParams(cycle_msg)) = execute_with_proof(
+            &identity,
+            "bridget_delegate_graph",
+            &json!({
+                "request_id": "g-cycle-1",
+                "steps": [
+                    {"step_id":"a","depends_on":["b"],"delegation":{"task":"t1","cwd":"/tmp"}},
+                    {"step_id":"b","depends_on":["a"],"delegation":{"task":"t2","cwd":"/tmp"}}
+                ]
+            }),
+            never_touched,
+            None,
+        ) else {
+            panic!("InvalidParams local attendu sur cycle DAG");
+        };
+        assert!(cycle_msg.contains("Cycle détecté"));
+        assert!(cycle_msg.contains("steps[i].convergence"));
+        assert!(cycle_msg.contains("request_id n'a pas été consommée"));
+
+        // 2) max_iterations hors bornes (1 et 6) rejeté localement.
+        for bad_max in [1, 6] {
+            let Err(ClientError::InvalidParams(msg)) = execute_with_proof(
+                &identity,
+                "bridget_delegate_graph",
+                &json!({
+                    "request_id": format!("g-bad-max-{bad_max}"),
+                    "steps": [{
+                        "step_id": "impl",
+                        "delegation": {"task":"code","cwd":"/tmp"},
+                        "convergence": {
+                            "max_iterations": bad_max,
+                            "verify": {"task":"review","cwd":"/tmp","posture":"discovery"}
+                        }
+                    }]
+                }),
+                never_touched,
+                None,
+            ) else {
+                panic!("InvalidParams attendu pour max_iterations={bad_max}");
+            };
+            assert!(msg.contains("max_iterations"));
+            assert!(msg.contains("request_id n'a pas été consommée"));
+        }
+
+        // 3) Champ inconnu dans convergence ou verify.brief invalide rejetés localement.
+        let Err(ClientError::InvalidParams(unknown_msg)) = execute_with_proof(
+            &identity,
+            "bridget_delegate_graph",
+            &json!({
+                "request_id": "g-unknown-conv",
+                "steps": [{
+                    "step_id": "impl",
+                    "delegation": {"task":"code","cwd":"/tmp"},
+                    "convergence": {
+                        "verifier": {"task":"review","cwd":"/tmp"}
+                    }
+                }]
+            }),
+            never_touched,
+            None,
+        ) else {
+            panic!("InvalidParams attendu sur champ inconnu dans convergence");
+        };
+        assert!(unknown_msg.contains("champ inconnu 'verifier'"));
+        assert!(unknown_msg.contains("Exemple minimal"));
+
+        let Err(ClientError::InvalidParams(brief_msg)) = execute_with_proof(
+            &identity,
+            "bridget_delegate_graph",
+            &json!({
+                "request_id": "g-bad-verify-brief",
+                "steps": [{
+                    "step_id": "impl",
+                    "delegation": {"task":"code","cwd":"/tmp"},
+                    "convergence": {
+                        "verify": {
+                            "task":"review",
+                            "cwd":"/tmp",
+                            "brief":{"objective":"o","summary":"s","context":"extra"}
+                        }
+                    }
+                }]
+            }),
+            never_touched,
+            None,
+        ) else {
+            panic!("InvalidParams attendu sur verify.brief");
+        };
+        assert!(brief_msg.contains("steps[0].convergence.verify.brief"));
+        assert!(brief_msg.contains("draft.context : champ inconnu"));
+
+        // 4) Parsing nominal : objet JSON et texte JSON encodé (mode compact), avec défauts.
+        let parsed = parse_delegate_graph(&json!({
+            "request_id": "g-ok-1",
+            "steps": [{
+                "step_id": "impl",
+                "delegation": {"task":"code","cwd":"/tmp"},
+                "convergence": "{\"verify\":{\"task\":\"review\",\"cwd\":\"/tmp\",\"posture\":\"discovery\"}}"
+            }]
+        }))
+        .expect("convergence valide attendue");
+        let conv = parsed.steps[0].convergence.as_ref().unwrap();
+        assert_eq!(conv.max_iterations, DEFAULT_CONVERGENCE_ITERATIONS);
+        assert!(conv.stop_on_stagnation);
+        assert_eq!(conv.verify.task, "review");
+        assert_eq!(conv.verify.posture, Some(SpawnPosture::Discovery));
+
+        // 5) Schéma complet expose convergence, verify, max_iterations (2..=5) et stop_on_stagnation.
+        let graph_tool = tools(&json!({}))
+            .into_iter()
+            .find(|t| t["name"] == "bridget_delegate_graph")
+            .unwrap();
+        let conv_schema =
+            &graph_tool["inputSchema"]["properties"]["steps"]["items"]["properties"]["convergence"];
+        assert_eq!(conv_schema["type"], "object");
+        assert_eq!(conv_schema["required"], json!(["verify"]));
+        assert_eq!(conv_schema["properties"]["max_iterations"]["minimum"], 2);
+        assert_eq!(conv_schema["properties"]["max_iterations"]["maximum"], 5);
+        assert_eq!(conv_schema["properties"]["max_iterations"]["default"], 3);
+        assert_eq!(
+            conv_schema["properties"]["stop_on_stagnation"]["default"],
+            true
+        );
     }
 }

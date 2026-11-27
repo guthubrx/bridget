@@ -2053,6 +2053,29 @@ pub enum GraphNotifyPolicy {
     EachStep,
 }
 
+/// Bornes d'une boucle de convergence bornée (`produce <-> verify`) dans un DAG Bridget.
+pub const MIN_CONVERGENCE_ITERATIONS: u8 = 2;
+pub const DEFAULT_CONVERGENCE_ITERATIONS: u8 = 3;
+pub const MAX_CONVERGENCE_ITERATIONS: u8 = 5;
+
+fn default_convergence_max_iterations() -> u8 {
+    DEFAULT_CONVERGENCE_ITERATIONS
+}
+
+/// Boucle de convergence bornée encapsulée dans une étape d'un DAG (`produce <-> verify`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GraphConvergenceLoop {
+    /// Délégation du vérificateur indépendant exécuté après chaque itération du producteur.
+    pub verify: AutoDelegateV2,
+    /// Plafond strict d'itérations (`2..=5`, défaut `3`).
+    #[serde(default = "default_convergence_max_iterations")]
+    pub max_iterations: u8,
+    /// Arrêt anticipé dès que 2 tours consécutifs stagnent (même commit ou mêmes motifs bloquants).
+    #[serde(default = "default_true")]
+    pub stop_on_stagnation: bool,
+}
+
 /// Étape déclarée dans un graphe de missions Bridget (`bridget_delegate_graph`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -2065,6 +2088,9 @@ pub struct DelegateGraphStep {
     #[serde(default = "default_true")]
     pub pass_dependency_results: bool,
     pub delegation: AutoDelegateV2,
+    /// Boucle de convergence bornée optionnelle (`produce <-> verify`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub convergence: Option<GraphConvergenceLoop>,
 }
 
 fn default_true() -> bool {
