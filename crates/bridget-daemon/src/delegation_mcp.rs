@@ -36,6 +36,22 @@ fn parse_workspace(value: &Value) -> Result<WorkspaceRequest, ClientError> {
     })
 }
 
+/// Pré-validation locale stricte de `brief` avant connexion au daemon,
+/// afin qu'une faute de nom de champ ne consomme jamais la `request_id`.
+fn parse_brief(value: &Value) -> Result<Value, ClientError> {
+    let decoded = value
+        .as_str()
+        .and_then(|text| serde_json::from_str::<Value>(text).ok())
+        .filter(Value::is_object);
+    let candidate = decoded.as_ref().unwrap_or(value);
+    crate::handoff::validate_and_render(candidate).map_err(|error| {
+        ClientError::InvalidParams(format!(
+            "Corrigez brief ({error}). Champs autorisés dans brief : objective et summary (obligatoires, chaînes non vides) ; results, decisions, questions, next_step, references et limitations (facultatifs). Dans references, chaque objet exige kind et label ; kind=file exige aussi host et path absolu. Refus local avant connexion : cet appel n'a pas été envoyé au serveur et la request_id n'a pas été consommée par cet appel. Vérifiez tout reçu ou tâche déjà connu avant de corriger les paramètres ; ne créez aucun remplacement d'issue inconnue. Les autres travaux autorisés suivent leur propre état."
+        ))
+    })?;
+    Ok(candidate.clone())
+}
+
 pub(crate) const WAIT_TIMEOUT_DEFAULT_SECS: u64 = 600;
 pub(crate) const WAIT_TIMEOUT_MAX_SECS: u64 = 3600;
 
@@ -423,7 +439,14 @@ fn parse_delegate_graph(args: &Value) -> Result<DelegateGraphRequest, ClientErro
                     )));
                 }
             },
-            brief: del_obj.get("brief").cloned(),
+            brief: del_obj.get("brief").map(parse_brief).transpose().map_err(
+                |error| match error {
+                    ClientError::InvalidParams(message) => ClientError::InvalidParams(format!(
+                        "steps[{idx}].delegation.brief : {message}"
+                    )),
+                    other => other,
+                },
+            )?,
             child_requests: match del_obj.get("child_requests") {
                 None => None,
                 Some(Value::String(m)) if matches!(m.as_str(), "deny" | "forward") => {
@@ -468,7 +491,7 @@ fn parse_delegate_graph(args: &Value) -> Result<DelegateGraphRequest, ClientErro
 
 pub(crate) fn tools(brief_schema: &Value) -> Vec<Value> {
     let workspace_schema = json!({"oneOf":[
-        {"type":"object","properties":{"strategy":{"const":"shared","description":"Dossier partagé : strategy est le seul champ autorisé. Le SHA source appartient à expected_base_commit ; ne pas ajouter base_ref ou branch."}},"required":["strategy"],"additionalProperties":false},
+        {"type":"object","properties":{"strategy":{"const":"shared","description":"Dossier partagé : strategy est le seul champ autorisé. Le SHA source appartient à expected_base_commit ; ne pas ajouter base_ref ou branch. Peut renvoyer workspace_busy si un worktree descendant est actif sur le même dépôt ; en lecture seule, préférer strategy=commit_view avec posture=discovery."}},"required":["strategy"],"additionalProperties":false},
         {"type":"object","properties":{"strategy":{"const":"worktree","description":"Dossier de travail isolé : seuls strategy et les chaînes facultatives base_ref et branch sont acceptés."},"base_ref":{"type":"string","description":"Référence Git disponible dans cwd sur la machine du parent. Pour une base figée, fournir le même SHA complet que expected_base_commit ; un nom de branche peut avancer. Un commit présent uniquement sur la destination doit d’abord être récupéré dans le dépôt source."},"branch":{"type":"string"}},"required":["strategy"],"additionalProperties":false}
     ]});
     let mut definitions = vec![
@@ -480,7 +503,7 @@ pub(crate) fn tools(brief_schema: &Value) -> Vec<Value> {
         json!({"name":"bridget_refresh_models","description":"Demande une nouvelle observation des modèles annoncés par Codex sur les serveurs. Aucun login, modèle, profil, droit ou mission modifié. La réponse requested n’atteste pas une lecture terminée : relire ensuite bridget_capabilities et fleet.connection_catalogues. Une demande par serveur au plus toutes les 30 secondes. Un ancien worker reste non vérifié.","inputSchema":{"type":"object","properties":{"machine_id":{"type":"string","minLength":1,"maxLength":256}},"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":false,"idempotentHint":false}}),
         json!({"name":"bridget_capabilities","description":"Catalogue natif : providers contient les verdicts locaux sur la machine d’origine ; ces refus ne décrivent pas les serveurs. fleet.options donne les choix distants déclarés pour auto_delegate (machine_id, engine, model). Ces choix ne prouvent ni éligibilité ni authentification : l’admission vérifie la cible, les droits et le dossier. Fonctionne sans T3.","inputSchema":{"type":"object","properties":{},"additionalProperties":false},"annotations":{"readOnlyHint":true,"destructiveHint":false,"idempotentHint":true}}),
         json!({"name":"bridget_delegate","description":"Crée un enfant Bridget et remet sa mission en un appel natif. Conserver request_id sur retry identique ; tâche, résultat et annulation appartiennent au parent. keep_alive_secs garde l'enfant après la remise pour une nouvelle ronde. Le brief est déclaré par le parent ; sources_not_verified : aucune source citée n'est vérifiée. Le journal peut être lu plus largement que l'enfant ; aucun secret dans le brief. Corps du dossier ≤ 16 Kio, refusé plutôt que tronqué.","inputSchema":{"type":"object","properties":{"quota_fallback_authorized":{"type":"boolean","description":"true seulement après accord humain explicite pour une bascule de moteur ou de compte en cas de quota dans cette mission. Absent/faux : question humaine. Aucun droit ni budget supplémentaire."},"request_id":{"type":"string","minLength":1,"maxLength":128},"agent_type":{"type":"string"},"model":{"type":"string"},"effort":{"type":["string","null"]},"task":{"type":"string","minLength":1,"maxLength":65536},"machine_id":{"type":"string","minLength":1,"maxLength":256,"description":"Machine de destination de la mission. Vérifier les prérequis propres au projet : données externes, accès SSH et outils ne sont pas garantis par le placement du dépôt. Le champ cwd reste le dossier source sur la machine du parent."},"project_id":{"type":"string","minLength":1,"maxLength":256},"cwd":{"type":"string","minLength":1,"description":"Chemin absolu du dossier source sur la machine du parent appelant. Même avec machine_id distant, ne pas fournir le chemin de destination ; Bridget traduit le chemin via le mapping du projet."},"posture":{"type":"string","enum":["discovery","development"],"description":"Omettre pour hériter des droits attestés du parent. discovery réduit à la lecture seule ; avec Claude/GLM, seuls Read, Glob et Grep sont permis, sans WebSearch, WebFetch ni Bash. Ne convient pas à une recherche web. Changer de machine ne lève pas cette limite. development reste borné par les droits du parent."},"reply_timeout":{"type":"integer","minimum":60,"maximum":86400,"description":"Délai de réponse de la mission en secondes (défaut 3600)."},"workspace":workspace_schema,"child_requests":{"type":"string","enum":["deny","forward"],"description":"Remonter les demandes de l’enfant Codex ; absent : deny, politique inchangée."},"keep_alive_secs":{"type":"integer","minimum":60,"maximum":7200,"description":"Durée de garde après la remise du résultat ; absent : aucune garde. La garde conserve une place de flotte ; un ACK ne la libère pas. reply_timeout ne prolonge pas cette garde. Chaque tâche est bornée à huit rondes, première mission comprise ; consulter round_limit et rounds_remaining."},"resume_on_limit":{"type":"boolean","description":"Attendre puis reprendre après une limite d’usage attestée ; absent ou faux : inactif. Au plus 6 h et 2 rondes, même fournisseur."},"brief":brief_schema,"fallback":{"type":"array","minItems":1,"maxItems":3,"items":{"type":"object","properties":{"agent_type":{"type":"string","minLength":1},"model":{"type":"string","minLength":1},"effort":{"type":"string","minLength":1}},"required":["agent_type","model"],"additionalProperties":false}}},"required":["request_id","agent_type","model","task","cwd"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":true,"idempotentHint":true,"openWorldHint":true}}),
-        json!({"name":"bridget_auto_delegate","description":"Demande une admission de flotte V2. Les axes machine, moteur, connexion, modèle et effort restent indépendants. Omettre agent_type : utiliser engine pour le moteur et, seulement si nécessaire, connection_id issu du catalogue pour une connexion précise. cwd désigne le dossier source sur la machine du parent ; machine_id désigne la destination. expected_base_commit est obligatoire dans un dépôt Git, en worktree ou pour compilation ; hors Git seulement, general/shared peut l’omettre : dossier local sur la machine source, ou dossier distant déjà présent et mappé ; aucun transfert automatique hors Git. La stratégie commit_view exige explicitement posture=discovery et expected_base_commit ; pour écrire, utiliser shared ou worktree avec posture=development. Il exige un SHA complet (40 caractères hexadécimaux (SHA-1)). Conserver request_id au rejeu strict. Un maître sans auto_delegate_v2 refuse explicitement. Après une réponse perdue, conserver le propriétaire, la request_id et l’enveloppe complète. Un rejeu strict retrouve une tâche admise mais peut admettre la mission si elle n’avait jamais été reçue : seulement si le mandat reste valide. guichet_request_status ne consulte pas ces admissions natives. Le placement du dépôt ne transmet ni données externes ni clés ou alias SSH : vérifier ces prérequis sur la destination. Une admission devenue périmée s’annule avec bridget_cancel, kind=admission, id=request_id.","inputSchema":{"type":"object","properties":{"quota_fallback_authorized":{"type":"boolean","description":"true seulement si l’utilisateur a déjà autorisé explicitement le changement de moteur ou de compte en cas de quota pour cette mission. Omettre sinon : une question humaine sera ouverte après un refus fournisseur constaté. Aucun accord n’est déduit du choix automatique initial ; aucun droit ni budget supplémentaire."},"resume_on_limit":{"type":"boolean","default":true,"description":"Attendre puis reprendre automatiquement après une limite de quota attestée (défaut : true ; au plus 6 h et 2 rondes). Passer false pour désactiver."},"request_id":{"type":"string","minLength":1,"maxLength":128},"machine_id":{"type":"string","minLength":1,"maxLength":256,"description":"Machine de destination de la mission. Vérifier les prérequis propres au projet : données externes, accès SSH et outils ne sont pas garantis par le placement du dépôt. Le champ cwd reste le dossier source sur la machine du parent."},"project_id":{"type":"string","minLength":1,"maxLength":256},"engine":{"type":"string","minLength":1,"maxLength":256},"connection_id":{"type":"string","minLength":1,"maxLength":256},"model":{"type":"string","minLength":1,"maxLength":256},"effort":{"type":"string","minLength":1,"maxLength":256},"workload":{"type":"string","enum":["general","compilation"],"default":"general"},"expected_base_commit":{"type":"string","minLength":40,"maxLength":40,"pattern":"^[0-9a-fA-F]{40}$","description":"Obligatoire dans un dépôt Git et pour compilation/worktree. Omission permise seulement hors Git en general/shared. SHA source complet : exactement 40 caractères hexadécimaux (SHA-1), jamais un nom de branche. En shared : HEAD source ; en worktree : commit résolu de workspace.base_ref (HEAD si absent)."},"task":{"type":"string","minLength":1,"maxLength":65536},"cwd":{"type":"string","minLength":1,"description":"Chemin absolu du dossier source sur la machine du parent appelant. Même avec machine_id distant, ne pas fournir le chemin de destination ; Bridget traduit le chemin via le mapping du projet."},"posture":{"type":"string","enum":["discovery","development"],"description":"Omettre pour hériter des droits attestés du parent. discovery réduit à la lecture seule ; avec Claude/GLM, seuls Read, Glob et Grep sont permis, sans WebSearch, WebFetch ni Bash. Ne convient pas à une recherche web. Changer de machine ne lève pas cette limite. development reste borné par les droits du parent."},"reply_timeout":{"type":"integer","minimum":60,"maximum":86400,"default":3600,"description":"Durée maximale de chaque ronde en secondes, à partir de sa remise effective. Une nouvelle ronde admise renouvelle ce budget ; un rejeu strict ne le renouvelle pas. Défaut : 3600 (1 h), y compris development. Pour un travail long, fournir par exemple 14400 (4 h), au plus 86400 et dans la limite du parent. Ce délai est distinct de wait_timeout et keep_alive_secs. Fixer la valeur avant la première admission ; ne pas modifier une enveloppe déjà admise au rejeu."},"workspace":workspace_schema,"child_requests":{"type":"string","enum":["deny","forward"]},"keep_alive_secs":{"type":"integer","minimum":60,"maximum":7200,"description":"Durée de garde après la remise du résultat ; absent : aucune garde. La garde conserve une place de flotte ; un ACK ne la libère pas. reply_timeout ne prolonge pas cette garde. Chaque tâche est bornée à huit rondes, première mission comprise ; consulter round_limit et rounds_remaining."},"brief":brief_schema,"urgent":{"type":"boolean"},"deliverable":{"type":"string","minLength":1,"maxLength":128}},"required":["request_id","task","cwd"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":true,"idempotentHint":true,"openWorldHint":true}}),
+        json!({"name":"bridget_auto_delegate","description":"Demande une admission de flotte V2. Les axes machine, moteur, connexion, modèle et effort restent indépendants. Omettre agent_type : utiliser engine pour le moteur et, seulement si nécessaire, connection_id issu du catalogue pour une connexion précise. cwd désigne le dossier source sur la machine du parent ; machine_id désigne la destination. expected_base_commit est obligatoire dans un dépôt Git, en worktree ou pour compilation ; hors Git seulement, general/shared peut l’omettre : dossier local sur la machine source, ou dossier distant déjà présent et mappé ; aucun transfert automatique hors Git. La stratégie commit_view exige explicitement posture=discovery et expected_base_commit ; pour écrire, utiliser shared ou worktree avec posture=development. Il exige un SHA complet (40 caractères hexadécimaux (SHA-1)). Conserver request_id au rejeu strict. Un maître sans auto_delegate_v2 refuse explicitement. Après une réponse perdue, conserver le propriétaire, la request_id et l’enveloppe complète. Un rejeu strict retrouve une tâche admise mais peut admettre la mission si elle n’avait jamais été reçue : seulement si le mandat reste valide. guichet_request_status ne consulte pas ces admissions natives. Le placement du dépôt ne transmet ni données externes ni clés ou alias SSH : vérifier ces prérequis sur la destination. Une admission devenue périmée s’annule avec bridget_cancel, kind=admission, id=request_id.","inputSchema":{"type":"object","properties":{"quota_fallback_authorized":{"type":"boolean","description":"true seulement si l’utilisateur a déjà autorisé explicitement le changement de moteur ou de compte en cas de quota pour cette mission. Omettre sinon : une question humaine sera ouverte après un refus fournisseur constaté. Aucun accord n’est déduit du choix automatique initial ; aucun droit ni budget supplémentaire."},"resume_on_limit":{"type":"boolean","default":true,"description":"Attendre puis reprendre automatiquement après une limite de quota attestée (défaut : true ; au plus 6 h et 2 rondes). Passer false pour désactiver."},"request_id":{"type":"string","minLength":1,"maxLength":128},"machine_id":{"type":"string","minLength":1,"maxLength":256,"description":"Machine de destination de la mission. Vérifier les prérequis propres au projet : données externes, accès SSH et outils ne sont pas garantis par le placement du dépôt. Le champ cwd reste le dossier source sur la machine du parent."},"project_id":{"type":"string","minLength":1,"maxLength":256},"engine":{"type":"string","minLength":1,"maxLength":256},"connection_id":{"type":"string","minLength":1,"maxLength":256},"model":{"type":"string","minLength":1,"maxLength":256},"effort":{"type":"string","minLength":1,"maxLength":256,"description":"Optionnel. Doit figurer dans supported_efforts du modèle choisi dans bridget_capabilities (par exemple omis sur antigravity qui le refuse, supporté sur codex et claude ; défaut du profil appliqué si omis)."},"workload":{"type":"string","enum":["general","compilation"],"default":"general"},"expected_base_commit":{"type":"string","minLength":40,"maxLength":40,"pattern":"^[0-9a-fA-F]{40}$","description":"Obligatoire dans un dépôt Git et pour compilation/worktree. Omission permise seulement hors Git en general/shared. SHA source complet : exactement 40 caractères hexadécimaux (SHA-1), jamais un nom de branche. En shared : HEAD source ; en worktree : commit résolu de workspace.base_ref (HEAD si absent)."},"task":{"type":"string","minLength":1,"maxLength":65536},"cwd":{"type":"string","minLength":1,"description":"Chemin absolu du dossier source sur la machine du parent appelant. Même avec machine_id distant, ne pas fournir le chemin de destination ; Bridget traduit le chemin via le mapping du projet."},"posture":{"type":"string","enum":["discovery","development"],"description":"Omettre pour hériter des droits attestés du parent. discovery réduit à la lecture seule ; avec Claude/GLM, seuls Read, Glob et Grep sont permis, sans WebSearch, WebFetch ni Bash. Ne convient pas à une recherche web. Changer de machine ne lève pas cette limite. development reste borné par les droits du parent."},"reply_timeout":{"type":"integer","minimum":60,"maximum":86400,"default":3600,"description":"Durée maximale de chaque ronde en secondes, à partir de sa remise effective. Une nouvelle ronde admise renouvelle ce budget ; un rejeu strict ne le renouvelle pas. Défaut : 3600 (1 h), y compris development. Pour un travail long, fournir par exemple 14400 (4 h), au plus 86400 et dans la limite du parent. Ce délai est distinct de wait_timeout et keep_alive_secs. Fixer la valeur avant la première admission ; ne pas modifier une enveloppe déjà admise au rejeu."},"workspace":workspace_schema,"child_requests":{"type":"string","enum":["deny","forward"]},"keep_alive_secs":{"type":"integer","minimum":60,"maximum":7200,"description":"Durée de garde après la remise du résultat ; absent : aucune garde. La garde conserve une place de flotte ; un ACK ne la libère pas. reply_timeout ne prolonge pas cette garde. Chaque tâche est bornée à huit rondes, première mission comprise ; consulter round_limit et rounds_remaining."},"brief":brief_schema,"urgent":{"type":"boolean"},"deliverable":{"type":"string","minLength":1,"maxLength":128}},"required":["request_id","task","cwd"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":true,"idempotentHint":true,"openWorldHint":true}}),
         json!({"name":"bridget_task_repair_workspace","description":"Répare explicitement le dossier déplacé de sa même tâche distante, après résultat remis. Conserver request_id sur rejeu identique. Aucun tour métier créé. Les pairs ou adaptations non qualifiés refusent sans forçage.","inputSchema":{"type":"object","properties":{"task_id":{"type":"string","minLength":1},"request_id":{"type":"string","minLength":1,"maxLength":128},"target_cwd":{"type":"string","minLength":1,"maxLength":4096},"expected_head":{"type":"string","pattern":"^[0-9a-fA-F]{40}$","minLength":40,"maxLength":40}},"required":["task_id","request_id","target_cwd","expected_head"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":true,"idempotentHint":true,"openWorldHint":true}}),
         json!({"name":"bridget_task_continue","description":"Ouvre une nouvelle ronde sur son enfant encore gardé, après la remise du résultat. Prévoir keep_alive_secs dès l’admission si une suite est nécessaire ; une tâche déjà terminée sans garde ne peut plus continuer. Un SHA cité dans task ou brief n’est ni importé ni synchronisé : rendre les objets et données autorisés disponibles avant la ronde, sans déplacer silencieusement son dossier. Employer une nouvelle request_id à chaque ronde et la conserver sur retry identique. Le brief est déclaré par le parent ; sources_not_verified : aucune source citée n'est vérifiée. Le journal peut être lu plus largement que l'enfant ; aucun secret dans le brief. Corps du dossier ≤ 16 Kio, refusé plutôt que tronqué. Dans brief.references, chaque objet exige kind et label ; kind=file exige aussi host et path absolu.","inputSchema":{"type":"object","properties":{"task_id":{"type":"string","minLength":1},"request_id":{"type":"string","minLength":1,"maxLength":128},"task":{"type":"string","minLength":1,"maxLength":65536},"brief":brief_schema},"required":["task_id","request_id","task"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":false,"idempotentHint":true,"openWorldHint":true}}),
         json!({"name":"bridget_task_respond","description":"Répond à une question de son enfant avec l'identifiant lu dans le statut ou l'avis. Les approbations appartiennent à l'humain. Aucun secret dans la réponse.","inputSchema":{"type":"object","properties":{"task_id":{"type":"string","minLength":1},"request_id":{"type":"string","minLength":1},"decision":{"type":"string","enum":["accept","decline","cancel"]},"answer":{"type":"object","description":"Pour accept uniquement : chaque identifiant de question porte un tableau de chaînes, 8 Kio au plus."}},"required":["task_id","request_id","decision"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":false,"idempotentHint":true,"openWorldHint":true}}),
@@ -503,7 +526,7 @@ pub(crate) fn tools(brief_schema: &Value) -> Vec<Value> {
             if crate::workspace_git::COMMIT_VIEW_LAUNCH_ENABLED {
                 tool["inputSchema"]["properties"]["workspace"]["oneOf"].as_array_mut().unwrap().push(json!({
                     "type":"object","properties":{"strategy":{"const":"commit_view",
-                        "description":"Vue partielle du commit exact, en lecture seule. Seul strategy est autorisé. Fournir posture=discovery et expected_base_commit. Aucun dépôt Git dans la vue ; les fichiers omis se lisent par bridget_read_commit_file."}},
+                        "description":"Vue partielle du commit exact, en lecture seule sans conflit workspace_busy avec un worktree actif. Seul strategy est autorisé. Fournir posture=discovery et expected_base_commit. Aucun dépôt Git dans la vue ; les fichiers omis se lisent par bridget_read_commit_file."}},
                     "required":["strategy"],"additionalProperties":false}));
                 sha_workspaces.push("commit_view");
                 tool["inputSchema"]["properties"]["expected_base_commit"]["description"] = json!(
@@ -821,7 +844,7 @@ fn execute_with_proof(
                     ));
                 }
             },
-            brief: args.get("brief").cloned(),
+            brief: args.get("brief").map(parse_brief).transpose()?,
         },
         "bridget_auto_delegate" => NativeDelegationRequest::AutoDelegateV2(AutoDelegateV2 {
             quota_fallback_authorized: args.get("quota_fallback_authorized").map(|v|v.as_bool().ok_or_else(||ClientError::InvalidParams("quota_fallback_authorized exige un booléen ; true seulement après accord humain explicite pour cette mission.".into()))).transpose()?,
@@ -899,7 +922,7 @@ fn execute_with_proof(
                     ));
                 }
             },
-            brief: args.get("brief").cloned(),
+            brief: args.get("brief").map(parse_brief).transpose()?,
             child_requests: match args.get("child_requests") {
                 None => None,
                 Some(Value::String(mode)) if matches!(mode.as_str(), "deny" | "forward") => {
@@ -929,7 +952,7 @@ fn execute_with_proof(
             task_id: string("task_id")?,
             request_id: string("request_id")?,
             task: string("task")?,
-            brief: args.get("brief").cloned(),
+            brief: args.get("brief").map(parse_brief).transpose()?,
         },
         "bridget_task_respond" => NativeDelegationRequest::Respond {
             task_id: string("task_id")?,
@@ -2101,5 +2124,84 @@ mod workspace_text321_tests {
         ));
         assert!(parse_workspace(&json!("{\"strategy\":\"shared\",\"x\":1}")).is_err());
         assert!(parse_workspace(&json!("pas du json")).is_err());
+    }
+
+    #[test]
+    fn brief_prevalidation_refuses_unknown_fields_locally_without_consuming_request_id() {
+        let identity = ResolvedIdentity {
+            name: "owner".into(),
+            instance_id: "instance".into(),
+            delegated_origin: None,
+        };
+        for (field, payload) in [
+            (
+                "context",
+                json!({"request_id":"req-brief-1","task":"t","cwd":"/tmp","brief":{"objective":"o","summary":"s","context":"extra"}}),
+            ),
+            (
+                "scope",
+                json!({"request_id":"req-brief-2","task":"t","cwd":"/tmp","brief":{"objective":"o","summary":"s","scope":"extra"}}),
+            ),
+            (
+                "constraints",
+                json!({"request_id":"req-brief-3","task":"t","cwd":"/tmp","brief":{"objective":"o","summary":"s","constraints":["c"]}}),
+            ),
+        ] {
+            let Err(ClientError::InvalidParams(message)) = execute_with_proof(
+                &identity,
+                "bridget_auto_delegate",
+                &payload,
+                Path::new("/missing-never-touched.sock"),
+                None,
+            ) else {
+                panic!("InvalidParams local attendu pour {field}");
+            };
+            assert!(
+                message.contains(&format!("draft.{field} : champ inconnu")),
+                "champ absent du message : {message}"
+            );
+            for expected in [
+                "objective et summary",
+                "results, decisions, questions, next_step, references et limitations",
+                "n'a pas été envoyé",
+                "request_id n'a pas été consommée",
+            ] {
+                assert!(
+                    message.contains(expected),
+                    "manquant ({expected}) : {message}"
+                );
+            }
+        }
+
+        // Un brief transmis en texte JSON valide est décodé comme workspace (mode compact).
+        let text_brief = json!("{\"objective\":\"obj\",\"summary\":\"sum\"}");
+        let parsed = parse_brief(&text_brief).unwrap();
+        assert_eq!(parsed["objective"], "obj");
+        assert_eq!(parsed["summary"], "sum");
+        assert!(parse_brief(&json!("{\"context\":\"bad\"}")).is_err());
+
+        // bridget_task_continue et bridget_delegate_graph pré-valident aussi brief localement.
+        let Err(ClientError::InvalidParams(cont_msg)) = execute_with_proof(
+            &identity,
+            "bridget_task_continue",
+            &json!({"task_id":"t-1","request_id":"r-1","task":"suite","brief":{"objective":"o","summary":"s","deliverable":"d"}}),
+            Path::new("/missing-never-touched.sock"),
+            None,
+        ) else {
+            panic!("InvalidParams attendu sur bridget_task_continue");
+        };
+        assert!(cont_msg.contains("draft.deliverable : champ inconnu"));
+
+        let Err(ClientError::InvalidParams(graph_msg)) = execute_with_proof(
+            &identity,
+            "bridget_delegate_graph",
+            &json!({"request_id":"g-1","steps":[{"step_id":"s1","delegation":{"task":"t","cwd":"/tmp","brief":{"objective":"o","summary":"s","scope":"bad"}}}]}),
+            Path::new("/missing-never-touched.sock"),
+            None,
+        ) else {
+            panic!("InvalidParams attendu sur bridget_delegate_graph");
+        };
+        assert!(graph_msg.contains("steps[0].delegation.brief"));
+        assert!(graph_msg.contains("draft.scope : champ inconnu"));
     }
 }

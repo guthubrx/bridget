@@ -12654,3 +12654,33 @@ fn spec353_worker_idle_reconcile_and_mutation_seq_avoid_repeated_store_scans() {
     assert_eq!(removed, 0);
     assert_eq!(runtime.store.mutation_seq(), seq2);
 }
+
+#[test]
+fn held_bootstrap_allows_parallel_prepare_up_to_cap_and_rejects_same_command_or_overflow() {
+    // 1 démarrage indépendant en cours de bootstrap (held=1) ne bloque plus une
+    // autre étape parallèle sur la même machine tant que held < MAX_HELD_BOOTSTRAPS.
+    assert_eq!(check_prepare_capacity(0, false, 1, false), Ok(()));
+    assert_eq!(
+        check_prepare_capacity(4, false, MAX_HELD_BOOTSTRAPS - 1, false),
+        Ok(())
+    );
+    // Préparer à nouveau un command_id déjà retenu dans `held` reste refusé.
+    assert_eq!(
+        check_prepare_capacity(0, false, 1, true),
+        Err("held_bootstrap")
+    );
+    // Atteindre MAX_HELD_BOOTSTRAPS (16) reste borné par held_bootstrap.
+    assert_eq!(
+        check_prepare_capacity(0, false, MAX_HELD_BOOTSTRAPS, false),
+        Err("held_bootstrap")
+    );
+    // Le total prepared + held reste borné par MAX_PREPARED_SLOTS (128), sauf rejeu.
+    assert_eq!(
+        check_prepare_capacity(MAX_PREPARED_SLOTS - 2, false, 2, false),
+        Err("prepared_slots")
+    );
+    assert_eq!(
+        check_prepare_capacity(MAX_PREPARED_SLOTS - 2, true, 2, false),
+        Ok(())
+    );
+}

@@ -7395,19 +7395,28 @@ fn spec309_compact_discovery_tools_fits_acp_budget_and_keeps_core_delegation_fie
     for tool in &compact {
         let encoded = serde_json::to_string(tool).unwrap();
         assert!(
-            encoded.len() <= 840,
+            encoded.len() <= 1800,
             "outil compact trop volumineux ({} octets): {}",
             encoded.len(),
+            tool["name"]
+        );
+        let desc = tool["description"].as_str().unwrap();
+        assert!(
+            !desc.is_empty()
+                && !desc.ends_with(' ')
+                && !desc.ends_with(" ni")
+                && !desc.ends_with(" d’une t"),
+            "description compacte tronquée sur {}: {desc:?}",
             tool["name"]
         );
         total_bytes += encoded.len();
         assert!(tool["inputSchema"].get("$defs").is_none());
         assert!(tool["inputSchema"].get("$ref").is_none());
     }
-    // Budget compact ACP (20 outils incluant bridget_usage, les 3 outils de graphe natif
-    // et les champs de résilience quota/workload/service_tier).
+    // Budget compact ACP (20 outils incluant descriptions complètes et indications
+    // de forme fermée sur workspace/brief/expected_base_commit/effort/reply_timeout).
     assert!(
-        total_bytes <= 7200,
+        total_bytes <= 10_000,
         "budget compact depasse ({total_bytes} octets)"
     );
     let auto = compact

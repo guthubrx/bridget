@@ -45,6 +45,27 @@ const DRAIN_PROOF_RESERVATION: u64 = 4096;
 const MAX_DRAIN_PROOF_BYTES: usize = 2048;
 
 // SPEC171: bounded diagnostics for the existing V2 probe only. The same
+// Plafond de démarrages retenus (fenêtre Start -> Release) simultanés sur un worker.
+// Un graphe parallèle qui lance plusieurs étapes sur la même machine ne doit pas
+// être refusé dès le 2e démarrage simultané (held=1) alors que prepared < 128.
+const MAX_HELD_BOOTSTRAPS: usize = 16;
+const MAX_PREPARED_SLOTS: usize = 128;
+
+fn check_prepare_capacity(
+    prepared_len: usize,
+    prepared_contains: bool,
+    held_len: usize,
+    held_contains: bool,
+) -> Result<(), &'static str> {
+    if held_len >= MAX_HELD_BOOTSTRAPS || held_contains {
+        return Err("held_bootstrap");
+    }
+    if prepared_len + held_len >= MAX_PREPARED_SLOTS && !prepared_contains {
+        return Err("prepared_slots");
+    }
+    Ok(())
+}
+
 // UUID/admission/candidate filters and 128 notes / 512 bytes as the master.
 const MAX_PROBE_PERMISSION_NOTES: usize = 128;
 const MAX_PROBE_PERMISSION_NOTE_BYTES: usize = 512;
@@ -5730,12 +5751,15 @@ impl WorkerRuntime {
         {
             return Err((WorkerRefusal::CommandMismatch, None));
         }
-        if !self.held.is_empty()
-            || (self.prepared.len() >= 128 && !self.prepared.contains_key(&command.command_id))
-        {
+        if let Err(cause) = check_prepare_capacity(
+            self.prepared.len(),
+            self.prepared.contains_key(&command.command_id),
+            self.held.len(),
+            self.held.contains_key(&command.command_id),
+        ) {
             return Err((
                 WorkerRefusal::ResourceLimit,
-                Some(if self.held.is_empty() {
+                Some(if cause == "prepared_slots" {
                     crate::workspace_git::ExportFailure::MetadataCapacity
                 } else {
                     crate::workspace_git::ExportFailure::OperationCapacity
@@ -6431,10 +6455,15 @@ impl WorkerRuntime {
             }
             return Ok(Some(previous.prepared.clone()));
         }
-        if self.prepared.len() >= 128 || !self.held.is_empty() {
+        if let Err(cause) = check_prepare_capacity(
+            self.prepared.len(),
+            false,
+            self.held.len(),
+            self.held.contains_key(&command.command_id),
+        ) {
             return Err((
                 WorkerRefusal::ResourceLimit,
-                Some(if self.held.is_empty() {
+                Some(if cause == "prepared_slots" {
                     crate::workspace_git::ExportFailure::MetadataCapacity
                 } else {
                     crate::workspace_git::ExportFailure::OperationCapacity
@@ -7741,20 +7770,17 @@ impl WorkerRuntime {
         {
             return Err(WorkerRefusal::InvalidEnvelope);
         }
-        if !inspect_only && !self.held.is_empty() {
-            eprintln!(
-                "bridget_prepare_capacity {}",
-                serde_json::json!({"command":command,"cause":"held_bootstrap","prepared":self.prepared.len(),"held":self.held.len(),"prepared_limit":128})
-            );
-            return Err(WorkerRefusal::ResourceLimit);
-        }
         if !inspect_only
-            && self.prepared.len() >= 128
-            && !self.prepared.contains_key(&command.command_id)
+            && let Err(cause) = check_prepare_capacity(
+                self.prepared.len(),
+                self.prepared.contains_key(&command.command_id),
+                self.held.len(),
+                self.held.contains_key(&command.command_id),
+            )
         {
             eprintln!(
                 "bridget_prepare_capacity {}",
-                serde_json::json!({"command":command,"cause":"prepared_slots","prepared":self.prepared.len(),"held":self.held.len(),"prepared_limit":128})
+                serde_json::json!({"command":command,"cause":cause,"prepared":self.prepared.len(),"held":self.held.len(),"held_limit":MAX_HELD_BOOTSTRAPS,"prepared_limit":MAX_PREPARED_SLOTS})
             );
             return Err(WorkerRefusal::ResourceLimit);
         }

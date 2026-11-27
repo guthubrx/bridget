@@ -2910,15 +2910,78 @@ fn truncate_compact_description(raw: &str, max_chars: usize) -> String {
         .map_or(raw, |(sentence, _)| sentence)
         .trim();
     if first.chars().count() <= max_chars {
-        first.to_owned()
-    } else {
-        first.chars().take(max_chars).collect()
+        return first.to_owned();
+    }
+    let limit = max_chars.saturating_sub(1);
+    let prefix: String = first.chars().take(limit).collect();
+    let trimmed = prefix
+        .rfind(char::is_whitespace)
+        .filter(|&idx| idx > 0)
+        .map_or(prefix.as_str(), |idx| &prefix[..idx])
+        .trim_end_matches(|c: char| c.is_whitespace() || matches!(c, ',' | ';' | ':' | '—' | '-'));
+    format!("{trimmed}…")
+}
+
+fn compact_tool_description(name: &str, raw: &str) -> String {
+    match name {
+        "bridget_send" => {
+            "Envoyer un message direct (intent=action), ou un avis sans réveil (intent=information, reply=false)."
+                .to_owned()
+        }
+        "bridget_cancel" => {
+            "Annuler une admission avant création de tâche (kind=admission, id=request_id)."
+                .to_owned()
+        }
+        "bridget_usage" => {
+            "Lire les quotas restants par abonnement (0 jeton LLM consommé).".to_owned()
+        }
+        "bridget_capabilities" => {
+            "Lire le catalogue natif : verdicts locaux (providers) et options distantes (fleet.options)."
+                .to_owned()
+        }
+        "bridget_task_wait" => {
+            "Attendre la fin d'une ou plusieurs tâches natives (task_ids), sans polling ni annulation sur timeout."
+                .to_owned()
+        }
+        "bridget_task_ack" => {
+            "Acquitter le résultat ou l'échec de tâches natives (task_ids) et annuler leurs avis en attente."
+                .to_owned()
+        }
+        "bridget_auto_delegate" => {
+            "Déléguer une mission via l'admission flotte V2 (axes machine, engine, model, effort indépendants)."
+                .to_owned()
+        }
+        _ => truncate_compact_description(raw, 128),
+    }
+}
+
+fn compact_field_hint(tool_name: &str, field: &str) -> Option<&'static str> {
+    match (tool_name, field) {
+        ("bridget_auto_delegate", "workspace") => Some(
+            "Objet {strategy:'shared'|'worktree'|'commit_view', base_ref?, branch?}. En lecture seule sans workspace_busy : strategy='commit_view' avec posture='discovery' et expected_base_commit.",
+        ),
+        ("bridget_delegate", "workspace") => {
+            Some("Objet {strategy:'shared'|'worktree', base_ref?, branch?}.")
+        }
+        ("bridget_auto_delegate" | "bridget_delegate" | "bridget_task_continue", "brief") => Some(
+            "Objet fermé : objective et summary (requis), results, decisions, questions, next_step, references, limitations.",
+        ),
+        ("bridget_auto_delegate", "expected_base_commit") => Some(
+            "SHA Git complet (40 hex), obligatoire en Git, worktree, commit_view ou compilation.",
+        ),
+        ("bridget_auto_delegate" | "bridget_delegate", "effort") => Some(
+            "Optionnel ; doit figurer dans supported_efforts du modèle (omis sur antigravity, supporté sur codex/claude).",
+        ),
+        ("bridget_auto_delegate" | "bridget_delegate", "reply_timeout") => Some(
+            "Délai max par ronde en s (défaut 3600, max 86400 ; augmenter pour mission longue).",
+        ),
+        _ => None,
     }
 }
 
 fn compact_property_schema(schema: &Value) -> Value {
     // Un choix entre objets (workspace) reste un objet simple. Antigravity
-    // retire un outil dont un objet imbriqué déclare ses propriétés (321) ;
+    // retire un outil dont un objet imbriqué déclare ses propriétés (321/322) ;
     // le texte JSON reçu à la place d'un objet est décodé côté serveur.
     if schema.get("type").is_none()
         && let Some(variants) = schema
@@ -2953,6 +3016,13 @@ fn compact_property_schema(schema: &Value) -> Value {
             .unwrap_or_else(|| json!({ "type": "string" }));
         return json!({ "type": ty, "items": items });
     }
+    if ty == "string"
+        && let Some(values) = schema.get("enum").and_then(Value::as_array)
+        && !values.is_empty()
+        && values.iter().all(Value::is_string)
+    {
+        return json!({ "type": "string", "enum": values });
+    }
     json!({ "type": ty })
 }
 
@@ -2965,11 +3035,11 @@ pub(crate) fn compact_discovery_tools(catalogue: Vec<Value>) -> Vec<Value> {
         if !COMPACT_MCP_TOOLS.contains(&name) {
             continue;
         }
-        let desc = truncate_compact_description(
+        let desc = compact_tool_description(
+            name,
             tool.get("description")
                 .and_then(Value::as_str)
                 .unwrap_or(""),
-            96,
         );
         let input_schema = if name == "bridget_specialists" {
             json!({
@@ -2989,21 +3059,31 @@ pub(crate) fn compact_discovery_tools(catalogue: Vec<Value>) -> Vec<Value> {
                 .pointer("/inputSchema/properties")
                 .and_then(Value::as_object)
             {
+                let insert_prop =
+                    |props: &mut serde_json::Map<String, Value>, field: &str, val: &Value| {
+                        let mut compact = compact_property_schema(val);
+                        if let Some(hint) = compact_field_hint(name, field)
+                            && let Some(obj) = compact.as_object_mut()
+                        {
+                            obj.insert("description".into(), json!(hint));
+                        }
+                        props.insert(field.into(), compact);
+                    };
                 if name == "bridget_auto_delegate" {
                     for &field in COMPACT_AUTO_DELEGATE_FIELDS {
                         if let Some(val) = src_props.get(field) {
-                            props.insert(field.into(), compact_property_schema(val));
+                            insert_prop(&mut props, field, val);
                         }
                     }
                 } else if name == "bridget_delegate" {
                     for &field in COMPACT_DELEGATE_FIELDS {
                         if let Some(val) = src_props.get(field) {
-                            props.insert(field.into(), compact_property_schema(val));
+                            insert_prop(&mut props, field, val);
                         }
                     }
                 } else {
                     for (k, val) in src_props {
-                        props.insert(k.clone(), compact_property_schema(val));
+                        insert_prop(&mut props, k, val);
                     }
                 }
             }
@@ -4025,16 +4105,65 @@ mod compact318_tests {
             .iter()
             .find(|t| t["name"] == "bridget_auto_delegate")
             .unwrap();
-        // Objet simple, sans propriétés imbriquées : forme gardée par Antigravity.
+        // Objet simple, sans propriétés imbriquées : forme gardée par Antigravity,
+        // avec description explicite de strategy/commit_view et des champs fermés de brief.
+        let workspace = &auto["inputSchema"]["properties"]["workspace"];
+        assert_eq!(workspace["type"], "object");
+        assert!(workspace.get("properties").is_none());
+        let ws_desc = workspace["description"].as_str().unwrap();
+        for token in [
+            "strategy",
+            "shared",
+            "worktree",
+            "commit_view",
+            "workspace_busy",
+        ] {
+            assert!(
+                ws_desc.contains(token),
+                "workspace hint manquant ({token}): {ws_desc}"
+            );
+        }
+        let brief = &auto["inputSchema"]["properties"]["brief"];
+        assert_eq!(brief["type"], "object");
+        assert!(brief.get("properties").is_none());
+        let brief_desc = brief["description"].as_str().unwrap();
+        for token in ["objective", "summary", "references"] {
+            assert!(
+                brief_desc.contains(token),
+                "brief hint manquant ({token}): {brief_desc}"
+            );
+        }
+        assert!(
+            auto["inputSchema"]["properties"]["expected_base_commit"]["description"]
+                .as_str()
+                .unwrap()
+                .contains("40")
+        );
+        assert!(
+            auto["inputSchema"]["properties"]["effort"]["description"]
+                .as_str()
+                .unwrap()
+                .contains("supported_efforts")
+        );
         assert_eq!(
-            auto["inputSchema"]["properties"]["workspace"],
-            json!({"type":"object"})
+            auto["inputSchema"]["properties"]["posture"]["enum"],
+            json!(["discovery", "development"])
+        );
+        assert_eq!(
+            auto["inputSchema"]["properties"]["workload"]["enum"],
+            json!(["general", "compilation"])
         );
         // 339 : reply_timeout et keep_alive_secs doivent rester visibles en mode compact
         // pour éviter qu'une mission longue ne reste bloquée sur le défaut de 3600 s.
         assert_eq!(
-            auto["inputSchema"]["properties"]["reply_timeout"],
-            json!({"type":"integer"})
+            auto["inputSchema"]["properties"]["reply_timeout"]["type"],
+            "integer"
+        );
+        assert!(
+            auto["inputSchema"]["properties"]["reply_timeout"]["description"]
+                .as_str()
+                .unwrap()
+                .contains("3600")
         );
         assert_eq!(
             auto["inputSchema"]["properties"]["keep_alive_secs"],
@@ -4045,8 +4174,8 @@ mod compact318_tests {
             .find(|t| t["name"] == "bridget_delegate")
             .unwrap();
         assert_eq!(
-            delegate["inputSchema"]["properties"]["reply_timeout"],
-            json!({"type":"integer"})
+            delegate["inputSchema"]["properties"]["reply_timeout"]["type"],
+            "integer"
         );
         assert_eq!(
             delegate["inputSchema"]["properties"]["keep_alive_secs"],
