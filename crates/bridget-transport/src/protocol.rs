@@ -1611,6 +1611,10 @@ pub enum AdoptStoppedOutcome {
 pub enum IdempotencyIssue {
     Accepted {
         expires_at: i64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        retained_reason: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        retained_detail: Option<String>,
     },
     Rejected {
         category: String,
@@ -1631,6 +1635,16 @@ pub enum IdempotencyIssue {
     EnvelopeMismatch,
     IdempotencyExpired,
     InvalidIssuedAt,
+}
+
+impl IdempotencyIssue {
+    pub fn accepted(expires_at: i64) -> Self {
+        Self::Accepted {
+            expires_at,
+            retained_reason: None,
+            retained_detail: None,
+        }
+    }
 }
 
 /// Fenêtre d'historique demandée par une vue attach.

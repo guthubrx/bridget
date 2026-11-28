@@ -973,7 +973,8 @@ fn native_receipt_view(
         .lookup(&key, unix_timestamp())
         .map_err(|_| "native_submission_unknown")?;
     let state = match result {
-        crate::idempotency::LookupResult::Accepted { .. } => "accepted",
+        crate::idempotency::LookupResult::Accepted { .. }
+        | crate::idempotency::LookupResult::Retained { .. } => "accepted",
         crate::idempotency::LookupResult::Rejected { .. } => "refused",
         crate::idempotency::LookupResult::OutcomeUnknown { .. } => "unknown",
         crate::idempotency::LookupResult::Orphaned { .. } => "orphaned",

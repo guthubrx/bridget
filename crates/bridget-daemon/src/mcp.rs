@@ -1622,7 +1622,9 @@ fn execute_send(
     }
     if let Some(intent) = requested_intent {
         result["intent"] = json!(intent);
-        result["effect"] = json!("unconfirmed");
+        if result.get("effect").is_none() {
+            result["effect"] = json!("unconfirmed");
+        }
         if intent == "information" && result["status"] == "accepted" {
             result["status"] = json!("stored");
             result["effect"] = json!("stored_without_wakeup");
@@ -2709,6 +2711,21 @@ fn fetch_ledger_requests(
 
 pub(crate) fn send_issue_result(id: &str, issued_at: i64, issue: IdempotencyIssue) -> Value {
     match issue {
+        IdempotencyIssue::Accepted {
+            retained_reason: Some(retained_reason),
+            retained_detail,
+            ..
+        } => json!({
+            "status": "stored",
+            "id": id,
+            "issued_at": issued_at,
+            "effect": "retained_without_wakeup",
+            "model_woken": false,
+            "retained_reason": retained_reason,
+            "reason": retained_detail.unwrap_or_else(|| {
+                "Réponse conservée dans le ledger sans réveil du destinataire.".to_string()
+            }),
+        }),
         IdempotencyIssue::Accepted { .. } => {
             json!({ "status": "accepted", "id": id, "issued_at": issued_at, "hops": 4 })
         }

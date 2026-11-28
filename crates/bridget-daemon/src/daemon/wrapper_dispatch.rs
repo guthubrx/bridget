@@ -1802,7 +1802,7 @@ pub(super) fn on_send(
         ));
     }
     let logical_sender = bridge_msg.from.clone();
-    let captured = match native_delegation::capture_reply(&mut st, conn_id, &bridge_msg) {
+    let captured = match native_delegation::capture_reply_outcome(&mut st, conn_id, &bridge_msg) {
         Ok(captured) => captured,
         Err(error) => {
             error!("capture native non persistée: {error}");
@@ -1818,11 +1818,24 @@ pub(super) fn on_send(
             });
         }
     };
-    if captured {
-        return Some(DaemonToWrapper::Ack {
-            id: bridge_msg.id.clone(),
-            project_warnings: Vec::new(),
-        });
+    match captured {
+        agent_tracking::CaptureOutcome::NotCaptured => {}
+        agent_tracking::CaptureOutcome::Captured => {
+            return Some(DaemonToWrapper::Ack {
+                id: bridge_msg.id.clone(),
+                project_warnings: Vec::new(),
+            });
+        }
+        agent_tracking::CaptureOutcome::RetainedWithoutWakeup { category, .. } => {
+            info!(
+                "réponse {} conservée dans le ledger sans réveil ({category}) pour {}",
+                bridge_msg.id, bridge_msg.to
+            );
+            return Some(DaemonToWrapper::Ack {
+                id: bridge_msg.id.clone(),
+                project_warnings: Vec::new(),
+            });
+        }
     }
     let content_key = bridge_msg.content_key();
     let message_guard_id = bridge_msg.id.clone();

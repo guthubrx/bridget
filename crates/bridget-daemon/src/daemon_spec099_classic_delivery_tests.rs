@@ -327,6 +327,252 @@ fn tracking230_reponse_admise_conservee_sans_solliciter_parent_dormant() {
 }
 
 #[test]
+fn tracking230_reply_true_depuis_expediteur_dormant_est_refuse_explicitement() {
+    let (state, root, peers) = fixture();
+    let _cleanup = FixtureRoot(root);
+    {
+        let mut st = state.lock().unwrap();
+        let sender_info = agent_tracking::directory(&mut st)
+            .unwrap()
+            .into_iter()
+            .find(|a| a.agent.agent_id == SENDER)
+            .unwrap();
+        crate::agent_tracking::set(
+            st.store.connection(),
+            "human",
+            &Uuid::new_v4().to_string(),
+            b"sleep-sender-before-reply",
+            &sender_info,
+            true,
+            Some(false),
+            None,
+            100,
+        )
+        .unwrap();
+        st.client_negotiations.insert(
+            "sender".into(),
+            NegotiatedClient {
+                version: CLIENT_CONTRACT_VERSION,
+                issuer_scope: "scope230_dormant_sender_ns".into(),
+                capabilities: vec![ClientCapability::SendIdempotent],
+            },
+        );
+    }
+    let mut with_reply = BridgetMessage::new(SENDER, TARGET, "question avec réponse attendue");
+    with_reply.reply = true;
+    let legacy = handle_wrapper_message("sender", WrapperToDaemon::Send(with_reply.clone()), &state)
+        .unwrap();
+    assert!(
+        matches!(legacy, DaemonToWrapper::Nack { ref reason, .. } if reason.contains("Expéditeur dormant") && reason.contains("bridget agents wake") && reason.contains(SENDER)),
+        "{legacy:?}"
+    );
+    let mut controls = Vec::new();
+    let idempotent = {
+        let mut st = state.lock().unwrap();
+        handle_idempotent_send(
+            "sender",
+            with_reply,
+            "dormant-sender-reply-1".into(),
+            unix_now_secs(),
+            IdempotentSendAdmission {
+                project: None,
+                issued_at_tolerance_secs: CLIENT_ISSUED_AT_TOLERANCE_SECS,
+            },
+            &mut st,
+            &mut controls,
+        )
+    };
+    assert!(
+        matches!(
+            idempotent,
+            DaemonToWrapper::IdempotencyResult {
+                issue: IdempotencyIssue::Rejected { ref category, ref reason, .. },
+                ..
+            } if category == "reply_sender_dormant" && reason.contains("bridget agents wake") && reason.contains(SENDER)
+        ),
+        "{idempotent:?}"
+    );
+    assert!(controls.is_empty(), "aucune remise à la cible");
+    // Un envoi sans réponse relayée (reply=false) reste autorisé depuis un agent dormant.
+    let without_reply = BridgetMessage::new(SENDER, TARGET, "information unidirectionnelle");
+    let ok = {
+        let mut st = state.lock().unwrap();
+        handle_idempotent_send(
+            "sender",
+            without_reply,
+            "dormant-sender-noreply-1".into(),
+            unix_now_secs(),
+            IdempotentSendAdmission {
+                project: None,
+                issued_at_tolerance_secs: CLIENT_ISSUED_AT_TOLERANCE_SECS,
+            },
+            &mut st,
+            &mut controls,
+        )
+    };
+    assert!(
+        matches!(
+            ok,
+            DaemonToWrapper::IdempotencyResult {
+                issue: IdempotencyIssue::OutcomeUnknown { delivery_id: Some(_), .. },
+                ..
+            }
+        ),
+        "{ok:?}"
+    );
+    peers[1]
+        .set_read_timeout(Some(Duration::from_millis(30)))
+        .unwrap();
+}
+
+#[test]
+fn tracking230_reponse_idempotente_vers_dormant_retourne_retained_without_wakeup_et_rejoue() {
+    let (state, root, _peers) = fixture();
+    let _cleanup = FixtureRoot(root);
+    let issued_at = unix_now_secs();
+    {
+        let mut st = state.lock().unwrap();
+        for (conn, scope) in [
+            ("sender", "scope230_retained_sender_ns"),
+            ("target", "scope230_retained_target_ns"),
+        ] {
+            st.client_negotiations.insert(
+                conn.into(),
+                NegotiatedClient {
+                    version: CLIENT_CONTRACT_VERSION,
+                    issuer_scope: scope.into(),
+                    capabilities: vec![ClientCapability::SendIdempotent],
+                },
+            );
+        }
+        let mut request = BridgetMessage::new(SENDER, TARGET, "demande initiale");
+        request.reply = true;
+        let mut controls = Vec::new();
+        let admitted = handle_idempotent_send(
+            "sender",
+            request,
+            "req-230-idemp".into(),
+            issued_at,
+            IdempotentSendAdmission {
+                project: None,
+                issued_at_tolerance_secs: CLIENT_ISSUED_AT_TOLERANCE_SECS,
+            },
+            &mut st,
+            &mut controls,
+        );
+        assert!(matches!(
+            admitted,
+            DaemonToWrapper::IdempotencyResult {
+                issue: IdempotencyIssue::OutcomeUnknown { delivery_id: Some(_), .. },
+                ..
+            }
+        ));
+        let sender_info = agent_tracking::directory(&mut st)
+            .unwrap()
+            .into_iter()
+            .find(|a| a.agent.agent_id == SENDER)
+            .unwrap();
+        crate::agent_tracking::set(
+            st.store.connection(),
+            "human",
+            &Uuid::new_v4().to_string(),
+            b"sleep-sender-after-req",
+            &sender_info,
+            true,
+            Some(false),
+            None,
+            issued_at,
+        )
+        .unwrap();
+    }
+    let mut reply1 = BridgetMessage::new(TARGET, SENDER, "première réponse conservée");
+    reply1.in_reply_to = Some("req-230-idemp".into());
+    let mut controls = Vec::new();
+    let first = {
+        let mut st = state.lock().unwrap();
+        handle_idempotent_send(
+            "target",
+            reply1.clone(),
+            "rep-230-idemp-1".into(),
+            issued_at,
+            IdempotentSendAdmission {
+                project: None,
+                issued_at_tolerance_secs: CLIENT_ISSUED_AT_TOLERANCE_SECS,
+            },
+            &mut st,
+            &mut controls,
+        )
+    };
+    assert!(
+        matches!(
+            &first,
+            DaemonToWrapper::IdempotencyResult {
+                issue: IdempotencyIssue::Accepted {
+                    retained_reason: Some(cat),
+                    retained_detail: Some(detail),
+                    ..
+                },
+                ..
+            } if cat == "recipient_dormant" && detail.contains("bridget agents wake") && detail.contains(SENDER)
+        ),
+        "{first:?}"
+    );
+    assert!(controls.is_empty());
+    let replay = {
+        let mut st = state.lock().unwrap();
+        handle_idempotent_send(
+            "target",
+            reply1,
+            "rep-230-idemp-1".into(),
+            issued_at,
+            IdempotentSendAdmission {
+                project: None,
+                issued_at_tolerance_secs: CLIENT_ISSUED_AT_TOLERANCE_SECS,
+            },
+            &mut st,
+            &mut controls,
+        )
+    };
+    assert_eq!(
+        serde_json::to_value(&replay).unwrap(),
+        serde_json::to_value(&first).unwrap(),
+        "le rejeu conserve le motif de rétention sans réveil"
+    );
+    let mut reply2 = BridgetMessage::new(TARGET, SENDER, "seconde réponse après clôture");
+    reply2.in_reply_to = Some("req-230-idemp".into());
+    let second = {
+        let mut st = state.lock().unwrap();
+        handle_idempotent_send(
+            "target",
+            reply2,
+            "rep-230-idemp-2".into(),
+            issued_at,
+            IdempotentSendAdmission {
+                project: None,
+                issued_at_tolerance_secs: CLIENT_ISSUED_AT_TOLERANCE_SECS,
+            },
+            &mut st,
+            &mut controls,
+        )
+    };
+    assert!(
+        matches!(
+            &second,
+            DaemonToWrapper::IdempotencyResult {
+                issue: IdempotencyIssue::Accepted {
+                    retained_reason: Some(cat),
+                    retained_detail: Some(detail),
+                    ..
+                },
+                ..
+            } if cat == "recipient_dormant_and_request_closed" && detail.contains("answered") && detail.contains("bridget agents wake")
+        ),
+        "{second:?}"
+    );
+    assert!(controls.is_empty());
+}
+
+#[test]
 fn spec099_notification_systeme_bornee_meme_si_writer_occupe() {
     let (socket, _peer) = UnixStream::pair().unwrap();
     let writer = Arc::new(Mutex::new(BufWriter::new(socket)));

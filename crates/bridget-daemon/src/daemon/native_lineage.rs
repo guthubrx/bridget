@@ -666,7 +666,9 @@ fn compose(conn: &str, context: &Context, state: &Arc<Mutex<DaemonState>>) -> Re
                 if let Ok(key) = IdempotencyKey::new(scope, OperationKind::Send, request_id.clone())
                 {
                     match st.idempotency.lookup(&key, unix_timestamp()) {
-                        Ok(LookupResult::Accepted { .. }) => compose_outcome(
+                        Ok(
+                            LookupResult::Accepted { .. } | LookupResult::Retained { .. },
+                        ) => compose_outcome(
                             &mut saved,
                             "accepted",
                             None,

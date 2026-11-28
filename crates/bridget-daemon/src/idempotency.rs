@@ -91,6 +91,11 @@ pub enum PublicResult {
     Accepted {
         expires_at: i64,
     },
+    Retained {
+        expires_at: i64,
+        reason_code: String,
+        detail: String,
+    },
     Rejected {
         category: String,
         reason: String,
@@ -105,6 +110,11 @@ pub enum PublicResult {
 pub enum LookupResult {
     Accepted {
         expires_at: i64,
+    },
+    Retained {
+        expires_at: i64,
+        reason_code: String,
+        detail: String,
     },
     Rejected {
         category: String,
@@ -1344,6 +1354,15 @@ impl IdempotencyStore {
     ) -> Result<(), IdempotencyError> {
         let (kind, category, reason) = match &result {
             PublicResult::Accepted { .. } => ("accepted", None, None),
+            PublicResult::Retained {
+                reason_code,
+                detail,
+                ..
+            } => (
+                "accepted",
+                Some(reason_code.as_str()),
+                Some(detail.as_str()),
+            ),
             PublicResult::Rejected { category, reason } => {
                 ("rejected", Some(category.as_str()), Some(reason.as_str()))
             }
@@ -1560,9 +1579,16 @@ impl Record {
             });
         }
         match self.public_result_kind.as_deref() {
-            Some("accepted") => Ok(LookupResult::Accepted {
-                expires_at: self.expires_at,
-            }),
+            Some("accepted") => match (&self.public_result_category, &self.public_result_reason) {
+                (Some(reason_code), Some(detail)) => Ok(LookupResult::Retained {
+                    expires_at: self.expires_at,
+                    reason_code: reason_code.clone(),
+                    detail: detail.clone(),
+                }),
+                _ => Ok(LookupResult::Accepted {
+                    expires_at: self.expires_at,
+                }),
+            },
             Some("rejected") => Ok(LookupResult::Rejected {
                 category: self
                     .public_result_category

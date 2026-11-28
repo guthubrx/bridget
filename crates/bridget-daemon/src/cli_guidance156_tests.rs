@@ -394,7 +394,7 @@ fn guidance156_cli_run(test: &str, extra: &[&str]) -> (Output, Option<String>) {
             encode(&DaemonToWrapper::IdempotencyResult {
                 operation_kind: "send".into(),
                 idempotency_key: "guidance156-cli".into(),
-                issue: IdempotencyIssue::Accepted { expires_at: 60 },
+                issue: IdempotencyIssue::accepted(60),
                 project_warnings: Vec::new(),
             })
             .unwrap()

@@ -504,7 +504,7 @@ fn guidance156_capture_send_with_information(
             DaemonToWrapper::IdempotencyResult {
                 operation_kind: "send".into(),
                 idempotency_key: "guidance156".into(),
-                issue: IdempotencyIssue::Accepted { expires_at: 60 },
+                issue: IdempotencyIssue::accepted(60),
                 project_warnings: Vec::new(),
             },
         );
@@ -3498,9 +3498,7 @@ fn spec100_mcp_shares_exact_excerpt_with_reply_and_closed_events_contract() {
                 operation_kind: "send".into(),
                 idempotency_key: message_id,
                 project_warnings: Vec::new(),
-                issue: IdempotencyIssue::Accepted {
-                    expires_at: 9999999999,
-                },
+                issue: IdempotencyIssue::accepted(9999999999),
             },
         );
         reply_caller_scope(&listener, json!({"version":1,"caller_read_only":false}));
@@ -5348,7 +5346,7 @@ fn send_transmet_un_corps_riche_octet_pour_octet_et_negocie_le_client() {
                     operation_kind: "send".to_string(),
                     idempotency_key: "retry-me".to_string(),
                     project_warnings: Vec::new(),
-                    issue: IdempotencyIssue::Accepted { expires_at: 60 },
+                    issue: IdempotencyIssue::accepted(60),
                 },
             );
         }
@@ -5426,7 +5424,7 @@ fn spec133_send_signe_par_le_parent_et_transporte_la_provenance() {
                 operation_kind: "send".into(),
                 idempotency_key: "delegated-message".into(),
                 project_warnings: Vec::new(),
-                issue: IdempotencyIssue::Accepted { expires_at: 60 },
+                issue: IdempotencyIssue::accepted(60),
             },
         );
     });
@@ -5505,7 +5503,7 @@ fn send_transmet_in_reply_to_dans_l_enveloppe_idempotente() {
                 operation_kind: "send".to_string(),
                 idempotency_key: "reply-1".to_string(),
                 project_warnings: Vec::new(),
-                issue: IdempotencyIssue::Accepted { expires_at: 60 },
+                issue: IdempotencyIssue::accepted(60),
             },
         );
     });
@@ -5629,9 +5627,7 @@ fn retry_rejoue_scope_et_horodatage_malgre_rename() {
                     operation_kind: "send".to_string(),
                     idempotency_key: "retry-1".to_string(),
                     project_warnings: Vec::new(),
-                    issue: IdempotencyIssue::Accepted {
-                        expires_at: 1_700_000_060,
-                    },
+                    issue: IdempotencyIssue::accepted(1_700_000_060),
                 },
             );
         }
@@ -5954,9 +5950,7 @@ fn coupure_apres_transmission_devient_outcome_unknown_et_le_retry_reste_identiqu
                 operation_kind: "send".to_string(),
                 idempotency_key: "retry-cut".to_string(),
                 project_warnings: Vec::new(),
-                issue: IdempotencyIssue::Accepted {
-                    expires_at: 1_700_000_060,
-                },
+                issue: IdempotencyIssue::accepted(1_700_000_060),
             },
         );
     });
@@ -5985,6 +5979,110 @@ fn coupure_apres_transmission_devient_outcome_unknown_et_le_retry_reste_identiqu
     std::fs::remove_file(socket).unwrap();
 }
 
+#[test]
+fn tracking230_mcp_retained_without_wakeup_preserves_honest_effect_and_model_woken_false() {
+    let result = send_issue_result(
+        "msg-retained-1",
+        1_700_000_000,
+        IdempotencyIssue::Accepted {
+            expires_at: 1_700_000_060,
+            retained_reason: Some("recipient_dormant_and_request_closed".into()),
+            retained_detail: Some(
+                "Réponse conservée dans le ledger sans réveil : bridget agents wake <UUID>".into(),
+            ),
+        },
+    );
+    assert_eq!(result["status"], "stored");
+    assert_eq!(result["effect"], "retained_without_wakeup");
+    assert_eq!(result["model_woken"], false);
+    assert_eq!(
+        result["retained_reason"],
+        "recipient_dormant_and_request_closed"
+    );
+    assert!(
+        result["reason"]
+            .as_str()
+            .unwrap()
+            .contains("bridget agents wake")
+    );
+
+    let socket = test_socket("retained-230-mcp");
+    let listener = UnixListener::bind(&socket).unwrap();
+    let server = thread::spawn(move || {
+        reply_caller_scope(&listener, json!({"version":1,"caller_read_only":false}));
+        let (stream, _) = listener.accept().unwrap();
+        let mut reader = BufReader::new(stream.try_clone().unwrap());
+        let mut writer = BufWriter::new(stream);
+        assert!(matches!(
+            read_command(&mut reader),
+            WrapperToDaemon::RoleHandshake { .. }
+        ));
+        write_command(
+            &mut writer,
+            DaemonToWrapper::RoleAccepted {
+                role: ConnectionRole::Client,
+            },
+        );
+        assert!(matches!(
+            read_command(&mut reader),
+            WrapperToDaemon::ClientHello { .. }
+        ));
+        write_command(
+            &mut writer,
+            DaemonToWrapper::ClientWelcome {
+                version: CLIENT_CONTRACT_VERSION,
+                horizon_secs: 60,
+                issued_at_tolerance_secs: 60,
+                capabilities: vec![ClientCapability::SendIdempotent],
+                build_id: String::new(),
+            },
+        );
+        assert!(matches!(
+            read_command(&mut reader),
+            WrapperToDaemon::SendIdempotent { .. }
+        ));
+        write_command(
+            &mut writer,
+            DaemonToWrapper::IdempotencyResult {
+                operation_kind: "send".into(),
+                idempotency_key: "msg-retained-queue".into(),
+                project_warnings: Vec::new(),
+                issue: IdempotencyIssue::Accepted {
+                    expires_at: 1_700_000_060,
+                    retained_reason: Some("recipient_dormant".into()),
+                    retained_detail: Some(
+                        "Réponse conservée dans le ledger sans réveil : destinataire dormant".into(),
+                    ),
+                },
+            },
+        );
+    });
+    let arguments = json!({
+        "to": "3b3b7942-7d4c-43fd-bf98-f9de28611e75",
+        "body": "bilan",
+        "in_reply_to": "req-1",
+        "intent": "queue",
+        "reply": false,
+        "id": "msg-retained-queue",
+        "issued_at": 1_700_000_000
+    });
+    let response = execute_tool_at_with_scope(
+        "agent",
+        "instance",
+        "bridget_send",
+        arguments.as_object().unwrap(),
+        &socket,
+    )
+    .unwrap();
+    assert_eq!(response["status"], "stored");
+    assert_eq!(response["effect"], "retained_without_wakeup");
+    assert_eq!(response["model_woken"], false);
+    assert_eq!(response["intent"], "queue");
+    assert_eq!(response["retained_reason"], "recipient_dormant");
+    server.join().unwrap();
+    std::fs::remove_file(socket).unwrap();
+}
+
 /// L'oracle du mandat : un envoi dont l'accusé aval est retardé rend un
 /// statut HONNÊTE (remise en vol, avec sa preuve), et le rejeu de la même
 /// clé lit le sort réel — en portant EXACTEMENT la même enveloppe, jamais
@@ -6001,9 +6099,7 @@ fn accuse_retarde_rend_un_statut_honnete_puis_le_rejeu_lit_le_sort_sans_duplique
                 expires_at: 1_700_000_060,
                 delivery_id: Some("livraison-differee".to_string()),
             },
-            IdempotencyIssue::Accepted {
-                expires_at: 1_700_000_060,
-            },
+            IdempotencyIssue::accepted(1_700_000_060),
         ] {
             reply_caller_scope(&listener, json!({"version":1,"caller_read_only":false}));
             let (stream, _) = listener.accept().unwrap();
@@ -6779,7 +6875,7 @@ fn spec138_send_returns_structured_warning_outside_exact_body() {
             DaemonToWrapper::IdempotencyResult {
                 operation_kind: "send".into(),
                 idempotency_key: message_id,
-                issue: IdempotencyIssue::Accepted { expires_at: 60 },
+                issue: IdempotencyIssue::accepted(60),
                 project_warnings: vec![warning],
             },
         );

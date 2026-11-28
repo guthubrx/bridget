@@ -185,9 +185,7 @@ fn start_reference_server(
                 IdempotencyIssue::EnvelopeMismatch
             } else {
                 first_send.get_or_insert_with(|| serialized.clone());
-                IdempotencyIssue::Accepted {
-                    expires_at: 123_456,
-                }
+                IdempotencyIssue::accepted(123_456)
             };
             sends.push(serialized);
             write_response(

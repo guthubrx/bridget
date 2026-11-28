@@ -5630,7 +5630,21 @@ fn send_usage_error(error: &str) -> ! {
 
 fn print_idempotency_issue(issue: &IdempotencyIssue, options: &IdempotentSendOptions) {
     match issue {
-        IdempotencyIssue::Accepted { expires_at } => {
+        IdempotencyIssue::Accepted {
+            retained_reason: Some(reason_code),
+            retained_detail,
+            ..
+        } => {
+            println!(
+                "CONSERVÉ SANS RÉVEIL ({reason_code}): id={} issued_at={} — {}",
+                options.id,
+                options.issued_at,
+                retained_detail.as_deref().unwrap_or(
+                    "réponse conservée dans le ledger sans réveil du destinataire"
+                )
+            );
+        }
+        IdempotencyIssue::Accepted { expires_at, .. } => {
             println!(
                 "OK: accepted id={} issued_at={} expires_at={expires_at}",
                 options.id, options.issued_at
@@ -9359,9 +9373,9 @@ mod depot_tests {
             expires_at: 1_700_000_060,
             delivery_id: Some("livraison-1".to_string()),
         }));
-        assert!(send_deposited(&IdempotencyIssue::Accepted {
-            expires_at: 1_700_000_060,
-        }));
+        assert!(send_deposited(&IdempotencyIssue::accepted(
+            1_700_000_060,
+        )));
     }
 
     /// La contre-épreuve : sans `delivery_id`, le sort est réellement inconnu.

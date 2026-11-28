@@ -122,6 +122,12 @@ pub(crate) fn bind(
 
 pub(crate) const DORMANT_MESSAGE: &str = "Agent dormant : cette nouvelle sollicitation est refusée. Son utilisateur doit demander son réveil, depuis sa fiche ou avec bridget agents wake <UUID>. Après réveil confirmé, une nouvelle sollicitation sera possible ; conservez ce reçu refusé. Les missions déjà engagées et leurs résultats sont conservés ; les autres travaux autorisés peuvent continuer.";
 
+pub(crate) fn dormant_reply_sender_message(agent_id: &str) -> String {
+    format!(
+        "Expéditeur dormant : votre fiche ({agent_id}) est marquée dormante (tracking.dormant=true) ; Bridget ne vous relaierait pas la réponse demandée avec reply=true. Demandez à l'utilisateur de réveiller votre fiche depuis son interface ou avec bridget agents wake {agent_id}, puis renvoyez cette demande avec une nouvelle clé, ou envoyez avec reply=false si aucune réponse relayée n'est attendue. Ce refus concerne uniquement cette demande ; les lectures et les autres travaux autorisés peuvent continuer."
+    )
+}
+
 fn record_change(
     conn: &Connection,
     agent: &str,

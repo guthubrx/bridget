@@ -9980,7 +9980,16 @@ fn replay_issue(
     result: LookupResult,
 ) -> Result<IdempotencyIssue, String> {
     match result {
-        LookupResult::Accepted { expires_at } => Ok(IdempotencyIssue::Accepted { expires_at }),
+        LookupResult::Accepted { expires_at } => Ok(IdempotencyIssue::accepted(expires_at)),
+        LookupResult::Retained {
+            expires_at,
+            reason_code,
+            detail,
+        } => Ok(IdempotencyIssue::Accepted {
+            expires_at,
+            retained_reason: Some(reason_code),
+            retained_detail: Some(detail),
+        }),
         LookupResult::Rejected {
             category,
             reason,
@@ -12167,6 +12176,26 @@ fn prepare_dispatch(
             "--reply requiert un agent Bridget connecté ; lance la commande depuis un wrapper actif ou envoie sans --reply".to_string(),
         ));
     }
+    if message.reply
+        && !native_task_exchange
+        && !specialist_requests::is_human_request(st, message)
+    {
+        match crate::agent_tracking::dormant(st.store.connection(), &routing_from) {
+            Ok(true) => {
+                return Err((
+                    "reply_sender_dormant",
+                    crate::agent_tracking::dormant_reply_sender_message(&routing_from),
+                ));
+            }
+            Err(_) => {
+                return Err((
+                    "tracking_storage_unavailable",
+                    "État de sommeil de l'expéditeur illisible. Conservez cette demande ; les lectures et les autres travaux autorisés peuvent continuer.".into(),
+                ));
+            }
+            Ok(false) => {}
+        }
+    }
 
     let valid_tracked_reply = message.in_reply_to.as_deref().is_some_and(|request_id| {
         st.store
@@ -12719,12 +12748,19 @@ fn handle_idempotent_send_with_result_authority(
         // Le résultat canonique reste conservé, sans nouvelle notification au dormant.
         if matches!(authority, Some(RetainedSendAuthority::Result(_))) {
             crate::agent_tracking::dormant(st.store.connection(), &message.to)
+                .map(|is_dormant| {
+                    if is_dormant {
+                        agent_tracking::CaptureOutcome::Captured
+                    } else {
+                        agent_tracking::CaptureOutcome::NotCaptured
+                    }
+                })
                 .map_err(|e| e.to_string())
         } else {
-            Ok(false)
+            Ok(agent_tracking::CaptureOutcome::NotCaptured)
         }
     } else {
-        native_delegation::capture_reply(st, conn_id, &message)
+        native_delegation::capture_reply_outcome(st, conn_id, &message)
     };
     let captured = match capture {
         Ok(captured) => captured,
@@ -12753,29 +12789,71 @@ fn handle_idempotent_send_with_result_authority(
             };
         }
     };
-    if captured {
-        if st
-            .idempotency
-            .transition(
-                &key,
-                crate::idempotency::RecordState::Prepared,
-                crate::idempotency::RecordState::Dispatching,
-            )
-            .is_err()
-            || st
+    match captured {
+        agent_tracking::CaptureOutcome::NotCaptured => {}
+        agent_tracking::CaptureOutcome::Captured => {
+            if st
                 .idempotency
-                .finalize(
+                .transition(
                     &key,
-                    crate::idempotency::PublicResult::Accepted { expires_at },
+                    crate::idempotency::RecordState::Prepared,
+                    crate::idempotency::RecordState::Dispatching,
                 )
                 .is_err()
-        {
-            return DaemonToWrapper::Nack {
-                id: message.id.clone(),
-                reason: "résultat capturé mais accusé non persisté".into(),
-            };
+                || st
+                    .idempotency
+                    .finalize(
+                        &key,
+                        crate::idempotency::PublicResult::Accepted { expires_at },
+                    )
+                    .is_err()
+            {
+                return DaemonToWrapper::Nack {
+                    id: message.id.clone(),
+                    reason: "résultat capturé mais accusé non persisté".into(),
+                };
+            }
+            return issue_response(&key, IdempotencyIssue::accepted(expires_at));
         }
-        return issue_response(&key, IdempotencyIssue::Accepted { expires_at });
+        agent_tracking::CaptureOutcome::RetainedWithoutWakeup { category, reason } => {
+            info!(
+                "réponse idempotente {} conservée dans le ledger sans réveil ({category}) pour {}",
+                message.id, message.to
+            );
+            if st
+                .idempotency
+                .transition(
+                    &key,
+                    crate::idempotency::RecordState::Prepared,
+                    crate::idempotency::RecordState::Dispatching,
+                )
+                .is_err()
+                || st
+                    .idempotency
+                    .finalize(
+                        &key,
+                        crate::idempotency::PublicResult::Retained {
+                            expires_at,
+                            reason_code: category.to_string(),
+                            detail: reason.clone(),
+                        },
+                    )
+                    .is_err()
+            {
+                return DaemonToWrapper::Nack {
+                    id: message.id.clone(),
+                    reason: "réponse conservée mais accusé non persisté".into(),
+                };
+            }
+            return issue_response(
+                &key,
+                IdempotencyIssue::Accepted {
+                    expires_at,
+                    retained_reason: Some(category.to_string()),
+                    retained_detail: Some(reason),
+                },
+            );
+        }
     }
     // Les gardes ci-dessous peuvent consulter ou modifier les limites
     // historiques, mais seulement après la réservation d'une clé neuve.
@@ -12850,7 +12928,7 @@ fn handle_idempotent_send_with_result_authority(
                 project_warnings: prepared.project_warnings,
                 operation_kind: key.operation_kind.as_str().into(),
                 idempotency_key: key.idempotency_key.clone(),
-                issue: IdempotencyIssue::Accepted { expires_at },
+                issue: IdempotencyIssue::accepted(expires_at),
             },
             Err(crate::idempotency::IdempotencyError::InformationCollision) => {
                 reject_idempotent_send(st, &key, "information_id_conflict",

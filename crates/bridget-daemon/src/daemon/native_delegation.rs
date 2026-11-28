@@ -14112,17 +14112,28 @@ fn send_as_with_result_authority(
     response
 }
 
+#[cfg(test)]
 pub(super) fn capture_reply(
     st: &mut DaemonState,
     conn: &str,
     message: &bridget_core::BridgetMessage,
 ) -> Result<bool, String> {
+    capture_reply_outcome(st, conn, message)
+        .map(|outcome| !matches!(outcome, super::agent_tracking::CaptureOutcome::NotCaptured))
+}
+
+pub(super) fn capture_reply_outcome(
+    st: &mut DaemonState,
+    conn: &str,
+    message: &bridget_core::BridgetMessage,
+) -> Result<super::agent_tracking::CaptureOutcome, String> {
+    use super::agent_tracking::CaptureOutcome;
     super::specialist_requests::capture_correlated_reply(st, conn, message);
     if super::specialist_requests::capture_human_reply(st, conn, message)? {
-        return Ok(true);
+        return Ok(CaptureOutcome::Captured);
     }
     let Some(correlation) = message.in_reply_to.as_deref() else {
-        return Ok(false);
+        return Ok(CaptureOutcome::NotCaptured);
     };
     // Ce refus précède identité, réparation d'enfant et absorption terminale.
     // Même une ancienne ronde distante ne peut entrer par Send legacy.
@@ -14140,7 +14151,7 @@ pub(super) fn capture_reply(
         return Err("remote_result_requires_worker".into());
     }
     if conn.starts_with("native-delegation:") {
-        return Ok(false);
+        return Ok(CaptureOutcome::NotCaptured);
     }
     let Some(mut task) = current else {
         // Une ancienne ronde est absorbée seulement sous l'identité courante
@@ -14156,19 +14167,23 @@ pub(super) fn capture_reply(
         if authorized && message.id.starts_with("reply244-") {
             return Err("retained_reply_native_past_mission: Conservez cette réponse et le task_id existant ; cette ronde est close. Le parent consulte les résultats et fichiers conservés. Ne recréez pas la mission pour renvoyer ce résultat.".into());
         }
-        return Ok(authorized);
+        return Ok(if authorized {
+            CaptureOutcome::Captured
+        } else {
+            CaptureOutcome::NotCaptured
+        });
     };
     if task.child != message.from
         || task.owner != message.to
         || !sender_is_authorized(st, conn, &message.from)
     {
-        return Ok(false);
+        return Ok(CaptureOutcome::NotCaptured);
     }
     let Some(instance) = st.conn_instances.get(conn) else {
-        return Ok(false);
+        return Ok(CaptureOutcome::NotCaptured);
     };
     if !recover_child(st, &mut task, instance)? {
-        return Ok(false);
+        return Ok(CaptureOutcome::NotCaptured);
     }
     if message.body.len() > 262144 || message.body.trim().is_empty() {
         return Err("native_result_invalid".into());
@@ -14178,7 +14193,7 @@ pub(super) fn capture_reply(
     }
     if quota_enabled(&task) && task.state == "working" {
         if task.quota_hold.is_some() {
-            return Ok(true);
+            return Ok(CaptureOutcome::Captured);
         }
         if task
             .quota_waits
@@ -14186,7 +14201,7 @@ pub(super) fn capture_reply(
             .is_some_and(|wait| wait.phase != QuotaWaitPhase::Done)
             && !settle_quota_acked(st, &mut task, unix_timestamp())?
         {
-            return Ok(true);
+            return Ok(CaptureOutcome::Captured);
         }
     }
     capture_result_body(&mut task, &message.body);
@@ -14198,7 +14213,7 @@ pub(super) fn capture_reply(
             "résultat local enregistré, clôture du suivi différée au prochain entretien : {error}"
         );
     }
-    Ok(true)
+    Ok(CaptureOutcome::Captured)
 }
 
 /// Mutation commune : complétion, enfants, notification et wait gardent la

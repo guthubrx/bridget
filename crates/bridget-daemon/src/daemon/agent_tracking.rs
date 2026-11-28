@@ -37,19 +37,57 @@ pub(super) fn bind_live(
         .map_err(|_| "tracking_storage_unavailable")
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum CaptureOutcome {
+    NotCaptured,
+    Captured,
+    RetainedWithoutWakeup {
+        category: &'static str,
+        reason: String,
+    },
+}
+
+fn retained_classic_reply_notice(
+    correlation: &str,
+    recipient: &str,
+    request_state: &str,
+    dormant: bool,
+) -> (&'static str, String) {
+    match (dormant, request_state) {
+        (true, "open") => (
+            "recipient_dormant",
+            format!(
+                "Réponse conservée dans le ledger sans réveil : le destinataire ({recipient}) est dormant (tracking.dormant=true), aucun nouveau tour n'a été lancé chez lui. Son utilisateur doit réveiller sa fiche depuis son interface ou avec bridget agents wake {recipient} pour reprendre les échanges en direct ; la réponse reste consultable dans le ledger. Cet envoi est clos ; les autres travaux autorisés peuvent continuer."
+            ),
+        ),
+        (true, closed_state) => (
+            "recipient_dormant_and_request_closed",
+            format!(
+                "Réponse conservée dans le ledger sans réveil : la demande {correlation} est déjà close ({closed_state}) et le destinataire ({recipient}) est dormant (tracking.dormant=true). Aucun nouveau tour n'a été lancé chez lui. Son utilisateur doit réveiller sa fiche depuis son interface ou avec bridget agents wake {recipient}, puis un nouveau message sans in_reply_to pourra le solliciter en direct. Cet envoi est clos ; les autres travaux autorisés peuvent continuer."
+            ),
+        ),
+        (false, closed_state) => (
+            "request_closed",
+            format!(
+                "Réponse conservée dans le ledger sans réveil : la demande {correlation} est déjà close ({closed_state}), aucun nouveau tour n'a été lancé chez {recipient}. Pour solliciter cet agent en direct, envoyez un nouveau message distinct sans in_reply_to. Cet envoi est clos ; les autres travaux autorisés peuvent continuer."
+            ),
+        ),
+    }
+}
+
 /// Une réponse à une demande close ou à un destinataire dormant reste
 /// consultable sans réveil. Une clôture acquise ne change jamais d’état.
 pub(super) fn retain_classic_reply(
     st: &mut DaemonState,
     conn: &str,
     message: &bridget_core::BridgetMessage,
-) -> Result<bool, String> {
+) -> Result<CaptureOutcome, String> {
     use rusqlite::{OptionalExtension, params};
     if !sender_is_authorized(st, conn, &message.from) {
-        return Ok(false);
+        return Ok(CaptureOutcome::NotCaptured);
     }
     let Some(correlation) = message.in_reply_to.as_deref() else {
-        return Ok(false);
+        return Ok(CaptureOutcome::NotCaptured);
     };
     let dormant = crate::agent_tracking::dormant(st.store.connection(), &message.to)
         .map_err(|e| e.to_string())?;
@@ -62,10 +100,21 @@ pub(super) fn retain_classic_reply(
         "SELECT state,reply_summary FROM tracked_requests WHERE id=?1 AND sender=?2 AND target=?3",
         params![correlation,message.to,message.from], |r|Ok((r.get(0)?,r.get(1)?))).optional().map_err(|e|e.to_string())?;
     let Some((state, _summary)) = request else {
-        return Ok(false);
+        return Ok(CaptureOutcome::NotCaptured);
     };
     if state == "open" && !dormant {
-        return Ok(false);
+        return Ok(CaptureOutcome::NotCaptured);
+    }
+    if state != "open"
+        && crate::communication::project_scope_typed(
+            connection_communication_project(st, conn).as_ref(),
+            agent_communication_project(st, &message.to).as_ref(),
+            &message.to,
+            message.cross_project_reason.as_deref(),
+        )
+        .is_err()
+    {
+        return Ok(CaptureOutcome::NotCaptured);
     }
     let existing: Option<(String, String)> = tx
         .query_row(
@@ -89,9 +138,11 @@ pub(super) fn retain_classic_reply(
         )
         .map_err(|e| e.to_string())?;
     }
+    let (category, reason) =
+        retained_classic_reply_notice(correlation, &message.to, &state, dormant);
     if state != "open" {
         tx.commit().map_err(|e| e.to_string())?;
-        return Ok(true);
+        return Ok(CaptureOutcome::RetainedWithoutWakeup { category, reason });
     }
     if !crate::store::mark_answered_in_transaction(
         &tx,
@@ -102,13 +153,13 @@ pub(super) fn retain_classic_reply(
     )
     .map_err(|e| e.to_string())?
     {
-        return Ok(false);
+        return Ok(CaptureOutcome::NotCaptured);
     }
     tx.commit().map_err(|e| e.to_string())?;
     st.pending_replies
         .retain(|pending| pending.msg_id != correlation);
     st.delegation_store.wait_epoch().bump();
-    Ok(true)
+    Ok(CaptureOutcome::RetainedWithoutWakeup { category, reason })
 }
 
 pub(super) fn directory(st: &mut DaemonState) -> Result<Vec<ScopedAgentInfo>, &'static str> {
