@@ -192,9 +192,79 @@ pub fn ensure_schema(conn: &Connection) -> rusqlite::Result<()> {
             PRIMARY KEY (bridget_build_id, project, model_tier)
         );
         CREATE INDEX IF NOT EXISTS idx_graph_build_metrics_last_seen
-            ON graph_build_metrics(last_seen_at);",
+            ON graph_build_metrics(last_seen_at);
+        CREATE TABLE IF NOT EXISTS bridget_build_history (
+            build_id TEXT PRIMARY KEY,
+            package_version TEXT NOT NULL DEFAULT '',
+            first_seen_at INTEGER NOT NULL,
+            last_seen_at INTEGER NOT NULL,
+            starts_count INTEGER NOT NULL DEFAULT 1
+        );",
     )?;
     ensure_raw_columns(conn)
+}
+
+/// Enregistre l'observation d'un build Bridget au démarrage du daemon (journal des versions déployées).
+pub fn record_build_seen(
+    conn: &Connection,
+    build_id: &str,
+    package_version: &str,
+    now: i64,
+) -> rusqlite::Result<()> {
+    let bid = build_id.trim();
+    if bid.is_empty() {
+        return Ok(());
+    }
+    conn.execute(
+        "INSERT INTO bridget_build_history (build_id, package_version, first_seen_at, last_seen_at, starts_count)
+         VALUES (?1, ?2, ?3, ?3, 1)
+         ON CONFLICT(build_id) DO UPDATE SET
+            package_version = CASE WHEN excluded.package_version != '' THEN excluded.package_version ELSE bridget_build_history.package_version END,
+            first_seen_at = MIN(bridget_build_history.first_seen_at, excluded.first_seen_at),
+            last_seen_at = MAX(bridget_build_history.last_seen_at, excluded.last_seen_at),
+            starts_count = bridget_build_history.starts_count + 1",
+        params![bid, package_version.trim(), now],
+    )?;
+    Ok(())
+}
+
+/// Estimation indicative du coût équivalent API public en USD (référence par million de jetons,
+/// distincte d'une facturation forfaitaire d'abonnement).
+pub fn estimate_tokens_cost_usd(
+    model: &str,
+    input: u64,
+    output: u64,
+    cache_write: u64,
+    cache_read: u64,
+) -> f64 {
+    let lower = model.to_ascii_lowercase();
+    let tokens: Vec<&str> = lower
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .filter(|t| !t.is_empty())
+        .collect();
+    let has = |needle: &str| tokens.contains(&needle);
+    let (in_rate, out_rate, cw_rate, cr_rate) = if has("opus") {
+        (5.0, 25.0, 6.25, 0.50)
+    } else if has("haiku") {
+        (1.0, 5.0, 1.25, 0.10)
+    } else if has("sonnet") || has("claude") {
+        (3.0, 15.0, 3.75, 0.30)
+    } else if has("mini") || has("nano") {
+        (0.25, 2.0, 0.25, 0.025)
+    } else if has("flash") || has("light") {
+        (0.30, 2.50, 0.30, 0.03)
+    } else if has("frontier") {
+        (5.0, 25.0, 6.25, 0.50)
+    } else {
+        // Référence standard (Codex / GPT-5 / Gemini Pro / défaut).
+        (2.50, 10.0, 2.50, 0.25)
+    };
+    let usd = (input as f64 * in_rate
+        + output as f64 * out_rate
+        + cache_write as f64 * cw_rate
+        + cache_read as f64 * cr_rate)
+        / 1_000_000.0;
+    (usd * 10_000.0).round() / 10_000.0
 }
 
 fn ensure_raw_columns(conn: &Connection) -> rusqlite::Result<()> {
@@ -794,6 +864,18 @@ impl BuildAgg {
     }
 
     fn to_json(&self, key_field: &str) -> Value {
+        let model_hint = if key_field == "model_tier" {
+            self.key.as_str()
+        } else {
+            "standard"
+        };
+        let estimated_usd = estimate_tokens_cost_usd(
+            model_hint,
+            self.input_tokens.max(0) as u64,
+            self.output_tokens.max(0) as u64,
+            self.cache_creation_tokens.max(0) as u64,
+            self.cache_read_tokens.max(0) as u64,
+        );
         json!({
             key_field: self.key,
             "steps": self.steps,
@@ -811,11 +893,317 @@ impl BuildAgg {
             "facturable_tokens": self.facturable_tokens(),
             "avg_facturable_tokens_per_step": self.avg_facturable_per_step(),
             "cache_hit_ratio_pct": self.cache_hit_ratio_pct(),
+            "estimated_api_equiv_usd": estimated_usd,
             "blackboard_reads": self.blackboard_reads,
             "blackboard_writes": self.blackboard_writes,
             "last_seen_at": self.last_seen_at,
         })
     }
+}
+
+#[derive(Debug, Clone, Default)]
+struct FleetBuildAgg {
+    build_id: String,
+    tasks_total: i64,
+    succeeded: i64,
+    failed: i64,
+    cancelled: i64,
+    in_progress: i64,
+    finished_count: i64,
+    total_duration_secs: i64,
+    input_tokens: u64,
+    output_tokens: u64,
+    cache_creation_tokens: u64,
+    cache_read_tokens: u64,
+    estimated_api_equiv_usd: f64,
+    first_seen_at: i64,
+    last_seen_at: i64,
+}
+
+impl FleetBuildAgg {
+    fn facturable_tokens(&self) -> u64 {
+        self.input_tokens
+            .saturating_add(self.output_tokens)
+            .saturating_add(self.cache_creation_tokens)
+    }
+
+    fn avg_facturable_per_task(&self) -> i64 {
+        if self.tasks_total > 0 {
+            (self.facturable_tokens() / self.tasks_total as u64) as i64
+        } else {
+            0
+        }
+    }
+
+    fn success_rate_pct(&self) -> i64 {
+        let terminal = self.succeeded + self.failed + self.cancelled;
+        if terminal > 0 {
+            (self.succeeded * 100) / terminal
+        } else {
+            0
+        }
+    }
+
+    fn cache_hit_ratio_pct(&self) -> i64 {
+        let prompt_total = self
+            .input_tokens
+            .saturating_add(self.cache_creation_tokens)
+            .saturating_add(self.cache_read_tokens);
+        if prompt_total > 0 {
+            ((self.cache_read_tokens * 100) / prompt_total) as i64
+        } else {
+            0
+        }
+    }
+
+    fn avg_duration_secs(&self) -> i64 {
+        if self.finished_count > 0 {
+            self.total_duration_secs / self.finished_count
+        } else {
+            0
+        }
+    }
+
+    fn to_json(&self) -> Value {
+        let usd = (self.estimated_api_equiv_usd * 10_000.0).round() / 10_000.0;
+        let avg_usd = if self.tasks_total > 0 {
+            ((usd / self.tasks_total as f64) * 10_000.0).round() / 10_000.0
+        } else {
+            0.0
+        };
+        json!({
+            "bridget_build_id": self.build_id,
+            "tasks_total": self.tasks_total,
+            "succeeded": self.succeeded,
+            "failed": self.failed,
+            "cancelled": self.cancelled,
+            "in_progress": self.in_progress,
+            "success_rate_pct": self.success_rate_pct(),
+            "avg_duration_secs": self.avg_duration_secs(),
+            "input_tokens": self.input_tokens,
+            "output_tokens": self.output_tokens,
+            "cache_creation_input_tokens": self.cache_creation_tokens,
+            "cache_read_input_tokens": self.cache_read_tokens,
+            "facturable_tokens": self.facturable_tokens(),
+            "avg_facturable_tokens_per_task": self.avg_facturable_per_task(),
+            "cache_hit_ratio_pct": self.cache_hit_ratio_pct(),
+            "estimated_api_equiv_usd": usd,
+            "avg_estimated_api_equiv_usd_per_task": avg_usd,
+            "first_seen_at": self.first_seen_at,
+            "last_seen_at": self.last_seen_at,
+        })
+    }
+}
+
+fn table_exists(conn: &Connection, name: &str) -> bool {
+    conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name=?1)",
+        params![name],
+        |r| r.get::<_, i64>(0),
+    )
+    .unwrap_or(0)
+        == 1
+}
+
+fn query_build_history(conn: &Connection) -> Vec<Value> {
+    if !table_exists(conn, "bridget_build_history") {
+        return Vec::new();
+    }
+    let Ok(mut stmt) = conn.prepare(
+        "SELECT build_id, package_version, first_seen_at, last_seen_at, starts_count
+         FROM bridget_build_history
+         ORDER BY last_seen_at DESC
+         LIMIT 32",
+    ) else {
+        return Vec::new();
+    };
+    stmt.query_map([], |r| {
+        Ok(json!({
+            "build_id": r.get::<_, String>(0)?,
+            "package_version": r.get::<_, String>(1)?,
+            "first_seen_at": r.get::<_, i64>(2)?,
+            "last_seen_at": r.get::<_, i64>(3)?,
+            "starts_count": r.get::<_, i64>(4)?,
+        }))
+    })
+    .ok()
+    .map(|iter| iter.filter_map(Result::ok).collect())
+    .unwrap_or_default()
+}
+
+fn query_fleet_tasks_by_build(conn: &Connection, since_ts: i64) -> Vec<FleetBuildAgg> {
+    if !table_exists(conn, "native_delegations") {
+        return Vec::new();
+    }
+    let has_build_col = conn
+        .prepare("PRAGMA table_info(native_delegations)")
+        .ok()
+        .and_then(|mut s| {
+            s.query_map([], |r| r.get::<_, String>(1))
+                .ok()
+                .map(|rows| rows.filter_map(Result::ok).any(|c| c == "bridget_build_id"))
+        })
+        .unwrap_or(false);
+    let build_expr = if has_build_col {
+        "COALESCE(NULLIF(bridget_build_id, ''), 'legacy_pre_371')"
+    } else {
+        "'legacy_pre_371'"
+    };
+    let sql = format!(
+        "SELECT {build_expr},
+                COALESCE(json_extract(payload, '$.state'), ''),
+                COALESCE(CAST(json_extract(payload, '$.created_at') AS INTEGER), 0),
+                COALESCE(CAST(json_extract(payload, '$.completed_at') AS INTEGER), CAST(json_extract(payload, '$.updated_at') AS INTEGER), 0),
+                COALESCE(json_extract(payload, '$.child'), ''),
+                COALESCE(json_extract(payload, '$.child_instance'), ''),
+                COALESCE(
+                    json_extract(payload, '$.request.AutoDelegateV2.model'),
+                    json_extract(payload, '$.request.Delegate.model'),
+                    json_extract(payload, '$.definition.command'),
+                    ''
+                )
+         FROM native_delegations
+         WHERE COALESCE(CAST(json_extract(payload, '$.created_at') AS INTEGER), 0) >= ?1"
+    );
+    let Ok(mut stmt) = conn.prepare(&sql) else {
+        return Vec::new();
+    };
+    let has_exec_usage =
+        table_exists(conn, "executions") && table_exists(conn, "execution_usage_totals");
+    let has_usage_samples = table_exists(conn, "usage_samples");
+    let mut by_build: std::collections::BTreeMap<String, FleetBuildAgg> =
+        std::collections::BTreeMap::new();
+
+    let rows: Vec<(String, String, i64, i64, String, String, String)> = stmt
+        .query_map(params![since_ts], |r| {
+            Ok((
+                r.get(0)?,
+                r.get(1)?,
+                r.get(2)?,
+                r.get(3)?,
+                r.get(4)?,
+                r.get(5)?,
+                r.get(6)?,
+            ))
+        })
+        .ok()
+        .map(|it| it.filter_map(Result::ok).collect())
+        .unwrap_or_default();
+
+    for (build_id, state, created_at, end_at, child, child_instance, model) in rows {
+        let entry = by_build
+            .entry(build_id.clone())
+            .or_insert_with(|| FleetBuildAgg {
+                build_id: build_id.clone(),
+                first_seen_at: created_at,
+                last_seen_at: created_at,
+                ..Default::default()
+            });
+        entry.tasks_total += 1;
+        if created_at > 0 && (entry.first_seen_at == 0 || created_at < entry.first_seen_at) {
+            entry.first_seen_at = created_at;
+        }
+        if created_at > entry.last_seen_at {
+            entry.last_seen_at = created_at;
+        }
+        match state.as_str() {
+            "result_available" | "completed" => {
+                entry.succeeded += 1;
+                if end_at >= created_at && created_at > 0 {
+                    entry.finished_count += 1;
+                    entry.total_duration_secs += end_at - created_at;
+                }
+            }
+            "failed" => {
+                entry.failed += 1;
+                if end_at >= created_at && created_at > 0 {
+                    entry.finished_count += 1;
+                    entry.total_duration_secs += end_at - created_at;
+                }
+            }
+            "cancelled" => {
+                entry.cancelled += 1;
+                if end_at >= created_at && created_at > 0 {
+                    entry.finished_count += 1;
+                    entry.total_duration_secs += end_at - created_at;
+                }
+            }
+            _ => {
+                entry.in_progress += 1;
+            }
+        }
+
+        let mut tokens: Option<(u64, u64, u64, u64)> = None;
+        if has_exec_usage
+            && !child_instance.is_empty()
+            && let Ok((inp, out, cw, cr)) = conn.query_row(
+                "SELECT COALESCE(SUM(u.input_tokens), 0),
+                        COALESCE(SUM(u.output_tokens), 0),
+                        COALESCE(SUM(u.cache_creation_input_tokens), 0),
+                        COALESCE(SUM(u.cache_read_input_tokens), 0)
+                 FROM execution_usage_totals u
+                 JOIN executions e ON e.execution_id = u.execution_id
+                 WHERE e.agent_instance_id = ?1",
+                params![child_instance],
+                |r| {
+                    Ok((
+                        r.get::<_, i64>(0)?.max(0) as u64,
+                        r.get::<_, i64>(1)?.max(0) as u64,
+                        r.get::<_, i64>(2)?.max(0) as u64,
+                        r.get::<_, i64>(3)?.max(0) as u64,
+                    ))
+                },
+            )
+            && (inp > 0 || out > 0 || cw > 0 || cr > 0)
+        {
+            tokens = Some((inp, out, cw, cr));
+        }
+        if tokens.is_none()
+            && has_usage_samples
+            && !child.is_empty()
+            && let Ok((inp, out, cw, cr)) = conn.query_row(
+                "SELECT COALESCE(SUM(input_tokens), 0),
+                        COALESCE(SUM(output_tokens), 0),
+                        COALESCE(SUM(cache_creation_input_tokens), 0),
+                        COALESCE(SUM(cache_read_input_tokens), 0)
+                 FROM usage_samples
+                 WHERE agent = ?1
+                   AND observed_at >= ?2
+                   AND (?3 <= 0 OR observed_at <= ?3)",
+                params![
+                    child,
+                    created_at,
+                    if end_at >= created_at && created_at > 0 {
+                        end_at.saturating_add(60)
+                    } else {
+                        0
+                    }
+                ],
+                |r| {
+                    Ok((
+                        r.get::<_, i64>(0)?.max(0) as u64,
+                        r.get::<_, i64>(1)?.max(0) as u64,
+                        r.get::<_, i64>(2)?.max(0) as u64,
+                        r.get::<_, i64>(3)?.max(0) as u64,
+                    ))
+                },
+            )
+            && (inp > 0 || out > 0 || cw > 0 || cr > 0)
+        {
+            tokens = Some((inp, out, cw, cr));
+        }
+        if let Some((inp, out, cw, cr)) = tokens {
+            entry.input_tokens = entry.input_tokens.saturating_add(inp);
+            entry.output_tokens = entry.output_tokens.saturating_add(out);
+            entry.cache_creation_tokens = entry.cache_creation_tokens.saturating_add(cw);
+            entry.cache_read_tokens = entry.cache_read_tokens.saturating_add(cr);
+            entry.estimated_api_equiv_usd += estimate_tokens_cost_usd(&model, inp, out, cw, cr);
+        }
+    }
+
+    let mut list: Vec<FleetBuildAgg> = by_build.into_values().collect();
+    list.sort_by(|a, b| b.last_seen_at.cmp(&a.last_seen_at));
+    list
 }
 
 fn query_build_or_tier_agg(
@@ -1185,6 +1573,37 @@ pub fn query_metrics_report(
         Value::Null
     };
 
+    let fleet_builds = query_fleet_tasks_by_build(conn, since_ts);
+    let build_history = query_build_history(conn);
+    let fleet_compare = if let Some((base_ref, head_ref)) = compare {
+        let base = fleet_builds
+            .iter()
+            .find(|b| b.build_id == base_ref || b.build_id.starts_with(base_ref));
+        let head = fleet_builds
+            .iter()
+            .find(|b| b.build_id == head_ref || b.build_id.starts_with(head_ref));
+        let deltas = match (base, head) {
+            (Some(a), Some(b)) => json!({
+                "success_rate_delta_pp": b.success_rate_pct() - a.success_rate_pct(),
+                "avg_facturable_tokens_delta_pct": pct_delta(a.avg_facturable_per_task(), b.avg_facturable_per_task()),
+                "cache_hit_ratio_delta_pp": b.cache_hit_ratio_pct() - a.cache_hit_ratio_pct(),
+                "avg_duration_delta_pct": pct_delta(a.avg_duration_secs(), b.avg_duration_secs()),
+            }),
+            _ => Value::Null,
+        };
+        json!({
+            "requested_base": base_ref,
+            "requested_head": head_ref,
+            "base": base.map(FleetBuildAgg::to_json),
+            "head": head.map(FleetBuildAgg::to_json),
+            "deltas": deltas,
+        })
+    } else {
+        Value::Null
+    };
+    let fleet_tasks_by_build: Vec<Value> =
+        fleet_builds.iter().map(FleetBuildAgg::to_json).collect();
+
     Ok(json!({
         "version": 1,
         "status": "ok",
@@ -1208,6 +1627,9 @@ pub fn query_metrics_report(
         "by_build": by_build,
         "by_tier": by_tier,
         "comparison": comparison,
+        "build_history": build_history,
+        "fleet_tasks_by_build": fleet_tasks_by_build,
+        "fleet_compare": fleet_compare,
         "storage": {
             "raw_rows": raw_rows,
             "daily_rows": daily_rows,
@@ -1424,5 +1846,116 @@ mod tests {
         assert_eq!(cmp["head"]["cache_hit_ratio_pct"], 84);
         assert_eq!(cmp["deltas"]["avg_facturable_tokens_delta_pct"], -80);
         assert_eq!(cmp["deltas"]["avg_duration_delta_pct"], -40);
+    }
+
+    #[test]
+    fn spec318_fleet_metrics_build_history_et_cout_indicatif() {
+        let conn = mem_conn();
+        conn.execute_batch(
+            "CREATE TABLE native_delegations (
+                task_id TEXT PRIMARY KEY,
+                owner_instance TEXT NOT NULL,
+                request_id TEXT NOT NULL,
+                canonical BLOB NOT NULL,
+                payload TEXT NOT NULL,
+                bridget_build_id TEXT NOT NULL DEFAULT ''
+            );
+            CREATE TABLE executions (
+                execution_id TEXT PRIMARY KEY,
+                agent_instance_id TEXT
+            );
+            CREATE TABLE execution_usage_totals (
+                execution_id TEXT NOT NULL,
+                generation INTEGER NOT NULL DEFAULT 1,
+                source TEXT NOT NULL DEFAULT 'test',
+                input_tokens INTEGER NOT NULL DEFAULT 0,
+                output_tokens INTEGER NOT NULL DEFAULT 0,
+                cache_creation_input_tokens INTEGER NOT NULL DEFAULT 0,
+                cache_read_input_tokens INTEGER NOT NULL DEFAULT 0
+            );",
+        )
+        .unwrap();
+        let now = 1_795_900_000_i64;
+        record_build_seen(&conn, "build_v1", "0.8.54", now - 300).unwrap();
+        record_build_seen(&conn, "build_v2", "0.8.55", now - 100).unwrap();
+        record_build_seen(&conn, "build_v2", "0.8.55", now - 50).unwrap();
+
+        // Mission build_v1 : opus, 100k input + 20k output, échec puis succès.
+        conn.execute(
+            "INSERT INTO native_delegations VALUES ('t1','o1','r1',X'01',?1,'build_v1')",
+            params![
+                json!({
+                    "state":"result_available","created_at": now - 250,"completed_at": now - 150,
+                    "child":"agent-1","child_instance":"inst-1",
+                    "request":{"AutoDelegateV2":{"model":"claude-opus-4-6"}}
+                })
+                .to_string()
+            ],
+        )
+        .unwrap();
+        conn.execute("INSERT INTO executions VALUES ('e1','inst-1')", [])
+            .unwrap();
+        conn.execute(
+            "INSERT INTO execution_usage_totals VALUES ('e1',1,'test',100000,20000,0,0)",
+            [],
+        )
+        .unwrap();
+
+        // Mission build_v2 : haiku avec cache hit élevé (80%).
+        conn.execute(
+            "INSERT INTO native_delegations VALUES ('t2','o1','r2',X'02',?1,'build_v2')",
+            params![
+                json!({
+                    "state":"result_available","created_at": now - 90,"completed_at": now - 50,
+                    "child":"agent-2","child_instance":"inst-2",
+                    "request":{"AutoDelegateV2":{"model":"claude-haiku-4-5"}}
+                })
+                .to_string()
+            ],
+        )
+        .unwrap();
+        conn.execute("INSERT INTO executions VALUES ('e2','inst-2')", [])
+            .unwrap();
+        conn.execute(
+            "INSERT INTO execution_usage_totals VALUES ('e2',1,'test',10000,5000,10000,80000)",
+            [],
+        )
+        .unwrap();
+
+        // Mission historique sans build_id -> groupée sous legacy_pre_371.
+        conn.execute(
+            "INSERT INTO native_delegations VALUES ('t0','o1','r0',X'00',?1,'')",
+            params![
+                json!({
+                    "state":"failed","created_at": now - 400,"updated_at": now - 380,
+                    "child":"agent-0","child_instance":null
+                })
+                .to_string()
+            ],
+        )
+        .unwrap();
+
+        let report =
+            query_metrics_report(&conn, None, Some(30), Some(("build_v1", "build_v2")), now)
+                .unwrap();
+        assert_eq!(report["build_history"].as_array().unwrap().len(), 2);
+        assert_eq!(report["build_history"][0]["build_id"], "build_v2");
+        assert_eq!(report["build_history"][0]["starts_count"], 2);
+        let fleet = report["fleet_tasks_by_build"].as_array().unwrap();
+        assert_eq!(fleet.len(), 3);
+        let v1 = fleet
+            .iter()
+            .find(|x| x["bridget_build_id"] == "build_v1")
+            .unwrap();
+        let v2 = fleet
+            .iter()
+            .find(|x| x["bridget_build_id"] == "build_v2")
+            .unwrap();
+        assert_eq!(v1["estimated_api_equiv_usd"].as_f64().unwrap(), 1.0);
+        assert_eq!(v2["estimated_api_equiv_usd"].as_f64().unwrap(), 0.0555);
+        assert_eq!(v2["cache_hit_ratio_pct"], 80);
+        let fcmp = &report["fleet_compare"];
+        assert_eq!(fcmp["deltas"]["avg_facturable_tokens_delta_pct"], -79);
+        assert_eq!(fcmp["deltas"]["cache_hit_ratio_delta_pp"], 80);
     }
 }

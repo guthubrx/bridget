@@ -292,8 +292,15 @@ pub(crate) async fn route_api_login_start(
     }
     let registry = state.registry_override_ref();
     let target_res = tokio::task::spawn_blocking(move || {
-        let (_, targets) = load_fleet_connections(registry.as_deref())?;
-        find_target(&targets, &req.connection_id, Some(&req.machine_id))
+        let (local_machine, targets) = load_fleet_connections(registry.as_deref())?;
+        find_target(&targets, &req.connection_id, Some(&req.machine_id)).or_else(|err| {
+            crate::accounts_connect::synthetic_detected_target(
+                &req.connection_id,
+                &req.machine_id,
+                &local_machine,
+            )
+            .ok_or(err)
+        })
     })
     .await;
     let target = match target_res {

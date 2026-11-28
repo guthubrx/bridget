@@ -82,7 +82,14 @@ function openModal(title, bodyHtml, footButtons) {
   document.getElementById("modalBackdrop").classList.remove("hidden");
 }
 
+let batchCancelHook = null;
+
 function closeModal() {
+  if (batchCancelHook) {
+    const fn = batchCancelHook;
+    batchCancelHook = null;
+    try { fn(); } catch {}
+  }
   stopLoginPolling();
   closeLoginPopup();
   if (loginCtx.running && loginCtx.sessionId) {
@@ -503,6 +510,81 @@ function handleRepairMachine(machine, repair) {
   ]);
 }
 
+function handleBatchUpdateClients(items, title) {
+  if (!items || !items.length) return;
+  stopDeployPolling();
+  let cancelled = false, running = false, activeResolve = null;
+  batchCancelHook = () => {
+    cancelled = true;
+    if (activeResolve) { const done = activeResolve; activeResolve = null; done({ ok: false, state: "Annulé" }); }
+  };
+  const rowsHtml = items.map((it, idx) =>
+    `<div class="batch-item" id="bItem${idx}"><span><strong>${esc(it.machine.machine_id)}</strong> · ${esc(it.client.label)} ${it.client.latest_version ? `<span class="row-sub">(${esc(it.client.version || "?")} -> ${esc(it.client.latest_version)})</span>` : ""}</span><span class="row-sub" id="bStat${idx}">En attente</span></div>`
+  ).join("");
+  const body = `<p>Mise à jour officielle séquentielle sur les machines joignables. Aucun compte ni service Bridget existant ne sera modifié.</p><div class="batch-list">${rowsHtml}</div><details id="batchLogDetails" class="tech-log"><summary>Voir la sortie en direct</summary><pre id="batchLog" class="live-terminal"></pre></details><div id="batchResult" class="login-banner hidden"></div>`;
+
+  const runOne = (item) => new Promise(async (resolve) => {
+    let settled = false;
+    const finish = (res) => { if (!settled) { settled = true; activeResolve = null; resolve(res); } };
+    activeResolve = finish;
+    try {
+      const started = await apiRequest("/api/clients/deploy", { method: "POST", body: JSON.stringify({ machine_id: item.machine.machine_id, client_id: item.client.id, mode: "update" }) });
+      if (cancelled) {
+        apiRequest("/api/clients/deploy/cancel", { method: "POST", body: JSON.stringify({ job_id: started.job_id }) }).catch(() => {});
+        return finish({ ok: false, state: "Annulé" });
+      }
+      deployCtx = { jobId: started.job_id, pollTimer: null, offset: 0, running: true };
+      const pre = document.getElementById("batchLog");
+      if (pre) pre.textContent += `\n=== ${item.machine.machine_id} · ${item.client.label} ===\n`;
+      const poll = async () => {
+        if (cancelled) { stopDeployPolling(); return finish({ ok: false, state: "Annulé" }); }
+        try {
+          const res = await apiRequest(`/api/clients/deploy/poll?job=${encodeURIComponent(started.job_id)}&offset=${deployCtx.offset}`);
+          deployCtx.offset = res.next_offset || deployCtx.offset;
+          if (res.chunk && pre) { pre.textContent += res.chunk; pre.scrollTop = pre.scrollHeight; }
+          if (!res.running) { deployCtx.running = false; stopDeployPolling(); finish({ ok: res.exit_code === 0, state: res.ui_state || (res.exit_code === 0 ? "OK" : "Échec") }); }
+        } catch (err) { deployCtx.running = false; stopDeployPolling(); finish({ ok: false, state: err.message || "Erreur" }); }
+      };
+      deployCtx.pollTimer = setInterval(poll, 500);
+      poll();
+    } catch (err) { finish({ ok: false, state: err.message || "Refusé" }); }
+  });
+
+  openModal(title || "Mettre à jour les CLI", body, [
+    { label: "Annuler", onClick: () => { cancelled = true; closeModal(); } },
+    {
+      label: `Lancer (${items.length})`, primary: true,
+      onClick: async (ev) => {
+        if (running) return;
+        running = true;
+        const btn = ev.currentTarget;
+        btn.disabled = true;
+        btn.innerHTML = `<span class="spinner" aria-hidden="true"></span> Mise à jour…`;
+        let okCount = 0, errCount = 0;
+        for (let i = 0; i < items.length; i += 1) {
+          if (cancelled) break;
+          const row = document.getElementById(`bItem${i}`), st = document.getElementById(`bStat${i}`);
+          if (row) row.classList.add("running");
+          if (st) st.innerHTML = `<span class="spinner" aria-hidden="true"></span> En cours…`;
+          const r = await runOne(items[i]);
+          if (row) { row.classList.remove("running"); row.classList.add(r.ok ? "done" : "err"); }
+          if (st) st.textContent = r.ok ? "✓ OK" : `✕ ${r.state}`;
+          if (r.ok) okCount += 1; else errCount += 1;
+        }
+        running = false; batchCancelHook = null;
+        if (cancelled) { loadMachines(true); return; }
+        const resBox = document.getElementById("batchResult");
+        if (resBox) { resBox.className = `login-banner ${errCount === 0 ? "ok" : "warn"}`; resBox.innerHTML = `<strong>${errCount === 0 ? "✓" : "▲"} ${okCount}/${items.length} client(s) mis à jour${errCount > 0 ? ` · ${errCount} échec(s)` : ""}</strong>`; resBox.classList.remove("hidden"); }
+        if (errCount > 0) { const det = document.getElementById("batchLogDetails"); if (det) det.open = true; }
+        const foot = document.getElementById("modalFoot");
+        if (foot) { foot.innerHTML = ""; const closeB = document.createElement("button"); closeB.type = "button"; closeB.className = "btn primary"; closeB.textContent = "Fermer"; closeB.onclick = closeModal; foot.appendChild(closeB); }
+        showFeedback(errCount === 0 ? "ok" : "warn", errCount === 0 ? "✓" : "▲", `Mises à jour CLI terminées : ${okCount}/${items.length} réussies.`);
+        loadMachines(true); loadStatus();
+      },
+    },
+  ]);
+}
+
 function handleDeployClient(machine, client, mode) {
   stopDeployPolling();
   deployCtx = { jobId: null, pollTimer: null, offset: 0, running: false };
@@ -809,6 +891,7 @@ function render() {
       onEditSsh: (m) => handleOpenSshModal(m),
       onRepair: handleRepairMachine,
       onDeployClient: handleDeployClient,
+      onBatchUpdate: handleBatchUpdateClients,
     });
     return;
   }
@@ -920,11 +1003,12 @@ async function handleUpdatesInstall(version) {
   }
 }
 
-async function loadMachines() {
+async function loadMachines(forceRefresh = false) {
   const btn = document.getElementById("refreshBtn");
   btn.disabled = true;
   try {
-    state.machinesData = await apiRequest("/api/machines");
+    const qs = forceRefresh ? "?refresh=1" : "";
+    state.machinesData = await apiRequest(`/api/machines${qs}`);
     if (state.activeView === "machines") render();
   } catch (e) {
     showFeedback("err", "✕", `Machines : ${e.message}`);
@@ -965,7 +1049,7 @@ async function loadStatus() {
 
 function refreshCurrentView() {
   if (state.activeView === "usage") return loadUsage(true);
-  if (state.activeView === "machines") return loadMachines();
+  if (state.activeView === "machines") return loadMachines(true);
   if (state.activeView === "settings") return loadSettings();
   return loadStatus();
 }

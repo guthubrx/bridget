@@ -334,3 +334,57 @@ async fn spec311_routing_preview_apply_readback_conflict_and_readonly() {
 
     let _ = fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn spec318_cli_semver_et_detected_targets() {
+    assert_eq!(
+        crate::console_admin::extract_semver("2.1.332 (Claude Code)"),
+        Some((2, 1, 332))
+    );
+    assert_eq!(
+        crate::console_admin::extract_semver("codex-cli 0.172.0"),
+        Some((0, 172, 0))
+    );
+    assert_eq!(
+        crate::console_admin::compare_cli_version(true, "codex-cli 0.170.0", Some("0.172.0")),
+        "update_available"
+    );
+    assert_eq!(
+        crate::console_admin::compare_cli_version(true, "2.1.332 (Claude Code)", Some("2.1.332")),
+        "up_to_date"
+    );
+    assert_eq!(
+        crate::console_admin::compare_cli_version(true, "2026.11.22-e9042b2", None),
+        "unknown_upstream"
+    );
+    assert_eq!(
+        crate::console_admin::compare_cli_version(false, "", Some("0.172.0")),
+        "not_installed"
+    );
+
+    let synth = crate::accounts_connect::synthetic_detected_target(
+        "detected-cursor-sysle2",
+        "sysle2",
+        "monordinateur",
+    )
+    .unwrap();
+    assert_eq!(synth.engine, "cursor");
+    assert_eq!(synth.command, "cursor-agent");
+    assert!(!synth.is_local);
+    let synth_gem = crate::accounts_connect::synthetic_detected_target(
+        "detected-gemini-sysle2",
+        "sysle2",
+        "monordinateur",
+    )
+    .unwrap();
+    assert_eq!(synth_gem.engine, "gemini");
+    assert_eq!(synth_gem.command, "gemini");
+    assert!(
+        crate::accounts_connect::synthetic_detected_target(
+            "detected-unknown-sysle2",
+            "sysle2",
+            "monordinateur"
+        )
+        .is_none()
+    );
+}

@@ -155,6 +155,9 @@ fn command_requires_principal(command: &str, subcommand: Option<&str>) -> bool {
     if command == "graphs" {
         return !matches!(subcommand, Some("metrics"));
     }
+    if command == "metrics" {
+        return false;
+    }
     !matches!(
         command,
         "daemon"
@@ -560,6 +563,11 @@ fn run_with_args(args: Vec<String>) {
             }
         },
         "graphs" => cmd_graphs(&args[2..]),
+        "metrics" => {
+            let mut forwarded = vec!["metrics".to_string()];
+            forwarded.extend_from_slice(&args[2..]);
+            cmd_graphs(&forwarded);
+        }
         "version" | "--version" | "-v" => {
             println!("bridget {}", env!("CARGO_PKG_VERSION"));
         }
@@ -2860,17 +2868,75 @@ fn cmd_graphs(args: &[String]) {
                 if let Some(builds) = report["by_build"].as_array()
                     && !builds.is_empty()
                 {
-                    println!("  Par version Bridget (build_id) :");
+                    println!("  Étapes de graphes par version Bridget (build_id) :");
                     for b in builds {
                         println!(
-                            "    - {:14} : {} étapes, succès {}%, facturable moy. {} tok/étape, cache hit {}%, durée moy. {}s, budget_stops={}",
+                            "    - {:14} : {} étapes, succès {}%, facturable moy. {} tok/étape, cache hit {}%, coût équiv. API ~${:.4}, durée moy. {}s, budget_stops={}",
                             b["bridget_build_id"].as_str().unwrap_or("inconnu"),
                             b["steps"].as_i64().unwrap_or(0),
                             b["approval_rate_pct"].as_i64().unwrap_or(0),
                             b["avg_facturable_tokens_per_step"].as_i64().unwrap_or(0),
                             b["cache_hit_ratio_pct"].as_i64().unwrap_or(0),
+                            b["estimated_api_equiv_usd"].as_f64().unwrap_or(0.0),
                             b["avg_duration_secs"].as_i64().unwrap_or(0),
                             b["budget_stops"].as_i64().unwrap_or(0),
+                        );
+                    }
+                }
+                if let Some(fleet) = report["fleet_tasks_by_build"].as_array()
+                    && !fleet.is_empty()
+                {
+                    println!(
+                        "  Toutes missions natives (unitaires + graphes) par version Bridget :"
+                    );
+                    for f in fleet {
+                        println!(
+                            "    - {:14} : {} missions ({} ok / {} échecs / {} annulées, succès {}%), facturable moy. {} tok, cache hit {}%, coût équiv. API ~${:.4}, durée moy. {}s",
+                            f["bridget_build_id"].as_str().unwrap_or("inconnu"),
+                            f["tasks_total"].as_i64().unwrap_or(0),
+                            f["succeeded"].as_i64().unwrap_or(0),
+                            f["failed"].as_i64().unwrap_or(0),
+                            f["cancelled"].as_i64().unwrap_or(0),
+                            f["success_rate_pct"].as_i64().unwrap_or(0),
+                            f["avg_facturable_tokens_per_task"].as_i64().unwrap_or(0),
+                            f["cache_hit_ratio_pct"].as_i64().unwrap_or(0),
+                            f["estimated_api_equiv_usd"].as_f64().unwrap_or(0.0),
+                            f["avg_duration_secs"].as_i64().unwrap_or(0),
+                        );
+                    }
+                }
+                if let Some(fcmp) = report.get("fleet_compare").filter(|v| v.is_object()) {
+                    println!(
+                        "  Comparaison flotte globale {} -> {} :",
+                        fcmp["requested_base"].as_str().unwrap_or("?"),
+                        fcmp["requested_head"].as_str().unwrap_or("?"),
+                    );
+                    if let Some(deltas) = fcmp.get("deltas").filter(|v| v.is_object()) {
+                        println!(
+                            "    - Succès : {:+} pts · Tokens facturables/mission : {}% · Cache hit : {:+} pts · Durée moy. : {}%",
+                            deltas["success_rate_delta_pp"].as_i64().unwrap_or(0),
+                            deltas["avg_facturable_tokens_delta_pct"]
+                                .as_i64()
+                                .map_or_else(|| "n/a".into(), |d| format!("{d:+}")),
+                            deltas["cache_hit_ratio_delta_pp"].as_i64().unwrap_or(0),
+                            deltas["avg_duration_delta_pct"]
+                                .as_i64()
+                                .map_or_else(|| "n/a".into(), |d| format!("{d:+}")),
+                        );
+                    } else {
+                        println!("    - Données insuffisantes sur l'une des deux versions.");
+                    }
+                }
+                if let Some(hist) = report["build_history"].as_array()
+                    && !hist.is_empty()
+                {
+                    println!("  Historique des builds daemon observés :");
+                    for h in hist.iter().take(10) {
+                        println!(
+                            "    - {:14} (v{}) · démarrages={}",
+                            h["build_id"].as_str().unwrap_or("?"),
+                            h["package_version"].as_str().unwrap_or("?"),
+                            h["starts_count"].as_i64().unwrap_or(0),
                         );
                     }
                 }

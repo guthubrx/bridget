@@ -270,7 +270,7 @@ fn extract_connections_from_registry(
     for conn in &policy.connections {
         if !matches!(
             conn.engine.as_str(),
-            "claude" | "codex" | "antigravity" | "cursor"
+            "claude" | "codex" | "antigravity" | "cursor" | "gemini"
         ) {
             continue;
         }
@@ -527,7 +527,9 @@ fn build_probe_script(targets: &[ConnectionTarget]) -> String {
                 script.push_str(&format!(
                     "if {missing}; then printf '%s\\tbinary_missing\\tbinaire absent\\n' {id}; else\n\
                      out=$({env_prefix} {cmd} auth status 2>&1 || true)\n\
-                     if printf '%s' \"$out\" | grep -qiE '\"loggedIn\"[[:space:]]*:[[:space:]]*true|logged in|authenticated'; then\n\
+                     if printf '%s' \"$out\" | grep -qiE '\"loggedIn\"[[:space:]]*:[[:space:]]*false|not logged in|unauthenticated'; then\n\
+                       printf '%s\\tunauthenticated\\tnon connecte\\n' {id}\n\
+                     elif printf '%s' \"$out\" | grep -qiE '\"loggedIn\"[[:space:]]*:[[:space:]]*true|logged in|authenticated'; then\n\
                        email=$(printf '%s' \"$out\" | sed -n 's/.*\"email\"[[:space:]]*:[[:space:]]*\"\\([^\"]*\\)\".*/\\1/p' | head -n 1)\n\
                        printf '%s\\tauthenticated\\t%s\\n' {id} \"${{email:-connecte}}\"\n\
                      else\n\
@@ -539,7 +541,9 @@ fn build_probe_script(targets: &[ConnectionTarget]) -> String {
                 script.push_str(&format!(
                     "if {missing}; then printf '%s\\tbinary_missing\\tbinaire absent\\n' {id}; else\n\
                      out=$({env_prefix} {cmd} login status 2>&1 || true)\n\
-                     if printf '%s' \"$out\" | grep -qi 'logged in'; then\n\
+                     if printf '%s' \"$out\" | grep -qiE 'not logged in|logged out'; then\n\
+                       printf '%s\\tunauthenticated\\tnon connecte\\n' {id}\n\
+                     elif printf '%s' \"$out\" | grep -qi 'logged in'; then\n\
                        line=$(printf '%s' \"$out\" | head -n 1 | tr '\\t\\r\\n' '   ')\n\
                        printf '%s\\tauthenticated\\t%s\\n' {id} \"$line\"\n\
                      else\n\
@@ -588,6 +592,16 @@ fn build_probe_script(targets: &[ConnectionTarget]) -> String {
                        else\n\
                          printf '%s\\tunauthenticated\\tsession Cursor non authentifiee\\n' {id}\n\
                        fi\n\
+                     fi; fi\n"
+                ));
+            }
+            "gemini" => {
+                script.push_str(&format!(
+                    "if {missing}; then printf '%s\\tbinary_missing\\tgemini absent\\n' {id}; else\n\
+                     if [ -s \"$HOME/.gemini/oauth_creds.json\" ] || [ -s \"$HOME/.gemini/google_accounts.json\" ]; then\n\
+                       printf '%s\\tauthenticated\\tsession Google presente (~/.gemini)\\n' {id}\n\
+                     else\n\
+                       printf '%s\\tunauthenticated\\tnon connecte (lancer gemini)\\n' {id}\n\
                      fi; fi\n"
                 ));
             }
@@ -649,6 +663,7 @@ fn friendly_account_label(t: &ConnectionTarget) -> String {
             "codex" => "Codex",
             "antigravity" => "Antigravity",
             "cursor" => "Cursor",
+            "gemini" => "Gemini",
             other => other,
         };
         return format!("{eng} ({name})");
@@ -664,6 +679,7 @@ fn friendly_account_label(t: &ConnectionTarget) -> String {
         ("codex", _) => "Codex".to_string(),
         ("antigravity", _) => "Antigravity".to_string(),
         ("cursor", _) => "Cursor".to_string(),
+        ("gemini", _) => "Gemini".to_string(),
         (other, _) => other.to_string(),
     }
 }
@@ -705,11 +721,74 @@ pub(crate) fn group_machine_accounts(
     grouped
 }
 
-fn probe_machine(machine: String, targets: Vec<ConnectionTarget>) -> Vec<ConnectionStatus> {
+const OFFICIAL_DISCOVERY_CLIS: &[(&str, &str)] = &[
+    ("claude", "claude"),
+    ("codex", "codex"),
+    ("antigravity", "agy"),
+    ("cursor", "cursor-agent"),
+    ("gemini", "gemini"),
+];
+
+/// Construit une cible synthétique de connexion pour un CLI officiel installé sur une machine
+/// mais non encore déclaré dans `agents.json` (`connection_id = "detected-<engine>-<machine>"`).
+pub(crate) fn synthetic_detected_target(
+    connection_id: &str,
+    machine_id: &str,
+    local_machine: &str,
+) -> Option<ConnectionTarget> {
+    if !valid_machine_id(machine_id) {
+        return None;
+    }
+    let rest = connection_id.strip_prefix("detected-")?;
+    let suffix = format!("-{machine_id}");
+    let engine = rest.strip_suffix(&suffix)?;
+    let &(_, binary) = OFFICIAL_DISCOVERY_CLIS
+        .iter()
+        .find(|&&(eng, _)| eng == engine)?;
+    Some(ConnectionTarget {
+        connection_id: connection_id.to_string(),
+        machine_id: machine_id.to_string(),
+        engine: engine.to_string(),
+        agent_type: engine.to_string(),
+        enabled: false,
+        display_name: None,
+        managed: false,
+        command: binary.to_string(),
+        profile_dir: None,
+        registry_path: String::new(),
+        is_local: machine_id == local_machine,
+    })
+}
+
+fn probe_machine(
+    machine: String,
+    is_local: bool,
+    targets: Vec<ConnectionTarget>,
+) -> Vec<ConnectionStatus> {
     let grouped = group_machine_accounts(targets);
     let primaries: Vec<ConnectionTarget> = grouped.iter().map(|(t, _, _)| t.clone()).collect();
-    let is_local = primaries.first().is_some_and(|t| t.is_local);
-    let script = build_probe_script(&primaries);
+    let covered_engines: BTreeSet<&str> = primaries.iter().map(|t| t.engine.as_str()).collect();
+    let mut detected_candidates: Vec<ConnectionTarget> = Vec::new();
+    for &(eng, bin) in OFFICIAL_DISCOVERY_CLIS {
+        if !covered_engines.contains(eng) {
+            detected_candidates.push(ConnectionTarget {
+                connection_id: format!("detected-{eng}-{machine}"),
+                machine_id: machine.clone(),
+                engine: eng.to_string(),
+                agent_type: eng.to_string(),
+                enabled: false,
+                display_name: None,
+                managed: false,
+                command: bin.to_string(),
+                profile_dir: None,
+                registry_path: String::new(),
+                is_local,
+            });
+        }
+    }
+    let mut all_probe_targets = primaries.clone();
+    all_probe_targets.extend(detected_candidates.iter().cloned());
+    let script = build_probe_script(&all_probe_targets);
     let output = if is_local {
         Command::new("bash")
             .arg("-lc")
@@ -760,7 +839,7 @@ fn probe_machine(machine: String, targets: Vec<ConnectionTarget>) -> Vec<Connect
         _ => false,
     };
 
-    grouped
+    let mut statuses: Vec<ConnectionStatus> = grouped
         .into_iter()
         .map(|(t, covered, any_enabled)| {
             let (auth_state, detail) = if !reachable {
@@ -791,7 +870,41 @@ fn probe_machine(machine: String, targets: Vec<ConnectionTarget>) -> Vec<Connect
                 covered_connections: covered,
             }
         })
-        .collect()
+        .collect();
+
+    // Ajouter tout CLI officiel réellement présent sur disque (même hors agents.json)
+    // afin qu'il apparaisse immédiatement dans Comptes (« À connecter » ou « Connecté »).
+    if reachable {
+        for cand in detected_candidates {
+            if let Some((auth_state, raw_detail)) = parsed.remove(&cand.connection_id)
+                && auth_state != "binary_missing"
+            {
+                let account_label = friendly_account_label(&cand);
+                let detail = if raw_detail.is_empty() {
+                    "CLI installé (hors registre)".to_string()
+                } else {
+                    format!("CLI installé (hors registre) · {raw_detail}")
+                };
+                statuses.push(ConnectionStatus {
+                    connection_id: cand.connection_id.clone(),
+                    machine_id: cand.machine_id,
+                    engine: cand.engine,
+                    agent_type: cand.agent_type,
+                    enabled: false,
+                    display_name: None,
+                    managed: false,
+                    profile_dir: None,
+                    registry_path: String::new(),
+                    is_local: cand.is_local,
+                    auth_state,
+                    detail,
+                    account_label,
+                    covered_connections: vec![cand.connection_id],
+                });
+            }
+        }
+    }
+    statuses
 }
 
 pub(crate) fn collect_fleet_status(
@@ -800,6 +913,11 @@ pub(crate) fn collect_fleet_status(
     let (local_machine, known_machines, targets) =
         load_fleet_connections_with_machines(registry_override)?;
     let mut grouped: BTreeMap<String, Vec<ConnectionTarget>> = BTreeMap::new();
+    if registry_override.is_none() {
+        for m in &known_machines {
+            grouped.entry(m.clone()).or_default();
+        }
+    }
     for target in targets {
         grouped
             .entry(target.machine_id.clone())
@@ -809,7 +927,10 @@ pub(crate) fn collect_fleet_status(
     let machines: Vec<String> = grouped.keys().cloned().collect();
     let handles: Vec<_> = grouped
         .into_iter()
-        .map(|(machine, items)| std::thread::spawn(move || probe_machine(machine, items)))
+        .map(|(machine, items)| {
+            let is_local = machine == local_machine;
+            std::thread::spawn(move || probe_machine(machine, is_local, items))
+        })
         .collect();
     let mut connections = Vec::new();
     for handle in handles {
@@ -938,6 +1059,15 @@ pub(crate) fn build_login_shell_command(target: &ConnectionTarget, logout_first:
                 )
             } else {
                 format!("{env_prefix} {cmd} login")
+            }
+        }
+        "gemini" => {
+            if logout_first {
+                format!(
+                    "rm -f \"$HOME/.gemini/oauth_creds.json\" \"$HOME/.gemini/google_accounts.json\" 2>/dev/null || true; {env_prefix} {cmd}"
+                )
+            } else {
+                format!("{env_prefix} {cmd}")
             }
         }
         _ => format!(

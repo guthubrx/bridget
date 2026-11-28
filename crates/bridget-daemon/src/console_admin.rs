@@ -22,12 +22,13 @@ use std::os::fd::AsRawFd;
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 const SSH_CONNECT_TIMEOUT: &str = "4";
 const PROBE_TIMEOUT_SECS: u64 = 10;
 const INSTALL_TIMEOUT_SECS: u64 = 240;
+const CLI_LATEST_CACHE_TTL_SECS: u64 = 900;
 const MAX_DEPLOY_LOG_BYTES: usize = 256 * 1024;
 const MIN_INTERVAL_SECS: u64 = 900;
 const MAX_INTERVAL_SECS: u64 = 604_800;
@@ -1133,12 +1134,130 @@ done
 "#
 }
 
+#[derive(Deserialize, Default)]
+pub(crate) struct MachinesQuery {
+    #[serde(default)]
+    pub refresh: Option<String>,
+}
+
+/// Extrait le premier triplet semver `MAJOR.MINOR.PATCH` d'une sortie `--version`.
+pub(crate) fn extract_semver(raw: &str) -> Option<(u64, u64, u64)> {
+    for token in raw.split(|c: char| !c.is_ascii_alphanumeric() && c != '.' && c != '-') {
+        let cleaned = token.trim_start_matches(['v', 'V']);
+        let base = cleaned.split('-').next().unwrap_or(cleaned);
+        let mut parts = base.split('.');
+        let (Some(a), Some(b), Some(c)) = (parts.next(), parts.next(), parts.next()) else {
+            continue;
+        };
+        if parts.next().is_some() {
+            continue;
+        }
+        if let (Ok(maj), Ok(min), Ok(pat)) = (a.parse::<u64>(), b.parse::<u64>(), c.parse::<u64>())
+        {
+            return Some((maj, min, pat));
+        }
+    }
+    None
+}
+
+/// Compare une version CLI locale à la dernière version publiée connue en amont.
+pub(crate) fn compare_cli_version(
+    installed: bool,
+    installed_version: &str,
+    latest: Option<&str>,
+) -> &'static str {
+    if !installed {
+        return "not_installed";
+    }
+    let Some(latest_str) = latest.filter(|s| !s.trim().is_empty()) else {
+        return "unknown_upstream";
+    };
+    match (
+        extract_semver(installed_version),
+        extract_semver(latest_str),
+    ) {
+        (Some(cur), Some(lat)) => {
+            if cur < lat {
+                "update_available"
+            } else {
+                "up_to_date"
+            }
+        }
+        _ => "unknown_upstream",
+    }
+}
+
+fn fetch_npm_latest_version(url: &str) -> Option<String> {
+    let resp = minreq::get(url)
+        .with_header("User-Agent", "bridget-console")
+        .with_timeout(3)
+        .send()
+        .ok()?;
+    if resp.status_code != 200 {
+        return None;
+    }
+    let body = resp.as_str().ok()?;
+    let val: Value = serde_json::from_str(body).ok()?;
+    val.get("version")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+}
+
+fn fetch_latest_cli_versions(force_refresh: bool) -> BTreeMap<String, String> {
+    static CACHE: OnceLock<Mutex<Option<(Instant, BTreeMap<String, String>)>>> = OnceLock::new();
+    let cache = CACHE.get_or_init(|| Mutex::new(None));
+    if let Ok(guard) = cache.lock()
+        && let Some((ts, map)) = guard.as_ref()
+    {
+        let ttl = if force_refresh {
+            Duration::from_secs(10)
+        } else {
+            Duration::from_secs(CLI_LATEST_CACHE_TTL_SECS)
+        };
+        if !map.is_empty() && ts.elapsed() < ttl {
+            return map.clone();
+        }
+    }
+    let sources = [
+        ("codex", "https://registry.npmjs.org/@openai%2Fcodex/latest"),
+        (
+            "claude",
+            "https://registry.npmjs.org/@anthropic-ai%2Fclaude-code/latest",
+        ),
+        (
+            "gemini",
+            "https://registry.npmjs.org/@google%2Fgemini-cli/latest",
+        ),
+    ];
+    let handles: Vec<_> = sources
+        .into_iter()
+        .map(|(id, url)| {
+            std::thread::spawn(move || (id.to_string(), fetch_npm_latest_version(url)))
+        })
+        .collect();
+    let mut map = BTreeMap::new();
+    for h in handles {
+        if let Ok((id, Some(ver))) = h.join() {
+            map.insert(id, ver);
+        }
+    }
+    if !map.is_empty()
+        && let Ok(mut guard) = cache.lock()
+    {
+        *guard = Some((Instant::now(), map.clone()));
+    }
+    map
+}
+
 fn probe_one_machine(
     machine_id: String,
     is_local: bool,
     ssh_entry: Option<BTreeMap<String, String>>,
     local_os: &str,
     local_arch: &str,
+    latest_versions: &BTreeMap<String, String>,
 ) -> Value {
     let script = build_machine_inventory_script();
     let out = if is_local {
@@ -1216,13 +1335,19 @@ fn probe_one_machine(
                 Some("CLI") if parts.len() >= 5 => {
                     let cid = parts[1];
                     if let Some(cat) = catalog_item(cid) {
+                        let installed = parts[2] == "present";
+                        let version = parts[4].trim();
+                        let latest = latest_versions.get(cat.id).map(String::as_str);
+                        let update_status = compare_cli_version(installed, version, latest);
                         clients.push(json!({
                             "id": cat.id,
                             "label": cat.label,
                             "binary": cat.binary,
-                            "installed": parts[2] == "present",
+                            "installed": installed,
                             "path": parts[3],
-                            "version": parts[4].trim(),
+                            "version": version,
+                            "latest_version": latest,
+                            "update_status": update_status,
                             "install_summary": cat.install_summary,
                             "update_summary": cat.update_summary,
                             "login_hint": cat.login_hint,
@@ -1235,6 +1360,7 @@ fn probe_one_machine(
     }
     if clients.is_empty() {
         for cat in CLI_CATALOG {
+            let latest = latest_versions.get(cat.id).map(String::as_str);
             clients.push(json!({
                 "id": cat.id,
                 "label": cat.label,
@@ -1242,6 +1368,8 @@ fn probe_one_machine(
                 "installed": false,
                 "path": "",
                 "version": "",
+                "latest_version": latest,
+                "update_status": "not_installed",
                 "install_summary": cat.install_summary,
                 "update_summary": cat.update_summary,
                 "login_hint": cat.login_hint,
@@ -1320,12 +1448,16 @@ fn probe_one_machine(
 pub(crate) async fn route_api_machines_get(
     State(state): State<ConsoleState>,
     headers: HeaderMap,
+    Query(query): Query<MachinesQuery>,
 ) -> Response {
     if let Err((status, code, msg)) = check_private_auth(&state, &headers, false) {
         return error_response(status, code, msg, &format!("Refusé : {msg}"));
     }
     let reg_override = state.registry_override_ref();
+    let force_refresh =
+        query.refresh.as_deref() == Some("1") || query.refresh.as_deref() == Some("true");
     let res = tokio::task::spawn_blocking(move || -> Value {
+        let latest_handle = std::thread::spawn(move || fetch_latest_cli_versions(force_refresh));
         let local_m = local_machine_name();
         let ssh_path = std::env::var("HOME")
             .map(|h| PathBuf::from(h).join(".ssh/config"))
@@ -1371,6 +1503,7 @@ pub(crate) async fn route_api_machines_get(
             other => other,
         };
 
+        let latest_versions = latest_handle.join().unwrap_or_default();
         let handles: Vec<_> = all_machines
             .into_iter()
             .map(|m| {
@@ -1378,7 +1511,10 @@ pub(crate) async fn route_api_machines_get(
                 let ssh_entry = ssh_hosts.get(&m).cloned();
                 let los = local_os.to_string();
                 let larch = local_uname_arch.to_string();
-                std::thread::spawn(move || probe_one_machine(m, is_local, ssh_entry, &los, &larch))
+                let latest = latest_versions.clone();
+                std::thread::spawn(move || {
+                    probe_one_machine(m, is_local, ssh_entry, &los, &larch, &latest)
+                })
             })
             .collect();
         let mut machines = Vec::new();
@@ -1397,6 +1533,7 @@ pub(crate) async fn route_api_machines_get(
         json!({
             "local_machine": local_m,
             "local_bridget_version": env!("CARGO_PKG_VERSION"),
+            "latest_cli_versions": latest_versions,
             "catalog": CLI_CATALOG,
             "machines": machines
         })

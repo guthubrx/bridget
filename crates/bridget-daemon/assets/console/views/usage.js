@@ -1,3 +1,5 @@
+import { vendorLogoSvg } from "/assets/logos.js";
+
 function esc(value) {
   return String(value ?? "").replace(/[&<>"']/g, (ch) => ({
     "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
@@ -112,7 +114,10 @@ export function renderUsageView(ctx) {
 
   const toolbar = `<div class="quota-toolbar">
     <div class="filter-pills" role="tablist">
-      ${filters.map(([id, lbl]) => `<button class="filter-pill${activeFilter === id ? " active" : ""}" type="button" data-usage-filter="${id}">${lbl}</button>`).join("")}
+      ${filters.map(([id, lbl]) => {
+        const ico = (id !== "all" && id !== "other") ? vendorLogoSvg(id, 14) : "";
+        return `<button class="filter-pill${activeFilter === id ? " active" : ""}" type="button" data-usage-filter="${id}">${ico}<span>${lbl}</span></button>`;
+      }).join("")}
     </div>
     <button class="btn primary" type="button" id="usageForceRefreshBtn" ${refreshing ? "disabled" : ""}>
       ${refreshing && !refreshingId ? '<span class="spinner"></span> Actualisation…' : "↻ Actualiser"}
@@ -151,7 +156,7 @@ export function renderUsageView(ctx) {
           ${gauge}${renderResets(s, now)}${renderActs(s, refreshing, refreshingId, true)}
         </div>`;
       }).join("");
-      sections.push(`<section class="u-vendor"><div class="u-vhead"><span class="u-vname">Codex</span><span class="u-vmeta">${meta}</span></div>${rows}</section>`);
+      sections.push(`<section class="u-vendor"><div class="u-vhead"><span class="u-vname">${vendorLogoSvg("codex", 17)}<span>Codex</span></span><span class="u-vmeta">${meta}</span></div>${rows}</section>`);
     }
   }
 
@@ -175,7 +180,7 @@ export function renderUsageView(ctx) {
           ${gauges}${renderResets(s, now)}${renderActs(s, refreshing, refreshingId, true)}
         </div>`;
       }).join("");
-      sections.push(`<section class="u-vendor"><div class="u-vhead"><span class="u-vname">Antigravity</span><span class="u-vmeta">${list.length} compte${list.length > 1 ? "s" : ""}</span></div>${rows}</section>`);
+      sections.push(`<section class="u-vendor"><div class="u-vhead"><span class="u-vname">${vendorLogoSvg("antigravity", 17)}<span>Antigravity</span></span><span class="u-vmeta">${list.length} compte${list.length > 1 ? "s" : ""}</span></div>${rows}</section>`);
     }
   }
 
@@ -207,7 +212,7 @@ export function renderUsageView(ctx) {
           ${renderResets(s, now)}${renderActs(s, refreshing, refreshingId, true)}
         </div>`;
       }).join("");
-      sections.push(`<section class="u-vendor"><div class="u-vhead"><span class="u-vname">Claude</span><span class="u-vmeta">${meta}</span></div>${rows}</section>`);
+      sections.push(`<section class="u-vendor"><div class="u-vhead"><span class="u-vname">${vendorLogoSvg("claude", 17)}<span>Claude</span></span><span class="u-vmeta">${meta}</span></div>${rows}</section>`);
     }
   }
 
@@ -218,7 +223,7 @@ export function renderUsageView(ctx) {
         const stCls = s.logged_in === true ? "u-ok" : (s.logged_in === false ? "u-warn" : "u-muted");
         const stTxt = s.logged_in === true ? "Connecté" : (s.logged_in === false ? "Non connecté" : s.source_label);
         return `<div class="u-row">
-          <div class="u-who"><div><span class="u-email">${esc(s.account_label)}</span></div>${renderChips(s)}</div>
+          <div class="u-who"><div class="v-label-inline">${vendorLogoSvg(s.engine, 15)}<span class="u-email">${esc(s.account_label)}</span></div>${renderChips(s)}</div>
           <div class="${stCls}">${esc(stTxt)}</div>
           ${renderResets(s, now)}${renderActs(s, refreshing, refreshingId, false)}
         </div>`;
@@ -237,7 +242,7 @@ export function renderUsageView(ctx) {
       ${renderMachineCell(m.machine_id, "cursor", m.cursor)}
     </tr>`).join("");
     sections.push(`<section class="u-vendor"><div class="u-vhead"><span class="u-vname">Machines</span></div>
-      <table class="u-table"><thead><tr><th>Machine</th><th>Codex</th><th>Claude</th><th>Antigravity</th><th>Cursor</th></tr></thead><tbody>${tbody}</tbody></table>
+      <table class="u-table"><thead><tr><th>Machine</th><th><span class="v-label-inline">${vendorLogoSvg("codex", 14)}<span>Codex</span></span></th><th><span class="v-label-inline">${vendorLogoSvg("claude", 14)}<span>Claude</span></span></th><th><span class="v-label-inline">${vendorLogoSvg("antigravity", 14)}<span>Antigravity</span></span></th><th><span class="v-label-inline">${vendorLogoSvg("cursor", 14)}<span>Cursor</span></span></th></tr></thead><tbody>${tbody}</tbody></table>
     </section>`);
   }
 

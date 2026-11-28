@@ -4762,6 +4762,11 @@ impl DaemonState {
         )?);
         let execution_store = ExecutionStore::open(&config.db_path)?;
         let delegation_store = crate::delegation::DelegationStore::open(&config.db_path)?;
+        let _ = delegation_store.record_daemon_build_seen(
+            crate::build_info::BUILD_ID,
+            env!("CARGO_PKG_VERSION"),
+            unix_now_secs(),
+        );
         let registry = AgentRegistry::load()?;
         if let Some(diagnostic) = crate::decision_service::startup_diagnostic() {
             warn!("{diagnostic}");

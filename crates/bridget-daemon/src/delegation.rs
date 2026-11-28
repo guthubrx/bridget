@@ -1459,6 +1459,27 @@ CREATE TABLE IF NOT EXISTS native_delegation_graph_tasks(
 );
 ")?;
         migrate_auto_admission_receipts_168(&tx)?;
+        {
+            let mut has_build_col = false;
+            let mut stmt = tx.prepare("PRAGMA table_info(native_delegations)")?;
+            let cols = stmt.query_map([], |row| row.get::<_, String>(1))?;
+            for col in cols {
+                if col? == "bridget_build_id" {
+                    has_build_col = true;
+                }
+            }
+            drop(stmt);
+            if !has_build_col {
+                tx.execute(
+                    "ALTER TABLE native_delegations ADD COLUMN bridget_build_id TEXT NOT NULL DEFAULT ''",
+                    [],
+                )?;
+            }
+            tx.execute(
+                "CREATE INDEX IF NOT EXISTS idx_native_delegations_build ON native_delegations(bridget_build_id)",
+                [],
+            )?;
+        }
         crate::convergence_metrics::ensure_schema(&tx)?;
         const LEGACY_INDEX: &str = "CREATE INDEX native_delegations_state ON native_delegations(json_extract(payload,'$.state'))";
         const CURRENT_INDEX: &str = "CREATE INDEX native_delegations_state ON native_delegations(json_extract(payload,'$.state'),coalesce(json_extract(payload,'$.guarded'),0),coalesce(json_extract(payload,'$.cleanup_done'),0),owner_instance)";
@@ -3279,6 +3300,16 @@ CREATE TABLE IF NOT EXISTS native_delegation_graph_tasks(
         now: i64,
     ) -> Result<crate::convergence_metrics::ConvergenceMaintenanceReport, String> {
         crate::convergence_metrics::run_rollup_and_purge(&mut self.conn, now)
+    }
+
+    pub fn record_daemon_build_seen(
+        &self,
+        build_id: &str,
+        package_version: &str,
+        now: i64,
+    ) -> Result<(), String> {
+        crate::convergence_metrics::record_build_seen(&self.conn, build_id, package_version, now)
+            .map_err(|e| e.to_string())
     }
 
     pub fn query_convergence_metrics(

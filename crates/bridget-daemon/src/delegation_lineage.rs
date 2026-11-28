@@ -557,7 +557,18 @@ impl DelegationStore {
             task.root_owner_agent_id = task.owner.clone();
         }
         let payload = serde_json::to_string(&task).map_err(|e| e.to_string())?;
-        tx.execute("INSERT INTO native_delegations(task_id,owner_instance,request_id,canonical,payload) VALUES(?1,?2,?3,?4,?5)",params![task.task_id,task.owner_instance,request_id,canonical,payload]).map_err(|e|e.to_string())?;
+        tx.execute(
+            "INSERT INTO native_delegations(task_id,owner_instance,request_id,canonical,payload,bridget_build_id) VALUES(?1,?2,?3,?4,?5,?6)",
+            params![
+                task.task_id,
+                task.owner_instance,
+                request_id,
+                canonical,
+                payload,
+                crate::build_info::BUILD_ID
+            ],
+        )
+        .map_err(|e| e.to_string())?;
         let mutation = increment(tx).map_err(|e| e.to_string())?;
         Ok((task, mutation))
     }

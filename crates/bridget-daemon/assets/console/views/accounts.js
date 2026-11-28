@@ -1,3 +1,5 @@
+import { vendorLogoSvg } from "/assets/logos.js";
+
 function esc(value) {
   return String(value ?? "").replace(/[&<>"']/g, (ch) => ({
     "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
@@ -127,10 +129,15 @@ export function renderAccountsView(ctx) {
             actions.push(`<button class="btn subtle" type="button" data-cli="${esc(key)}">Commande CLI</button>`);
           }
           const btnHtml = actions.join("");
+          const isDetected = String(c.connection_id || "").startsWith("detected-");
+          const subLabel = c.managed
+            ? "Compte dédié (isolé)"
+            : (isDetected ? "CLI installé (hors registre)" : "Compte principal");
+          const logoEngine = (c.account_label || "").toLowerCase().startsWith("glm") ? "glm" : c.engine;
           return `<div class="row">
             <div>
-              <div class="row-label">${esc(c.account_label || c.engine)}</div>
-              <div class="row-sub">${c.managed ? "Compte dédié (isolé)" : "Compte principal"}</div>
+              <div class="row-label v-label-inline">${vendorLogoSvg(logoEngine, 16)}<span>${esc(c.account_label || c.engine)}</span></div>
+              <div class="row-sub">${subLabel}</div>
             </div>
             <div class="row-conn mono" title="${esc(c.connection_id)}">${esc(c.connection_id)}${esc(extra)}</div>
             <div class="row-detail" title="${esc(c.detail)}">${esc(c.detail)}</div>

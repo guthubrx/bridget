@@ -34,6 +34,7 @@ const INDEX_HTML: &str = include_str!("../assets/console/index.html");
 const STYLES_CSS: &str = include_str!("../assets/console/styles.css");
 const APP_JS: &str = include_str!("../assets/console/app.js");
 const API_JS: &str = include_str!("../assets/console/api.js");
+const LOGOS_JS: &str = include_str!("../assets/console/logos.js");
 const VIEW_ACCOUNTS_JS: &str = include_str!("../assets/console/views/accounts.js");
 const VIEW_MACHINES_JS: &str = include_str!("../assets/console/views/machines.js");
 const VIEW_SETTINGS_JS: &str = include_str!("../assets/console/views/settings.js");
@@ -560,6 +561,16 @@ async fn route_api_js(State(state): State<ConsoleState>, headers: HeaderMap) -> 
     .await
 }
 
+async fn route_logos_js(State(state): State<ConsoleState>, headers: HeaderMap) -> Response {
+    serve_asset(
+        state,
+        headers,
+        "application/javascript; charset=utf-8",
+        LOGOS_JS,
+    )
+    .await
+}
+
 async fn route_accounts_js(State(state): State<ConsoleState>, headers: HeaderMap) -> Response {
     serve_asset(
         state,
@@ -943,15 +954,13 @@ pub(crate) fn build_console_router(state: ConsoleState) -> Router {
         .route("/assets/styles.css", get(route_styles))
         .route("/assets/app.js", get(route_app_js))
         .route("/assets/api.js", get(route_api_js))
+        .route("/assets/logos.js", get(route_logos_js))
         .route("/assets/views/accounts.js", get(route_accounts_js))
         .route("/assets/views/machines.js", get(route_machines_js))
         .route("/assets/views/settings.js", get(route_settings_js))
         .route("/assets/views/usage.js", get(route_usage_js))
         .route("/api/status", get(route_api_status))
-        .route(
-            "/api/usage",
-            get(crate::console_admin::route_api_usage_get),
-        )
+        .route("/api/usage", get(crate::console_admin::route_api_usage_get))
         .route(
             "/api/usage/refresh",
             post(crate::console_admin::route_api_usage_refresh),
