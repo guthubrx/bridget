@@ -21,10 +21,12 @@ use bridget_transport::{DaemonToWrapper, WrapperToDaemon};
 use serde_json::{Value, json};
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
-use std::io::{self, BufRead, BufReader, BufWriter, Write};
+#[cfg(test)]
+use std::io::BufReader;
+use std::io::{self, BufRead, BufWriter, Write};
 use std::os::unix::net::UnixStream;
 use std::path::Path;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 #[cfg(test)]
 use std::time::Instant;
@@ -275,6 +277,19 @@ struct Session {
     initialized: bool,
 }
 
+struct ActiveWorkerGuard(Arc<AtomicUsize>);
+
+impl Drop for ActiveWorkerGuard {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
+enum ServeOutcome {
+    Eof,
+    HotReload(crate::mcp_hot_reload::HotReloadPlan),
+}
+
 /// Exécute le serveur MCP avec un lecteur unique et un writer unique.
 ///
 /// L'ownership exclusif du `BufWriter` sérialise les sorties JSON-RPC : aucun
@@ -288,12 +303,7 @@ pub fn serve<R: BufRead, W: Write + Send>(mut input: R, output: W) -> io::Result
     )
 }
 
-fn serve_with<R, W, I, E>(
-    mut input: R,
-    output: W,
-    resolve_identity: &I,
-    execute: &E,
-) -> io::Result<()>
+fn serve_with<R, W, I, E>(input: R, output: W, resolve_identity: &I, execute: &E) -> io::Result<()>
 where
     R: BufRead,
     W: Write + Send,
@@ -301,19 +311,93 @@ where
         + Sync,
     E: Fn(&crate::mcp_identity::ResolvedIdentity, &str, &Value) -> Result<Value, ToolError> + Sync,
 {
-    let output = Arc::new(Mutex::new(BufWriter::new(output)));
+    let mut source = crate::mcp_hot_reload::BufReadSource::new(input);
     let mut session = Session::default();
-    let mut line = String::new();
-    let registry = Arc::new(Mutex::new(ToolCallRegistry::default()));
+    let _ = serve_with_source(
+        &mut source,
+        output,
+        &mut session,
+        None,
+        resolve_identity,
+        execute,
+    )?;
+    Ok(())
+}
 
-    std::thread::scope(|scope| -> io::Result<()> {
+fn try_plan_hot_reload<S: crate::mcp_hot_reload::LineSource>(
+    hot_reload: &mut Option<&mut crate::mcp_hot_reload::HotReloadController>,
+    input: &S,
+    session: &Session,
+    active_workers: &AtomicUsize,
+    registry: &Mutex<ToolCallRegistry>,
+) -> Option<crate::mcp_hot_reload::HotReloadPlan> {
+    let controller = hot_reload.as_deref_mut()?;
+    if !controller.is_enabled() {
+        return None;
+    }
+    if active_workers.load(Ordering::Acquire) != 0 {
+        return None;
+    }
+    if !registry.lock().recover_poison().calls.is_empty() {
+        return None;
+    }
+    if input.stdin_has_hangup_only() {
+        return None;
+    }
+    controller.check_reload(session.initialize_seen, session.initialized)
+}
+
+fn serve_with_source<S, W, I, E>(
+    input: &mut S,
+    output: W,
+    session: &mut Session,
+    mut hot_reload: Option<&mut crate::mcp_hot_reload::HotReloadController>,
+    resolve_identity: &I,
+    execute: &E,
+) -> io::Result<ServeOutcome>
+where
+    S: crate::mcp_hot_reload::LineSource,
+    W: Write + Send,
+    I: Fn() -> Result<crate::mcp_identity::ResolvedIdentity, crate::mcp_identity::IdentityError>
+        + Sync,
+    E: Fn(&crate::mcp_identity::ResolvedIdentity, &str, &Value) -> Result<Value, ToolError> + Sync,
+{
+    let output = Arc::new(Mutex::new(BufWriter::new(output)));
+    let registry = Arc::new(Mutex::new(ToolCallRegistry::default()));
+    let active_workers = Arc::new(AtomicUsize::new(0));
+
+    let outcome = std::thread::scope(|scope| -> io::Result<ServeOutcome> {
         // La garde tombe AVANT la jonction des threads, sur EOF comme sur erreur.
         let _cancel_calls = CancelCallsOnExit(Arc::clone(&registry));
         loop {
-            line.clear();
-            if input.read_line(&mut line)? == 0 {
-                break;
+            if hot_reload
+                .as_deref()
+                .is_some_and(crate::mcp_hot_reload::HotReloadController::check_due)
+                && let Some(plan) =
+                    try_plan_hot_reload(&mut hot_reload, input, session, &active_workers, &registry)
+            {
+                return Ok(ServeOutcome::HotReload(plan));
             }
+            let poll_timeout_ms = hot_reload.as_deref().map_or(
+                -1,
+                crate::mcp_hot_reload::HotReloadController::poll_timeout_ms,
+            );
+            let line = match input.read_event(poll_timeout_ms)? {
+                crate::mcp_hot_reload::ReadLineEvent::Eof => return Ok(ServeOutcome::Eof),
+                crate::mcp_hot_reload::ReadLineEvent::IdleTimeout => {
+                    if let Some(plan) = try_plan_hot_reload(
+                        &mut hot_reload,
+                        input,
+                        session,
+                        &active_workers,
+                        &registry,
+                    ) {
+                        return Ok(ServeOutcome::HotReload(plan));
+                    }
+                    continue;
+                }
+                crate::mcp_hot_reload::ReadLineEvent::Line(line) => line,
+            };
             if line.trim().is_empty() {
                 continue;
             }
@@ -328,7 +412,7 @@ where
                 registry.lock().recover_poison().cancel(&cancelled_id);
                 continue;
             }
-            let call_id = asynchronous_tool_call_id(&request, &session);
+            let call_id = asynchronous_tool_call_id(&request, session);
             if let Some(call_id) = call_id {
                 let waiting = matches!(
                     request
@@ -377,7 +461,10 @@ where
                 }
                 let output = Arc::clone(&output);
                 let registry = Arc::clone(&registry);
+                let workers = Arc::clone(&active_workers);
+                workers.fetch_add(1, Ordering::AcqRel);
                 scope.spawn(move || {
+                    let _worker_guard = ActiveWorkerGuard(workers);
                     let mut call = ToolCallGuard::new(call_id, registry);
                     let mut tool_session = Session {
                         initialize_seen: true,
@@ -403,19 +490,65 @@ where
                 continue;
             }
             if let Some(response) =
-                dispatch_with_executor(&request, &mut session, resolve_identity, execute)
+                dispatch_with_executor(&request, session, resolve_identity, execute)
             {
                 write_shared_response(&output, &response)?;
             }
         }
-        Ok(())
     })?;
-    output.lock().recover_poison().flush()
+    output.lock().recover_poison().flush()?;
+    Ok(outcome)
 }
 
 /// Lance la façade MCP depuis la sous-commande `bridget mcp`.
 pub fn run_stdio() -> io::Result<()> {
-    serve(BufReader::new(io::stdin().lock()), io::stdout())
+    let handoff = crate::mcp_hot_reload::take_handoff_state()?;
+    let mut session = Session {
+        initialize_seen: handoff.as_ref().is_some_and(|state| state.initialize_seen),
+        initialized: handoff.as_ref().is_some_and(|state| state.initialized),
+    };
+    let mut controller =
+        crate::mcp_hot_reload::HotReloadController::from_process_env(handoff.as_ref());
+    if let Some(state) = &handoff {
+        eprintln!(
+            "bridget mcp: rechargement à chaud actif (build {}, reexec #{})",
+            crate::build_info::BUILD_ID,
+            state.reexec_count
+        );
+        if session.initialized {
+            let mut stdout = io::stdout().lock();
+            write_response(
+                &mut stdout,
+                &json!({
+                    "jsonrpc": "2.0",
+                    "method": "notifications/tools/list_changed"
+                }),
+            )?;
+        }
+    }
+    let mut reader = crate::mcp_hot_reload::PollLineReader::stdin();
+    loop {
+        match serve_with_source(
+            &mut reader,
+            io::stdout(),
+            &mut session,
+            Some(&mut controller),
+            &crate::mcp_identity::resolve_current_mcp_identity,
+            &execute_tool,
+        )? {
+            ServeOutcome::Eof => return Ok(()),
+            ServeOutcome::HotReload(plan) => {
+                let _ = io::stdout().flush();
+                let _ = io::stderr().flush();
+                let error = crate::mcp_hot_reload::HotReloadController::exec_replace(&plan);
+                eprintln!(
+                    "bridget mcp: échec du rechargement à chaud vers {} ({error}), poursuite sur l'image courante",
+                    plan.target_binary.display()
+                );
+                controller.mark_failed(plan.target_fingerprint);
+            }
+        }
+    }
 }
 
 fn write_response(output: &mut impl Write, response: &Value) -> io::Result<()> {
@@ -2834,7 +2967,7 @@ fn now_secs() -> i64 {
 fn initialize_result() -> Value {
     json!({
         "protocolVersion": PROTOCOL_VERSION,
-        "capabilities": { "tools": {} },
+        "capabilities": { "tools": { "listChanged": true } },
         "serverInfo": { "name": "bridget", "version": env!("CARGO_PKG_VERSION") }
     })
 }

@@ -2362,7 +2362,7 @@ fn matrice_fr009_couvre_les_quinze_cas() {
                 assert_eq!(responses[0]["result"]["protocolVersion"], PROTOCOL_VERSION);
                 assert_eq!(
                     responses[0]["result"]["capabilities"],
-                    json!({ "tools": {} })
+                    json!({ "tools": { "listChanged": true } })
                 );
             }
             "tools" => assert_eq!(

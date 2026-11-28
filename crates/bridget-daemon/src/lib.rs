@@ -52,6 +52,7 @@ pub(crate) mod agent_tracking;
 pub(crate) mod delegation;
 pub(crate) mod delegation_mcp;
 pub mod mcp;
+pub(crate) mod mcp_hot_reload;
 pub mod mcp_identity;
 pub(crate) mod mcp_scopes;
 pub mod memory;

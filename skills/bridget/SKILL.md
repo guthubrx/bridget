@@ -28,6 +28,9 @@ uniquement des alias de compatibilité.
 Utiliser la connexion Bridget de la session courante. Ne pas démarrer de daemon,
 changer de namespace, installer une skill globale ou relancer un fournisseur pour
 envoyer un message. Une panne de connexion n'autorise pas une autre route.
+Lors d'un déploiement de la flotte, chaque façade `bridget mcp` active bascule
+automatiquement sur la nouvelle image entre deux requêtes (sans redémarrer la session)
+et émet `notifications/tools/list_changed` (désactivable via `BRIDGET_MCP_HOT_RELOAD=0`).
 
 ## Informer sans consommer un tour (251)
 
