@@ -9,14 +9,16 @@
 use super::*;
 use crate::convergence_metrics::ConvergenceMetricRawRow;
 use crate::delegation::{
-    NativeGraphConvergenceIteration, NativeGraphConvergenceState, NativeGraphRecord,
-    NativeGraphStepRecord,
+    NativeGraphBlackboardEntry, NativeGraphBudgetUsage, NativeGraphConvergenceIteration,
+    NativeGraphConvergenceState, NativeGraphRecord, NativeGraphStepRecord,
 };
 use bridget_transport::protocol::{
-    AutoDelegateV2, ConvergenceMetricsPolicyUpdate, DelegateGraphRequest,
-    GraphConvergenceEscalation, GraphDeterministicGate, GraphFailurePolicy, GraphNotifyPolicy,
-    GraphStepCondition, MAX_CONVERGENCE_ITERATIONS, MAX_ESCALATION_EXTRA_ITERATIONS,
-    MAX_TOTAL_CONVERGENCE_ITERATIONS, MIN_CONVERGENCE_ITERATIONS, MIN_ESCALATION_EXTRA_ITERATIONS,
+    AutoDelegateV2, ConvergenceMetricsPolicyUpdate, DelegateGraphRequest, GraphBudget,
+    GraphConvergenceEscalation, GraphDeterministicGate, GraphFailurePolicy, GraphModelTier,
+    GraphNotifyPolicy, GraphStepCondition, MAX_CONVERGENCE_ITERATIONS,
+    MAX_ESCALATION_EXTRA_ITERATIONS, MAX_GRAPH_BUDGET_DURATION_SECS,
+    MAX_GRAPH_BUDGET_FRONTIER_ROUNDS, MAX_GRAPH_BUDGET_ROUNDS, MAX_TOTAL_CONVERGENCE_ITERATIONS,
+    MIN_CONVERGENCE_ITERATIONS, MIN_ESCALATION_EXTRA_ITERATIONS, MIN_GRAPH_BUDGET_DURATION_SECS,
     NativeDelegationRequest, ProviderPermissions, SpawnPosture, WorkspaceRequest,
 };
 use serde_json::{Value, json};
@@ -29,6 +31,11 @@ const MAX_DEP_EXCERPT_CHARS: usize = 1200;
 const MAX_TASK_BYTES: usize = 65_536;
 const CONVERGENCE_KEEP_ALIVE_SECS: u64 = 900;
 const MAX_KEEP_ALIVE_SECS: u64 = 7200;
+const MAX_BLACKBOARD_KEYS: usize = 32;
+const MAX_BLACKBOARD_KEY_LEN: usize = 64;
+const MAX_BLACKBOARD_VALUE_BYTES: usize = 4096;
+const MAX_BLACKBOARD_READS_PER_STEP: usize = 16;
+const MAX_BLACKBOARD_WRITES_PER_STEP: usize = 8;
 
 /// Issues d'échec autorisées dans `when_outcomes` (jamais `"cancelled"` : une annulation humaine
 /// ne déclenche jamais une branche de repli automatique).
@@ -39,6 +46,7 @@ pub(crate) const ALLOWED_WHEN_OUTCOMES: &[&str] = &[
     "escalated",
     "gate_unavailable",
     "verdict_unparseable",
+    "budget_exhausted",
 ];
 
 fn valid_step_id(id: &str) -> bool {
@@ -66,10 +74,73 @@ fn step_dependency_failure_outcome(dep: &NativeGraphStepRecord) -> Option<&str> 
     if dep.state != "failed" {
         return None;
     }
-    dep.convergence_state
+    if let Some(outcome) = dep
+        .convergence_state
         .as_ref()
         .and_then(|cs| cs.outcome.as_deref())
-        .or(Some("failed"))
+    {
+        return Some(outcome);
+    }
+    if dep
+        .error
+        .as_deref()
+        .is_some_and(|e| e.starts_with("budget_exhausted"))
+    {
+        return Some("budget_exhausted");
+    }
+    Some("failed")
+}
+
+fn valid_blackboard_key(key: &str) -> bool {
+    !key.is_empty()
+        && key.len() <= MAX_BLACKBOARD_KEY_LEN
+        && key
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.'))
+}
+
+fn validate_graph_budget(budget: &GraphBudget) -> Result<(), (String, String)> {
+    if let Some(total) = budget.max_total_rounds
+        && !(1..=MAX_GRAPH_BUDGET_ROUNDS).contains(&total)
+    {
+        return Err((
+            "graph_invalid".into(),
+            format!(
+                "budget.max_total_rounds doit être compris entre 1 et {MAX_GRAPH_BUDGET_ROUNDS}."
+            ),
+        ));
+    }
+    if let Some(frontier) = budget.max_frontier_rounds
+        && frontier > MAX_GRAPH_BUDGET_FRONTIER_ROUNDS
+    {
+        return Err((
+            "graph_invalid".into(),
+            format!(
+                "budget.max_frontier_rounds doit être compris entre 0 et {MAX_GRAPH_BUDGET_FRONTIER_ROUNDS}."
+            ),
+        ));
+    }
+    if let Some(secs) = budget.max_duration_secs
+        && !(MIN_GRAPH_BUDGET_DURATION_SECS..=MAX_GRAPH_BUDGET_DURATION_SECS).contains(&secs)
+    {
+        return Err((
+            "graph_invalid".into(),
+            format!(
+                "budget.max_duration_secs doit être compris entre {MIN_GRAPH_BUDGET_DURATION_SECS} et {MAX_GRAPH_BUDGET_DURATION_SECS}."
+            ),
+        ));
+    }
+    if let (Some(total), Some(frontier)) = (budget.max_total_rounds, budget.max_frontier_rounds)
+        && frontier > total
+    {
+        return Err((
+            "graph_invalid".into(),
+            format!(
+                "budget.max_frontier_rounds ({frontier}) ne peut pas dépasser budget.max_total_rounds ({total})."
+            ),
+        ));
+    }
+    Ok(())
 }
 
 /// Valide la structure DAG (1..=16 étapes, `step_id` uniques, dépendances existantes,
@@ -89,6 +160,10 @@ pub(crate) fn validate_and_order_graph(
             "graph_invalid".into(),
             format!("steps doit contenir entre 1 et {MAX_GRAPH_STEPS} étapes."),
         ));
+    }
+
+    if let Some(budget) = &request.budget {
+        validate_graph_budget(budget)?;
     }
 
     let has_fallback_branch = request
@@ -133,6 +208,46 @@ pub(crate) fn validate_and_order_graph(
                 "graph_invalid".into(),
                 format!("étape '{}' : cwd est obligatoire.", step.step_id),
             ));
+        }
+        if step.blackboard_reads.len() > MAX_BLACKBOARD_READS_PER_STEP {
+            return Err((
+                "graph_invalid".into(),
+                format!(
+                    "étape '{}' : blackboard_reads accepte au plus {MAX_BLACKBOARD_READS_PER_STEP} clés.",
+                    step.step_id
+                ),
+            ));
+        }
+        for key in &step.blackboard_reads {
+            if !valid_blackboard_key(key) {
+                return Err((
+                    "graph_invalid".into(),
+                    format!(
+                        "étape '{}' : clé blackboard_reads invalide '{key}'.",
+                        step.step_id
+                    ),
+                ));
+            }
+        }
+        if step.blackboard_writes.len() > MAX_BLACKBOARD_WRITES_PER_STEP {
+            return Err((
+                "graph_invalid".into(),
+                format!(
+                    "étape '{}' : blackboard_writes accepte au plus {MAX_BLACKBOARD_WRITES_PER_STEP} clés.",
+                    step.step_id
+                ),
+            ));
+        }
+        for key in &step.blackboard_writes {
+            if !valid_blackboard_key(key) {
+                return Err((
+                    "graph_invalid".into(),
+                    format!(
+                        "étape '{}' : clé blackboard_writes invalide '{key}'.",
+                        step.step_id
+                    ),
+                ));
+            }
         }
         match step.when {
             GraphStepCondition::AllSucceeded => {
@@ -648,37 +763,174 @@ fn ensure_convergence_producer_keep_alive(delegation: &mut AutoDelegateV2) {
         Some(current.clamp(CONVERGENCE_KEEP_ALIVE_SECS, MAX_KEEP_ALIVE_SECS));
 }
 
+fn step_is_frontier_launch(
+    step_tier: Option<GraphModelTier>,
+    escalation_tier: u8,
+    delegation: &AutoDelegateV2,
+) -> bool {
+    if escalation_tier > 0 || step_tier == Some(GraphModelTier::Frontier) {
+        return true;
+    }
+    if step_tier == Some(GraphModelTier::Light) {
+        return false;
+    }
+    delegation
+        .model
+        .as_deref()
+        .is_some_and(super::native_delegation::is_frontier_model_name)
+}
+
+fn check_graph_budget(
+    graph: &NativeGraphRecord,
+    is_frontier: bool,
+    now: i64,
+) -> Result<(), &'static str> {
+    let Some(budget) = graph.budget.as_ref() else {
+        return Ok(());
+    };
+    if let Some(max_secs) = budget.max_duration_secs
+        && now.saturating_sub(graph.created_at) >= max_secs as i64
+    {
+        return Err("max_duration_secs");
+    }
+    if let Some(max_total) = budget.max_total_rounds
+        && graph.budget_usage.total_rounds_used >= max_total
+    {
+        return Err("max_total_rounds");
+    }
+    if is_frontier
+        && let Some(max_frontier) = budget.max_frontier_rounds
+        && graph.budget_usage.frontier_rounds_used >= max_frontier
+    {
+        return Err("max_frontier_rounds");
+    }
+    Ok(())
+}
+
+fn consume_graph_budget(graph: &mut NativeGraphRecord, is_frontier: bool) {
+    graph.budget_usage.total_rounds_used = graph.budget_usage.total_rounds_used.saturating_add(1);
+    if is_frontier {
+        graph.budget_usage.frontier_rounds_used =
+            graph.budget_usage.frontier_rounds_used.saturating_add(1);
+    }
+}
+
+fn fail_step_budget_exhausted(graph: &mut NativeGraphRecord, idx: usize, reason: &str, now: i64) {
+    graph.budget_usage.exhausted_reason = Some(reason.to_string());
+    let step = &mut graph.steps[idx];
+    step.state = "failed".into();
+    step.error = Some(format!("budget_exhausted:{reason}"));
+    step.finished_at = Some(now);
+    if let Some(cs) = step.convergence_state.as_mut() {
+        if let Some(iter_rec) = cs.iterations.last_mut() {
+            iter_rec.finished_at.get_or_insert(now);
+        }
+        cs.phase = "done".into();
+        cs.outcome = Some("budget_exhausted".into());
+    }
+}
+
+/// Extrait un éventuel objet `{"blackboard":{...}}` en fin de réponse d'une étape
+/// (ligne JSON autonome ou bloc markdown ```json), sans appel MCP supplémentaire.
+pub(crate) fn extract_blackboard_updates(text: &str) -> Option<serde_json::Map<String, Value>> {
+    let parse_candidate = |raw: &str| -> Option<serde_json::Map<String, Value>> {
+        let trimmed = raw.trim();
+        if !trimmed.starts_with('{') || !trimmed.ends_with('}') {
+            return None;
+        }
+        let val = serde_json::from_str::<Value>(trimmed).ok()?;
+        val.get("blackboard").and_then(Value::as_object).cloned()
+    };
+
+    for line in text.lines().rev() {
+        if let Some(map) = parse_candidate(line) {
+            return Some(map);
+        }
+    }
+    let mut in_fence = false;
+    let mut buf = String::new();
+    let mut last_found = None;
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("```") {
+            if in_fence {
+                if let Some(map) = parse_candidate(&buf) {
+                    last_found = Some(map);
+                }
+                buf.clear();
+                in_fence = false;
+            } else {
+                in_fence = true;
+                buf.clear();
+            }
+            continue;
+        }
+        if in_fence {
+            buf.push_str(line);
+            buf.push('\n');
+        }
+    }
+    last_found
+}
+
+/// Valide et applique les écritures tableau noir émises par une étape terminée.
+/// Une étape doit déclarer explicitement les clés autorisées dans `blackboard_writes`
+/// (liste vide = aucune écriture acceptée) ; plafond de 32 clés et 4 Ko par valeur.
+pub(crate) fn apply_blackboard_updates(
+    graph: &mut NativeGraphRecord,
+    idx: usize,
+    text: &str,
+    now: i64,
+) -> u32 {
+    let allowed = graph.steps[idx].blackboard_writes.clone();
+    if allowed.is_empty() {
+        return 0;
+    }
+    let Some(updates) = extract_blackboard_updates(text) else {
+        return 0;
+    };
+    let step_id = graph.steps[idx].step_id.clone();
+    let mut applied = 0u32;
+    for (key, value) in updates {
+        if !valid_blackboard_key(&key) {
+            continue;
+        }
+        if !allowed.iter().any(|k| k == &key) {
+            continue;
+        }
+        let encoded_len = serde_json::to_vec(&value).map_or(usize::MAX, |v| v.len());
+        if encoded_len > MAX_BLACKBOARD_VALUE_BYTES {
+            continue;
+        }
+        if !graph.blackboard.contains_key(&key) && graph.blackboard.len() >= MAX_BLACKBOARD_KEYS {
+            continue;
+        }
+        graph.blackboard.insert(
+            key,
+            NativeGraphBlackboardEntry {
+                value,
+                updated_by_step: step_id.clone(),
+                updated_at: now,
+            },
+        );
+        applied = applied.saturating_add(1);
+    }
+    graph.steps[idx].blackboard_writes_applied = graph.steps[idx]
+        .blackboard_writes_applied
+        .saturating_add(applied);
+    applied
+}
+
+/// Prompt vérificateur ordonné pour le Prompt Caching (Spec 316) :
+/// le bloc invariant (`Contrat de verdict` + `Consigne de vérification`) est placé
+/// strictement en tête, et le contexte variable de l'itération courante en pied.
 fn build_verifier_task(
     step: &NativeGraphStepRecord,
     verify: &AutoDelegateV2,
     iteration: u8,
     max_iterations: u8,
 ) -> String {
-    let mut header = format!(
-        "## Vérification de convergence — étape `{}` (itération {}/{})\n",
-        step.step_id, iteration, max_iterations
-    );
-    if let Some(cs) = step.convergence_state.as_ref()
-        && let Some(tid) = cs.producer_task_id.as_deref()
-    {
-        header.push_str(&format!("- Producteur : task_id={tid}"));
-        if let Some(commit) = cs.last_producer_commit.as_deref() {
-            header.push_str(&format!(", commit={commit}"));
-        }
-        header.push('\n');
-    }
-    if let Some(fs) = step.factual_summary.as_ref()
-        && let Some(files) = fs.get("files_changed").and_then(Value::as_u64)
-    {
-        header.push_str(&format!("- Fichiers modifiés déclarés : {files}\n"));
-    }
-    if let Some(excerpt) = step.result_excerpt.as_deref()
-        && !excerpt.trim().is_empty()
-    {
-        let clipped: String = excerpt.trim().chars().take(MAX_DEP_EXCERPT_CHARS).collect();
-        header.push_str(&format!("- Extrait producteur : {clipped}\n"));
-    }
-    let contract = "\n## Contrat de verdict fermé (obligatoire en fin de réponse)\n\
+    let contract = "## Contrat de verdict fermé (obligatoire en fin de réponse)\n\
 Termine ta réponse par UNE ligne JSON autonome respectant exactement l'un des trois schémas suivants :\n\
 {\"verdict\":\"approve\",\"reason\":\"...\"}\n\
 {\"verdict\":\"revise\",\"reason\":\"...\",\"blocking_points\":[\"...\",\"...\"]}\n\
@@ -686,20 +938,52 @@ Termine ta réponse par UNE ligne JSON autonome respectant exactement l'un des t
 - `approve` : livrable conforme, clôt la boucle et débloque les étapes suivantes.\n\
 - `revise` : défauts corrigeables dans le périmètre ; le producteur reprendra avec tes `blocking_points`.\n\
 - `escalate` : blocage hors périmètre, ambiguïté produit ou arbitrage humain requis ; arrêt immédiat vers le parent.\n";
-    let body = format!(
-        "{header}\n## Consigne de vérification\n{}{contract}",
-        verify.task
+    let invariant_prefix = format!(
+        "{contract}\n## Consigne de vérification (étape `{}`)\n{}\n",
+        step.step_id, verify.task
     );
+
+    let mut variable_tail =
+        format!("\n## Contexte de l'itération courante ({iteration}/{max_iterations})\n");
+    if let Some(cs) = step.convergence_state.as_ref()
+        && let Some(tid) = cs.producer_task_id.as_deref()
+    {
+        variable_tail.push_str(&format!("- Producteur : task_id={tid}"));
+        if let Some(commit) = cs.last_producer_commit.as_deref() {
+            variable_tail.push_str(&format!(", commit={commit}"));
+        }
+        variable_tail.push('\n');
+    }
+    if let Some(fs) = step.factual_summary.as_ref()
+        && let Some(files) = fs.get("files_changed").and_then(Value::as_u64)
+    {
+        variable_tail.push_str(&format!("- Fichiers modifiés déclarés : {files}\n"));
+    }
+    if let Some(excerpt) = step.result_excerpt.as_deref()
+        && !excerpt.trim().is_empty()
+    {
+        let clipped: String = excerpt.trim().chars().take(MAX_DEP_EXCERPT_CHARS).collect();
+        variable_tail.push_str(&format!("- Extrait producteur : {clipped}\n"));
+    }
+
+    let body = format!("{invariant_prefix}{variable_tail}");
     if body.len() <= MAX_TASK_BYTES {
         body
     } else {
-        let suffix = format!("\n## Consigne de vérification\n{}{contract}", verify.task);
-        let budget = MAX_TASK_BYTES.saturating_sub(suffix.len() + 16);
-        let prefix: String = header.chars().take(budget).collect();
-        format!("{prefix}\n...{suffix}")
+        let budget = MAX_TASK_BYTES.saturating_sub(invariant_prefix.len() + 16);
+        let mut clipped_tail = String::new();
+        for ch in variable_tail.chars() {
+            if clipped_tail.len() + ch.len_utf8() > budget {
+                break;
+            }
+            clipped_tail.push(ch);
+        }
+        format!("{invariant_prefix}{clipped_tail}\n...")
     }
 }
 
+/// Prompt de reprise corrective : pour une session neuve (`for_fallback_new_task`),
+/// la consigne initiale est placée EN TÊTE afin de préserver le préfixe de cache KV.
 fn build_producer_revision_task(
     step_id: &str,
     tier: u8,
@@ -723,26 +1007,28 @@ fn build_producer_revision_task(
     } else {
         String::new()
     };
-    let mut out = format!(
-        "## Reprise corrective — étape `{step_id}` (palier {tier}, itération {iteration}/{max_iterations})\n{source}{tier_note}\nMotif : {reason}\n"
+    let mut revision = format!(
+        "## Reprise corrective : étape `{step_id}` (palier {tier}, itération {iteration}/{max_iterations})\n{source}{tier_note}\nMotif : {reason}\n"
     );
     if !blocking_points.is_empty() {
-        out.push_str(if from_gate {
+        revision.push_str(if from_gate {
             "Sortie de la porte déterministe :\n"
         } else {
             "Points bloquants à corriger :\n"
         });
         for point in blocking_points {
-            out.push_str(&format!("- {point}\n"));
+            revision.push_str(&format!("- {point}\n"));
         }
     }
-    out.push_str(
+    revision.push_str(
         "Corrige précisément ces points bloquants, vérifie par des tests ciblés et produis un nouveau commit avant de rendre ton bilan.\n",
     );
-    if for_fallback_new_task {
-        out.push_str("\n## Rappel de la consigne initiale\n");
-        out.push_str(original_task);
-    }
+
+    let out = if for_fallback_new_task {
+        format!("## Consigne de cette étape\n{original_task}\n\n{revision}")
+    } else {
+        revision
+    };
     if out.len() <= MAX_TASK_BYTES {
         out
     } else {
@@ -750,98 +1036,136 @@ fn build_producer_revision_task(
     }
 }
 
-/// Construit la consigne finale d'une étape dépendante en y préfixant un contexte court et
-/// factuel des résultats de ses dépendances terminées (borné à `MAX_TASK_BYTES`).
-/// Pour une branche de repli (`when != all_succeeded`), inclut aussi l'issue d'échec,
-/// l'erreur et les derniers points bloquants de la dépendance en échec.
+/// Construit la consigne finale d'une étape en plaçant le bloc invariant en tête
+/// (Prompt Caching, Spec 316) et les données variables en pied (clés ciblées du tableau noir
+/// + résultats factuels des dépendances), borné à `MAX_TASK_BYTES`.
 pub(crate) fn build_enriched_step_task(
     step: &NativeGraphStepRecord,
     all_steps: &[NativeGraphStepRecord],
-) -> String {
-    if !step.pass_dependency_results || step.depends_on.is_empty() {
-        return step.delegation.task.clone();
+    blackboard: &BTreeMap<String, NativeGraphBlackboardEntry>,
+) -> (String, u32) {
+    let mut invariant = format!("## Consigne de cette étape\n{}", step.delegation.task);
+    if !step.blackboard_writes.is_empty() {
+        invariant.push_str(&format!(
+            "\n\n## Contrat tableau noir (optionnel en fin de réponse)\n\
+Si tu produis des faits structurés utiles aux étapes suivantes, termine par une ligne JSON autonome contenant uniquement les clés autorisées ({}) :\n\
+{{\"blackboard\":{{\"{}\": ...}}}}\n",
+            step.blackboard_writes.join(", "),
+            step.blackboard_writes[0]
+        ));
     }
-    let by_id: BTreeMap<&str, &NativeGraphStepRecord> =
-        all_steps.iter().map(|s| (s.step_id.as_str(), s)).collect();
-    let mut header = String::from("## Résultats des étapes préalables du graphe Bridget\n");
-    for dep_id in &step.depends_on {
-        let Some(dep) = by_id.get(dep_id.as_str()) else {
-            continue;
-        };
-        header.push_str(&format!("- Étape `{}` : état={}", dep.step_id, dep.state));
-        if let Some(tid) = dep.task_id.as_deref() {
-            header.push_str(&format!(", task_id={tid}"));
-        }
-        if let Some(fs) = dep.factual_summary.as_ref() {
-            if let Some(commit) = extract_commit_from_factual_summary(fs)
-                .or_else(|| fs.get("commit").and_then(Value::as_str))
+
+    let mut variable_tail = String::new();
+    let mut bb_reads_injected = 0u32;
+    if !step.blackboard_reads.is_empty() {
+        let mut bb_lines = Vec::new();
+        for key in &step.blackboard_reads {
+            if let Some(entry) = blackboard.get(key)
+                && let Ok(encoded) = serde_json::to_string(&entry.value)
             {
-                header.push_str(&format!(", commit={commit}"));
-            }
-            if let Some(files) = fs
-                .get("files_changed")
-                .and_then(Value::as_u64)
-                .or_else(|| fs.pointer("/git/commit_count").and_then(Value::as_u64))
-            {
-                header.push_str(&format!(", fichiers_modifies={files}"));
+                bb_lines.push(format!(
+                    "- `{key}` (par `{}`) : {encoded}",
+                    entry.updated_by_step
+                ));
+                bb_reads_injected = bb_reads_injected.saturating_add(1);
             }
         }
-        if let Some(cs) = dep.convergence_state.as_ref() {
-            if let Some(outcome) = cs.outcome.as_deref() {
-                header.push_str(&format!(", outcome={outcome}"));
+        if !bb_lines.is_empty() {
+            variable_tail.push_str("\n\n## Tableau noir du graphe (clés sélectionnées)\n");
+            for line in bb_lines {
+                variable_tail.push_str(&line);
+                variable_tail.push('\n');
             }
-            if cs.tier_escalated {
-                header.push_str(", tier_escalated=true");
-            }
-        }
-        header.push('\n');
-        if let Some(err) = dep.error.as_deref()
-            && !err.trim().is_empty()
-        {
-            let clipped: String = err.trim().chars().take(400).collect();
-            header.push_str(&format!("  Erreur : {clipped}\n"));
-        }
-        if dep.state == "failed"
-            && let Some(last_iter) = dep
-                .convergence_state
-                .as_ref()
-                .and_then(|cs| cs.iterations.last())
-            && !last_iter.blocking_points.is_empty()
-        {
-            header.push_str("  Derniers points bloquants :\n");
-            for pt in last_iter.blocking_points.iter().take(6) {
-                let clipped: String = pt.chars().take(300).collect();
-                header.push_str(&format!("  - {clipped}\n"));
-            }
-        }
-        if let Some(excerpt) = dep.result_excerpt.as_deref()
-            && !excerpt.trim().is_empty()
-        {
-            let clipped: String = excerpt.trim().chars().take(MAX_DEP_EXCERPT_CHARS).collect();
-            header.push_str(&format!("  Extrait : {clipped}\n"));
         }
     }
-    header.push_str("\n## Consigne de cette étape\n");
-    let combined = format!("{header}{}", step.delegation.task);
+
+    if step.pass_dependency_results && !step.depends_on.is_empty() {
+        let by_id: BTreeMap<&str, &NativeGraphStepRecord> =
+            all_steps.iter().map(|s| (s.step_id.as_str(), s)).collect();
+        variable_tail.push_str("\n\n## Résultats des étapes préalables du graphe Bridget\n");
+        for dep_id in &step.depends_on {
+            let Some(dep) = by_id.get(dep_id.as_str()) else {
+                continue;
+            };
+            variable_tail.push_str(&format!("- Étape `{}` : état={}", dep.step_id, dep.state));
+            if let Some(tid) = dep.task_id.as_deref() {
+                variable_tail.push_str(&format!(", task_id={tid}"));
+            }
+            if let Some(fs) = dep.factual_summary.as_ref() {
+                if let Some(commit) = extract_commit_from_factual_summary(fs)
+                    .or_else(|| fs.get("commit").and_then(Value::as_str))
+                {
+                    variable_tail.push_str(&format!(", commit={commit}"));
+                }
+                if let Some(files) = fs
+                    .get("files_changed")
+                    .and_then(Value::as_u64)
+                    .or_else(|| fs.pointer("/git/commit_count").and_then(Value::as_u64))
+                {
+                    variable_tail.push_str(&format!(", fichiers_modifies={files}"));
+                }
+            }
+            if let Some(cs) = dep.convergence_state.as_ref() {
+                if let Some(outcome) = cs.outcome.as_deref() {
+                    variable_tail.push_str(&format!(", outcome={outcome}"));
+                }
+                if cs.tier_escalated {
+                    variable_tail.push_str(", tier_escalated=true");
+                }
+            }
+            variable_tail.push('\n');
+            if let Some(err) = dep.error.as_deref()
+                && !err.trim().is_empty()
+            {
+                let clipped: String = err.trim().chars().take(400).collect();
+                variable_tail.push_str(&format!("  Erreur : {clipped}\n"));
+            }
+            if dep.state == "failed"
+                && let Some(last_iter) = dep
+                    .convergence_state
+                    .as_ref()
+                    .and_then(|cs| cs.iterations.last())
+                && !last_iter.blocking_points.is_empty()
+            {
+                variable_tail.push_str("  Derniers points bloquants :\n");
+                for pt in last_iter.blocking_points.iter().take(6) {
+                    let clipped: String = pt.chars().take(300).collect();
+                    variable_tail.push_str(&format!("  - {clipped}\n"));
+                }
+            }
+            if let Some(excerpt) = dep.result_excerpt.as_deref()
+                && !excerpt.trim().is_empty()
+            {
+                let clipped: String = excerpt.trim().chars().take(MAX_DEP_EXCERPT_CHARS).collect();
+                variable_tail.push_str(&format!("  Extrait : {clipped}\n"));
+            }
+        }
+    }
+
+    if variable_tail.is_empty() {
+        if step.blackboard_writes.is_empty() {
+            return (step.delegation.task.clone(), 0);
+        }
+        return (invariant, 0);
+    }
+
+    let combined = format!("{invariant}{variable_tail}");
     if combined.len() <= MAX_TASK_BYTES {
-        combined
+        (combined, bb_reads_injected)
     } else {
-        // Ne jamais tronquer la consigne métier de l'étape : raccourcir uniquement le préambule.
-        let budget = MAX_TASK_BYTES.saturating_sub(step.delegation.task.len() + 64);
+        // Ne jamais tronquer la consigne métier en tête : raccourcir uniquement le pied variable.
+        let budget = MAX_TASK_BYTES.saturating_sub(invariant.len() + 16);
         if budget < 64 {
-            step.delegation.task.clone()
+            (invariant, 0)
         } else {
-            let mut trimmed_header = String::new();
-            for ch in header.chars() {
-                if trimmed_header.len() + ch.len_utf8() > budget {
+            let mut trimmed_tail = String::new();
+            for ch in variable_tail.chars() {
+                if trimmed_tail.len() + ch.len_utf8() > budget {
                     break;
                 }
-                trimmed_header.push(ch);
+                trimmed_tail.push(ch);
             }
-            format!(
-                "{trimmed_header}\n...\n\n## Consigne de cette étape\n{}",
-                step.delegation.task
-            )
+            (format!("{invariant}{trimmed_tail}\n..."), bb_reads_injected)
         }
     }
 }
@@ -1130,6 +1454,9 @@ pub(crate) fn graph_view(graph: &NativeGraphRecord) -> Value {
                 "depends_on": s.depends_on,
                 "when": s.when,
                 "when_outcomes": s.when_outcomes,
+                "model_tier": s.model_tier,
+                "blackboard_reads": s.blackboard_reads,
+                "blackboard_writes": s.blackboard_writes,
                 "state": s.state,
                 "task_id": s.task_id,
                 "error": s.error,
@@ -1152,10 +1479,14 @@ pub(crate) fn graph_view(graph: &NativeGraphRecord) -> Value {
         "graph_id": graph.graph_id,
         "request_id": graph.request_id,
         "title": graph.title,
+        "bridget_build_id": if graph.bridget_build_id.is_empty() { Value::Null } else { json!(graph.bridget_build_id) },
         "state": graph.state,
         "fallback_recovered": fallback_recovered,
         "on_failure": graph.on_failure,
         "notify_policy": graph.notify_policy,
+        "budget": graph.budget,
+        "budget_usage": graph.budget_usage,
+        "blackboard": graph.blackboard,
         "topological_order": graph.topological_order,
         "counts": {
             "total": total,
@@ -1377,16 +1708,29 @@ pub(super) fn handle_submit(
                             outcome: None,
                             iterations: Vec::new(),
                         });
+                let is_root = s.depends_on.is_empty() && s.when == GraphStepCondition::AllSucceeded;
                 NativeGraphStepRecord {
                     step_id: s.step_id.clone(),
                     depends_on: s.depends_on.clone(),
                     pass_dependency_results: s.pass_dependency_results,
                     when: s.when,
                     when_outcomes: s.when_outcomes.clone(),
+                    model_tier: s.model_tier,
+                    blackboard_reads: s.blackboard_reads.clone(),
+                    blackboard_writes: s.blackboard_writes.clone(),
+                    blackboard_reads_injected: 0,
+                    blackboard_writes_applied: 0,
+                    metrics_recorded: false,
                     delegation,
                     convergence,
                     convergence_state,
-                    state: "waiting_dependencies".into(),
+                    // Les racines sont marquées `launching` avant de relâcher le verrou afin que
+                    // `tick` ne puisse jamais les lancer en double ni écraser `budget_usage`.
+                    state: if is_root {
+                        "launching".into()
+                    } else {
+                        "waiting_dependencies".into()
+                    },
                     task_id: None,
                     error: None,
                     result_excerpt: None,
@@ -1409,8 +1753,12 @@ pub(super) fn handle_submit(
             owner_instance: instance,
             request_id: request.request_id.clone(),
             title: request.title.clone(),
+            bridget_build_id: crate::build_info::BUILD_ID.to_string(),
             on_failure: request.on_failure,
             notify_policy: request.notify_policy,
+            budget: request.budget.clone(),
+            budget_usage: NativeGraphBudgetUsage::default(),
+            blackboard: BTreeMap::new(),
             state: "running".into(),
             topological_order,
             steps,
@@ -1431,7 +1779,25 @@ pub(super) fn handle_submit(
     // Admettre immédiatement les étapes racines (sans dépendance) sur la connexion vivante.
     let suppress_step_notices = graph.notify_policy == GraphNotifyPolicy::OnGraphDoneOrFailure;
     for idx in root_indices {
-        let step_delegation = graph.steps[idx].delegation.clone();
+        let mut step_delegation = graph.steps[idx].delegation.clone();
+        if let Some(tier) = graph.steps[idx].model_tier {
+            let st = state.lock().recover_poison();
+            super::native_delegation::resolve_model_tier_pub(&st, &mut step_delegation, tier);
+        }
+        let is_frontier = step_is_frontier_launch(graph.steps[idx].model_tier, 0, &step_delegation);
+        let now_check = unix_timestamp();
+        if let Err(reason) = check_graph_budget(&graph, is_frontier, now_check) {
+            fail_step_budget_exhausted(&mut graph, idx, reason, now_check);
+            continue;
+        }
+        consume_graph_budget(&mut graph, is_frontier);
+        let (task_text, bb_reads) =
+            build_enriched_step_task(&graph.steps[idx], &graph.steps, &graph.blackboard);
+        step_delegation.task = task_text;
+        graph.steps[idx].blackboard_reads_injected = bb_reads;
+        graph.steps[idx].delegation.engine = step_delegation.engine.clone();
+        graph.steps[idx].delegation.model = step_delegation.model.clone();
+        graph.steps[idx].delegation.effort = step_delegation.effort.clone();
         let step_id = graph.steps[idx].step_id.clone();
         let response = super::native_delegation::handle_with_fact_pub(
             conn,
@@ -1620,6 +1986,7 @@ pub(super) fn handle_metrics(
     conn: &str,
     project: Option<&str>,
     window_days: Option<u32>,
+    compare: Option<(&str, &str)>,
     state: &Arc<Mutex<DaemonState>>,
 ) -> Value {
     let st = state.lock().recover_poison();
@@ -1629,7 +1996,7 @@ pub(super) fn handle_metrics(
     let now = unix_timestamp();
     match st
         .delegation_store
-        .query_convergence_metrics(project, window_days, now)
+        .query_convergence_metrics(project, window_days, compare, now)
     {
         Ok(report) => json!({
             "version": 1,
@@ -1687,26 +2054,93 @@ pub(super) fn handle_metrics_policy(
 }
 
 /// Collecte les métriques de toutes les étapes de convergence nouvellement terminales
-/// (`metrics_recorded == false`), positionne `metrics_recorded = true` et enregistre
-/// atomiquement le graphe + les lignes de métriques dans une unique transaction SQLite.
+fn collect_step_usage_agents(
+    st: &DaemonState,
+    step: &NativeGraphStepRecord,
+) -> Vec<(String, Option<String>)> {
+    let mut task_ids: Vec<&str> = Vec::new();
+    if let Some(tid) = step.task_id.as_deref() {
+        task_ids.push(tid);
+    }
+    if let Some(cs) = step.convergence_state.as_ref() {
+        if let Some(tid) = cs.producer_task_id.as_deref() {
+            task_ids.push(tid);
+        }
+        if let Some(tid) = cs.verifier_task_id.as_deref() {
+            task_ids.push(tid);
+        }
+        for tid in &cs.prior_producer_task_ids {
+            task_ids.push(tid.as_str());
+        }
+        for it in &cs.iterations {
+            if let Some(tid) = it.producer_task_id.as_deref() {
+                task_ids.push(tid);
+            }
+            if let Some(tid) = it.verifier_task_id.as_deref() {
+                task_ids.push(tid);
+            }
+        }
+    }
+    let mut seen_tasks = BTreeSet::new();
+    let mut agents = Vec::new();
+    for tid in task_ids {
+        if !seen_tasks.insert(tid) {
+            continue;
+        }
+        if let Ok(Some(task)) = st.delegation_store.get(tid)
+            && !task.child.is_empty()
+        {
+            agents.push((task.child, task.child_instance));
+        }
+    }
+    agents
+}
+
+/// Collecte les étapes terminales (convergées ou simples) dont la métrique n'a pas encore été
+/// enregistrée, joint leurs tokens attestés depuis `execution_usage_totals` et le
+/// `bridget_build_id` du graphe, puis persiste atomiquement graphe + métriques.
 fn persist_graph_with_pending_metrics(st: &DaemonState, graph: &mut NativeGraphRecord, now: i64) {
     let project = graph
         .communication_project
         .as_ref()
         .map(|p| p.root.clone())
         .unwrap_or_default();
+    let build_id = if graph.bridget_build_id.is_empty() {
+        crate::build_info::BUILD_ID.to_string()
+    } else {
+        graph.bridget_build_id.clone()
+    };
     let mut rows = Vec::new();
     for step in &mut graph.steps {
         if !step_is_terminal(&step.state) {
             continue;
         }
-        let Some(cs) = step.convergence_state.as_mut() else {
-            continue;
-        };
-        if cs.metrics_recorded {
+        if matches!(
+            step.state.as_str(),
+            "skipped_dependency_failed" | "skipped_condition_not_met"
+        ) {
             continue;
         }
-        let outcome = cs.outcome.clone().unwrap_or_else(|| step.state.clone());
+        let already_recorded = step.metrics_recorded
+            || step
+                .convergence_state
+                .as_ref()
+                .is_some_and(|cs| cs.metrics_recorded);
+        if already_recorded {
+            continue;
+        }
+        let usage_agents = collect_step_usage_agents(st, step);
+        let usage_since = step.started_at.unwrap_or(graph.created_at);
+        let usage = match st.store.sum_task_usage_tokens(&usage_agents, usage_since) {
+            Ok(tokens) => tokens,
+            Err(error) => {
+                warn!(
+                    "graphe {} étape {}: lecture tokens échouée ({error})",
+                    graph.graph_id, step.step_id
+                );
+                Default::default()
+            }
+        };
         let producer_engine = step
             .delegation
             .engine
@@ -1716,67 +2150,125 @@ fn persist_graph_with_pending_metrics(st: &DaemonState, graph: &mut NativeGraphR
             .unwrap_or("auto")
             .to_string();
         let producer_model = step.delegation.model.clone().unwrap_or_default();
-        let verifier_engine = cs
-            .iterations
-            .iter()
-            .rev()
-            .find_map(|it| it.verifier_engine.as_deref())
-            .or_else(|| {
-                step.convergence
-                    .as_ref()
-                    .and_then(|c| c.verify.engine.as_deref())
-            })
-            .map(super::native_delegation::normalize_engine_family)
-            .filter(|s| !s.is_empty())
-            .unwrap_or("auto")
-            .to_string();
-        let verifier_model = cs
-            .iterations
-            .iter()
-            .rev()
-            .find_map(|it| it.verifier_model.clone())
-            .or_else(|| {
-                step.convergence
-                    .as_ref()
-                    .and_then(|c| c.verify.model.clone())
-            })
+        let model_tier = step
+            .model_tier
+            .map(|t| t.as_str().to_string())
             .unwrap_or_default();
-        let verifier_orthogonal = cs
-            .iterations
-            .iter()
-            .any(|it| it.verifier_orthogonal == Some(true));
         let started = step.started_at.unwrap_or(graph.created_at);
         let finished = step.finished_at.unwrap_or(now);
         let duration_secs = finished.saturating_sub(started).max(0);
-        let tier1_iterations = cs.iterations.iter().filter(|it| it.tier == 0).count() as u32;
-        let tier2_iterations = cs.iterations.iter().filter(|it| it.tier > 0).count() as u32;
-        let iterations_used = (cs.iterations.len() as u32)
-            .max(u32::from(cs.current_iteration))
-            .min(u32::from(MAX_TOTAL_CONVERGENCE_ITERATIONS));
-        let gate_configured = step.convergence.as_ref().is_some_and(|c| c.gate.is_some());
-        rows.push(ConvergenceMetricRawRow {
-            graph_id: graph.graph_id.clone(),
-            step_id: step.step_id.clone(),
-            project: project.clone(),
-            producer_engine,
-            producer_model,
-            verifier_engine,
-            verifier_model,
-            verifier_orthogonal,
-            outcome,
-            iterations_used,
-            tier1_iterations,
-            tier2_iterations,
-            tier_escalated: cs.tier_escalated,
-            gate_configured,
-            gate_runs: cs.gate_runs,
-            gate_failures: cs.gate_failures,
-            gate_saved_verifier_calls: cs.gate_saved_verifier_calls,
-            stagnation_saved_iterations: cs.stagnation_saved_iterations,
-            duration_secs,
-            finished_at: finished,
-        });
-        cs.metrics_recorded = true;
+
+        if let Some(cs) = step.convergence_state.as_mut() {
+            let outcome = cs.outcome.clone().unwrap_or_else(|| step.state.clone());
+            let verifier_engine = cs
+                .iterations
+                .iter()
+                .rev()
+                .find_map(|it| it.verifier_engine.as_deref())
+                .or_else(|| {
+                    step.convergence
+                        .as_ref()
+                        .and_then(|c| c.verify.engine.as_deref())
+                })
+                .map(super::native_delegation::normalize_engine_family)
+                .filter(|s| !s.is_empty())
+                .unwrap_or("auto")
+                .to_string();
+            let verifier_model = cs
+                .iterations
+                .iter()
+                .rev()
+                .find_map(|it| it.verifier_model.clone())
+                .or_else(|| {
+                    step.convergence
+                        .as_ref()
+                        .and_then(|c| c.verify.model.clone())
+                })
+                .unwrap_or_default();
+            let verifier_orthogonal = cs
+                .iterations
+                .iter()
+                .any(|it| it.verifier_orthogonal == Some(true));
+            let tier1_iterations = cs.iterations.iter().filter(|it| it.tier == 0).count() as u32;
+            let tier2_iterations = cs.iterations.iter().filter(|it| it.tier > 0).count() as u32;
+            let iterations_used = (cs.iterations.len() as u32)
+                .max(u32::from(cs.current_iteration))
+                .min(u32::from(MAX_TOTAL_CONVERGENCE_ITERATIONS));
+            let gate_configured = step.convergence.as_ref().is_some_and(|c| c.gate.is_some());
+            rows.push(ConvergenceMetricRawRow {
+                graph_id: graph.graph_id.clone(),
+                step_id: step.step_id.clone(),
+                project: project.clone(),
+                bridget_build_id: build_id.clone(),
+                model_tier,
+                producer_engine,
+                producer_model,
+                verifier_engine,
+                verifier_model,
+                verifier_orthogonal,
+                outcome,
+                iterations_used,
+                tier1_iterations,
+                tier2_iterations,
+                tier_escalated: cs.tier_escalated,
+                gate_configured,
+                gate_runs: cs.gate_runs,
+                gate_failures: cs.gate_failures,
+                gate_saved_verifier_calls: cs.gate_saved_verifier_calls,
+                stagnation_saved_iterations: cs.stagnation_saved_iterations,
+                duration_secs,
+                input_tokens: usage.input_tokens,
+                output_tokens: usage.output_tokens,
+                cache_creation_input_tokens: usage.cache_creation_input_tokens,
+                cache_read_input_tokens: usage.cache_read_input_tokens,
+                blackboard_reads: step.blackboard_reads_injected,
+                blackboard_writes: step.blackboard_writes_applied,
+                finished_at: finished,
+            });
+            cs.metrics_recorded = true;
+            step.metrics_recorded = true;
+        } else {
+            let outcome = if step
+                .error
+                .as_deref()
+                .is_some_and(|e| e.starts_with("budget_exhausted"))
+            {
+                "budget_exhausted".to_string()
+            } else {
+                step.state.clone()
+            };
+            rows.push(ConvergenceMetricRawRow {
+                graph_id: graph.graph_id.clone(),
+                step_id: step.step_id.clone(),
+                project: project.clone(),
+                bridget_build_id: build_id.clone(),
+                model_tier,
+                producer_engine,
+                producer_model,
+                verifier_engine: String::new(),
+                verifier_model: String::new(),
+                verifier_orthogonal: false,
+                outcome,
+                iterations_used: 1,
+                tier1_iterations: 1,
+                tier2_iterations: 0,
+                tier_escalated: false,
+                gate_configured: false,
+                gate_runs: 0,
+                gate_failures: 0,
+                gate_saved_verifier_calls: 0,
+                stagnation_saved_iterations: 0,
+                duration_secs,
+                input_tokens: usage.input_tokens,
+                output_tokens: usage.output_tokens,
+                cache_creation_input_tokens: usage.cache_creation_input_tokens,
+                cache_read_input_tokens: usage.cache_read_input_tokens,
+                blackboard_reads: step.blackboard_reads_injected,
+                blackboard_writes: step.blackboard_writes_applied,
+                finished_at: finished,
+            });
+            step.metrics_recorded = true;
+        }
     }
     if rows.is_empty() {
         let _ = st.delegation_store.save_graph(graph);
@@ -1876,48 +2368,61 @@ pub(super) fn handle_cancel(
 
 fn sync_steps_from_tasks(st: &DaemonState, graph: &mut NativeGraphRecord, now: i64) -> bool {
     let mut changed = false;
-    for step in &mut graph.steps {
-        if step.state != "running" {
+    for idx in 0..graph.steps.len() {
+        if graph.steps[idx].state != "running" {
             continue;
         }
-        if step.convergence.is_some() {
-            if sync_convergence_step_from_tasks(st, step, now) {
+        if graph.steps[idx].convergence.is_some() {
+            let prev_state = graph.steps[idx].state.clone();
+            if sync_convergence_step_from_tasks(st, &mut graph.steps[idx], now) {
                 changed = true;
+                if prev_state != "completed"
+                    && graph.steps[idx].state == "completed"
+                    && let Some(ptid) = graph.steps[idx].task_id.as_deref()
+                    && let Ok(Some(ptask)) = st.delegation_store.get(ptid)
+                    && let Some(raw_res) = ptask.result.as_deref()
+                {
+                    apply_blackboard_updates(graph, idx, raw_res, now);
+                }
             }
             continue;
         }
-        let Some(task_id) = step.task_id.as_deref() else {
+        let Some(task_id) = graph.steps[idx].task_id.clone() else {
             continue;
         };
-        let Ok(Some(task)) = st.delegation_store.get(task_id) else {
+        let Ok(Some(task)) = st.delegation_store.get(&task_id) else {
             continue;
         };
         match task.state.as_str() {
             "result_available" => {
-                step.state = "completed".into();
-                step.finished_at = Some(now);
-                step.error = None;
-                step.result_excerpt = task
+                graph.steps[idx].state = "completed".into();
+                graph.steps[idx].finished_at = Some(now);
+                graph.steps[idx].error = None;
+                graph.steps[idx].result_excerpt = task
                     .result
                     .as_deref()
                     .map(|r| r.chars().take(MAX_DEP_EXCERPT_CHARS).collect());
-                step.factual_summary = Some(super::native_delegation::factual_summary(
+                graph.steps[idx].factual_summary = Some(super::native_delegation::factual_summary(
                     &task,
                     task.result.as_ref().map(String::len),
                 ));
+                if let Some(raw_res) = task.result.as_deref() {
+                    apply_blackboard_updates(graph, idx, raw_res, now);
+                }
                 changed = true;
             }
             "failed" => {
-                step.state = "failed".into();
-                step.finished_at = Some(now);
-                step.error = task.error.clone().or_else(|| Some("task_failed".into()));
-                step.factual_summary = Some(super::native_delegation::factual_summary(&task, None));
+                graph.steps[idx].state = "failed".into();
+                graph.steps[idx].finished_at = Some(now);
+                graph.steps[idx].error = task.error.clone().or_else(|| Some("task_failed".into()));
+                graph.steps[idx].factual_summary =
+                    Some(super::native_delegation::factual_summary(&task, None));
                 changed = true;
             }
             "cancelled" => {
-                step.state = "cancelled".into();
-                step.finished_at = Some(now);
-                step.error = Some("task_cancelled".into());
+                graph.steps[idx].state = "cancelled".into();
+                graph.steps[idx].finished_at = Some(now);
+                graph.steps[idx].error = Some("task_cancelled".into());
                 changed = true;
             }
             _ => {}
@@ -2536,14 +3041,38 @@ pub(super) fn tick(state: &Arc<Mutex<DaemonState>>) {
                         continue;
                     }
                     if let Some(idx) = graph.steps.iter().position(|s| s.step_id == step_id) {
-                        let enriched_task =
-                            build_enriched_step_task(&graph.steps[idx], &graph.steps);
                         let mut delegation = graph.steps[idx].delegation.clone();
+                        if let Some(tier) = graph.steps[idx].model_tier {
+                            super::native_delegation::resolve_model_tier_pub(
+                                &st,
+                                &mut delegation,
+                                tier,
+                            );
+                        }
+                        let is_frontier =
+                            step_is_frontier_launch(graph.steps[idx].model_tier, 0, &delegation);
+                        if let Err(reason) = check_graph_budget(&graph, is_frontier, now) {
+                            st.graph_launching_steps
+                                .remove(&format!("{}:{}:start:1", graph.graph_id, step_id));
+                            fail_step_budget_exhausted(&mut graph, idx, reason, now);
+                            dirty = true;
+                            continue;
+                        }
+                        consume_graph_budget(&mut graph, is_frontier);
+                        let (enriched_task, bb_reads) = build_enriched_step_task(
+                            &graph.steps[idx],
+                            &graph.steps,
+                            &graph.blackboard,
+                        );
                         pin_worktree_base_ref(&mut delegation);
                         delegation.task = enriched_task;
                         if graph.steps[idx].convergence.is_some() {
                             ensure_convergence_producer_keep_alive(&mut delegation);
                         }
+                        graph.steps[idx].blackboard_reads_injected = bb_reads;
+                        graph.steps[idx].delegation.engine = delegation.engine.clone();
+                        graph.steps[idx].delegation.model = delegation.model.clone();
+                        graph.steps[idx].delegation.effort = delegation.effort.clone();
                         graph.steps[idx].state = "launching".into();
                         dirty = true;
                         launches.push(GraphLaunchJob::StepStart {
@@ -2615,10 +3144,18 @@ pub(super) fn tick(state: &Arc<Mutex<DaemonState>>) {
                             "{}:{}:verify:t{}:i{}",
                             graph.graph_id, step_id, cs.escalation_tier, cs.current_iteration
                         );
-                        if !st.graph_launching_steps.insert(launch_key) {
+                        if !st.graph_launching_steps.insert(launch_key.clone()) {
                             continue;
                         }
                         let mut verify_del = conv.verify.clone();
+                        let verify_is_frontier = step_is_frontier_launch(None, 0, &verify_del);
+                        if let Err(reason) = check_graph_budget(&graph, verify_is_frontier, now) {
+                            st.graph_launching_steps.remove(&launch_key);
+                            fail_step_budget_exhausted(&mut graph, idx, reason, now);
+                            dirty = true;
+                            continue;
+                        }
+                        consume_graph_budget(&mut graph, verify_is_frontier);
                         verify_del.request_id = convergence_step_request_id(
                             &graph.request_id,
                             &step_id,
@@ -2696,9 +3233,21 @@ pub(super) fn tick(state: &Arc<Mutex<DaemonState>>) {
                             "{}:{}:produce:t{}:i{}",
                             graph.graph_id, step_id, cs.escalation_tier, cs.current_iteration
                         );
-                        if !st.graph_launching_steps.insert(launch_key) {
+                        if !st.graph_launching_steps.insert(launch_key.clone()) {
                             continue;
                         }
+                        let produce_is_frontier = step_is_frontier_launch(
+                            graph.steps[idx].model_tier,
+                            cs.escalation_tier,
+                            &graph.steps[idx].delegation,
+                        );
+                        if let Err(reason) = check_graph_budget(&graph, produce_is_frontier, now) {
+                            st.graph_launching_steps.remove(&launch_key);
+                            fail_step_budget_exhausted(&mut graph, idx, reason, now);
+                            dirty = true;
+                            continue;
+                        }
+                        consume_graph_budget(&mut graph, produce_is_frontier);
                         let (last_reason, last_points, from_gate) = cs
                             .iterations
                             .last()
@@ -3407,6 +3956,9 @@ mod tests {
             pass_dependency_results: true,
             when: GraphStepCondition::AllSucceeded,
             when_outcomes: Vec::new(),
+            model_tier: None,
+            blackboard_reads: Vec::new(),
+            blackboard_writes: Vec::new(),
             delegation: sample_auto(task),
             convergence: None,
         }
@@ -3419,6 +3971,7 @@ mod tests {
             title: Some("Build puis tests parallèles puis synthèse".into()),
             on_failure: GraphFailurePolicy::StopDependents,
             notify_policy: GraphNotifyPolicy::OnGraphDoneOrFailure,
+            budget: None,
             steps: vec![
                 sample_step("D", &["B", "C"], "Synthèse finale"),
                 sample_step("B", &["A"], "Tests unitaires"),
@@ -3438,8 +3991,12 @@ mod tests {
             owner_instance: "inst-1".into(),
             request_id: "dag-1".into(),
             title: req.title.clone(),
+            bridget_build_id: String::new(),
             on_failure: req.on_failure,
             notify_policy: req.notify_policy,
+            budget: None,
+            budget_usage: NativeGraphBudgetUsage::default(),
+            blackboard: BTreeMap::new(),
             state: "running".into(),
             topological_order: order,
             steps: req
@@ -3451,6 +4008,12 @@ mod tests {
                     pass_dependency_results: s.pass_dependency_results,
                     when: s.when,
                     when_outcomes: s.when_outcomes,
+                    model_tier: None,
+                    blackboard_reads: Vec::new(),
+                    blackboard_writes: Vec::new(),
+                    blackboard_reads_injected: 0,
+                    blackboard_writes_applied: 0,
+                    metrics_recorded: false,
                     delegation: s.delegation,
                     convergence: s.convergence,
                     convergence_state: None,
@@ -3483,7 +4046,7 @@ mod tests {
 
         // Vérifier l'enrichissement de la consigne de B avec le résultat factuel de A.
         let b = graph.steps.iter().find(|s| s.step_id == "B").unwrap();
-        let enriched = build_enriched_step_task(b, &graph.steps);
+        let (enriched, _) = build_enriched_step_task(b, &graph.steps, &graph.blackboard);
         assert!(enriched.contains(
             "Étape `A` : état=completed, task_id=task-a, commit=deadbeef, fichiers_modifies=3"
         ));
@@ -3498,6 +4061,7 @@ mod tests {
             title: None,
             on_failure: GraphFailurePolicy::StopDependents,
             notify_policy: GraphNotifyPolicy::OnGraphDoneOrFailure,
+            budget: None,
             steps: vec![
                 sample_step("A", &["B"], "step A"),
                 sample_step("B", &["A"], "step B"),
@@ -3511,6 +4075,7 @@ mod tests {
             title: None,
             on_failure: GraphFailurePolicy::StopDependents,
             notify_policy: GraphNotifyPolicy::OnGraphDoneOrFailure,
+            budget: None,
             steps: vec![sample_step("A", &["Z"], "step A")],
         };
         let err = validate_and_order_graph(&unknown).unwrap_err();
@@ -3525,8 +4090,12 @@ mod tests {
             owner_instance: "inst-1".into(),
             request_id: "req-fail".into(),
             title: None,
+            bridget_build_id: String::new(),
             on_failure: policy,
             notify_policy: GraphNotifyPolicy::OnGraphDoneOrFailure,
+            budget: None,
+            budget_usage: NativeGraphBudgetUsage::default(),
+            blackboard: BTreeMap::new(),
             state: "running".into(),
             topological_order: vec!["A".into(), "B".into(), "C".into(), "X".into()],
             steps: vec![
@@ -3536,6 +4105,12 @@ mod tests {
                     pass_dependency_results: true,
                     when: GraphStepCondition::AllSucceeded,
                     when_outcomes: Vec::new(),
+                    model_tier: None,
+                    blackboard_reads: Vec::new(),
+                    blackboard_writes: Vec::new(),
+                    blackboard_reads_injected: 0,
+                    blackboard_writes_applied: 0,
+                    metrics_recorded: false,
                     delegation: sample_auto("A"),
                     convergence: None,
                     convergence_state: None,
@@ -3553,6 +4128,12 @@ mod tests {
                     pass_dependency_results: true,
                     when: GraphStepCondition::AllSucceeded,
                     when_outcomes: Vec::new(),
+                    model_tier: None,
+                    blackboard_reads: Vec::new(),
+                    blackboard_writes: Vec::new(),
+                    blackboard_reads_injected: 0,
+                    blackboard_writes_applied: 0,
+                    metrics_recorded: false,
                     delegation: sample_auto("B"),
                     convergence: None,
                     convergence_state: None,
@@ -3570,6 +4151,12 @@ mod tests {
                     pass_dependency_results: true,
                     when: GraphStepCondition::AllSucceeded,
                     when_outcomes: Vec::new(),
+                    model_tier: None,
+                    blackboard_reads: Vec::new(),
+                    blackboard_writes: Vec::new(),
+                    blackboard_reads_injected: 0,
+                    blackboard_writes_applied: 0,
+                    metrics_recorded: false,
                     delegation: sample_auto("C"),
                     convergence: None,
                     convergence_state: None,
@@ -3587,6 +4174,12 @@ mod tests {
                     pass_dependency_results: true,
                     when: GraphStepCondition::AllSucceeded,
                     when_outcomes: Vec::new(),
+                    model_tier: None,
+                    blackboard_reads: Vec::new(),
+                    blackboard_writes: Vec::new(),
+                    blackboard_reads_injected: 0,
+                    blackboard_writes_applied: 0,
+                    metrics_recorded: false,
                     delegation: sample_auto("X"),
                     convergence: None,
                     convergence_state: None,
@@ -3639,8 +4232,12 @@ mod tests {
             owner_instance: "inst-a".into(),
             request_id: "req-sql-1".into(),
             title: Some("Pipeline".into()),
+            bridget_build_id: String::new(),
             on_failure: GraphFailurePolicy::StopDependents,
             notify_policy: GraphNotifyPolicy::OnGraphDoneOrFailure,
+            budget: None,
+            budget_usage: NativeGraphBudgetUsage::default(),
+            blackboard: BTreeMap::new(),
             state: "running".into(),
             topological_order: vec!["A".into()],
             steps: vec![],
@@ -3687,6 +4284,7 @@ mod tests {
             title: None,
             on_failure: GraphFailurePolicy::StopDependents,
             notify_policy: GraphNotifyPolicy::OnGraphDoneOrFailure,
+            budget: None,
             steps: vec![bad],
         };
         assert_eq!(
@@ -3795,6 +4393,12 @@ mod tests {
             pass_dependency_results: true,
             when: GraphStepCondition::AllSucceeded,
             when_outcomes: Vec::new(),
+            model_tier: None,
+            blackboard_reads: Vec::new(),
+            blackboard_writes: Vec::new(),
+            blackboard_reads_injected: 0,
+            blackboard_writes_applied: 0,
+            metrics_recorded: false,
             delegation: sample_auto("impl"),
             convergence: Some(GraphConvergenceLoop {
                 verify: sample_auto("review"),
@@ -3993,8 +4597,12 @@ mod tests {
             communication_project: None,
             attested_permissions: None,
             title: Some("A->B(conv)->D".into()),
+            bridget_build_id: String::new(),
             on_failure: GraphFailurePolicy::StopDependents,
             notify_policy: GraphNotifyPolicy::OnGraphDoneOrFailure,
+            budget: None,
+            budget_usage: NativeGraphBudgetUsage::default(),
+            blackboard: BTreeMap::new(),
             state: "running".into(),
             topological_order: vec!["A".into(), "B".into(), "D".into()],
             steps: vec![
@@ -4004,6 +4612,12 @@ mod tests {
                     pass_dependency_results: true,
                     when: GraphStepCondition::AllSucceeded,
                     when_outcomes: Vec::new(),
+                    model_tier: None,
+                    blackboard_reads: Vec::new(),
+                    blackboard_writes: Vec::new(),
+                    blackboard_reads_injected: 0,
+                    blackboard_writes_applied: 0,
+                    metrics_recorded: false,
                     delegation: sample_auto("prep"),
                     convergence: None,
                     convergence_state: None,
@@ -4027,6 +4641,12 @@ mod tests {
                     pass_dependency_results: true,
                     when: GraphStepCondition::AllSucceeded,
                     when_outcomes: Vec::new(),
+                    model_tier: None,
+                    blackboard_reads: Vec::new(),
+                    blackboard_writes: Vec::new(),
+                    blackboard_reads_injected: 0,
+                    blackboard_writes_applied: 0,
+                    metrics_recorded: false,
                     delegation: sample_auto("deploy"),
                     convergence: None,
                     convergence_state: None,
@@ -4110,6 +4730,12 @@ mod tests {
             pass_dependency_results: true,
             when: GraphStepCondition::AllSucceeded,
             when_outcomes: Vec::new(),
+            model_tier: None,
+            blackboard_reads: Vec::new(),
+            blackboard_writes: Vec::new(),
+            blackboard_reads_injected: 0,
+            blackboard_writes_applied: 0,
+            metrics_recorded: false,
             delegation: sample_auto("impl"),
             convergence: Some(GraphConvergenceLoop {
                 verify: sample_auto("review"),
@@ -4307,6 +4933,7 @@ mod tests {
             title: None,
             on_failure: GraphFailurePolicy::CancelGraph,
             notify_policy: GraphNotifyPolicy::OnGraphDoneOrFailure,
+            budget: None,
             steps: vec![sample_step("A", &[], "plan A"), fb_step.clone()],
         };
         assert_eq!(
@@ -4320,6 +4947,7 @@ mod tests {
             title: None,
             on_failure: GraphFailurePolicy::StopDependents,
             notify_policy: GraphNotifyPolicy::OnGraphDoneOrFailure,
+            budget: None,
             steps: vec![sample_step("A", &[], "plan A"), bad_cancelled],
         };
         assert_eq!(
@@ -4340,8 +4968,12 @@ mod tests {
             }),
             attested_permissions: None,
             title: None,
+            bridget_build_id: String::new(),
             on_failure: GraphFailurePolicy::StopDependents,
             notify_policy: GraphNotifyPolicy::OnGraphDoneOrFailure,
+            budget: None,
+            budget_usage: NativeGraphBudgetUsage::default(),
+            blackboard: BTreeMap::new(),
             state: "running".into(),
             topological_order: vec!["A".into(), "B_repli".into(), "C_post_repli".into()],
             steps: vec![
@@ -4351,6 +4983,12 @@ mod tests {
                     pass_dependency_results: true,
                     when: GraphStepCondition::AllSucceeded,
                     when_outcomes: Vec::new(),
+                    model_tier: None,
+                    blackboard_reads: Vec::new(),
+                    blackboard_writes: Vec::new(),
+                    blackboard_reads_injected: 0,
+                    blackboard_writes_applied: 0,
+                    metrics_recorded: false,
                     delegation: sample_auto("plan A"),
                     convergence: None,
                     convergence_state: a_outcome.map(|o| NativeGraphConvergenceState {
@@ -4392,6 +5030,12 @@ mod tests {
                     pass_dependency_results: true,
                     when: GraphStepCondition::OnOutcome,
                     when_outcomes: vec!["stagnated".into()],
+                    model_tier: None,
+                    blackboard_reads: Vec::new(),
+                    blackboard_writes: Vec::new(),
+                    blackboard_reads_injected: 0,
+                    blackboard_writes_applied: 0,
+                    metrics_recorded: false,
                     delegation: sample_auto("plan B"),
                     convergence: None,
                     convergence_state: None,
@@ -4409,6 +5053,12 @@ mod tests {
                     pass_dependency_results: true,
                     when: GraphStepCondition::AllSucceeded,
                     when_outcomes: Vec::new(),
+                    model_tier: None,
+                    blackboard_reads: Vec::new(),
+                    blackboard_writes: Vec::new(),
+                    blackboard_reads_injected: 0,
+                    blackboard_writes_applied: 0,
+                    metrics_recorded: false,
                     delegation: sample_auto("post repli"),
                     convergence: None,
                     convergence_state: None,
@@ -4438,7 +5088,7 @@ mod tests {
         let mut g_fb = mk_fb_graph("failed", Some("stagnated"));
         propagate_graph_state(&mut g_fb, 10);
         assert_eq!(ready_waiting_steps(&g_fb), vec!["B_repli"]);
-        let enriched = build_enriched_step_task(&g_fb.steps[1], &g_fb.steps);
+        let (enriched, _) = build_enriched_step_task(&g_fb.steps[1], &g_fb.steps, &g_fb.blackboard);
         assert!(enriched.contains("outcome=stagnated"));
         assert!(enriched.contains("Erreur : stagnation"));
         g_fb.steps[1].state = "completed".into();
@@ -4504,6 +5154,179 @@ mod tests {
                 base_ref: Some(sha_prod.into()),
                 branch: None,
             })
+        );
+    }
+
+    #[test]
+    fn spec316_prefixe_stable_budgets_durs_blackboard_et_palier_cout() {
+        // 1) Prompt caching : `build_verifier_task` place le bloc invariant strictement en tête.
+        let mut step_v = NativeGraphStepRecord {
+            step_id: "impl".into(),
+            depends_on: vec![],
+            pass_dependency_results: true,
+            when: GraphStepCondition::AllSucceeded,
+            when_outcomes: Vec::new(),
+            model_tier: Some(GraphModelTier::Standard),
+            blackboard_reads: Vec::new(),
+            blackboard_writes: vec!["api_contract".into()],
+            blackboard_reads_injected: 0,
+            blackboard_writes_applied: 0,
+            metrics_recorded: false,
+            delegation: sample_auto("Implémenter l'endpoint /v2"),
+            convergence: None,
+            convergence_state: None,
+            state: "running".into(),
+            task_id: Some("t1".into()),
+            error: None,
+            result_excerpt: Some("extrait iter 1".into()),
+            factual_summary: None,
+            started_at: Some(10),
+            finished_at: None,
+        };
+        let verify = sample_auto("Vérifier sécurité et tests unitaires");
+        let p1 = build_verifier_task(&step_v, &verify, 1, 3);
+        step_v.result_excerpt = Some("extrait iter 2 complètement différent".into());
+        let p2 = build_verifier_task(&step_v, &verify, 2, 3);
+        let marker = "\n## Contexte de l'itération courante";
+        let head1 = p1.split(marker).next().unwrap();
+        let head2 = p2.split(marker).next().unwrap();
+        assert_eq!(
+            head1, head2,
+            "le préfixe invariant doit être bit-à-bit identique entre les itérations"
+        );
+        assert!(head1.starts_with("## Contrat de verdict fermé"));
+        assert!(head1.contains("Vérifier sécurité et tests unitaires"));
+
+        // `build_producer_revision_task` en nouvelle session conserve la consigne initiale en tête.
+        let rev_new = build_producer_revision_task(
+            "impl",
+            1,
+            2,
+            4,
+            "test cassé",
+            &["fixer assert".into()],
+            "Consigne initiale fixe",
+            true,
+            false,
+        );
+        assert!(rev_new.starts_with("## Consigne de cette étape\nConsigne initiale fixe"));
+
+        // 2) Budgets durs : plafond frontière épuisé autorise encore un repli `light` !
+        let mut g = NativeGraphRecord {
+            graph_id: "g-budget".into(),
+            owner: "o".into(),
+            owner_instance: "i".into(),
+            request_id: "r-budget".into(),
+            title: None,
+            bridget_build_id: "build316".into(),
+            on_failure: GraphFailurePolicy::StopDependents,
+            notify_policy: GraphNotifyPolicy::OnGraphDoneOrFailure,
+            budget: Some(GraphBudget {
+                max_total_rounds: Some(3),
+                max_frontier_rounds: Some(1),
+                max_duration_secs: Some(600),
+            }),
+            budget_usage: NativeGraphBudgetUsage::default(),
+            blackboard: BTreeMap::new(),
+            state: "running".into(),
+            topological_order: vec!["A".into(), "B_light".into()],
+            steps: vec![
+                step_v.clone(),
+                NativeGraphStepRecord {
+                    step_id: "B_light".into(),
+                    depends_on: vec!["impl".into()],
+                    pass_dependency_results: false,
+                    when: GraphStepCondition::OnOutcome,
+                    when_outcomes: vec!["budget_exhausted".into()],
+                    model_tier: Some(GraphModelTier::Light),
+                    blackboard_reads: vec!["api_contract".into()],
+                    blackboard_writes: Vec::new(),
+                    blackboard_reads_injected: 0,
+                    blackboard_writes_applied: 0,
+                    metrics_recorded: false,
+                    delegation: sample_auto("Plan B léger"),
+                    convergence: None,
+                    convergence_state: None,
+                    state: "waiting_dependencies".into(),
+                    task_id: None,
+                    error: None,
+                    result_excerpt: None,
+                    factual_summary: None,
+                    started_at: None,
+                    finished_at: None,
+                },
+            ],
+            attested_permissions: None,
+            parent_thread: None,
+            communication_project: None,
+            notice_sent: false,
+            canonical: vec![1],
+            created_at: 1_000,
+            updated_at: 1_000,
+        };
+        assert!(check_graph_budget(&g, true, 1_010).is_ok());
+        consume_graph_budget(&mut g, true);
+        // 2e appel frontière refusé (`max_frontier_rounds = 1`)...
+        assert_eq!(
+            check_graph_budget(&g, true, 1_020),
+            Err("max_frontier_rounds")
+        );
+        // ...mais un appel non-frontière (`light`) reste autorisé !
+        assert!(check_graph_budget(&g, false, 1_020).is_ok());
+        // Durée dépassée refuse tout.
+        assert_eq!(
+            check_graph_budget(&g, false, 1_600),
+            Err("max_duration_secs")
+        );
+        // Quand l'étape 0 échoue sur budget_exhausted, B_light devient prête.
+        fail_step_budget_exhausted(&mut g, 0, "max_frontier_rounds", 1_025);
+        propagate_graph_state(&mut g, 1_025);
+        assert_eq!(ready_waiting_steps(&g), vec!["B_light"]);
+
+        // 3) Tableau noir structuré : seules les clés autorisées passent et sont injectées en pied.
+        let output_text =
+            "Travail fini.\n{\"blackboard\":{\"api_contract\":{\"v\":2},\"unauthorized\":true}}";
+        let applied = apply_blackboard_updates(&mut g, 0, output_text, 1_030);
+        assert_eq!(applied, 1);
+        assert!(g.blackboard.contains_key("api_contract"));
+        assert!(!g.blackboard.contains_key("unauthorized"));
+        let (prompt_b, reads_count) =
+            build_enriched_step_task(&g.steps[1], &g.steps, &g.blackboard);
+        assert_eq!(reads_count, 1);
+        assert!(prompt_b.starts_with("## Consigne de cette étape\nPlan B léger"));
+        assert!(prompt_b.contains("## Tableau noir du graphe"));
+        assert!(prompt_b.contains("`api_contract`"));
+        assert!(!prompt_b.contains("Résultats des étapes préalables"));
+
+        // Liste `blackboard_writes` vide sur B_light : aucune écriture acceptée.
+        let denied =
+            apply_blackboard_updates(&mut g, 1, "{\"blackboard\":{\"sneaky\":true}}", 1_035);
+        assert_eq!(denied, 0);
+        assert!(!g.blackboard.contains_key("sneaky"));
+
+        // 4) Classification par jetons (évite le faux positif `mini` dans `gemini`).
+        assert_eq!(
+            super::native_delegation::classify_catalog_model_tier("gemini-2.5-pro"),
+            GraphModelTier::Frontier
+        );
+        assert!(super::native_delegation::is_frontier_model_name(
+            "gemini-2.5-pro"
+        ));
+        assert_eq!(
+            super::native_delegation::classify_catalog_model_tier("gemini-2.5-flash"),
+            GraphModelTier::Light
+        );
+        assert_eq!(
+            super::native_delegation::classify_catalog_model_tier("gpt-5-mini"),
+            GraphModelTier::Light
+        );
+        assert_eq!(
+            super::native_delegation::classify_catalog_model_tier("claude-opus-4-6"),
+            GraphModelTier::Frontier
+        );
+        assert_eq!(
+            super::native_delegation::classify_catalog_model_tier("claude-sonnet-4-6"),
+            GraphModelTier::Standard
         );
     }
 }

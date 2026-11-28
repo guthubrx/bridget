@@ -28,12 +28,16 @@ pub const MAX_MAX_RAW_ROWS: u32 = 100_000;
 const ROLLUP_BATCH_LIMIT: usize = 2000;
 const GRAPH_PURGE_BATCH_LIMIT: usize = 256;
 
-/// Ligne brute enregistrée à la clôture d'une étape convergée.
+/// Ligne brute enregistrée à la clôture d'une étape de graphe (convergée ou simple).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ConvergenceMetricRawRow {
     pub graph_id: String,
     pub step_id: String,
     pub project: String,
+    #[serde(default)]
+    pub bridget_build_id: String,
+    #[serde(default)]
+    pub model_tier: String,
     pub producer_engine: String,
     pub producer_model: String,
     pub verifier_engine: String,
@@ -50,6 +54,18 @@ pub struct ConvergenceMetricRawRow {
     pub gate_saved_verifier_calls: u32,
     pub stagnation_saved_iterations: u32,
     pub duration_secs: i64,
+    #[serde(default)]
+    pub input_tokens: u64,
+    #[serde(default)]
+    pub output_tokens: u64,
+    #[serde(default)]
+    pub cache_creation_input_tokens: u64,
+    #[serde(default)]
+    pub cache_read_input_tokens: u64,
+    #[serde(default)]
+    pub blackboard_reads: u32,
+    #[serde(default)]
+    pub blackboard_writes: u32,
     pub finished_at: i64,
 }
 
@@ -151,8 +167,62 @@ pub fn ensure_schema(conn: &Connection) -> rusqlite::Result<()> {
             PRIMARY KEY (month_utc, project, producer_engine, producer_model, verifier_engine, verifier_model, outcome)
         );
         CREATE INDEX IF NOT EXISTS idx_conv_metrics_monthly_month
-            ON convergence_metrics_monthly(month_utc);",
-    )
+            ON convergence_metrics_monthly(month_utc);
+        CREATE TABLE IF NOT EXISTS graph_build_metrics (
+            bridget_build_id TEXT NOT NULL DEFAULT '',
+            project TEXT NOT NULL DEFAULT '',
+            model_tier TEXT NOT NULL DEFAULT '',
+            steps_count INTEGER NOT NULL DEFAULT 0,
+            approved_count INTEGER NOT NULL DEFAULT 0,
+            budget_exhausted_count INTEGER NOT NULL DEFAULT 0,
+            tier_escalated_count INTEGER NOT NULL DEFAULT 0,
+            total_iterations INTEGER NOT NULL DEFAULT 0,
+            total_gate_runs INTEGER NOT NULL DEFAULT 0,
+            total_gate_saved_verifier_calls INTEGER NOT NULL DEFAULT 0,
+            total_stagnation_saved_iterations INTEGER NOT NULL DEFAULT 0,
+            total_duration_secs INTEGER NOT NULL DEFAULT 0,
+            total_input_tokens INTEGER NOT NULL DEFAULT 0,
+            total_output_tokens INTEGER NOT NULL DEFAULT 0,
+            total_cache_creation_tokens INTEGER NOT NULL DEFAULT 0,
+            total_cache_read_tokens INTEGER NOT NULL DEFAULT 0,
+            total_blackboard_reads INTEGER NOT NULL DEFAULT 0,
+            total_blackboard_writes INTEGER NOT NULL DEFAULT 0,
+            first_seen_at INTEGER NOT NULL DEFAULT 0,
+            last_seen_at INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY (bridget_build_id, project, model_tier)
+        );
+        CREATE INDEX IF NOT EXISTS idx_graph_build_metrics_last_seen
+            ON graph_build_metrics(last_seen_at);",
+    )?;
+    ensure_raw_columns(conn)
+}
+
+fn ensure_raw_columns(conn: &Connection) -> rusqlite::Result<()> {
+    let mut existing = std::collections::BTreeSet::new();
+    let mut stmt = conn.prepare("PRAGMA table_info(convergence_metrics_raw)")?;
+    let rows = stmt.query_map([], |r| r.get::<_, String>(1))?;
+    for col in rows {
+        existing.insert(col?);
+    }
+    let additions = [
+        ("bridget_build_id", "TEXT NOT NULL DEFAULT ''"),
+        ("model_tier", "TEXT NOT NULL DEFAULT ''"),
+        ("input_tokens", "INTEGER NOT NULL DEFAULT 0"),
+        ("output_tokens", "INTEGER NOT NULL DEFAULT 0"),
+        ("cache_creation_input_tokens", "INTEGER NOT NULL DEFAULT 0"),
+        ("cache_read_input_tokens", "INTEGER NOT NULL DEFAULT 0"),
+        ("blackboard_reads", "INTEGER NOT NULL DEFAULT 0"),
+        ("blackboard_writes", "INTEGER NOT NULL DEFAULT 0"),
+    ];
+    for (col, spec) in additions {
+        if !existing.contains(col) {
+            conn.execute(
+                &format!("ALTER TABLE convergence_metrics_raw ADD COLUMN {col} {spec}"),
+                [],
+            )?;
+        }
+    }
+    Ok(())
 }
 
 pub fn validate_policy(policy: &ConvergenceMetricsPolicy) -> Result<(), String> {
@@ -270,47 +340,124 @@ pub fn update_policy(
     Ok(policy)
 }
 
-/// Insère une ligne brute dans la transaction courante (appelé atomiquement avec `save_graph`).
+/// Insère une ligne brute dans la transaction courante (appelé atomiquement avec `save_graph`)
+/// et met à jour l'agrégat durable par version Bridget (`graph_build_metrics`) uniquement si
+/// la ligne brute est nouvellement insérée (zéro double comptage garanti).
 pub fn insert_raw_in_tx(conn: &Connection, row: &ConvergenceMetricRawRow) -> Result<(), String> {
     let duration = row.duration_secs.max(0);
-    conn.execute(
-        "INSERT OR IGNORE INTO convergence_metrics_raw (
-            graph_id, step_id, project, producer_engine, producer_model,
-            verifier_engine, verifier_model, verifier_orthogonal, outcome,
-            iterations_used, tier1_iterations, tier2_iterations, tier_escalated,
-            gate_configured, gate_runs, gate_failures, gate_saved_verifier_calls,
-            stagnation_saved_iterations, duration_secs, finished_at
-         ) VALUES (
-            ?1, ?2, ?3, ?4, ?5,
-            ?6, ?7, ?8, ?9,
-            ?10, ?11, ?12, ?13,
-            ?14, ?15, ?16, ?17,
-            ?18, ?19, ?20
-         )",
-        params![
-            row.graph_id,
-            row.step_id,
-            row.project,
-            row.producer_engine,
-            row.producer_model,
-            row.verifier_engine,
-            row.verifier_model,
-            i32::from(row.verifier_orthogonal),
-            row.outcome,
-            row.iterations_used,
-            row.tier1_iterations,
-            row.tier2_iterations,
-            i32::from(row.tier_escalated),
-            i32::from(row.gate_configured),
-            row.gate_runs,
-            row.gate_failures,
-            row.gate_saved_verifier_calls,
-            row.stagnation_saved_iterations,
-            duration,
-            row.finished_at,
-        ],
-    )
-    .map_err(|e| e.to_string())?;
+    let inserted = conn
+        .execute(
+            "INSERT OR IGNORE INTO convergence_metrics_raw (
+                graph_id, step_id, project, bridget_build_id, model_tier,
+                producer_engine, producer_model, verifier_engine, verifier_model,
+                verifier_orthogonal, outcome, iterations_used, tier1_iterations,
+                tier2_iterations, tier_escalated, gate_configured, gate_runs,
+                gate_failures, gate_saved_verifier_calls, stagnation_saved_iterations,
+                duration_secs, input_tokens, output_tokens, cache_creation_input_tokens,
+                cache_read_input_tokens, blackboard_reads, blackboard_writes, finished_at
+             ) VALUES (
+                ?1, ?2, ?3, ?4, ?5,
+                ?6, ?7, ?8, ?9,
+                ?10, ?11, ?12, ?13,
+                ?14, ?15, ?16, ?17,
+                ?18, ?19, ?20,
+                ?21, ?22, ?23, ?24,
+                ?25, ?26, ?27, ?28
+             )",
+            params![
+                row.graph_id,
+                row.step_id,
+                row.project,
+                row.bridget_build_id,
+                row.model_tier,
+                row.producer_engine,
+                row.producer_model,
+                row.verifier_engine,
+                row.verifier_model,
+                i32::from(row.verifier_orthogonal),
+                row.outcome,
+                row.iterations_used,
+                row.tier1_iterations,
+                row.tier2_iterations,
+                i32::from(row.tier_escalated),
+                i32::from(row.gate_configured),
+                row.gate_runs,
+                row.gate_failures,
+                row.gate_saved_verifier_calls,
+                row.stagnation_saved_iterations,
+                duration,
+                row.input_tokens as i64,
+                row.output_tokens as i64,
+                row.cache_creation_input_tokens as i64,
+                row.cache_read_input_tokens as i64,
+                row.blackboard_reads,
+                row.blackboard_writes,
+                row.finished_at,
+            ],
+        )
+        .map_err(|e| e.to_string())?;
+    if inserted > 0 {
+        let is_success = i64::from(matches!(row.outcome.as_str(), "approved" | "completed"));
+        let is_budget_stop = i64::from(row.outcome == "budget_exhausted");
+        conn.execute(
+            "INSERT INTO graph_build_metrics (
+                bridget_build_id, project, model_tier,
+                steps_count, approved_count, budget_exhausted_count, tier_escalated_count,
+                total_iterations, total_gate_runs, total_gate_saved_verifier_calls,
+                total_stagnation_saved_iterations, total_duration_secs,
+                total_input_tokens, total_output_tokens, total_cache_creation_tokens,
+                total_cache_read_tokens, total_blackboard_reads, total_blackboard_writes,
+                first_seen_at, last_seen_at
+             ) VALUES (
+                ?1, ?2, ?3,
+                1, ?4, ?5, ?6,
+                ?7, ?8, ?9,
+                ?10, ?11,
+                ?12, ?13, ?14,
+                ?15, ?16, ?17,
+                ?18, ?18
+             )
+             ON CONFLICT(bridget_build_id, project, model_tier) DO UPDATE SET
+                steps_count = steps_count + 1,
+                approved_count = approved_count + excluded.approved_count,
+                budget_exhausted_count = budget_exhausted_count + excluded.budget_exhausted_count,
+                tier_escalated_count = tier_escalated_count + excluded.tier_escalated_count,
+                total_iterations = total_iterations + excluded.total_iterations,
+                total_gate_runs = total_gate_runs + excluded.total_gate_runs,
+                total_gate_saved_verifier_calls = total_gate_saved_verifier_calls + excluded.total_gate_saved_verifier_calls,
+                total_stagnation_saved_iterations = total_stagnation_saved_iterations + excluded.total_stagnation_saved_iterations,
+                total_duration_secs = total_duration_secs + excluded.total_duration_secs,
+                total_input_tokens = total_input_tokens + excluded.total_input_tokens,
+                total_output_tokens = total_output_tokens + excluded.total_output_tokens,
+                total_cache_creation_tokens = total_cache_creation_tokens + excluded.total_cache_creation_tokens,
+                total_cache_read_tokens = total_cache_read_tokens + excluded.total_cache_read_tokens,
+                total_blackboard_reads = total_blackboard_reads + excluded.total_blackboard_reads,
+                total_blackboard_writes = total_blackboard_writes + excluded.total_blackboard_writes,
+                first_seen_at = MIN(first_seen_at, excluded.first_seen_at),
+                last_seen_at = MAX(last_seen_at, excluded.last_seen_at)",
+            params![
+                row.bridget_build_id,
+                row.project,
+                row.model_tier,
+                is_success,
+                is_budget_stop,
+                i64::from(row.tier_escalated),
+                i64::from(row.iterations_used),
+                i64::from(row.gate_runs),
+                i64::from(row.gate_saved_verifier_calls),
+                i64::from(row.stagnation_saved_iterations),
+                duration,
+                row.input_tokens as i64,
+                row.output_tokens as i64,
+                row.cache_creation_input_tokens as i64,
+                row.cache_read_input_tokens as i64,
+                i64::from(row.blackboard_reads),
+                i64::from(row.blackboard_writes),
+                row.finished_at,
+            ],
+        )
+        .map_err(|e| e.to_string())?;
+    }
     Ok(())
 }
 
@@ -417,7 +564,7 @@ pub fn run_rollup_and_purge(
                 strftime('%Y-%m-%d', finished_at, 'unixepoch') AS day_utc,
                 project, producer_engine, producer_model, verifier_engine, verifier_model, outcome,
                 COUNT(*),
-                SUM(CASE WHEN outcome = 'approved' THEN 1 ELSE 0 END),
+                SUM(CASE WHEN outcome IN ('approved', 'completed') THEN 1 ELSE 0 END),
                 SUM(tier_escalated),
                 SUM(verifier_orthogonal),
                 SUM(iterations_used),
@@ -584,11 +731,219 @@ pub fn run_rollup_and_purge(
     Ok(report)
 }
 
-/// Agrège `raw` + `daily` + `monthly` sur la fenêtre demandée (`window_days`, défaut 90 j).
+#[derive(Debug, Clone, Default)]
+struct BuildAgg {
+    key: String,
+    steps: i64,
+    approved: i64,
+    budget_stops: i64,
+    tier_escalated: i64,
+    total_iterations: i64,
+    gate_saved: i64,
+    total_duration_secs: i64,
+    input_tokens: i64,
+    output_tokens: i64,
+    cache_creation_tokens: i64,
+    cache_read_tokens: i64,
+    blackboard_reads: i64,
+    blackboard_writes: i64,
+    last_seen_at: i64,
+}
+
+impl BuildAgg {
+    fn facturable_tokens(&self) -> i64 {
+        self.input_tokens
+            .saturating_add(self.output_tokens)
+            .saturating_add(self.cache_creation_tokens)
+    }
+
+    fn avg_facturable_per_step(&self) -> i64 {
+        if self.steps > 0 {
+            self.facturable_tokens() / self.steps
+        } else {
+            0
+        }
+    }
+
+    fn approval_rate_pct(&self) -> i64 {
+        if self.steps > 0 {
+            (self.approved * 100) / self.steps
+        } else {
+            0
+        }
+    }
+
+    fn cache_hit_ratio_pct(&self) -> i64 {
+        let prompt_total = self
+            .input_tokens
+            .saturating_add(self.cache_creation_tokens)
+            .saturating_add(self.cache_read_tokens);
+        if prompt_total > 0 {
+            (self.cache_read_tokens * 100) / prompt_total
+        } else {
+            0
+        }
+    }
+
+    fn avg_duration_secs(&self) -> i64 {
+        if self.steps > 0 {
+            self.total_duration_secs / self.steps
+        } else {
+            0
+        }
+    }
+
+    fn to_json(&self, key_field: &str) -> Value {
+        json!({
+            key_field: self.key,
+            "steps": self.steps,
+            "approved": self.approved,
+            "approval_rate_pct": self.approval_rate_pct(),
+            "budget_stops": self.budget_stops,
+            "tier_escalated": self.tier_escalated,
+            "avg_iterations_x10": if self.steps > 0 { (self.total_iterations * 10) / self.steps } else { 0 },
+            "avg_duration_secs": self.avg_duration_secs(),
+            "gate_saved_verifier_calls": self.gate_saved,
+            "input_tokens": self.input_tokens,
+            "output_tokens": self.output_tokens,
+            "cache_creation_input_tokens": self.cache_creation_tokens,
+            "cache_read_input_tokens": self.cache_read_tokens,
+            "facturable_tokens": self.facturable_tokens(),
+            "avg_facturable_tokens_per_step": self.avg_facturable_per_step(),
+            "cache_hit_ratio_pct": self.cache_hit_ratio_pct(),
+            "blackboard_reads": self.blackboard_reads,
+            "blackboard_writes": self.blackboard_writes,
+            "last_seen_at": self.last_seen_at,
+        })
+    }
+}
+
+fn query_build_or_tier_agg(
+    conn: &Connection,
+    group_col: &str,
+    proj_filter: &str,
+    since_ts: i64,
+    limit: i64,
+) -> Result<Vec<BuildAgg>, String> {
+    let sql = format!(
+        "SELECT {group_col},
+                SUM(steps_count),
+                SUM(approved_count),
+                SUM(budget_exhausted_count),
+                SUM(tier_escalated_count),
+                SUM(total_iterations),
+                SUM(total_gate_saved_verifier_calls),
+                SUM(total_duration_secs),
+                SUM(total_input_tokens),
+                SUM(total_output_tokens),
+                SUM(total_cache_creation_tokens),
+                SUM(total_cache_read_tokens),
+                SUM(total_blackboard_reads),
+                SUM(total_blackboard_writes),
+                MAX(last_seen_at)
+         FROM graph_build_metrics
+         WHERE last_seen_at >= ?1 AND (?2 = '' OR project = ?2)
+         GROUP BY {group_col}
+         ORDER BY MAX(last_seen_at) DESC
+         LIMIT ?3"
+    );
+    let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map(params![since_ts, proj_filter, limit], |r| {
+            Ok(BuildAgg {
+                key: r.get(0)?,
+                steps: r.get(1)?,
+                approved: r.get(2)?,
+                budget_stops: r.get(3)?,
+                tier_escalated: r.get(4)?,
+                total_iterations: r.get(5)?,
+                gate_saved: r.get(6)?,
+                total_duration_secs: r.get(7)?,
+                input_tokens: r.get(8)?,
+                output_tokens: r.get(9)?,
+                cache_creation_tokens: r.get(10)?,
+                cache_read_tokens: r.get(11)?,
+                blackboard_reads: r.get(12)?,
+                blackboard_writes: r.get(13)?,
+                last_seen_at: r.get(14)?,
+            })
+        })
+        .map_err(|e| e.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())?;
+    Ok(rows)
+}
+
+fn query_single_build_agg(
+    conn: &Connection,
+    build_prefix: &str,
+    proj_filter: &str,
+) -> Result<Option<BuildAgg>, String> {
+    let prefix = build_prefix.trim();
+    if prefix.is_empty() {
+        return Ok(None);
+    }
+    let like_pat = format!("{prefix}%");
+    let row = conn
+        .query_row(
+            "SELECT MIN(bridget_build_id),
+                    SUM(steps_count),
+                    SUM(approved_count),
+                    SUM(budget_exhausted_count),
+                    SUM(tier_escalated_count),
+                    SUM(total_iterations),
+                    SUM(total_gate_saved_verifier_calls),
+                    SUM(total_duration_secs),
+                    SUM(total_input_tokens),
+                    SUM(total_output_tokens),
+                    SUM(total_cache_creation_tokens),
+                    SUM(total_cache_read_tokens),
+                    SUM(total_blackboard_reads),
+                    SUM(total_blackboard_writes),
+                    MAX(last_seen_at)
+             FROM graph_build_metrics
+             WHERE (bridget_build_id = ?1 OR bridget_build_id LIKE ?2)
+               AND (?3 = '' OR project = ?3)",
+            params![prefix, like_pat, proj_filter],
+            |r| {
+                let key: Option<String> = r.get(0)?;
+                Ok(key.map(|k| BuildAgg {
+                    key: k,
+                    steps: r.get::<_, i64>(1).unwrap_or(0),
+                    approved: r.get::<_, i64>(2).unwrap_or(0),
+                    budget_stops: r.get::<_, i64>(3).unwrap_or(0),
+                    tier_escalated: r.get::<_, i64>(4).unwrap_or(0),
+                    total_iterations: r.get::<_, i64>(5).unwrap_or(0),
+                    gate_saved: r.get::<_, i64>(6).unwrap_or(0),
+                    total_duration_secs: r.get::<_, i64>(7).unwrap_or(0),
+                    input_tokens: r.get::<_, i64>(8).unwrap_or(0),
+                    output_tokens: r.get::<_, i64>(9).unwrap_or(0),
+                    cache_creation_tokens: r.get::<_, i64>(10).unwrap_or(0),
+                    cache_read_tokens: r.get::<_, i64>(11).unwrap_or(0),
+                    blackboard_reads: r.get::<_, i64>(12).unwrap_or(0),
+                    blackboard_writes: r.get::<_, i64>(13).unwrap_or(0),
+                    last_seen_at: r.get::<_, i64>(14).unwrap_or(0),
+                }))
+            },
+        )
+        .map_err(|e| e.to_string())?;
+    Ok(row.filter(|agg| agg.steps > 0))
+}
+
+fn pct_delta(before: i64, after: i64) -> Option<i64> {
+    if before <= 0 {
+        None
+    } else {
+        Some(((after - before) * 100) / before)
+    }
+}
+
+/// Agrège `raw` + `daily` + `monthly` + `graph_build_metrics` sur la fenêtre demandée (`window_days`, défaut 90 j).
 pub fn query_metrics_report(
     conn: &Connection,
     project: Option<&str>,
     window_days: Option<u32>,
+    compare: Option<(&str, &str)>,
     now: i64,
 ) -> Result<Value, String> {
     let policy = load_policy(conn)?;
@@ -605,7 +960,7 @@ pub fn query_metrics_report(
             SELECT
                 project, producer_engine, producer_model, verifier_engine, verifier_model, outcome,
                 1 AS steps_count,
-                CASE WHEN outcome = 'approved' THEN 1 ELSE 0 END AS approved_count,
+                CASE WHEN outcome IN ('approved', 'completed') THEN 1 ELSE 0 END AS approved_count,
                 tier_escalated AS tier_escalated_count,
                 verifier_orthogonal AS orthogonal_count,
                 iterations_used AS total_iterations,
@@ -687,7 +1042,7 @@ pub fn query_metrics_report(
             "WITH unified AS (
                 SELECT producer_engine, producer_model, verifier_engine, verifier_model,
                        1 AS steps_count,
-                       CASE WHEN outcome = 'approved' THEN 1 ELSE 0 END AS approved_count,
+                       CASE WHEN outcome IN ('approved', 'completed') THEN 1 ELSE 0 END AS approved_count,
                        tier_escalated AS tier_escalated_count,
                        iterations_used AS total_iterations,
                        gate_saved_verifier_calls AS total_gate_saved,
@@ -791,6 +1146,45 @@ pub fn query_metrics_report(
         )
         .unwrap_or(0);
 
+    let by_build: Vec<Value> =
+        query_build_or_tier_agg(conn, "bridget_build_id", proj_filter, since_ts, 32)?
+            .into_iter()
+            .map(|agg| agg.to_json("bridget_build_id"))
+            .collect();
+    let by_tier: Vec<Value> =
+        query_build_or_tier_agg(conn, "model_tier", proj_filter, since_ts, 16)?
+            .into_iter()
+            .map(|agg| {
+                let mut agg = agg;
+                if agg.key.is_empty() {
+                    agg.key = "auto".into();
+                }
+                agg.to_json("model_tier")
+            })
+            .collect();
+    let comparison = if let Some((base_ref, head_ref)) = compare {
+        let base = query_single_build_agg(conn, base_ref, proj_filter)?;
+        let head = query_single_build_agg(conn, head_ref, proj_filter)?;
+        let deltas = match (&base, &head) {
+            (Some(a), Some(b)) => json!({
+                "approval_rate_delta_pp": b.approval_rate_pct() - a.approval_rate_pct(),
+                "avg_facturable_tokens_delta_pct": pct_delta(a.avg_facturable_per_step(), b.avg_facturable_per_step()),
+                "cache_hit_ratio_delta_pp": b.cache_hit_ratio_pct() - a.cache_hit_ratio_pct(),
+                "avg_duration_delta_pct": pct_delta(a.avg_duration_secs(), b.avg_duration_secs()),
+            }),
+            _ => Value::Null,
+        };
+        json!({
+            "requested_base": base_ref,
+            "requested_head": head_ref,
+            "base": base.as_ref().map(|a| a.to_json("bridget_build_id")),
+            "head": head.as_ref().map(|b| b.to_json("bridget_build_id")),
+            "deltas": deltas,
+        })
+    } else {
+        Value::Null
+    };
+
     Ok(json!({
         "version": 1,
         "status": "ok",
@@ -811,6 +1205,9 @@ pub fn query_metrics_report(
         },
         "outcomes": outcomes,
         "by_model_pair": pairs,
+        "by_build": by_build,
+        "by_tier": by_tier,
+        "comparison": comparison,
         "storage": {
             "raw_rows": raw_rows,
             "daily_rows": daily_rows,
@@ -857,6 +1254,8 @@ mod tests {
             graph_id: graph_id.into(),
             step_id: step_id.into(),
             project: "64.bridget".into(),
+            bridget_build_id: "build314".into(),
+            model_tier: "standard".into(),
             producer_engine: "codex".into(),
             producer_model: "gpt-5.4".into(),
             verifier_engine: "".into(),
@@ -873,6 +1272,12 @@ mod tests {
             gate_saved_verifier_calls: 1,
             stagnation_saved_iterations: 0,
             duration_secs: duration,
+            input_tokens: 1_000,
+            output_tokens: 400,
+            cache_creation_input_tokens: 600,
+            cache_read_input_tokens: 8_000,
+            blackboard_reads: 0,
+            blackboard_writes: 0,
             finished_at,
         }
     }
@@ -963,7 +1368,7 @@ mod tests {
         assert_eq!(graphs_left, 1);
 
         // Vérifier fusion multi-paliers sur 365 jours (1 raw + 2 daily + 1 monthly = 4 étapes)
-        let view = query_metrics_report(&conn, Some("64.bridget"), Some(365), now).unwrap();
+        let view = query_metrics_report(&conn, Some("64.bridget"), Some(365), None, now).unwrap();
         assert_eq!(view["totals"]["steps"], 4);
         assert_eq!(view["totals"]["gate_saved_verifier_calls"], 4);
         assert_eq!(view["storage"]["raw_rows"], 1);
@@ -973,5 +1378,51 @@ mod tests {
         // Idempotence : un second passage immédiat ne double ni ne purge rien de plus
         let rep2 = run_rollup_and_purge(&mut conn, now).unwrap();
         assert_eq!(rep2, ConvergenceMaintenanceReport::default());
+    }
+
+    #[test]
+    fn spec316_build_metrics_compare_et_zero_double_comptage() {
+        let conn = mem_conn();
+        let now = 1_795_900_000_i64;
+        let mut a1 = sample_raw("ga1", "s1", now - 200, 100);
+        a1.bridget_build_id = "aaaa1111".into();
+        a1.model_tier = "frontier".into();
+        a1.input_tokens = 8_000;
+        a1.output_tokens = 2_000;
+        a1.cache_creation_input_tokens = 10_000;
+        a1.cache_read_input_tokens = 2_000;
+        insert_raw_in_tx(&conn, &a1).unwrap();
+        // Réinsertion identique : doit être ignorée sans doubler `graph_build_metrics`.
+        insert_raw_in_tx(&conn, &a1).unwrap();
+
+        let mut b1 = sample_raw("gb1", "s1", now - 100, 60);
+        b1.bridget_build_id = "bbbb2222".into();
+        b1.model_tier = "light".into();
+        b1.input_tokens = 1_000;
+        b1.output_tokens = 1_000;
+        b1.cache_creation_input_tokens = 2_000;
+        b1.cache_read_input_tokens = 16_000;
+        b1.blackboard_reads = 2;
+        b1.blackboard_writes = 1;
+        insert_raw_in_tx(&conn, &b1).unwrap();
+
+        let report = query_metrics_report(
+            &conn,
+            Some("64.bridget"),
+            Some(30),
+            Some(("aaaa", "bbbb")),
+            now,
+        )
+        .unwrap();
+        assert_eq!(report["by_build"].as_array().unwrap().len(), 2);
+        assert_eq!(report["by_tier"].as_array().unwrap().len(), 2);
+        let cmp = &report["comparison"];
+        assert_eq!(cmp["base"]["steps"], 1);
+        assert_eq!(cmp["base"]["facturable_tokens"], 20_000);
+        assert_eq!(cmp["head"]["steps"], 1);
+        assert_eq!(cmp["head"]["facturable_tokens"], 4_000);
+        assert_eq!(cmp["head"]["cache_hit_ratio_pct"], 84);
+        assert_eq!(cmp["deltas"]["avg_facturable_tokens_delta_pct"], -80);
+        assert_eq!(cmp["deltas"]["avg_duration_delta_pct"], -40);
     }
 }

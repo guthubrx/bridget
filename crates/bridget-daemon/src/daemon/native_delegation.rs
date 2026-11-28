@@ -8858,9 +8858,16 @@ fn handle_with_fact_inner(
         NativeDelegationRequest::GraphMetrics {
             project,
             window_days,
+            compare,
         } => {
-            let result =
-                super::native_graphs::handle_metrics(conn, project.as_deref(), window_days, state);
+            let cmp = compare.as_ref().map(|(a, b)| (a.as_str(), b.as_str()));
+            let result = super::native_graphs::handle_metrics(
+                conn,
+                project.as_deref(),
+                window_days,
+                cmp,
+                state,
+            );
             DaemonToWrapper::NativeDelegationResult { result }
         }
         NativeDelegationRequest::GraphMetricsPolicy { update, run_now } => {
@@ -18642,6 +18649,119 @@ pub(super) fn pick_orthogonal_engine_pub(
         }
     }
     None
+}
+
+/// Indique si un nom de modèle correspond à un palier frontière (coûteux en quotas)
+/// pour la comptabilisation budgétaire `budget.max_frontier_rounds` (Spec 316).
+/// Compare par jetons alphanumériques (évite qu'une sous-chaîne comme `mini` dans `gemini`
+/// ne fausse la classification).
+pub(super) fn is_frontier_model_name(model: &str) -> bool {
+    let lower = model.trim().to_ascii_lowercase();
+    if lower.is_empty() || is_light_model_name(&lower) {
+        return false;
+    }
+    lower
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .any(|tok| matches!(tok, "opus" | "pro" | "o3" | "max" | "ultra"))
+}
+
+fn is_light_model_name(lower: &str) -> bool {
+    lower
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .any(|tok| matches!(tok, "haiku" | "flash" | "mini" | "nano" | "spark" | "lite"))
+}
+
+pub(super) fn classify_catalog_model_tier(
+    model: &str,
+) -> bridget_transport::protocol::GraphModelTier {
+    let lower = model.trim().to_ascii_lowercase();
+    if is_light_model_name(&lower) {
+        bridget_transport::protocol::GraphModelTier::Light
+    } else if is_frontier_model_name(&lower) {
+        bridget_transport::protocol::GraphModelTier::Frontier
+    } else {
+        bridget_transport::protocol::GraphModelTier::Standard
+    }
+}
+
+/// Résout dynamiquement un modèle sain du catalogue disponible sur la flotte correspondant
+/// au palier demandé (`light` | `standard` | `frontier`) sans jamais écraser un `model`
+/// déjà explicitement choisi par le parent (Spec 316).
+pub(super) fn resolve_model_tier_pub(
+    st: &DaemonState,
+    delegation: &mut AutoDelegateV2,
+    tier: bridget_transport::protocol::GraphModelTier,
+) {
+    let desired_effort = match tier {
+        bridget_transport::protocol::GraphModelTier::Light => "low",
+        bridget_transport::protocol::GraphModelTier::Standard => "medium",
+        bridget_transport::protocol::GraphModelTier::Frontier => "high",
+    };
+    if delegation.model.is_some() {
+        return;
+    }
+    let now = unix_timestamp();
+    let imposed_family = delegation
+        .engine
+        .as_deref()
+        .map(normalize_engine_family)
+        .filter(|s| !s.is_empty());
+
+    let mut candidates: Vec<(String, String, Vec<String>)> = Vec::new();
+    if let Ok(defs) = st.registry.resolved_definitions() {
+        for (name, def) in defs {
+            let fam = normalize_engine_family(&name);
+            if fam.is_empty() || imposed_family.is_some_and(|f| f != fam) {
+                continue;
+            }
+            let blocked = st
+                .provider_limits
+                .quota(&name, now)
+                .is_some_and(|q| q.launch_blocked || q.exhausted);
+            if blocked {
+                continue;
+            }
+            for (model, cap) in def.capabilities.models {
+                if classify_catalog_model_tier(&model) == tier {
+                    candidates.push((fam.to_string(), model, cap.efforts));
+                }
+            }
+        }
+    }
+    for worker in st.remote_workers.values() {
+        for (key, cat) in &worker.catalogues {
+            let fam = normalize_engine_family(key);
+            if fam.is_empty() || imposed_family.is_some_and(|f| f != fam) {
+                continue;
+            }
+            let blocked = st
+                .provider_limits
+                .quota(fam, now)
+                .is_some_and(|q| q.launch_blocked || q.exhausted);
+            if blocked {
+                continue;
+            }
+            for cap in &cat.value.models {
+                if classify_catalog_model_tier(&cap.model) == tier {
+                    candidates.push((
+                        fam.to_string(),
+                        cap.model.clone(),
+                        cap.supported_efforts.clone(),
+                    ));
+                }
+            }
+        }
+    }
+    candidates.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
+    if let Some((fam, model, efforts)) = candidates.into_iter().next() {
+        if delegation.engine.is_none() {
+            delegation.engine = Some(fam);
+        }
+        delegation.model = Some(model);
+        if delegation.effort.is_none() && efforts.iter().any(|e| e == desired_effort) {
+            delegation.effort = Some(desired_effort.to_string());
+        }
+    }
 }
 
 /// Exécute une porte déterministe (0 jeton LLM) dans le worktree exact attesté d'une tâche

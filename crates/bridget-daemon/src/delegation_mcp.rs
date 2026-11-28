@@ -7,11 +7,13 @@ use crate::mcp_identity::ResolvedIdentity;
 use bridget_transport::protocol::{
     AutoDelegateV2, AutoDelegateWorkload, ChildRequestDecision, DEFAULT_CONVERGENCE_ITERATIONS,
     DEFAULT_ESCALATION_EXTRA_ITERATIONS, DEFAULT_GATE_TIMEOUT_SECS, DelegateGraphRequest,
-    DelegateGraphStep, FallbackTarget, GraphConvergenceEscalation, GraphConvergenceLoop,
-    GraphDeterministicGate, GraphFailurePolicy, GraphNotifyPolicy, GraphStepCondition,
-    MAX_CONVERGENCE_ITERATIONS, MAX_ESCALATION_EXTRA_ITERATIONS, MAX_GATE_TIMEOUT_SECS,
-    MAX_TOTAL_CONVERGENCE_ITERATIONS, MIN_CONVERGENCE_ITERATIONS, MIN_ESCALATION_EXTRA_ITERATIONS,
-    MIN_GATE_TIMEOUT_SECS, NativeDelegationRequest, SpawnPosture, WorkspaceRequest,
+    DelegateGraphStep, FallbackTarget, GraphBudget, GraphConvergenceEscalation,
+    GraphConvergenceLoop, GraphDeterministicGate, GraphFailurePolicy, GraphModelTier,
+    GraphNotifyPolicy, GraphStepCondition, MAX_CONVERGENCE_ITERATIONS,
+    MAX_ESCALATION_EXTRA_ITERATIONS, MAX_GATE_TIMEOUT_SECS, MAX_GRAPH_BUDGET_DURATION_SECS,
+    MAX_GRAPH_BUDGET_FRONTIER_ROUNDS, MAX_GRAPH_BUDGET_ROUNDS, MAX_TOTAL_CONVERGENCE_ITERATIONS,
+    MIN_CONVERGENCE_ITERATIONS, MIN_ESCALATION_EXTRA_ITERATIONS, MIN_GATE_TIMEOUT_SECS,
+    MIN_GRAPH_BUDGET_DURATION_SECS, NativeDelegationRequest, SpawnPosture, WorkspaceRequest,
 };
 use bridget_transport::{DaemonToWrapper, WrapperToDaemon};
 use serde_json::{Value, json};
@@ -770,6 +772,125 @@ fn validate_dag_topology_locally(steps: &[DelegateGraphStep]) -> Result<(), Clie
     Ok(())
 }
 
+fn parse_graph_budget(raw: &Value) -> Result<GraphBudget, ClientError> {
+    let obj = raw.as_object().ok_or_else(|| {
+        ClientError::InvalidParams(format!(
+            "budget doit être un objet JSON. {GRAPH_LOCAL_REFUSAL_FOOTER}"
+        ))
+    })?;
+    for k in obj.keys() {
+        if !matches!(
+            k.as_str(),
+            "max_total_rounds" | "max_frontier_rounds" | "max_duration_secs"
+        ) {
+            return Err(ClientError::InvalidParams(format!(
+                "budget : champ inconnu '{k}' (autorisés : max_total_rounds, max_frontier_rounds, max_duration_secs). {GRAPH_LOCAL_REFUSAL_FOOTER}"
+            )));
+        }
+    }
+    let max_total_rounds = match obj.get("max_total_rounds") {
+        None | Some(Value::Null) => None,
+        Some(v) => {
+            let n = v.as_u64().ok_or_else(|| {
+                ClientError::InvalidParams(format!(
+                    "budget.max_total_rounds doit être un entier entre 1 et {MAX_GRAPH_BUDGET_ROUNDS}. {GRAPH_LOCAL_REFUSAL_FOOTER}"
+                ))
+            })?;
+            if !(1..=u64::from(MAX_GRAPH_BUDGET_ROUNDS)).contains(&n) {
+                return Err(ClientError::InvalidParams(format!(
+                    "budget.max_total_rounds doit être compris entre 1 et {MAX_GRAPH_BUDGET_ROUNDS}. {GRAPH_LOCAL_REFUSAL_FOOTER}"
+                )));
+            }
+            Some(n as u32)
+        }
+    };
+    let max_frontier_rounds = match obj.get("max_frontier_rounds") {
+        None | Some(Value::Null) => None,
+        Some(v) => {
+            let n = v.as_u64().ok_or_else(|| {
+                ClientError::InvalidParams(format!(
+                    "budget.max_frontier_rounds doit être un entier entre 0 et {MAX_GRAPH_BUDGET_FRONTIER_ROUNDS}. {GRAPH_LOCAL_REFUSAL_FOOTER}"
+                ))
+            })?;
+            if n > u64::from(MAX_GRAPH_BUDGET_FRONTIER_ROUNDS) {
+                return Err(ClientError::InvalidParams(format!(
+                    "budget.max_frontier_rounds doit être compris entre 0 et {MAX_GRAPH_BUDGET_FRONTIER_ROUNDS}. {GRAPH_LOCAL_REFUSAL_FOOTER}"
+                )));
+            }
+            Some(n as u32)
+        }
+    };
+    let max_duration_secs = match obj.get("max_duration_secs") {
+        None | Some(Value::Null) => None,
+        Some(v) => {
+            let n = v.as_u64().ok_or_else(|| {
+                ClientError::InvalidParams(format!(
+                    "budget.max_duration_secs doit être un entier entre {MIN_GRAPH_BUDGET_DURATION_SECS} et {MAX_GRAPH_BUDGET_DURATION_SECS}. {GRAPH_LOCAL_REFUSAL_FOOTER}"
+                ))
+            })?;
+            if !(MIN_GRAPH_BUDGET_DURATION_SECS..=MAX_GRAPH_BUDGET_DURATION_SECS).contains(&n) {
+                return Err(ClientError::InvalidParams(format!(
+                    "budget.max_duration_secs doit être compris entre {MIN_GRAPH_BUDGET_DURATION_SECS} et {MAX_GRAPH_BUDGET_DURATION_SECS}. {GRAPH_LOCAL_REFUSAL_FOOTER}"
+                )));
+            }
+            Some(n)
+        }
+    };
+    if let (Some(total), Some(frontier)) = (max_total_rounds, max_frontier_rounds)
+        && frontier > total
+    {
+        return Err(ClientError::InvalidParams(format!(
+            "budget.max_frontier_rounds ({frontier}) ne peut pas dépasser budget.max_total_rounds ({total}). {GRAPH_LOCAL_REFUSAL_FOOTER}"
+        )));
+    }
+    Ok(GraphBudget {
+        max_total_rounds,
+        max_frontier_rounds,
+        max_duration_secs,
+    })
+}
+
+fn parse_blackboard_key_list(
+    raw: Option<&Value>,
+    field: &str,
+    max_items: usize,
+) -> Result<Vec<String>, ClientError> {
+    let Some(val) = raw else {
+        return Ok(Vec::new());
+    };
+    if val.is_null() {
+        return Ok(Vec::new());
+    }
+    let arr = val.as_array().ok_or_else(|| {
+        ClientError::InvalidParams(format!(
+            "{field} doit être un tableau de clés (max {max_items}). {GRAPH_LOCAL_REFUSAL_FOOTER}"
+        ))
+    })?;
+    if arr.len() > max_items {
+        return Err(ClientError::InvalidParams(format!(
+            "{field} accepte au plus {max_items} clés. {GRAPH_LOCAL_REFUSAL_FOOTER}"
+        )));
+    }
+    let mut out = Vec::with_capacity(arr.len());
+    for item in arr {
+        let key = item.as_str().map(str::trim).unwrap_or("");
+        if key.is_empty()
+            || key.len() > 64
+            || !key
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.'))
+        {
+            return Err(ClientError::InvalidParams(format!(
+                "{field} : clé invalide '{key}' (1..=64 caractères [A-Za-z0-9_.-]). {GRAPH_LOCAL_REFUSAL_FOOTER}"
+            )));
+        }
+        if !out.iter().any(|k| k == key) {
+            out.push(key.to_string());
+        }
+    }
+    Ok(out)
+}
+
 /// Parse la charge MCP de `bridget_delegate_graph` (1 à 16 étapes DAG + convergence bornée optionnelle).
 fn parse_delegate_graph(args: &Value) -> Result<DelegateGraphRequest, ClientError> {
     let request_id = args
@@ -813,6 +934,10 @@ fn parse_delegate_graph(args: &Value) -> Result<DelegateGraphRequest, ClientErro
             )));
         }
     };
+    let budget = match args.get("budget") {
+        None | Some(Value::Null) => None,
+        Some(raw_budget) => Some(parse_graph_budget(raw_budget)?),
+    };
     let raw_steps = args
         .get("steps")
         .and_then(Value::as_array)
@@ -838,11 +963,14 @@ fn parse_delegate_graph(args: &Value) -> Result<DelegateGraphRequest, ClientErro
                     | "pass_dependency_results"
                     | "when"
                     | "when_outcomes"
+                    | "model_tier"
+                    | "blackboard_reads"
+                    | "blackboard_writes"
                     | "delegation"
                     | "convergence"
             ) {
                 return Err(ClientError::InvalidParams(format!(
-                    "steps[{idx}] : champ inconnu '{k}'. Champs acceptés : step_id, depends_on, pass_dependency_results, when, when_outcomes, delegation, convergence. {GRAPH_MINIMAL_EXAMPLE} {GRAPH_LOCAL_REFUSAL_FOOTER}"
+                    "steps[{idx}] : champ inconnu '{k}'. Champs acceptés : step_id, depends_on, pass_dependency_results, when, when_outcomes, model_tier, blackboard_reads, blackboard_writes, delegation, convergence. {GRAPH_MINIMAL_EXAMPLE} {GRAPH_LOCAL_REFUSAL_FOOTER}"
                 )));
             }
         }
@@ -955,15 +1083,37 @@ fn parse_delegate_graph(args: &Value) -> Result<DelegateGraphRequest, ClientErro
                             | "escalated"
                             | "gate_unavailable"
                             | "verdict_unparseable"
+                            | "budget_exhausted"
                     ) {
                         return Err(ClientError::InvalidParams(format!(
-                            "steps[{idx}].when_outcomes : issue '{outcome}' invalide (autorisées : failed, stagnated, max_iterations_reached, escalated, gate_unavailable, verdict_unparseable ; jamais cancelled). {GRAPH_LOCAL_REFUSAL_FOOTER}"
+                            "steps[{idx}].when_outcomes : issue '{outcome}' invalide (autorisées : failed, stagnated, max_iterations_reached, escalated, gate_unavailable, verdict_unparseable, budget_exhausted ; jamais cancelled). {GRAPH_LOCAL_REFUSAL_FOOTER}"
                         )));
                     }
                 }
             }
             _ => {}
         }
+        let model_tier = match step_obj.get("model_tier") {
+            None | Some(Value::Null) => None,
+            Some(Value::String(s)) if s == "light" => Some(GraphModelTier::Light),
+            Some(Value::String(s)) if s == "standard" => Some(GraphModelTier::Standard),
+            Some(Value::String(s)) if s == "frontier" => Some(GraphModelTier::Frontier),
+            _ => {
+                return Err(ClientError::InvalidParams(format!(
+                    "steps[{idx}].model_tier invalide (light | standard | frontier). {GRAPH_LOCAL_REFUSAL_FOOTER}"
+                )));
+            }
+        };
+        let blackboard_reads = parse_blackboard_key_list(
+            step_obj.get("blackboard_reads"),
+            &format!("steps[{idx}].blackboard_reads"),
+            16,
+        )?;
+        let blackboard_writes = parse_blackboard_key_list(
+            step_obj.get("blackboard_writes"),
+            &format!("steps[{idx}].blackboard_writes"),
+            8,
+        )?;
         let raw_del = step_obj.get("delegation").ok_or_else(|| {
             ClientError::InvalidParams(format!(
                 "steps[{idx}].delegation requis. {GRAPH_MINIMAL_EXAMPLE} {GRAPH_LOCAL_REFUSAL_FOOTER}"
@@ -996,6 +1146,9 @@ fn parse_delegate_graph(args: &Value) -> Result<DelegateGraphRequest, ClientErro
             pass_dependency_results,
             when,
             when_outcomes,
+            model_tier,
+            blackboard_reads,
+            blackboard_writes,
             delegation,
             convergence,
         });
@@ -1018,6 +1171,7 @@ fn parse_delegate_graph(args: &Value) -> Result<DelegateGraphRequest, ClientErro
         title,
         on_failure,
         notify_policy,
+        budget,
         steps,
     })
 }
@@ -1048,7 +1202,10 @@ pub(crate) fn tools(brief_schema: &Value) -> Vec<Value> {
             "depends_on":{"type":"array","items":{"type":"string"}},
             "pass_dependency_results":{"type":"boolean","default":true},
             "when":{"type":"string","enum":["all_succeeded","any_failed","on_outcome"],"default":"all_succeeded","description":"Condition de déclenchement sur depends_on : all_succeeded (défaut), any_failed (repli si une dépendance échoue, jamais sur cancelled) ou on_outcome (repli ciblé sur when_outcomes)."},
-            "when_outcomes":{"type":"array","items":{"type":"string","enum":["failed","stagnated","max_iterations_reached","escalated","gate_unavailable","verdict_unparseable"]},"description":"Issues d'échec déclenchant l'étape lorsque when='on_outcome'."},
+            "when_outcomes":{"type":"array","items":{"type":"string","enum":["failed","stagnated","max_iterations_reached","escalated","gate_unavailable","verdict_unparseable","budget_exhausted"]},"description":"Issues d'échec déclenchant l'étape lorsque when='on_outcome'."},
+            "model_tier":{"type":"string","enum":["light","standard","frontier"],"description":"Palier de coût/capacité souhaité (light | standard | frontier) sans écraser un delegation.model explicite."},
+            "blackboard_reads":{"type":"array","maxItems":16,"items":{"type":"string","minLength":1,"maxLength":64},"description":"Clés du tableau noir du graphe injectées en lecture dans le prompt de l'étape."},
+            "blackboard_writes":{"type":"array","maxItems":8,"items":{"type":"string","minLength":1,"maxLength":64},"description":"Clés du tableau noir que cette étape est autorisée à publier via {\"blackboard\":{...}}."},
             "delegation":{"type":"object","description":"Mission producteur au format bridget_auto_delegate."},
             "convergence":convergence_schema
         },
@@ -1072,7 +1229,7 @@ pub(crate) fn tools(brief_schema: &Value) -> Vec<Value> {
         json!({"name":"bridget_task_wait","description":"Attend le résultat d'une ou plusieurs de ses tâches natives, sans polling ni modification de la remise. Une expiration n'annule aucun enfant. Le message de résultat peut arriver après ce retour.","inputSchema":{"type":"object","properties":{"task_ids":{"type":"array","minItems":1,"maxItems":16,"uniqueItems":true,"items":{"type":"string","minLength":1}},"wait_timeout":{"type":"integer","minimum":1,"maximum":WAIT_TIMEOUT_MAX_SECS,"default":WAIT_TIMEOUT_DEFAULT_SECS}},"required":["task_ids"],"additionalProperties":false},"annotations":{"readOnlyHint":true,"destructiveHint":false,"idempotentHint":true}}),
         json!({"name":"bridget_task_ack","description":"Déclare avoir lu le résultat ou l'échec de ses tâches natives et annule les avis asynchrones encore en attente (native-result-*, native-failure-*) pour éviter tout doublon en fin de tour. Ne modifie ni nettoyage ni rétention. Tout le groupe est refusé sans ACK partiel si une tâche n’est pas prête ; le refus identifie ses task_id, ronde et état après contrôle de propriété du groupe.","inputSchema":{"type":"object","properties":{"task_ids":{"type":"array","minItems":1,"maxItems":16,"uniqueItems":true,"items":{"type":"string","minLength":1}}},"required":["task_ids"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":false,"idempotentHint":true}}),
         json!({"name":"bridget_task_cancel","description":"Annule sa mission native et sa descendance ; aucune mission d'un autre parent n'est accessible.","inputSchema":{"type":"object","properties":{"task_id":{"type":"string"}},"required":["task_id"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":true,"idempotentHint":true}}),
-        json!({"name":"bridget_delegate_graph","description":"Enchaîne des missions A->B+C avec dépendances, sans ronde de garde. Déclarez 1 à 16 étapes DAG (step_id, depends_on, when/when_outcomes pour branches de repli conditionnelles, delegation au format bridget_auto_delegate) et, en option par étape, une boucle de convergence adaptative (`convergence`: verify, gate déterministe 0 jeton, escalation de modèle bornée, different_provider orthogonal, max_iterations 2..=5, stop_on_stagnation anti-oscillation). Bridget orchestre portes, itérations, escalade et branches de repli puis réveille le parent une seule fois en fin de graphe.","inputSchema":{"type":"object","properties":{"request_id":{"type":"string","minLength":1,"maxLength":128},"title":{"type":"string","minLength":1,"maxLength":256},"on_failure":{"type":"string","enum":["stop_dependents","cancel_graph"],"default":"stop_dependents","description":"stop_dependents (défaut, requis avec branches de repli) saute les étapes dépendantes et laisse finir branches indépendantes ou replis ; cancel_graph annule tout le graphe dès le premier échec."},"notify_policy":{"type":"string","enum":["on_graph_done_or_failure","each_step"],"default":"on_graph_done_or_failure","description":"on_graph_done_or_failure (défaut) réveille le parent une seule fois en fin de graphe ; each_step conserve aussi chaque avis intermédiaire."},"steps":{"type":"array","minItems":1,"maxItems":16,"items":graph_step_schema}},"required":["request_id","steps"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":true,"idempotentHint":true,"openWorldHint":true}}),
+        json!({"name":"bridget_delegate_graph","description":"Enchaîne des missions A->B+C avec dépendances, sans ronde de garde. Déclarez 1 à 16 étapes DAG (step_id, depends_on, when/when_outcomes pour replis, model_tier light|standard|frontier, blackboard_reads/blackboard_writes pour partager des clés JSON compactes, delegation au format bridget_auto_delegate), un budget dur optionnel (max_total_rounds, max_frontier_rounds, max_duration_secs) et convergence (verify, gate 0 jeton, escalation, different_provider).","inputSchema":{"type":"object","properties":{"request_id":{"type":"string","minLength":1,"maxLength":128},"title":{"type":"string","minLength":1,"maxLength":256},"on_failure":{"type":"string","enum":["stop_dependents","cancel_graph"],"default":"stop_dependents","description":"stop_dependents (défaut, requis avec branches de repli) saute les étapes dépendantes et laisse finir branches indépendantes ou replis ; cancel_graph annule tout le graphe dès le premier échec."},"notify_policy":{"type":"string","enum":["on_graph_done_or_failure","each_step"],"default":"on_graph_done_or_failure","description":"on_graph_done_or_failure (défaut) réveille le parent une seule fois en fin de graphe ; each_step conserve aussi chaque avis intermédiaire."},"budget":{"type":"object","description":"Budget dur optionnel du graphe : max_total_rounds (1..=128), max_frontier_rounds (0..=64), max_duration_secs (30..=86400).","properties":{"max_total_rounds":{"type":"integer","minimum":1,"maximum":128},"max_frontier_rounds":{"type":"integer","minimum":0,"maximum":64},"max_duration_secs":{"type":"integer","minimum":30,"maximum":86400}},"additionalProperties":false},"steps":{"type":"array","minItems":1,"maxItems":16,"items":graph_step_schema}},"required":["request_id","steps"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":true,"idempotentHint":true,"openWorldHint":true}}),
         json!({"name":"bridget_graph_status","description":"Lit l'état d'un graphe de missions Bridget. Sans effet ni polling obligatoire.","inputSchema":{"type":"object","properties":{"graph_id":{"type":"string","minLength":1,"maxLength":128}},"required":["graph_id"],"additionalProperties":false},"annotations":{"readOnlyHint":true,"destructiveHint":false,"idempotentHint":true}}),
         json!({"name":"bridget_graph_cancel","description":"Annule un graphe de missions Bridget. Stoppe les étapes actives et annule celles en attente.","inputSchema":{"type":"object","properties":{"graph_id":{"type":"string","minLength":1,"maxLength":128}},"required":["graph_id"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":true,"idempotentHint":true}}),
     ];
@@ -1254,6 +1411,7 @@ fn execute_with_proof(
             "title",
             "on_failure",
             "notify_policy",
+            "budget",
             "steps",
         ],
         "bridget_graph_status" | "bridget_graph_cancel" => &["graph_id"],

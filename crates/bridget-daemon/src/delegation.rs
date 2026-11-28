@@ -3285,9 +3285,16 @@ CREATE TABLE IF NOT EXISTS native_delegation_graph_tasks(
         &self,
         project: Option<&str>,
         window_days: Option<u32>,
+        compare: Option<(&str, &str)>,
         now: i64,
     ) -> Result<serde_json::Value, String> {
-        crate::convergence_metrics::query_metrics_report(&self.conn, project, window_days, now)
+        crate::convergence_metrics::query_metrics_report(
+            &self.conn,
+            project,
+            window_days,
+            compare,
+            now,
+        )
     }
 }
 
@@ -3394,6 +3401,25 @@ pub struct NativeGraphConvergenceState {
     pub iterations: Vec<NativeGraphConvergenceIteration>,
 }
 
+/// Consommation budgétaire suivie en temps réel sur un graphe Bridget (Spec 316).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NativeGraphBudgetUsage {
+    #[serde(default)]
+    pub total_rounds_used: u32,
+    #[serde(default)]
+    pub frontier_rounds_used: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exhausted_reason: Option<String>,
+}
+
+/// Entrée bornée du tableau noir structuré d'un graphe Bridget (Spec 316).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NativeGraphBlackboardEntry {
+    pub value: serde_json::Value,
+    pub updated_by_step: String,
+    pub updated_at: i64,
+}
+
 /// Enregistrement durable d'une étape dans un graphe de missions Bridget.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NativeGraphStepRecord {
@@ -3404,6 +3430,18 @@ pub struct NativeGraphStepRecord {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub when_outcomes: Vec<String>,
     pub pass_dependency_results: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_tier: Option<bridget_transport::protocol::GraphModelTier>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub blackboard_reads: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub blackboard_writes: Vec<String>,
+    #[serde(default)]
+    pub blackboard_reads_injected: u32,
+    #[serde(default)]
+    pub blackboard_writes_applied: u32,
+    #[serde(default)]
+    pub metrics_recorded: bool,
     pub delegation: bridget_transport::protocol::AutoDelegateV2,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub convergence: Option<bridget_transport::protocol::GraphConvergenceLoop>,
@@ -3434,8 +3472,16 @@ pub struct NativeGraphRecord {
     pub request_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub bridget_build_id: String,
     pub on_failure: bridget_transport::protocol::GraphFailurePolicy,
     pub notify_policy: bridget_transport::protocol::GraphNotifyPolicy,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub budget: Option<bridget_transport::protocol::GraphBudget>,
+    #[serde(default)]
+    pub budget_usage: NativeGraphBudgetUsage,
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub blackboard: std::collections::BTreeMap<String, NativeGraphBlackboardEntry>,
     /// `running` | `completed` | `partial_failure` | `failed` | `cancelled`
     pub state: String,
     pub topological_order: Vec<String>,

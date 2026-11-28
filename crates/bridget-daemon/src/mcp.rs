@@ -3078,7 +3078,7 @@ fn compact_tool_description(name: &str, raw: &str) -> String {
         "bridget_auto_delegate" => "Déléguer (flotte V2).".to_owned(),
         "bridget_delegate" => "Déléguer (explicite).".to_owned(),
         "bridget_delegate_graph" => {
-            "DAG 1-16 étapes + convergence (gate, escalation, verify, when).".to_owned()
+            "DAG 1-16 étapes (budget, tier, blackboard, convergence).".to_owned()
         }
         _ => truncate_compact_description(raw, 128),
     }

@@ -2027,12 +2027,14 @@ pub enum NativeDelegationRequest {
     GraphCancel {
         graph_id: String,
     },
-    /// Lecture des métriques de convergence (brutes + agrégats journaliers/mensuels).
+    /// Lecture des métriques de convergence (brutes + agrégats journaliers/mensuels + par build).
     GraphMetrics {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         project: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         window_days: Option<u32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        compare: Option<(String, String)>,
     },
     /// Lecture ou mise à jour de la politique de rétention/rollup Time-Machine des métriques.
     GraphMetricsPolicy {
@@ -2202,6 +2204,48 @@ pub enum GraphStepCondition {
     OnOutcome,
 }
 
+pub const MAX_GRAPH_BUDGET_ROUNDS: u32 = 128;
+pub const MAX_GRAPH_BUDGET_FRONTIER_ROUNDS: u32 = 64;
+pub const MIN_GRAPH_BUDGET_DURATION_SECS: u64 = 30;
+pub const MAX_GRAPH_BUDGET_DURATION_SECS: u64 = 86_400;
+
+/// Budget dur optionnel appliqué globalement à un graphe Bridget (Spec 316).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GraphBudget {
+    /// Plafond total d'admissions et de reprises sur tout le graphe (`1..=128`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_total_rounds: Option<u32>,
+    /// Plafond d'admissions/reprises de palier frontière ou escaladé (`0..=64`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_frontier_rounds: Option<u32>,
+    /// Durée murale maximale du graphe en secondes depuis sa création (`30..=86400`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_duration_secs: Option<u64>,
+}
+
+/// Palier de coût/capacité demandé sur une étape de graphe (Spec 316).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GraphModelTier {
+    /// Modèle rapide et économe (exploration, lint, tests mécaniques, repli léger).
+    Light,
+    /// Modèle équilibré par défaut.
+    Standard,
+    /// Modèle frontière réservé aux tâches complexes et architectures.
+    Frontier,
+}
+
+impl GraphModelTier {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Light => "light",
+            Self::Standard => "standard",
+            Self::Frontier => "frontier",
+        }
+    }
+}
+
 /// Étape déclarée dans un graphe de missions Bridget (`bridget_delegate_graph`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -2215,10 +2259,19 @@ pub struct DelegateGraphStep {
     /// Liste de motifs ciblés (requis uniquement quand `when == on_outcome`, excluant `cancelled`).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub when_outcomes: Vec<String>,
-    /// Si vrai (défaut), Bridget préfixe la consigne de cette étape par un bloc court
+    /// Si vrai (défaut), Bridget complète la consigne de cette étape par un bloc court
     /// factuel résumant les étapes préalables terminées (`task_id`, commit, fichiers, résumé).
     #[serde(default = "default_true")]
     pub pass_dependency_results: bool,
+    /// Palier de coût souhaité (`light` | `standard` | `frontier`) ; n'écrase jamais un `model` explicite.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_tier: Option<GraphModelTier>,
+    /// Clés du tableau noir du graphe injectées en lecture dans cette étape (max 16).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub blackboard_reads: Vec<String>,
+    /// Clés du tableau noir que cette étape est autorisée à publier (max 8).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub blackboard_writes: Vec<String>,
     pub delegation: AutoDelegateV2,
     /// Boucle de convergence bornée optionnelle (`produce <-> [gate] <-> verify`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -2240,6 +2293,9 @@ pub struct DelegateGraphRequest {
     pub on_failure: GraphFailurePolicy,
     #[serde(default)]
     pub notify_policy: GraphNotifyPolicy,
+    /// Budget dur optionnel de protection des quotas sur l'ensemble du graphe.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub budget: Option<GraphBudget>,
     pub steps: Vec<DelegateGraphStep>,
 }
 
@@ -6617,7 +6673,7 @@ impl std::fmt::Display for UsageSource {
 
 /// Compteurs d'un échantillon de tour. `facturable` = in + out + cache_create ;
 /// `cache_read` reste hors facturable.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct UsageTokens {
     pub input_tokens: u64,
     pub output_tokens: u64,

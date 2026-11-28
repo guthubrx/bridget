@@ -262,6 +262,91 @@ impl Store {
         }))
     }
 
+    /// Somme les tokens attestés pour un ensemble de tâches de graphe (`(child_agent_id, child_instance_id)`),
+    /// en lisant en priorité `execution_usage_totals` (via `executions.agent_instance_id`) puis en
+    /// repli `usage_samples` (borné à `observed_at >= since_ts`) si aucune ligne d'exécution n'existe (Spec 316).
+    pub fn sum_task_usage_tokens(
+        &self,
+        task_agents: &[(String, Option<String>)],
+        since_ts: i64,
+    ) -> Result<bridget_transport::protocol::UsageTokens, StoreError> {
+        let mut totals = bridget_transport::protocol::UsageTokens::default();
+        if task_agents.is_empty() {
+            return Ok(totals);
+        }
+        let has_exec_totals = self
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'execution_usage_totals'",
+                [],
+                |r| r.get::<_, i64>(0),
+            )
+            .map_err(StoreError::Sqlite)?
+            > 0;
+        let mut seen_agents = std::collections::BTreeSet::new();
+        for (agent, instance_opt) in task_agents {
+            if agent.is_empty() || !seen_agents.insert(agent.as_str()) {
+                continue;
+            }
+            let mut found_exec = false;
+            if has_exec_totals
+                && let Some(instance_id) = instance_opt.as_deref()
+                && !instance_id.is_empty()
+            {
+                let row: (i64, i64, i64, i64, i64) = self
+                    .conn
+                    .query_row(
+                        "SELECT COUNT(*),
+                                COALESCE(SUM(u.input_tokens), 0),
+                                COALESCE(SUM(u.output_tokens), 0),
+                                COALESCE(SUM(u.cache_creation_input_tokens), 0),
+                                COALESCE(SUM(u.cache_read_input_tokens), 0)
+                         FROM execution_usage_totals u
+                         JOIN executions e ON e.execution_id = u.execution_id
+                         WHERE e.agent_instance_id = ?1",
+                        [instance_id],
+                        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
+                    )
+                    .map_err(StoreError::Sqlite)?;
+                if row.0 > 0 {
+                    totals.input_tokens = totals.input_tokens.saturating_add(row.1.max(0) as u64);
+                    totals.output_tokens = totals.output_tokens.saturating_add(row.2.max(0) as u64);
+                    totals.cache_creation_input_tokens = totals
+                        .cache_creation_input_tokens
+                        .saturating_add(row.3.max(0) as u64);
+                    totals.cache_read_input_tokens = totals
+                        .cache_read_input_tokens
+                        .saturating_add(row.4.max(0) as u64);
+                    found_exec = true;
+                }
+            }
+            if !found_exec {
+                let row: (i64, i64, i64, i64) = self
+                    .conn
+                    .query_row(
+                        "SELECT COALESCE(SUM(input_tokens), 0),
+                                COALESCE(SUM(output_tokens), 0),
+                                COALESCE(SUM(cache_creation_input_tokens), 0),
+                                COALESCE(SUM(cache_read_input_tokens), 0)
+                         FROM usage_samples
+                         WHERE agent = ?1 AND observed_at >= ?2",
+                        params![agent, since_ts],
+                        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+                    )
+                    .map_err(StoreError::Sqlite)?;
+                totals.input_tokens = totals.input_tokens.saturating_add(row.0.max(0) as u64);
+                totals.output_tokens = totals.output_tokens.saturating_add(row.1.max(0) as u64);
+                totals.cache_creation_input_tokens = totals
+                    .cache_creation_input_tokens
+                    .saturating_add(row.2.max(0) as u64);
+                totals.cache_read_input_tokens = totals
+                    .cache_read_input_tokens
+                    .saturating_add(row.3.max(0) as u64);
+            }
+        }
+        Ok(totals)
+    }
+
     pub fn create_request(
         &self,
         id: &str,

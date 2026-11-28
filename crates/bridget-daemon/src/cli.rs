@@ -2622,7 +2622,7 @@ fn parse_delegate_grant(
 
 const GRAPHS_CLI_USAGE: &str = "\
 usage:
-  bridget graphs metrics [--project NOM] [--window JOURS] [--json]
+  bridget graphs metrics [--project NOM] [--window JOURS] [--compare BUILD_A..BUILD_B] [--json]
   bridget graphs metrics-policy [--raw-days N] [--daily-days N] [--monthly-months N] [--graph-days N] [--max-raw-rows N] [--run-now] [--json]";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -2630,6 +2630,7 @@ enum ParsedGraphsCli {
     Metrics {
         project: Option<String>,
         window_days: Option<u32>,
+        compare: Option<(String, String)>,
         as_json: bool,
     },
     MetricsPolicy {
@@ -2655,6 +2656,7 @@ fn parse_graphs_cli(args: &[String]) -> Result<ParsedGraphsCli, String> {
         "metrics" => {
             let mut project = None;
             let mut window_days = None;
+            let mut compare = None;
             let mut as_json = false;
             let mut idx = 0;
             while idx < rest.len() {
@@ -2678,6 +2680,26 @@ fn parse_graphs_cli(args: &[String]) -> Result<ParsedGraphsCli, String> {
                         }
                         window_days = Some(days);
                     }
+                    "--compare" => {
+                        idx += 1;
+                        let raw = rest
+                            .get(idx)
+                            .ok_or("--compare attend BUILD_A..BUILD_B")?
+                            .trim();
+                        let Some((a, b)) = raw.split_once("..") else {
+                            return Err(format!(
+                                "--compare attend la forme BUILD_A..BUILD_B (reçu '{raw}')"
+                            ));
+                        };
+                        let (a, b) = (a.trim(), b.trim());
+                        if a.is_empty() || b.is_empty() {
+                            return Err(
+                                "--compare exige deux préfixes de build non vides (BUILD_A..BUILD_B)"
+                                    .into(),
+                            );
+                        }
+                        compare = Some((a.to_string(), b.to_string()));
+                    }
                     "--json" => as_json = true,
                     other => {
                         return Err(format!(
@@ -2690,6 +2712,7 @@ fn parse_graphs_cli(args: &[String]) -> Result<ParsedGraphsCli, String> {
             Ok(ParsedGraphsCli::Metrics {
                 project,
                 window_days,
+                compare,
                 as_json,
             })
         }
@@ -2752,11 +2775,13 @@ fn cmd_graphs(args: &[String]) {
         ParsedGraphsCli::Metrics {
             project,
             window_days,
+            compare,
             as_json,
         } => (
             bridget_transport::protocol::NativeDelegationRequest::GraphMetrics {
                 project,
                 window_days,
+                compare,
             },
             as_json,
         ),
@@ -2830,6 +2855,60 @@ fn cmd_graphs(args: &[String]) {
                     println!("  Par issue :");
                     for (outcome, count) in outcomes {
                         println!("    - {:24} : {}", outcome, count.as_u64().unwrap_or(0));
+                    }
+                }
+                if let Some(builds) = report["by_build"].as_array()
+                    && !builds.is_empty()
+                {
+                    println!("  Par version Bridget (build_id) :");
+                    for b in builds {
+                        println!(
+                            "    - {:14} : {} étapes, succès {}%, facturable moy. {} tok/étape, cache hit {}%, durée moy. {}s, budget_stops={}",
+                            b["bridget_build_id"].as_str().unwrap_or("inconnu"),
+                            b["steps"].as_i64().unwrap_or(0),
+                            b["approval_rate_pct"].as_i64().unwrap_or(0),
+                            b["avg_facturable_tokens_per_step"].as_i64().unwrap_or(0),
+                            b["cache_hit_ratio_pct"].as_i64().unwrap_or(0),
+                            b["avg_duration_secs"].as_i64().unwrap_or(0),
+                            b["budget_stops"].as_i64().unwrap_or(0),
+                        );
+                    }
+                }
+                if let Some(tiers) = report["by_tier"].as_array()
+                    && !tiers.is_empty()
+                {
+                    println!("  Par palier de coût (model_tier) :");
+                    for t in tiers {
+                        println!(
+                            "    - {:10} : {} étapes, succès {}%, facturable moy. {} tok/étape, cache hit {}%",
+                            t["model_tier"].as_str().unwrap_or("auto"),
+                            t["steps"].as_i64().unwrap_or(0),
+                            t["approval_rate_pct"].as_i64().unwrap_or(0),
+                            t["avg_facturable_tokens_per_step"].as_i64().unwrap_or(0),
+                            t["cache_hit_ratio_pct"].as_i64().unwrap_or(0),
+                        );
+                    }
+                }
+                if let Some(cmp) = report.get("comparison").filter(|v| v.is_object()) {
+                    println!(
+                        "  Comparaison {} -> {} :",
+                        cmp["requested_base"].as_str().unwrap_or("?"),
+                        cmp["requested_head"].as_str().unwrap_or("?"),
+                    );
+                    if let Some(deltas) = cmp.get("deltas").filter(|v| v.is_object()) {
+                        println!(
+                            "    - Succès : {:+} pts · Tokens facturables/étape : {}% · Cache hit : {:+} pts · Durée moy. : {}%",
+                            deltas["approval_rate_delta_pp"].as_i64().unwrap_or(0),
+                            deltas["avg_facturable_tokens_delta_pct"]
+                                .as_i64()
+                                .map_or_else(|| "n/a".into(), |d| format!("{d:+}")),
+                            deltas["cache_hit_ratio_delta_pp"].as_i64().unwrap_or(0),
+                            deltas["avg_duration_delta_pct"]
+                                .as_i64()
+                                .map_or_else(|| "n/a".into(), |d| format!("{d:+}")),
+                        );
+                    } else {
+                        println!("    - Données insuffisantes sur l'une des deux versions.");
                     }
                 }
             } else if let Some(policy) = result.get("policy") {
@@ -9748,7 +9827,24 @@ mod message244_tests {
             super::ParsedGraphsCli::Metrics {
                 project: Some("bridget".into()),
                 window_days: Some(30),
+                compare: None,
                 as_json: true,
+            }
+        );
+
+        let cmp = super::parse_graphs_cli(&[
+            "metrics".into(),
+            "--compare".into(),
+            "c9fe2d49..abcd1234".into(),
+        ])
+        .unwrap();
+        assert_eq!(
+            cmp,
+            super::ParsedGraphsCli::Metrics {
+                project: None,
+                window_days: None,
+                compare: Some(("c9fe2d49".into(), "abcd1234".into())),
+                as_json: false,
             }
         );
 
