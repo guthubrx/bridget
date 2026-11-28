@@ -6,14 +6,17 @@ use crate::communication::client::{
 use crate::mcp_identity::ResolvedIdentity;
 use bridget_transport::protocol::{
     AutoDelegateV2, AutoDelegateWorkload, ChildRequestDecision, DEFAULT_CONVERGENCE_ITERATIONS,
-    DEFAULT_ESCALATION_EXTRA_ITERATIONS, DEFAULT_GATE_TIMEOUT_SECS, DelegateGraphRequest,
-    DelegateGraphStep, FallbackTarget, GraphBudget, GraphConvergenceEscalation,
-    GraphConvergenceLoop, GraphDeterministicGate, GraphFailurePolicy, GraphModelTier,
-    GraphNotifyPolicy, GraphStepCondition, MAX_CONVERGENCE_ITERATIONS,
+    DEFAULT_ESCALATION_CANDIDATES, DEFAULT_ESCALATION_EXTRA_ITERATIONS, DEFAULT_GATE_TIMEOUT_SECS,
+    DEFAULT_GRAPH_MAP_CONCURRENCY, DelegateGraphRequest, DelegateGraphStep, FallbackTarget,
+    GraphBudget, GraphConvergenceEscalation, GraphConvergenceLoop, GraphDeterministicGate,
+    GraphFailurePolicy, GraphMapSpec, GraphModelTier, GraphNotifyPolicy, GraphStepCondition,
+    MAX_CONVERGENCE_ITERATIONS, MAX_ESCALATION_CANDIDATES, MAX_ESCALATION_CANDIDATES_WITHOUT_GATE,
     MAX_ESCALATION_EXTRA_ITERATIONS, MAX_GATE_TIMEOUT_SECS, MAX_GRAPH_BUDGET_DURATION_SECS,
-    MAX_GRAPH_BUDGET_FRONTIER_ROUNDS, MAX_GRAPH_BUDGET_ROUNDS, MAX_TOTAL_CONVERGENCE_ITERATIONS,
+    MAX_GRAPH_BUDGET_FRONTIER_ROUNDS, MAX_GRAPH_BUDGET_ROUNDS, MAX_GRAPH_MAP_CONCURRENCY,
+    MAX_GRAPH_MAP_ITEM_BYTES, MAX_GRAPH_MAP_ITEMS, MAX_TOTAL_CONVERGENCE_ITERATIONS,
     MIN_CONVERGENCE_ITERATIONS, MIN_ESCALATION_EXTRA_ITERATIONS, MIN_GATE_TIMEOUT_SECS,
-    MIN_GRAPH_BUDGET_DURATION_SECS, NativeDelegationRequest, SpawnPosture, WorkspaceRequest,
+    MIN_GRAPH_BUDGET_DURATION_SECS, MIN_GRAPH_MAP_ITEMS, NativeDelegationRequest, SpawnPosture,
+    WorkspaceRequest,
 };
 use bridget_transport::{DaemonToWrapper, WrapperToDaemon};
 use serde_json::{Value, json};
@@ -505,6 +508,7 @@ fn parse_convergence_escalation(
     idx: usize,
     base_max_iterations: u8,
     stop_on_stagnation: bool,
+    has_gate: bool,
 ) -> Result<GraphConvergenceEscalation, ClientError> {
     let decoded = raw
         .as_str()
@@ -513,7 +517,7 @@ fn parse_convergence_escalation(
     let val = decoded.as_ref().unwrap_or(raw);
     let obj = val.as_object().ok_or_else(|| {
         ClientError::InvalidParams(format!(
-            "steps[{idx}].convergence.escalation doit être un objet {{engine?, model?, effort?, machine_id?, extra_iterations?, on_stagnation?, on_max_iterations?}}. {GRAPH_LOCAL_REFUSAL_FOOTER}"
+            "steps[{idx}].convergence.escalation doit être un objet {{engine?, model?, effort?, machine_id?, extra_iterations?, on_stagnation?, on_max_iterations?, candidates?}}. {GRAPH_LOCAL_REFUSAL_FOOTER}"
         ))
     })?;
     for k in obj.keys() {
@@ -526,6 +530,7 @@ fn parse_convergence_escalation(
                 | "extra_iterations"
                 | "on_stagnation"
                 | "on_max_iterations"
+                | "candidates"
         ) {
             return Err(ClientError::InvalidParams(format!(
                 "steps[{idx}].convergence.escalation : champ inconnu '{k}'. {GRAPH_LOCAL_REFUSAL_FOOTER}"
@@ -547,9 +552,33 @@ fn parse_convergence_escalation(
     let model = opt_str("model")?;
     let effort = opt_str("effort")?;
     let machine_id = opt_str("machine_id")?;
-    if engine.is_none() && model.is_none() && effort.is_none() && machine_id.is_none() {
+    let candidates = match obj.get("candidates") {
+        None => DEFAULT_ESCALATION_CANDIDATES,
+        Some(Value::Number(n))
+            if n.as_u64()
+                .is_some_and(|v| (1..=u64::from(MAX_ESCALATION_CANDIDATES)).contains(&v)) =>
+        {
+            n.as_u64().unwrap() as u8
+        }
+        _ => {
+            return Err(ClientError::InvalidParams(format!(
+                "steps[{idx}].convergence.escalation.candidates doit être un entier entre 1 et {MAX_ESCALATION_CANDIDATES} (défaut {DEFAULT_ESCALATION_CANDIDATES}). {GRAPH_LOCAL_REFUSAL_FOOTER}"
+            )));
+        }
+    };
+    if !has_gate && candidates > MAX_ESCALATION_CANDIDATES_WITHOUT_GATE {
         return Err(ClientError::InvalidParams(format!(
-            "steps[{idx}].convergence.escalation exige au moins une surcharge (engine, model, effort ou machine_id). {GRAPH_LOCAL_REFUSAL_FOOTER}"
+            "steps[{idx}].convergence.escalation.candidates={candidates} exige convergence.gate (plafonné à {MAX_ESCALATION_CANDIDATES_WITHOUT_GATE} sans porte déterministe). {GRAPH_LOCAL_REFUSAL_FOOTER}"
+        )));
+    }
+    if engine.is_none()
+        && model.is_none()
+        && effort.is_none()
+        && machine_id.is_none()
+        && candidates <= 1
+    {
+        return Err(ClientError::InvalidParams(format!(
+            "steps[{idx}].convergence.escalation exige au moins une surcharge (engine, model, effort, machine_id ou candidates > 1). {GRAPH_LOCAL_REFUSAL_FOOTER}"
         )));
     }
     let extra_iterations = match obj.get("extra_iterations") {
@@ -609,6 +638,7 @@ fn parse_convergence_escalation(
         extra_iterations,
         on_stagnation,
         on_max_iterations,
+        candidates,
     })
 }
 
@@ -687,6 +717,7 @@ fn parse_convergence_loop(
             idx,
             max_iterations,
             stop_on_stagnation,
+            gate.is_some(),
         )?),
     };
     let raw_verify = obj.get("verify").ok_or_else(|| {
@@ -891,6 +922,88 @@ fn parse_blackboard_key_list(
     Ok(out)
 }
 
+fn parse_graph_map(raw: &Value, idx: usize) -> Result<GraphMapSpec, ClientError> {
+    let decoded = raw
+        .as_str()
+        .and_then(|txt| serde_json::from_str::<Value>(txt).ok())
+        .filter(Value::is_object);
+    let val = decoded.as_ref().unwrap_or(raw);
+    let obj = val.as_object().ok_or_else(|| {
+        ClientError::InvalidParams(format!(
+            "steps[{idx}].map doit être un objet {{items, max_concurrency?, reuse_workers?, fail_fast?}}. {GRAPH_LOCAL_REFUSAL_FOOTER}"
+        ))
+    })?;
+    for k in obj.keys() {
+        if !matches!(
+            k.as_str(),
+            "items" | "max_concurrency" | "reuse_workers" | "fail_fast"
+        ) {
+            return Err(ClientError::InvalidParams(format!(
+                "steps[{idx}].map : champ inconnu '{k}' (autorisés : items, max_concurrency, reuse_workers, fail_fast). {GRAPH_LOCAL_REFUSAL_FOOTER}"
+            )));
+        }
+    }
+    let raw_items = obj
+        .get("items")
+        .and_then(Value::as_array)
+        .filter(|arr| (MIN_GRAPH_MAP_ITEMS..=MAX_GRAPH_MAP_ITEMS).contains(&arr.len()))
+        .ok_or_else(|| {
+            ClientError::InvalidParams(format!(
+                "steps[{idx}].map.items doit contenir entre {MIN_GRAPH_MAP_ITEMS} et {MAX_GRAPH_MAP_ITEMS} chaînes non vides. {GRAPH_LOCAL_REFUSAL_FOOTER}"
+            ))
+        })?;
+    let mut items = Vec::with_capacity(raw_items.len());
+    for (item_idx, raw_item) in raw_items.iter().enumerate() {
+        let txt = raw_item
+            .as_str()
+            .filter(|s| !s.trim().is_empty() && s.len() <= MAX_GRAPH_MAP_ITEM_BYTES)
+            .ok_or_else(|| {
+                ClientError::InvalidParams(format!(
+                    "steps[{idx}].map.items[{item_idx}] doit être une chaîne non vide (<= {MAX_GRAPH_MAP_ITEM_BYTES} octets). {GRAPH_LOCAL_REFUSAL_FOOTER}"
+                ))
+            })?;
+        items.push(txt.to_string());
+    }
+    let max_concurrency = match obj.get("max_concurrency") {
+        None => DEFAULT_GRAPH_MAP_CONCURRENCY,
+        Some(Value::Number(n))
+            if n.as_u64()
+                .is_some_and(|v| (1..=u64::from(MAX_GRAPH_MAP_CONCURRENCY)).contains(&v)) =>
+        {
+            n.as_u64().unwrap() as u8
+        }
+        _ => {
+            return Err(ClientError::InvalidParams(format!(
+                "steps[{idx}].map.max_concurrency doit être un entier entre 1 et {MAX_GRAPH_MAP_CONCURRENCY} (défaut {DEFAULT_GRAPH_MAP_CONCURRENCY}). {GRAPH_LOCAL_REFUSAL_FOOTER}"
+            )));
+        }
+    };
+    let reuse_workers = match obj.get("reuse_workers") {
+        None => true,
+        Some(Value::Bool(b)) => *b,
+        _ => {
+            return Err(ClientError::InvalidParams(format!(
+                "steps[{idx}].map.reuse_workers doit être un booléen. {GRAPH_LOCAL_REFUSAL_FOOTER}"
+            )));
+        }
+    };
+    let fail_fast = match obj.get("fail_fast") {
+        None => false,
+        Some(Value::Bool(b)) => *b,
+        _ => {
+            return Err(ClientError::InvalidParams(format!(
+                "steps[{idx}].map.fail_fast doit être un booléen. {GRAPH_LOCAL_REFUSAL_FOOTER}"
+            )));
+        }
+    };
+    Ok(GraphMapSpec {
+        items,
+        max_concurrency,
+        reuse_workers,
+        fail_fast,
+    })
+}
+
 /// Parse la charge MCP de `bridget_delegate_graph` (1 à 16 étapes DAG + convergence bornée optionnelle).
 fn parse_delegate_graph(args: &Value) -> Result<DelegateGraphRequest, ClientError> {
     let request_id = args
@@ -968,9 +1081,10 @@ fn parse_delegate_graph(args: &Value) -> Result<DelegateGraphRequest, ClientErro
                     | "blackboard_writes"
                     | "delegation"
                     | "convergence"
+                    | "map"
             ) {
                 return Err(ClientError::InvalidParams(format!(
-                    "steps[{idx}] : champ inconnu '{k}'. Champs acceptés : step_id, depends_on, pass_dependency_results, when, when_outcomes, model_tier, blackboard_reads, blackboard_writes, delegation, convergence. {GRAPH_MINIMAL_EXAMPLE} {GRAPH_LOCAL_REFUSAL_FOOTER}"
+                    "steps[{idx}] : champ inconnu '{k}'. Champs acceptés : step_id, depends_on, pass_dependency_results, when, when_outcomes, model_tier, blackboard_reads, blackboard_writes, delegation, convergence, map. {GRAPH_MINIMAL_EXAMPLE} {GRAPH_LOCAL_REFUSAL_FOOTER}"
                 )));
             }
         }
@@ -1133,6 +1247,34 @@ fn parse_delegate_graph(args: &Value) -> Result<DelegateGraphRequest, ClientErro
                 &step_id,
             )?),
         };
+        let map = match step_obj.get("map") {
+            None | Some(Value::Null) => None,
+            Some(raw_map) => Some(parse_graph_map(raw_map, idx)?),
+        };
+        if map.is_some() && convergence.is_some() {
+            return Err(ClientError::InvalidParams(format!(
+                "steps[{idx}] : map et convergence sont mutuellement exclusifs sur une même étape. {GRAPH_LOCAL_REFUSAL_FOOTER}"
+            )));
+        }
+        if map.as_ref().is_some_and(|m| m.max_concurrency > 1)
+            && delegation.posture != Some(SpawnPosture::Discovery)
+            && matches!(delegation.workspace, Some(WorkspaceRequest::Shared {}))
+        {
+            return Err(ClientError::InvalidParams(format!(
+                "steps[{idx}] : map avec max_concurrency > 1 en écriture est interdit avec workspace='shared'. Utilisez workspace='worktree', posture='discovery' ou max_concurrency=1. {GRAPH_LOCAL_REFUSAL_FOOTER}"
+            )));
+        }
+        if convergence
+            .as_ref()
+            .and_then(|c| c.escalation.as_ref())
+            .is_some_and(|e| e.candidates > 1)
+            && delegation.posture != Some(SpawnPosture::Discovery)
+            && matches!(delegation.workspace, Some(WorkspaceRequest::Shared {}))
+        {
+            return Err(ClientError::InvalidParams(format!(
+                "steps[{idx}] : convergence.escalation.candidates > 1 exige une isolation worktree (interdit avec workspace='shared' hors posture 'discovery'). {GRAPH_LOCAL_REFUSAL_FOOTER}"
+            )));
+        }
         if convergence.as_ref().is_some_and(|c| c.gate.is_some())
             && delegation.posture == Some(SpawnPosture::Discovery)
         {
@@ -1151,6 +1293,7 @@ fn parse_delegate_graph(args: &Value) -> Result<DelegateGraphRequest, ClientErro
             blackboard_writes,
             delegation,
             convergence,
+            map,
         });
     }
 
@@ -1190,9 +1333,21 @@ pub(crate) fn tools(brief_schema: &Value) -> Vec<Value> {
             "stop_on_stagnation":{"type":"boolean","default":true,"description":"Arrête (ou déclenche escalation) si un commit ou une empreinte bloquante se répète dans le palier (stagnation et oscillation A->B->A)."},
             "different_provider":{"type":"boolean","default":false,"description":"Préfère un moteur fournisseur orthogonal au producteur pour verify (repli gracieux si indisponible)."},
             "gate":{"type":"object","description":"Porte déterministe 0 jeton (argv sans shell) exécutée dans le worktree du producteur avant verify ; exige posture development.","properties":{"argv":{"type":"array","minItems":1,"maxItems":32,"items":{"type":"string"}},"timeout_secs":{"type":"integer","minimum":5,"maximum":300,"default":120}},"required":["argv"],"additionalProperties":false},
-            "escalation":{"type":"object","description":"Escalade bornée unique vers un palier 1 (modèle/moteur/effort/machine plus fort) sur stagnation ou max_iterations_reached (jamais sur verdict escalate).","properties":{"engine":{"type":"string"},"model":{"type":"string"},"effort":{"type":"string"},"machine_id":{"type":"string"},"extra_iterations":{"type":"integer","minimum":1,"maximum":3,"default":2},"on_stagnation":{"type":"boolean","default":true},"on_max_iterations":{"type":"boolean","default":true}},"additionalProperties":false}
+            "escalation":{"type":"object","description":"Escalade bornée unique vers un palier 1 (modèle/moteur/effort/machine plus fort ou Best-of-N candidates 2..=3 sur stagnation/plafond, jamais sur verdict escalate).","properties":{"engine":{"type":"string"},"model":{"type":"string"},"effort":{"type":"string"},"machine_id":{"type":"string"},"extra_iterations":{"type":"integer","minimum":1,"maximum":3,"default":2},"on_stagnation":{"type":"boolean","default":true},"on_max_iterations":{"type":"boolean","default":true},"candidates":{"type":"integer","minimum":1,"maximum":3,"default":1,"description":"Candidats parallèles Best-of-N sur escalade (1..=3 ; plafonné à 2 sans gate)."}},"additionalProperties":false}
         },
         "required":["verify"],
+        "additionalProperties":false
+    });
+    let map_schema = json!({
+        "type":"object",
+        "description":"Map-Reduce borné sur pool de workers chauds (mutuellement exclusif avec convergence).",
+        "properties":{
+            "items":{"type":"array","minItems":2,"maxItems":16,"items":{"type":"string","minLength":1,"maxLength":512},"description":"2 à 16 éléments indépendants à traiter."},
+            "max_concurrency":{"type":"integer","minimum":1,"maximum":4,"default":2,"description":"Nombre maximal de workers parallèles (1 à 4, défaut 2)."},
+            "reuse_workers":{"type":"boolean","default":true,"description":"Réutilise les workers chauds via Continue pour maximiser le cache KV."},
+            "fail_fast":{"type":"boolean","default":false,"description":"Si true, saute les items restants au premier échec."}
+        },
+        "required":["items"],
         "additionalProperties":false
     });
     let graph_step_schema = json!({
@@ -1207,7 +1362,8 @@ pub(crate) fn tools(brief_schema: &Value) -> Vec<Value> {
             "blackboard_reads":{"type":"array","maxItems":16,"items":{"type":"string","minLength":1,"maxLength":64},"description":"Clés du tableau noir du graphe injectées en lecture dans le prompt de l'étape."},
             "blackboard_writes":{"type":"array","maxItems":8,"items":{"type":"string","minLength":1,"maxLength":64},"description":"Clés du tableau noir que cette étape est autorisée à publier via {\"blackboard\":{...}}."},
             "delegation":{"type":"object","description":"Mission producteur au format bridget_auto_delegate."},
-            "convergence":convergence_schema
+            "convergence":convergence_schema,
+            "map":map_schema
         },
         "required":["step_id","delegation"],
         "additionalProperties":false

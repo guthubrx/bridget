@@ -3348,6 +3348,83 @@ pub struct NativeGraphConvergenceIteration {
     pub finished_at: Option<i64>,
 }
 
+/// Candidat parallèle lancé lors d'une escalade `Best-of-N` bornée (Spec 317).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NativeGraphEscalationCandidate {
+    pub candidate_id: u8,
+    /// `pending_produce` | `launching_produce` | `producing` | `pending_gate` | `launching_gate` | `pending_verify` | `launching_verify` | `verifying` | `approved` | `rejected` | `failed` | `cancelled`
+    pub phase: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub engine: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub producer_task_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub producer_commit: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verifier_task_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gate_passed: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verdict: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub result_excerpt: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub factual_summary: Option<serde_json::Value>,
+}
+
+/// État durable d'un élément traité dans une étape Map-Reduce bornée (Spec 317).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NativeGraphMapItemRecord {
+    pub index: usize,
+    pub item: String,
+    /// `pending` | `launching` | `running` | `completed` | `failed` | `cancelled` | `skipped`
+    pub state: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worker_slot: Option<u8>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task_id: Option<String>,
+    #[serde(default)]
+    pub expected_round: u32,
+    #[serde(default)]
+    pub reused_worker: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub result_excerpt: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub started_at: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub finished_at: Option<i64>,
+}
+
+/// Emplacement de worker chaud réutilisable dans une étape Map-Reduce (Spec 317).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NativeGraphMapWorkerSlot {
+    pub slot_id: u8,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task_id: Option<String>,
+    #[serde(default)]
+    pub busy: bool,
+    #[serde(default)]
+    pub rounds_completed: u32,
+}
+
+/// État durable d'une étape Map-Reduce sur pool de workers chauds (Spec 317).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NativeGraphMapState {
+    pub max_concurrency: u8,
+    pub reuse_workers: bool,
+    pub fail_fast: bool,
+    pub items: Vec<NativeGraphMapItemRecord>,
+    pub worker_slots: Vec<NativeGraphMapWorkerSlot>,
+    #[serde(default)]
+    pub reused_worker_hits: u32,
+}
+
 /// État durable d'une boucle de convergence bornée attachée à une étape de graphe.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NativeGraphConvergenceState {
@@ -3357,7 +3434,7 @@ pub struct NativeGraphConvergenceState {
     #[serde(default)]
     pub total_max_iterations: u8,
     pub stop_on_stagnation: bool,
-    /// `waiting` | `producing` | `pending_gate` | `running_gate` | `pending_verify` | `launching_verify` | `verifying` | `pending_produce` | `launching_produce` | `done`
+    /// `waiting` | `producing` | `pending_gate` | `running_gate` | `pending_verify` | `launching_verify` | `verifying` | `pending_produce` | `launching_produce` | `escalating_candidates` | `done`
     pub phase: String,
     /// Palier d'escalade courant (`0` = initial, `1` = escaladé).
     #[serde(default)]
@@ -3394,11 +3471,18 @@ pub struct NativeGraphConvergenceState {
     pub stagnation_saved_iterations: u32,
     #[serde(default)]
     pub metrics_recorded: bool,
-    /// `approved` | `escalated` | `stagnated` | `max_iterations_reached` | `gate_unavailable` | `verdict_unparseable` | `failed` | `cancelled`
+    /// `approved` | `escalated` | `stagnated` | `max_iterations_reached` | `gate_unavailable` | `verdict_unparseable` | `budget_exhausted` | `failed` | `cancelled`
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub outcome: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub iterations: Vec<NativeGraphConvergenceIteration>,
+    /// Candidats parallèles `Best-of-N` actifs ou terminés lors de l'escalade (Spec 317).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub escalation_candidates: Vec<NativeGraphEscalationCandidate>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub winning_candidate_id: Option<u8>,
+    #[serde(default)]
+    pub candidates_cancelled: u32,
 }
 
 /// Consommation budgétaire suivie en temps réel sur un graphe Bridget (Spec 316).
@@ -3447,6 +3531,10 @@ pub struct NativeGraphStepRecord {
     pub convergence: Option<bridget_transport::protocol::GraphConvergenceLoop>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub convergence_state: Option<NativeGraphConvergenceState>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub map: Option<bridget_transport::protocol::GraphMapSpec>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub map_state: Option<NativeGraphMapState>,
     /// `waiting_dependencies` | `launching` | `running` | `completed` | `failed` | `cancelled` | `skipped_dependency_failed` | `skipped_condition_not_met`
     pub state: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]

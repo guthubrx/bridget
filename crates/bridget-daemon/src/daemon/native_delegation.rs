@@ -18621,7 +18621,11 @@ pub(super) fn pick_orthogonal_engine_pub(
             let blocked = st
                 .provider_limits
                 .quota(&name, now)
-                .is_some_and(|q| q.launch_blocked || q.exhausted);
+                .is_some_and(|q| q.launch_blocked || q.exhausted)
+                || st
+                    .provider_limits
+                    .quota(fam, now)
+                    .is_some_and(|q| q.launch_blocked || q.exhausted);
             if !blocked {
                 healthy_families.insert(fam);
             }
@@ -18643,6 +18647,56 @@ pub(super) fn pick_orthogonal_engine_pub(
         }
     }
 
+    for preferred in ["claude", "codex", "antigravity", "cursor", "glm"] {
+        if healthy_families.contains(preferred) {
+            return Some(preferred.to_string());
+        }
+    }
+    None
+}
+
+/// Sélectionne un moteur sain disponible différent de tous ceux listés dans `exclude_families`
+/// (utilisé pour diversifier les candidats parallèles d'une escalade `Best-of-N`, Spec 317).
+pub(super) fn pick_diverse_healthy_engine_pub(
+    st: &DaemonState,
+    exclude_families: &[&str],
+) -> Option<String> {
+    let now = unix_timestamp();
+    let mut healthy_families = std::collections::BTreeSet::new();
+    if let Ok(defs) = st.registry.resolved_definitions() {
+        for (name, _) in defs {
+            let fam = normalize_engine_family(&name);
+            if fam.is_empty() || exclude_families.contains(&fam) {
+                continue;
+            }
+            let blocked = st
+                .provider_limits
+                .quota(&name, now)
+                .is_some_and(|q| q.launch_blocked || q.exhausted)
+                || st
+                    .provider_limits
+                    .quota(fam, now)
+                    .is_some_and(|q| q.launch_blocked || q.exhausted);
+            if !blocked {
+                healthy_families.insert(fam);
+            }
+        }
+    }
+    for worker in st.remote_workers.values() {
+        for key in worker.catalogues.keys() {
+            let fam = normalize_engine_family(key);
+            if fam.is_empty() || exclude_families.contains(&fam) {
+                continue;
+            }
+            let blocked = st
+                .provider_limits
+                .quota(fam, now)
+                .is_some_and(|q| q.launch_blocked || q.exhausted);
+            if !blocked {
+                healthy_families.insert(fam);
+            }
+        }
+    }
     for preferred in ["claude", "codex", "antigravity", "cursor", "glm"] {
         if healthy_families.contains(preferred) {
             return Some(preferred.to_string());
@@ -18717,7 +18771,11 @@ pub(super) fn resolve_model_tier_pub(
             let blocked = st
                 .provider_limits
                 .quota(&name, now)
-                .is_some_and(|q| q.launch_blocked || q.exhausted);
+                .is_some_and(|q| q.launch_blocked || q.exhausted)
+                || st
+                    .provider_limits
+                    .quota(fam, now)
+                    .is_some_and(|q| q.launch_blocked || q.exhausted);
             if blocked {
                 continue;
             }

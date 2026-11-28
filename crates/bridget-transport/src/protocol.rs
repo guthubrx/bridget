@@ -2133,8 +2133,42 @@ fn default_gate_timeout_secs() -> u64 {
     DEFAULT_GATE_TIMEOUT_SECS
 }
 
+pub const DEFAULT_ESCALATION_CANDIDATES: u8 = 1;
+pub const MAX_ESCALATION_CANDIDATES: u8 = 3;
+pub const MAX_ESCALATION_CANDIDATES_WITHOUT_GATE: u8 = 2;
+pub const MIN_GRAPH_MAP_ITEMS: usize = 2;
+pub const MAX_GRAPH_MAP_ITEMS: usize = 16;
+pub const DEFAULT_GRAPH_MAP_CONCURRENCY: u8 = 2;
+pub const MAX_GRAPH_MAP_CONCURRENCY: u8 = 4;
+pub const MAX_GRAPH_MAP_ITEM_BYTES: usize = 512;
+
 fn default_escalation_extra_iterations() -> u8 {
     DEFAULT_ESCALATION_EXTRA_ITERATIONS
+}
+
+fn default_escalation_candidates() -> u8 {
+    DEFAULT_ESCALATION_CANDIDATES
+}
+
+fn default_map_max_concurrency() -> u8 {
+    DEFAULT_GRAPH_MAP_CONCURRENCY
+}
+
+/// Spécification d'une étape Map-Reduce bornée sur pool de workers chauds (Spec 317).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GraphMapSpec {
+    /// Liste bornée d'éléments indépendants (`2..=16`, chacun 1..=512 octets).
+    pub items: Vec<String>,
+    /// Parallélisme maximal du pool de workers (`1..=4`, défaut `2`).
+    #[serde(default = "default_map_max_concurrency")]
+    pub max_concurrency: u8,
+    /// Réutilise les sessions workers chaudes (`keep_alive` + `Continue`) pour maximiser le cache KV.
+    #[serde(default = "default_true")]
+    pub reuse_workers: bool,
+    /// Si vrai, saute les items restants dès le premier échec ; si faux (défaut), termine tous les items.
+    #[serde(default)]
+    pub fail_fast: bool,
 }
 
 /// Porte déterministe exécutée à 0 token dans le worktree attesté du producteur
@@ -2166,6 +2200,9 @@ pub struct GraphConvergenceEscalation {
     pub on_stagnation: bool,
     #[serde(default = "default_true")]
     pub on_max_iterations: bool,
+    /// Nombre de candidats parallèles `Best-of-N` lors de l'escalade (`1..=3`, défaut `1` ; plafonné à `2` sans `gate`).
+    #[serde(default = "default_escalation_candidates")]
+    pub candidates: u8,
 }
 
 /// Boucle de convergence bornée encapsulée dans une étape d'un DAG (`produce <-> [gate] <-> verify`).
@@ -2276,6 +2313,9 @@ pub struct DelegateGraphStep {
     /// Boucle de convergence bornée optionnelle (`produce <-> [gate] <-> verify`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub convergence: Option<GraphConvergenceLoop>,
+    /// Traitement Map-Reduce borné sur pool de workers chauds (mutuellement exclusif avec `convergence`, Spec 317).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub map: Option<GraphMapSpec>,
 }
 
 fn default_true() -> bool {
