@@ -7,8 +7,9 @@ function esc(value) {
 }
 
 function statusMeta(conn) {
+  const isDetected = String(conn.connection_id || "").startsWith("detected-");
   if (conn.auth_state === "machine_unreachable") return { cls: "err", icon: "✕", text: "Machine injoignable" };
-  if (conn.auth_state === "authenticated" && !conn.enabled) return { cls: "muted", icon: "○", text: "Désactivé" };
+  if (conn.auth_state === "authenticated" && !conn.enabled && !isDetected) return { cls: "muted", icon: "○", text: "Désactivé" };
   if (conn.auth_state === "authenticated") return { cls: "ok", icon: "●", text: "Connecté" };
   if (conn.auth_state === "unauthenticated") return { cls: "warn", icon: "▲", text: "À connecter" };
   if (conn.auth_state === "binary_missing") return { cls: "err", icon: "✕", text: "Programme absent" };

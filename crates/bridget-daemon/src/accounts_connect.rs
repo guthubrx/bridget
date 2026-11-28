@@ -1062,13 +1062,14 @@ pub(crate) fn build_login_shell_command(target: &ConnectionTarget, logout_first:
             }
         }
         "gemini" => {
-            if logout_first {
-                format!(
-                    "rm -f \"$HOME/.gemini/oauth_creds.json\" \"$HOME/.gemini/google_accounts.json\" 2>/dev/null || true; {env_prefix} {cmd}"
-                )
+            let clear = if logout_first {
+                "rm -f \"$HOME/.gemini/oauth_creds.json\" \"$HOME/.gemini/google_accounts.json\" 2>/dev/null || true; "
             } else {
-                format!("{env_prefix} {cmd}")
-            }
+                ""
+            };
+            format!(
+                "{clear}stty cols 512 rows 40 2>/dev/null || true; _bs=$(mktemp); (i=0; while [ \"$i\" -lt 600 ]; do if [ -s \"$HOME/.gemini/oauth_creds.json\" ] && [ \"$HOME/.gemini/oauth_creds.json\" -nt \"$_bs\" ]; then sleep 1; printf '\\n[Bridget] GEMINI_AUTH_OK\\n'; break; fi; sleep 1; i=$((i+1)); done; rm -f \"$_bs\") & _bw=$!; trap 'kill \"$_bw\" 2>/dev/null || true; rm -f \"$_bs\"' EXIT; NO_BROWSER=true TERM=xterm-256color {env_prefix} {cmd} --skip-trust"
+            )
         }
         _ => format!(
             "printf 'Moteur non pris en charge : %s\\n' {} && exit 1",
@@ -1419,7 +1420,7 @@ pub(crate) fn looks_like_oauth_clipboard_code(engine: &str, raw: &str) -> bool {
         return false;
     }
     match engine {
-        "antigravity" => {
+        "antigravity" | "gemini" => {
             (trimmed.starts_with("4/0A") || trimmed.starts_with("4/")) && trimmed.len() >= 30
                 || (trimmed.starts_with("https://antigravity.google/oauth-callback?")
                     && trimmed.contains("code="))
@@ -1663,5 +1664,35 @@ mod tests {
             .find(|(t, _, _)| t.connection_id == "codex-sysle2")
             .unwrap();
         assert_eq!(codex.1, vec!["codex-sysle2", "codex-sysle2-terra213"]);
+    }
+
+    #[test]
+    fn spec318_gemini_login_command_and_clipboard_code() {
+        let target = ConnectionTarget {
+            connection_id: "detected-gemini-ksstore".into(),
+            machine_id: "ksstore".into(),
+            engine: "gemini".into(),
+            agent_type: "gemini".into(),
+            enabled: false,
+            display_name: None,
+            managed: false,
+            command: "gemini".into(),
+            profile_dir: None,
+            registry_path: String::new(),
+            is_local: false,
+        };
+        let cmd = build_login_shell_command(&target, false);
+        assert!(cmd.contains("NO_BROWSER=true"));
+        assert!(cmd.contains("--skip-trust"));
+        assert!(cmd.contains("stty cols 512"));
+        assert!(cmd.contains("GEMINI_AUTH_OK"));
+        assert!(!cmd.contains("rm -f \"$HOME/.gemini/oauth_creds.json\""));
+        let logout_cmd = build_login_shell_command(&target, true);
+        assert!(logout_cmd.contains("rm -f \"$HOME/.gemini/oauth_creds.json\""));
+        assert!(looks_like_oauth_clipboard_code(
+            "gemini",
+            "4/0AeanS0a1234567890abcdefghijklmnopqrstuvwxyz"
+        ));
+        assert!(!looks_like_oauth_clipboard_code("gemini", "short"));
     }
 }

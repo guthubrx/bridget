@@ -29,6 +29,8 @@ pub(crate) struct LoginSession {
     open_in_browser: bool,
     code_sent: bool,
     code_auto_sent: bool,
+    gemini_menu_confirmed: bool,
+    auth_confirmed: bool,
     logged_in_as: Option<String>,
     running: bool,
     exit_code: Option<i32>,
@@ -120,7 +122,8 @@ fn start_clipboard_watcher(session: Arc<Mutex<LoginSession>>, initial_fp: Option
             }
             last_fp = Some(fp);
             if looks_like_oauth_clipboard_code(&engine, &clip) {
-                let payload = format!("{}\n", clip.trim());
+                let eol = if engine == "gemini" { "\r" } else { "\n" };
+                let payload = format!("{}{eol}", clip.trim());
                 let mut guard = session.lock().unwrap_or_else(|e| e.into_inner());
                 if !guard.running || guard.code_sent {
                     break;
@@ -203,6 +206,8 @@ fn pump_stream<R: std::io::Read>(reader: R, session: Arc<Mutex<LoginSession>>) {
                 let mut url_to_open = None;
                 let mut open_via_os = false;
                 let mut watch_engine = false;
+                let mut confirm_gemini_menu = false;
+                let mut child_to_stop = None;
                 {
                     let mut guard = session.lock().unwrap_or_else(|e| e.into_inner());
                     if guard.log.len() < MAX_SESSION_LOG_BYTES {
@@ -210,6 +215,18 @@ fn pump_stream<R: std::io::Read>(reader: R, session: Arc<Mutex<LoginSession>>) {
                     }
                     if let Some(acc) = detected_account {
                         guard.logged_in_as = Some(acc);
+                    }
+                    if guard.engine == "gemini"
+                        && !guard.gemini_menu_confirmed
+                        && guard.auth_url.is_none()
+                        && (text.contains("Sign in with Google") || text.contains("Enter to select"))
+                    {
+                        guard.gemini_menu_confirmed = true;
+                        confirm_gemini_menu = true;
+                    }
+                    if guard.engine == "gemini" && text.contains("[Bridget] GEMINI_AUTH_OK") {
+                        guard.auth_confirmed = true;
+                        child_to_stop = Some(guard.child.clone());
                     }
                     if guard.engine == "codex"
                         && let Some(code) = detected_device_code
@@ -222,9 +239,33 @@ fn pump_stream<R: std::io::Read>(reader: R, session: Arc<Mutex<LoginSession>>) {
                             guard.browser_opened = true;
                             url_to_open = Some(url);
                             open_via_os = guard.open_in_browser;
-                            watch_engine =
-                                matches!(guard.engine.as_str(), "antigravity" | "claude");
+                            watch_engine = matches!(
+                                guard.engine.as_str(),
+                                "antigravity" | "claude" | "gemini"
+                            );
                         }
+                    }
+                }
+                if confirm_gemini_menu {
+                    let s = session.clone();
+                    std::thread::spawn(move || {
+                        std::thread::sleep(Duration::from_millis(300));
+                        let mut guard = s.lock().unwrap_or_else(|e| e.into_inner());
+                        if guard.running
+                            && guard.auth_url.is_none()
+                            && let Some(stdin) = guard.stdin.as_mut()
+                        {
+                            let _ = stdin.write_all(b"\r").and_then(|_| stdin.flush());
+                        }
+                    });
+                }
+                if let Some(child_handle) = child_to_stop {
+                    let mut child_guard = child_handle.lock().unwrap_or_else(|e| e.into_inner());
+                    if let Some(child) = child_guard.as_mut() {
+                        let pid = child.id();
+                        let _ = Command::new("kill")
+                            .args(["-TERM", &pid.to_string()])
+                            .status();
                     }
                 }
                 if let Some(url) = url_to_open {
@@ -353,6 +394,8 @@ pub(crate) async fn route_api_login_start(
         open_in_browser: req.open_in_browser,
         code_sent: false,
         code_auto_sent: false,
+        gemini_menu_confirmed: false,
+        auth_confirmed: false,
         logged_in_as: None,
         running: true,
         exit_code: None,
@@ -405,16 +448,17 @@ pub(crate) async fn route_api_login_start(
             };
             let enable_target = {
                 let mut guard = s.lock().unwrap_or_else(|e| e.into_inner());
+                let effective_exit = if guard.auth_confirmed { 0 } else { exit };
                 guard.running = false;
-                guard.exit_code = Some(exit);
+                guard.exit_code = Some(effective_exit);
                 guard.stdin = None;
-                if exit == 0 {
+                if effective_exit == 0 {
                     guard.log.push_str("\nConnexion terminée avec succès.\n");
                     guard.enable_on_success.clone()
                 } else {
                     guard
                         .log
-                        .push_str(&format!("\nSession terminée (code {exit}).\n"));
+                        .push_str(&format!("\nSession terminée (code {effective_exit}).\n"));
                     None
                 }
             };
@@ -532,6 +576,7 @@ pub(crate) async fn route_api_login_input(
             "Refusé : session étrangère",
         );
     }
+    let eol = if guard.engine == "gemini" { "\r" } else { "\n" };
     let Some(stdin) = guard.stdin.as_mut() else {
         return error_response(
             StatusCode::CONFLICT,
@@ -540,7 +585,7 @@ pub(crate) async fn route_api_login_input(
             "Conflit : session fermée",
         );
     };
-    let payload = format!("{}\n", req.text.trim_end_matches(&['\r', '\n'][..]));
+    let payload = format!("{}{eol}", req.text.trim_end_matches(&['\r', '\n'][..]));
     if let Err(e) = stdin
         .write_all(payload.as_bytes())
         .and_then(|_| stdin.flush())
